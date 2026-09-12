@@ -196,3 +196,128 @@ describe("seedSessionStatuses", () => {
     expect(msgs).toEqual([{ type: "sessionStatus", sessionID: "confirmed", status: "busy" }])
   })
 })
+
+describe("seedSessionStatuses private-first", () => {
+  function privateConn(statuses: Record<string, unknown>) {
+    return {
+      isPrivateAvailable: () => true,
+      privateStatusOutcomeWithHandle: (r: { requestId: string; opId: string; idempotencyKey: string }) => ({
+        id: 1,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: r.requestId,
+            opId: r.opId,
+            op: "session/status",
+            idempotencyKey: r.idempotencyKey,
+            status: "succeeded",
+            outcome: { type: "succeeded", time: Date.now() },
+            accepted: true,
+            data: { statuses },
+          },
+        }),
+        cancel: () => true,
+      }),
+    }
+  }
+
+  it("private success seeds with zero SDK", async () => {
+    let sdkCalls = 0
+    const client = {
+      session: {
+        status: async () => {
+          sdkCalls += 1
+          return { data: {} }
+        },
+      },
+    } as Parameters<typeof seedSessionStatuses>[0]
+    const map = new Map<string, SessionStatus["type"]>([["stale", "busy"]])
+    const { msgs, post } = collect()
+    await seedSessionStatuses(
+      client,
+      "/repo",
+      map,
+      post,
+      true,
+      { connection: privateConn({ ses_a: { type: "busy" } }) as never },
+    )
+    expect(sdkCalls).toBe(0)
+    expect(map.get("ses_a")).toBe("busy")
+    expect(map.get("stale")).toBe("idle")
+    expect(msgs).toEqual([
+      { type: "sessionStatus", sessionID: "ses_a", status: "busy" },
+      { type: "sessionStatus", sessionID: "stale", status: "idle" },
+    ])
+  })
+
+  it("retryable private falls back exactly once with same dir", async () => {
+    const seen: string[] = []
+    const client = {
+      session: {
+        status: async (params: { directory: string }) => {
+          seen.push(params.directory)
+          return { data: { ses_a: { type: "busy" } } }
+        },
+      },
+    } as Parameters<typeof seedSessionStatuses>[0]
+    const map = new Map<string, SessionStatus["type"]>()
+    const { msgs, post } = collect()
+    const failing = {
+      isPrivateAvailable: () => true,
+      privateStatusOutcomeWithHandle: () => ({ id: 2, promise: Promise.resolve({ kind: "invalid", detail: "bad" }), cancel: () => true }),
+    } as never
+    await seedSessionStatuses(client, "/repo", map, post, true, { connection: failing })
+    expect(seen).toEqual(["/repo"])
+    expect(map.get("ses_a")).toBe("busy")
+    expect(msgs).toEqual([{ type: "sessionStatus", sessionID: "ses_a", status: "busy" }])
+  })
+
+  it("terminal private writes nothing and never calls SDK", async () => {
+    let sdkCalls = 0
+    const client = {
+      session: {
+        status: async () => {
+          sdkCalls += 1
+          return { data: {} }
+        },
+      },
+    } as Parameters<typeof seedSessionStatuses>[0]
+    const map = new Map<string, SessionStatus["type"]>([["s1", "busy"]])
+    const { msgs, post } = collect()
+    const terminal = {
+      isPrivateAvailable: () => true,
+      privateStatusOutcomeWithHandle: (r: { requestId: string; opId: string; idempotencyKey: string }) => ({
+        id: 3,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: r.requestId,
+            opId: r.opId,
+            op: "session/status",
+            idempotencyKey: r.idempotencyKey,
+            status: "failed",
+            outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "x", retryable: false } },
+            accepted: false,
+            failure: { code: "internal", message: "x", retryable: false },
+          },
+        }),
+        cancel: () => true,
+      }),
+    } as never
+    await seedSessionStatuses(client, "/repo", map, post, true, { connection: terminal })
+    expect(sdkCalls).toBe(0)
+    expect(map.get("s1")).toBe("busy")
+    expect(msgs).toEqual([])
+  })
+
+  it("SDK failure after fallback writes nothing", async () => {
+    const client = createClient(new Error("down"))
+    const map = new Map<string, SessionStatus["type"]>([["s1", "busy"]])
+    const { msgs, post } = collect()
+    await seedSessionStatuses(client, "/repo", map, post, true, { connection: { isPrivateAvailable: () => false } as never })
+    expect(map.get("s1")).toBe("busy")
+    expect(msgs).toEqual([])
+  })
+})

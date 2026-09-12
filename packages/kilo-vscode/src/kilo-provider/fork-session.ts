@@ -376,17 +376,30 @@ export async function forkSessionPrivateFirst(opts: {
 }
 
 export async function handleForkSession(ctx: ForkContext, sessionId: string, messageId?: string): Promise<void> {
-  const status =
-    ctx.status(sessionId) ??
-    (await Promise.resolve()
-      .then(() =>
-        ctx.connection.getClient().session.status({ directory: ctx.directory(sessionId) }, { throwOnError: true }),
-      )
-      .then((result) => result.data?.[sessionId]?.type ?? "idle")
-      .catch((e) => {
-        console.error("[Kilo New] refreshForkStatus failed:", e)
-        return "busy" as SessionStatus["type"]
-      }))
+  const local = ctx.status(sessionId)
+  let status: SessionStatus["type"]
+  if (local !== undefined) {
+    status = local
+  } else {
+    try {
+      const { fetchSessionStatusesPrivateFirst } = await import("./session-status-privatefirst")
+      const directory = ctx.directory(sessionId)
+      const client = ctx.connection.getClient() as unknown as never
+      const result = await fetchSessionStatusesPrivateFirst({
+        connection: ctx.connection as unknown as never,
+        client: client as unknown as never,
+        directory,
+      })
+      if (result.kind === "ok") status = (result.statuses[sessionId]?.type as SessionStatus["type"] | undefined) ?? "idle"
+      else {
+        console.error("[Kilo New] refreshForkStatus failed:", result.kind)
+        status = "busy"
+      }
+    } catch (e) {
+      console.error("[Kilo New] refreshForkStatus failed:", e)
+      status = "busy"
+    }
+  }
   if (status !== "idle") {
     ctx.post({ type: "error", message: "Wait for the session to finish before forking it." })
     return

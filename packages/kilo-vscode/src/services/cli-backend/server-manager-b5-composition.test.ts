@@ -1,10 +1,11 @@
 /* eslint-disable complexity */
 // P4.4-G3-B5 production-composition evidence via KiloConnectionService ownership.
 // ServerManager (stdio/epoch owner) -> KiloConnectionService (ServePrivatePeer
-// owner) -> ServePrivatePeer/session/status parity observer. SDK HTTP
-// (`client.session.status`) is the sole authority; the private path is
-// non-blocking parity diagnostics only (no map/post/reconcile impact,
-// LOCK-B5-001). B0-B5 protocol compatibility preserved, no cutover or Gate
+// owner) -> ServePrivatePeer/session/status private-first read. The private
+// path and SDK HTTP (`client.session.status`) read the same
+// `SessionStatus.Service.list()` source; the shared helper returns private
+// success with zero SDK, terminal with zero SDK, else exactly one same-dir
+// SDK fallback (LOCK-B5-001). B0-B5 protocol compatibility preserved, no Gate
 // B-D completion claim (LOCK-B5-002). Wire outcomes are explicit
 // valid/invalid; malformed never enters comparator; current-epoch cancel
 // miss/throw is fail-closed (LOCK-B5-003). A stale captured handle cleans
@@ -75,9 +76,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v)
 }
 
-describe("KiloConnectionService owns ServerManager stdio + ServePrivatePeer B5 status parity production composition", () => {
+describe("KiloConnectionService owns ServerManager stdio + ServePrivatePeer B5 status private-first production composition", () => {
   test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
-    "covers connect/startup ownership, initialize+capability gate, SDK-first same-directory status, invalid-wire exclusion, deferred dedupe, current-miss fail-closed plus no-current-peer stale cleanup, exact cleanup",
+    "covers connect/startup ownership, initialize+capability gate, private-first same-directory status, invalid-wire exclusion, current-miss fail-closed plus no-current-peer stale cleanup, exact cleanup",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")
       const binPath = path.join(extensionPath, "bin", process.platform === "win32" ? "kilo.exe" : "kilo")
@@ -216,8 +217,8 @@ describe("KiloConnectionService owns ServerManager stdio + ServePrivatePeer B5 s
         const parity = compareStatusParity(outcome.result, { data: sdkData } as unknown as never)
         expect(parity.divergence).toBeNull()
 
-        // 6. SDK-first non-blocking observer: SDK applies first, private observes
-        // detached and never mutates map/posts/reconcile (LOCK-B5-001).
+        // 6. Private-first seed: private success returns with zero SDK and
+        // seeds map/posts; empty idle map stays empty (LOCK-B5-001).
         const map = new Map<string, string>()
         const posts: unknown[] = []
         const post = (msg: unknown) => {
@@ -239,18 +240,6 @@ describe("KiloConnectionService owns ServerManager stdio + ServePrivatePeer B5 s
         const before = JSON.stringify([...map.entries()])
         await new Promise((r) => setTimeout(r, 800))
         expect(JSON.stringify([...map.entries()])).toBe(before)
-
-        // 7. Deferred observer dedupe: same epoch+directory registers once.
-        const inner = (svc as unknown as { deferredStatusObservers: Map<string, () => void> }).deferredStatusObservers
-        const sizeBefore = inner.size
-        const unsub1 = svc.addDeferredStatusObserver(workspace, () => {})
-        expect(inner.size).toBe(sizeBefore + 1)
-        const unsub2 = svc.addDeferredStatusObserver(workspace, () => {})
-        expect(inner.size).toBe(sizeBefore + 1)
-        unsub2()
-        expect(inner.size).toBe(sizeBefore + 1)
-        unsub1()
-        expect(inner.size).toBe(sizeBefore)
 
         // 8. Direct-helper invalid-wire exclusion (LOCK-B5-003): helper-level
         // normalize/validate assertion, not live invalid wire over fd3/fd4, so

@@ -195,14 +195,6 @@ export class KiloConnectionService {
    */
   private readonly privateAvailableListeners: Set<() => void> = new Set()
   /**
-   * Keyed deferred status observers: at most one deferred private status
-   * observation per backend epoch + effective directory. Wrappers live in
-   * `privateAvailableListeners` too, so notify/reset paths treat them as
-   * ordinary one-shot listeners; the map only provides the dedupe key.
-   * No timers, no polling, no detached work.
-   */
-  private readonly deferredStatusObservers: Map<string, () => void> = new Map()
-  /**
    * Keyed deferred get observers (B6): at most one deferred private get
    * observation per backend epoch + canonical directory + session id.
    * Owner-managed like status observers: wrappers live in
@@ -792,7 +784,6 @@ export class KiloConnectionService {
     this.seenConfigTransactions.clear()
     this.configRevisionListeners.clear()
     this.privateAvailableListeners.clear()
-    this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
@@ -841,7 +832,6 @@ export class KiloConnectionService {
     this.stopCheckin()
     this.disposePrivatePeer()
     this.privateAvailableListeners.clear()
-    this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
@@ -1113,7 +1103,6 @@ export class KiloConnectionService {
     this.privatePid = undefined
     this.privateFailedGetEpoch = null
     this.privateAvailableListeners.clear()
-    this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
@@ -1121,62 +1110,6 @@ export class KiloConnectionService {
     this.deferredConfigWarnings.clearAll()
     this.deferredFindFiles.clearAll()
     this.deferredSessionList.clearAll()
-  }
-
-  /**
-   * Deferred status observer key: current backend epoch plus effective
-   * (canonicalized) directory. Duplicate seeds for the same backend and
-   * directory share one key, hence one deferred observation.
-   */
-  deferredStatusObserverKey(dir: string): string {
-    let canonical = dir
-    try {
-      canonical = normalize(resolve(dir))
-    } catch {
-      canonical = dir
-    }
-    return `status:${this.privateEpoch ?? "none"}:${canonical}`
-  }
-
-  /**
-   * Register a one-shot deferred status observation for the current backend
-   * epoch + directory. A duplicate registration for the same key is absorbed
-   * (returns a no-op unsubscribe) so multiple seeds before private
-   * negotiation yield at most one deferred observation. The entry is released
-   * when it fires, when its owner unsubscribes, or when negotiation for its
-   * epoch definitively fails / the connection resets / disposes / invalidates.
-   */
-  addDeferredStatusObserver(dir: string, listener: () => void): () => void {
-    const key = this.deferredStatusObserverKey(dir)
-    if (this.deferredStatusObservers.has(key)) return () => {}
-    let wrapper: () => void = () => {
-      this.removeDeferredStatusObserver(key, wrapper)
-      listener()
-    }
-    this.deferredStatusObservers.set(key, wrapper)
-    this.privateAvailableListeners.add(wrapper)
-    return () => {
-      this.removeDeferredStatusObserver(key, wrapper)
-    }
-  }
-
-  private removeDeferredStatusObserver(key: string, wrapper: () => void): void {
-    if (this.deferredStatusObservers.get(key) === wrapper) this.deferredStatusObservers.delete(key)
-    this.privateAvailableListeners.delete(wrapper)
-  }
-
-  private clearDeferredStatusObserversForEpoch(epoch: number | null): void {
-    const prefix = `status:${epoch ?? "none"}:`
-    for (const [key, wrapper] of [...this.deferredStatusObservers]) {
-      if (!key.startsWith(prefix)) continue
-      this.deferredStatusObservers.delete(key)
-      this.privateAvailableListeners.delete(wrapper)
-    }
-  }
-
-  private clearAllDeferredStatusObservers(): void {
-    for (const [, wrapper] of [...this.deferredStatusObservers]) this.privateAvailableListeners.delete(wrapper)
-    this.deferredStatusObservers.clear()
   }
 
   /**
@@ -1505,7 +1438,7 @@ export class KiloConnectionService {
 
   /**
    * Definitive negotiation failure for the current backend epoch: it will
-   * never notify availability, so deferred status observers for that epoch
+   * never notify availability, so deferred observers for that epoch
    * are released without notifying. The epoch guard in the caller protects a
    * newer backend/epoch's listeners.
    */
@@ -1513,7 +1446,6 @@ export class KiloConnectionService {
     this.privateAvailable = false
     console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
     this.privateFailedGetEpoch = epochAtStart
-    this.clearDeferredStatusObserversForEpoch(epochAtStart)
     this.clearDeferredGetObserversForEpoch(epochAtStart)
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
@@ -1560,7 +1492,6 @@ export class KiloConnectionService {
       // notify: release deferred observers without notifying (same fail-closed
       // cleanup as a definitive negotiation failure).
       this.privateFailedGetEpoch = server.epoch
-      this.clearDeferredStatusObserversForEpoch(server.epoch)
       this.clearDeferredGetObserversForEpoch(server.epoch)
       this.clearDeferredMessagesObserversForEpoch(server.epoch)
       this.deferredChildren.clearForEpoch(server.epoch)
