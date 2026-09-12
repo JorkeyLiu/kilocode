@@ -10,12 +10,11 @@
 // identities. No session_operation row is written.
 //
 // Source facts:
-// - Route: `POST /kilocode/skill/remove` with `RemoveSkillPayload`
-//   in `packages/opencode/src/kilocode/server/httpapi/groups/kilocode.ts`
-//   (`identifier: "kilocode.removeSkill"`).
-// - Shared mutation: `packages/opencode/src/kilocode/skill-remove-execute.ts`
+// - Private-only mutation: `packages/opencode/src/kilocode/skill-remove-execute.ts`
 //   (`Skill.all` → `skill-remove.target` guards → `containsPath` scope →
-//   `withColdMutation` → manifest-only `unlink`).
+//   `withColdMutation` → manifest-only `unlink`) is reached solely through the
+//   private `skill/remove` FD op. There is no HTTP skill-remove route and no
+//   generated SDK method.
 // - Private entry: `packages/opencode/src/kilocode/skill-remove-private.ts`
 //   (`skill/remove` FD op, strict validation, drain-control lane,
 //   `InstanceRef` scope, redacted terminal failures).

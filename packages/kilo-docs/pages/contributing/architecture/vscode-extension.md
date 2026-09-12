@@ -161,7 +161,7 @@ Permission save/reply is private-first over the same `kilo serve` fd3/fd4 into t
 
 ## Private `skill/remove` carrier — private-only mutation, same AppLayer
 
-Skill removal is private-only over the same `kilo serve` fd3/fd4 into the same `AppRuntime` shared skill-removal mutation used by HTTP `POST /kilocode/skill/remove` (exact registry match, manifest-only unlink, cold convergence). There is no SDK fallback on any outcome: settings (`KiloProvider.removeSkillViaCli`) removal fails closed and re-observes authoritative skills/commands, and the extension never inspects or deletes skill paths. There is no downloadable catalog product; skills load locally from canonical directories, `.claude`/`.agents`, `skills.paths`, and user-configured `skills.urls`.
+Skill removal is private-only over the same `kilo serve` fd3/fd4 into the CLI-owned skill-removal mutation (`packages/opencode/src/kilocode/skill-remove-execute.ts`: exact registry match, manifest-only unlink, cold convergence). There is no HTTP skill-remove route and no SDK fallback on any outcome: settings (`KiloProvider.removeSkillViaCli`) removal fails closed and re-observes authoritative skills/commands, and the extension never inspects or deletes skill paths. There is no downloadable catalog product; skills load locally from canonical directories, `.claude`/`.agents`, `skills.paths`, and user-configured `skills.urls`.
 
 | Aspect | Behavior |
 |---|---|

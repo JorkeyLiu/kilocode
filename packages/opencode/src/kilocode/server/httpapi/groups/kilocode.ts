@@ -26,10 +26,6 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 
 const root = "/kilocode"
 
-export const RemoveSkillPayload = Schema.Struct({
-  location: Schema.String,
-})
-
 export const RemoveAgentPayload = Schema.Struct({
   name: Schema.String,
 })
@@ -98,7 +94,6 @@ export class CustomProviderSaveFailure extends Schema.ErrorClass<CustomProviderS
 export const KilocodePaths = {
   heapSnapshot: `${root}/heap/snapshot`,
   agentRequirements: `${root}/agent/requirements`,
-  removeSkill: `${root}/skill/remove`,
   removeAgent: `${root}/agent/remove`,
   notebookList: `${root}/notebook`,
   notebookReply: `${root}/notebook/:requestID/reply`,
@@ -131,18 +126,6 @@ export const KilocodeApi = HttpApi.make("kilocode")
             identifier: "kilocode.agentRequirements",
             summary: "Check agent requirements",
             description: "Check whether the selected agent's requirements are available in the request directory.",
-          }),
-        ),
-        HttpApiEndpoint.post("removeSkill", KilocodePaths.removeSkill, {
-          query: WorkspaceRoutingQuery,
-          payload: RemoveSkillPayload,
-          success: described(Schema.Boolean, "Skill removed"),
-          error: HttpApiError.BadRequest,
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilocode.removeSkill",
-            summary: "Remove a skill",
-            description: "Remove a skill by deleting its manifest from disk and clearing it from cache.",
           }),
         ),
         HttpApiEndpoint.post("removeAgent", KilocodePaths.removeAgent, {

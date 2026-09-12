@@ -2,7 +2,6 @@ import { Effect } from "effect"
 import { HttpEffect } from "effect/unstable/http" // kilocode_change - LOCK-003 response-boundary events
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as KiloAgent from "@/kilocode/agent"
-import { execute as executeSkillRemove } from "@/kilocode/skill-remove-execute"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -30,7 +29,6 @@ import {
   NotebookRejectPayload,
   NotebookReplyPayload,
   RemoveAgentPayload,
-  RemoveSkillPayload,
 } from "../groups/kilocode"
 
 export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode", (handlers) =>
@@ -47,26 +45,6 @@ export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode"
       query: { agent: string }
     }) {
       return yield* agents.requirementStatus(ctx.query.agent)
-    })
-
-    // LOCK-005/007: durable skill removal routed through withColdMutation. The
-    // scope is decided from robust path ownership evidence BEFORE the fence —
-    // the resolved SKILL.md target inside the instance boundary (directory or
-    // worktree) fences only that directory; anything else is conservatively
-    // global (all loaded directories). The response returns after the durable
-    // unlink and rebuild registration, before any generation drain; the
-    // convergence pass owns seal/drain/dispose/boot, so there is no direct
-    // store.dispose and no write-before-dispose window (LOCK-002). The
-    // production mutation is shared with the private `skill/remove` FD op in
-    // `skill-remove-execute` — both entry points invoke the exact same logic.
-    const removeSkill = Effect.fn("KilocodeHttpApi.removeSkill")(function* (ctx: {
-      payload: typeof RemoveSkillPayload.Type
-    }) {
-      const instance = yield* InstanceState.context
-      return yield* executeSkillRemove({
-        location: ctx.payload.location,
-        instance: { directory: instance.directory, worktree: instance.worktree },
-      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     // LOCK-005/007: durable agent removal routed through withColdMutation. A
@@ -229,7 +207,6 @@ export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode"
     return handlers
       .handle("heapSnapshot", heapSnapshot)
       .handle("agentRequirements", agentRequirements)
-      .handle("removeSkill", removeSkill)
       .handle("removeAgent", removeAgent)
       .handle("notebookList", notebookList)
       .handle("notebookReply", notebookReply)

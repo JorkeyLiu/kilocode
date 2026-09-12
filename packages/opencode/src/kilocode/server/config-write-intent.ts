@@ -26,8 +26,7 @@
  *   POST (settings/provider/auth saves):
  *     /custom-provider/:providerID/save
  *     /custom-provider/:providerID/delete
- *     /kilocode/agent/remove          custom agent removal (LOCK-005)
- *     /kilocode/skill/remove          skill removal (LOCK-005)
+  *     /kilocode/agent/remove          custom agent removal (LOCK-005)
  *     /kilo/organization              Kilo Gateway organization switch
  *     /kilocode/anaconda-desktop/sync Anaconda Desktop provider sync
  *     /provider/:providerID/oauth/callback
@@ -132,16 +131,12 @@ export function isConfigWrite(method: string, path: string): boolean {
   if (segs.length === 3 && segs[0] === "custom-provider" && (segs[2] === "save" || segs[2] === "delete")) {
     return Schema.is(ProviderV2.ID)(segs[1])
   }
-  // LOCK-005: agent/skill removal routes. Their handlers register their own
-  // convergence fence right after the load (via withColdMutation), so they take
-  // write-intent admission like the config PATCHes — a held reader lease would
-  // either self-deadlock or block the removal behind an active fence.
-  if (
-    segs.length === 3 &&
-    segs[0] === "kilocode" &&
-    (segs[1] === "agent" || segs[1] === "skill") &&
-    segs[2] === "remove"
-  ) {
+  // LOCK-005: agent removal route. Its handler registers its own convergence
+  // fence right after the load (via withColdMutation), so it takes write-intent
+  // admission like the config PATCHes — a held reader lease would either
+  // self-deadlock or block the removal behind an active fence. Skill removal is
+  // private-only over the `skill/remove` FD op and has no HTTP route.
+  if (segs.length === 3 && segs[0] === "kilocode" && segs[1] === "agent" && segs[2] === "remove") {
     return true
   }
   if (segs.length === 4 && segs[0] === "provider" && segs[2] === "oauth") {

@@ -12,7 +12,6 @@
  *   PUT   /agent-builder/:id                              (LOCK-005 agent-builder save)
  *   POST  /custom-provider/:providerID/save|delete
  *   POST  /kilocode/agent/remove                          (LOCK-005 agent removal)
- *   POST  /kilocode/skill/remove                          (LOCK-005 skill removal)
  *   POST  /kilo/organization
  *   POST  /kilocode/anaconda-desktop/sync
  *   POST  /provider/:providerID/oauth/callback
@@ -50,9 +49,8 @@ describe("isConfigWrite write-intent classification", () => {
     ["POST", "/custom-provider/ollama/save"],
     ["POST", "/custom-provider/ollama/delete"],
     ["POST", "/custom-provider/my_provider-2/save"],
-    // agent/skill removal (LOCK-005 durable mutations)
+    // agent removal (LOCK-005 durable mutation)
     ["POST", "/kilocode/agent/remove"],
-    ["POST", "/kilocode/skill/remove"],
     // Kilo Gateway organization switch
     ["POST", "/kilo/organization"],
     // Anaconda Desktop provider sync
@@ -128,11 +126,15 @@ describe("isConfigWrite write-intent classification", () => {
     ["DELETE", "/agent-builder/my-agent"],
     ["GET", "/agent-builder/my-agent"],
     ["POST", "/agent-builder/preview"],
-    // agent/skill removal near-misses: siblings, trailing segments, wrong trees
+    // agent removal near-misses: siblings, trailing segments, wrong trees.
+    // Skill removal is private-only over the `skill/remove` FD op and has no
+    // HTTP route, so every `/kilocode/skill/remove` shape stays on reader
+    // admission.
     ["POST", "/kilocode/agent/remove/"],
     ["POST", "/kilocode/agent/remove/extra"],
     ["POST", "/kilocode/agent/removes"],
     ["POST", "/kilocode/agent/requirements"],
+    ["POST", "/kilocode/skill/remove"],
     ["POST", "/kilocode/skill/remove/"],
     ["POST", "/kilocode/skill/remove/extra"],
     ["POST", "/kilocode/skills/remove"],

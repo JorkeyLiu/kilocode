@@ -11263,36 +11263,6 @@ export type KilocodeAgentRequirementsResponses = {
 export type KilocodeAgentRequirementsResponse =
   KilocodeAgentRequirementsResponses[keyof KilocodeAgentRequirementsResponses]
 
-export type KilocodeRemoveSkillData = {
-  body?: {
-    location: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/kilocode/skill/remove"
-}
-
-export type KilocodeRemoveSkillErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type KilocodeRemoveSkillError = KilocodeRemoveSkillErrors[keyof KilocodeRemoveSkillErrors]
-
-export type KilocodeRemoveSkillResponses = {
-  /**
-   * Skill removed
-   */
-  200: boolean
-}
-
-export type KilocodeRemoveSkillResponse = KilocodeRemoveSkillResponses[keyof KilocodeRemoveSkillResponses]
-
 export type KilocodeRemoveAgentData = {
   body?: {
     name: string

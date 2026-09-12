@@ -166,8 +166,6 @@ import type {
   KilocodeNotebookReplyResponses,
   KilocodeRemoveAgentErrors,
   KilocodeRemoveAgentResponses,
-  KilocodeRemoveSkillErrors,
-  KilocodeRemoveSkillResponses,
   KilocodeSessionImportMessageErrors,
   KilocodeSessionImportMessageResponses,
   KilocodeSessionImportPartErrors,
@@ -7137,45 +7135,6 @@ export class Kilocode extends HeyApiClient {
       ...options,
       ...params,
     })
-  }
-
-  /**
-   * Remove a skill
-   *
-   * Remove a skill by deleting its manifest from disk and clearing it from cache.
-   */
-  public removeSkill<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      location?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "location" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<KilocodeRemoveSkillResponses, KilocodeRemoveSkillErrors, ThrowOnError>(
-      {
-        url: "/kilocode/skill/remove",
-        ...options,
-        ...params,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-          ...params.headers,
-        },
-      },
-    )
   }
 
   /**

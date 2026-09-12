@@ -1,19 +1,21 @@
 // kilocode_change - new file
 /**
  * LOCK-001/002/005/007 convergence tests for the agent-builder save, agent
- * removal, and skill removal routes.
+ * removal, and private skill removal.
  *
- * These routes are durable cold mutations routed through `withColdMutation`
- * with explicit scope (LOCK-005):
+ * The agent-builder save and agent removal routes are durable cold mutations
+ * routed through `withColdMutation` with explicit scope (LOCK-005); skill
+ * removal is private-only over the `skill/remove` FD op through the same
+ * shared cold-convergence mutation (`skill-remove-execute`):
  *
  * - agent-builder save: project scope follows the request payload (project →
  *   its directory, global → all loaded directories).
  * - agent removal: always GLOBAL — a custom agent can live in any config
  *   directory, so every loaded directory converges to the post-removal
  *   registry.
- * - skill removal: project-local when the resolved SKILL.md target is inside
- *   the instance boundary (robust path ownership evidence), otherwise
- *   conservatively GLOBAL.
+ * - skill removal (private FD): project-local when the resolved SKILL.md
+ *   target is inside the instance boundary (robust path ownership evidence),
+ *   otherwise conservatively GLOBAL.
  *
  * Covered scenarios:
  * 1. Project agent-builder save while a generation stream is HELD: the save
@@ -25,17 +27,18 @@
  *    before release, the active generation's runtime is not disposed early, and
  *    after release BOTH loaded directories are disposed/reloaded exactly once
  *    each with one `global.disposed`.
- * 3. Skill removal of a project-local skill: project scope — only the request
- *    directory converges, `global.disposed` never fires.
+ * 3. Private skill removal of a project-local skill: project scope — only the
+ *    request directory converges, `global.disposed` never fires.
  * 4. Agent removal: global scope — every loaded directory (including an idle
  *    sibling) converges and `global.disposed` fires once.
- * 5. Skill removal of a skill OUTSIDE the instance boundary: conservatively
- *    global — both loaded directories converge.
+ * 5. Private skill removal of a skill OUTSIDE the instance boundary:
+ *    conservatively global — both loaded directories converge.
  *
  * Progression uses Deferred/event latches — never wall-clock sleeps.
  */
 import { afterEach, describe, expect } from "bun:test"
 import path from "path"
+import { PassThrough } from "stream"
 import { Deferred, Effect, Fiber } from "effect"
 import * as Log from "@opencode-ai/core/util/log"
 import { Global } from "@opencode-ai/core/global"
@@ -43,6 +46,10 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Server } from "../../../src/server/server"
 import { Event } from "../../../src/server/event"
 import { GlobalBus } from "../../../src/bus/global"
+import { JsonRpcPeer } from "../../../src/private-worker/peer"
+import { createFdCarrier } from "../../../src/kilocode/server/fd-carrier"
+import { FD_PROTOCOL_NAME } from "../../../src/kilocode/server/fd-carrier-protocol"
+import { canonicalSkillRemoveOpId } from "../../../src/kilocode/skill-remove-private"
 import { TestLLMServer } from "../../lib/llm-server"
 import { testProviderConfig } from "../../lib/test-provider"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../../lib/effect"
@@ -65,6 +72,39 @@ function request(dir: string | undefined, input: string, init?: RequestInit) {
       ...init?.headers,
     },
   })
+}
+
+/**
+ * Private-only skill removal through the real `skill/remove` FD carrier into
+ * the shared cold-convergence mutation. There is no HTTP skill-remove route;
+ * scope/convergence assertions must drive this path.
+ */
+async function privateRemoveSkill(dir: string, location: string, token: string): Promise<{ status: string }> {
+  const extToCarrier = new PassThrough()
+  const carrierToExt = new PassThrough()
+  const carrier = createFdCarrier(extToCarrier, carrierToExt)
+  const ext = new JsonRpcPeer({ reader: carrierToExt, writer: extToCarrier })
+  try {
+    await ext.request("initialize", {
+      protocol: { name: FD_PROTOCOL_NAME, major: 1, minor: 0 },
+      clientInfo: { name: "kilo-vscode", version: "7.4.11" },
+      capabilities: ["skill/remove"],
+    })
+    const opId = canonicalSkillRemoveOpId(token)
+    const raw = (await ext.request("skill/remove", {
+      v: 1,
+      requestId: `req-${token}`,
+      opId,
+      op: "skill/remove",
+      idempotencyKey: opId,
+      context: { directory: dir },
+      payload: { location },
+    })) as { status: string }
+    return raw
+  } finally {
+    carrier.dispose()
+    ext.dispose()
+  }
 }
 
 /** Per-test project directories to dispose in afterEach (app-store isolation). */
@@ -371,7 +411,7 @@ describe("agent-builder save converges with explicit scope (LOCK-005/007)", () =
   )
 })
 
-describe("skill removal converges with project scope for project-local skills (LOCK-005)", () => {
+describe("private skill removal converges with project scope for project-local skills (LOCK-005)", () => {
   it.live(
     "removing a project-local skill disposes only the request directory and never fires global.disposed",
     () =>
@@ -387,15 +427,8 @@ describe("skill removal converges with project scope for project-local skills (L
         const globalDisposed = yield* eventCountLatch(Event.Disposed.type, undefined, 1)
         const location = path.join(f.project, ".kilo", "skill", "remove-me", "SKILL.md")
 
-        const removed = yield* Effect.promise(async () => {
-          const response = await request(f.project, "/kilocode/skill/remove", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ location }),
-          })
-          return response.status
-        })
-        expect(removed).toBe(200)
+        const removed = yield* Effect.promise(() => privateRemoveSkill(f.project, location, "conv-project"))
+        expect(removed.status).toBe("succeeded")
         expect(yield* Effect.promise(() => Bun.file(location).exists())).toBe(false)
         // Removing only the manifest preserves sibling files.
         expect(yield* Effect.promise(() => Bun.file(path.join(f.project, ".kilo", "skill", "remove-me", "KEEP.txt")).exists())).toBe(true)
@@ -433,15 +466,8 @@ describe("skill removal converges with project scope for project-local skills (L
         const siblingDisposed = yield* eventCountLatch("server.instance.disposed", other, 1)
         const globalDisposed = yield* eventCountLatch(Event.Disposed.type, undefined, 1)
 
-        const removed = yield* Effect.promise(async () => {
-          const response = await request(f.project, "/kilocode/skill/remove", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ location: globalSkill }),
-          })
-          return response.status
-        })
-        expect(removed).toBe(200)
+        const removed = yield* Effect.promise(() => privateRemoveSkill(f.project, globalSkill, "conv-global"))
+        expect(removed.status).toBe("succeeded")
         expect(yield* Effect.promise(() => Bun.file(globalSkill).exists())).toBe(false)
 
         yield* joinSignal(projectDisposed.await)

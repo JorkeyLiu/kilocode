@@ -20,14 +20,6 @@ function file(ctx: ScenarioContext, name: string, content: string) {
   })
 }
 
-const skill = async (dir: string) => {
-  await Bun.write(
-    path.join(dir, ".kilo/skill/httpapi-remove/SKILL.md"),
-    "---\nname: httpapi-remove\ndescription: HTTP API removal fixture.\n---\n# HTTP API remove\n",
-  )
-  await Bun.write(path.join(dir, ".kilo/skill/httpapi-remove/KEEP.txt"), "synthetic sentinel\n")
-}
-
 const agent = async (dir: string) => {
   await Bun.write(
     path.join(dir, ".kilo/agent/httpapi-remove.md"),
@@ -343,31 +335,6 @@ export const kiloScenarios: Scenario[] = [
       array(body.mcps)
       array(body.vscode_extensions)
     }),
-  http.protected
-    .post("/kilocode/skill/remove", "kilocode.removeSkill")
-    .inProject({ git: true, init: skill })
-    .mutating()
-    .preserveDatabase()
-    .at((ctx) => ({
-      path: "/kilocode/skill/remove",
-      headers: ctx.headers(),
-      body: { location: path.join(directory(ctx), ".kilo/skill/httpapi-remove/SKILL.md") },
-    }))
-    .jsonEffect(200, (body, ctx) =>
-      Effect.gen(function* () {
-        check(body === true, "skill removal should return true")
-        const location = path.join(directory(ctx), ".kilo/skill/httpapi-remove/SKILL.md")
-        const sentinel = path.join(directory(ctx), ".kilo/skill/httpapi-remove/KEEP.txt")
-        check(
-          !(yield* Effect.promise(() => Bun.file(location).exists())),
-          "removed skill should not remain on disk",
-        )
-        check(
-          yield* Effect.promise(() => Bun.file(sentinel).exists()),
-          "skill removal should preserve sibling files",
-        )
-      }),
-    ),
   http.protected
     .post("/kilocode/agent/remove", "kilocode.removeAgent")
     .inProject({ git: true, init: agent })
