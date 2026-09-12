@@ -7,7 +7,7 @@
  */
 
 import type { KiloClient, QuestionRequest } from "@kilocode/sdk/v2/client"
-import { rejectQuestionPrivateFirst, replyQuestionPrivateFirst } from "../question-privatefirst"
+import { readQuestionsForDir, rejectQuestionPrivateFirst, replyQuestionPrivateFirst } from "../question-privatefirst"
 
 type PrivateConn = Parameters<typeof replyQuestionPrivateFirst>[0]["connection"]
 
@@ -78,15 +78,26 @@ export async function fetchAndSendPendingQuestions(ctx: QuestionContext): Promis
       const failed = new Set<string>()
       const pending: Array<{ question: QuestionRequest; dir: string }> = []
       for (const dir of dirs) {
-        const { data, error } = await ctx.client.question.list({ directory: dir })
-        if (error) {
+        let items: QuestionRequest[]
+        try {
+          const read = await readQuestionsForDir({
+            connection: ctx.connection ?? null,
+            client: ctx.client,
+            directory: dir,
+          })
+          if (read.kind !== "ok") {
+            failed.add(dir)
+            continue
+          }
+          items = read.items as unknown as QuestionRequest[]
+        } catch (error) {
           failed.add(dir)
           console.error(`[Kilo New] KiloProvider: Failed to fetch pending questions for ${dir}:`, error)
           continue
         }
         scanned.add(dir)
-        if (!data) continue
-        for (const q of data) {
+        if (!items) continue
+        for (const q of items) {
           if (seen.has(q.id)) continue
           seen.add(q.id)
           if (!ctx.trackedSessionIds.has(q.sessionID)) continue

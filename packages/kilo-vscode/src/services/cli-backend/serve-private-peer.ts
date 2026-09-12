@@ -204,6 +204,16 @@ import type {
   PermissionListWireOutcome,
 } from "./serve-private-permission-list-contract"
 import {
+  makeQuestionListAmbiguous,
+  normalizePrivateQuestionListWire,
+  validateQuestionListContractRequest,
+} from "./serve-private-question-list-contract"
+import type {
+  QuestionListContractRequest,
+  QuestionListResult,
+  QuestionListWireOutcome,
+} from "./serve-private-question-list-contract"
+import {
   makeMcpStatusAmbiguous,
   normalizePrivateMcpStatusWire,
   validateMcpStatusContractRequest,
@@ -3744,6 +3754,61 @@ export class ServePrivatePeer {
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makePermissionListAmbiguous(req, true) }
       return normalizePrivatePermissionListWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateQuestionList(req: QuestionListContractRequest): Promise<QuestionListResult> {
+    const handle = this.privateQuestionListWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new Error(outcome.detail)
+    return outcome.result
+  }
+
+  private failedQuestionList(req: QuestionListContractRequest, code: string, msg: string): QuestionListResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "question/list",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  privateQuestionListWithHandle(req: QuestionListContractRequest): {
+    id: number
+    promise: Promise<QuestionListWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateQuestionListContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("question/list")) {
+      throw new Error("Private peer missing question/list capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("question/list", req)
+    const promise = (async (): Promise<QuestionListWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeQuestionListAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedQuestionList(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeQuestionListAmbiguous(req, true) }
+      return normalizePrivateQuestionListWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }
