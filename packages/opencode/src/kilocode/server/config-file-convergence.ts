@@ -17,7 +17,8 @@
  *   never awaiting drain; pass boots from latest disk and coalesces bursts).
  *
  * Private fd methods: `config/convergence/acquire` + `config/convergence/resolve`
- * (no client-declared commit/abort). Capability negotiation is fail-closed.
+ * plus fail-safe cold `config/convergence/observe` (descriptor-only,
+ * always cold, no baseline, no hot/noop).
  * Descriptors are a closed set; runtime derives paths, never accepts arbitrary
  * absolute paths. Any global descriptor => global fence; otherwise a single
  * project directory (multi-dir in one lease is rejected). Project directories
@@ -61,8 +62,10 @@ import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 
 export const CONVERGENCE_ACQUIRE_OP = "config/convergence/acquire" as const
 export const CONVERGENCE_RESOLVE_OP = "config/convergence/resolve" as const
+export const CONVERGENCE_OBSERVE_OP = "config/convergence/observe" as const
 export const CONVERGENCE_ACQUIRE_VERSION = 1 as const
 export const CONVERGENCE_RESOLVE_VERSION = 1 as const
+export const CONVERGENCE_OBSERVE_VERSION = 1 as const
 export const MAX_CONVERGENCE_LEASES = 32
 export const RESOLVED_TERMINAL_CACHE = 128
 export const LEASE_TTL_MS = 30_000
@@ -475,9 +478,24 @@ function verifyAllSync(auth: ReadonlyMap<string, DirAuth>): void {
 export interface ConfigFileConvergence {
   readonly acquire: (leaseId: string, descriptors: readonly ConvergenceDescriptor[]) => Effect.Effect<AcquireOutcome>
   readonly resolve: (leaseId: string) => Effect.Effect<ConvergenceTerminal>
+  readonly observe: (observeId: string, descriptors: readonly ConvergenceDescriptor[]) => Effect.Effect<ObserveTerminal>
   readonly peerClosed: () => Effect.Effect<void>
   readonly shutdown: Effect.Effect<void>
   readonly unresolvedCount: () => Effect.Effect<number>
+}
+
+/**
+ * External observe terminal: fail-safe cold only. A valid hint always
+ * registers a cold convergence obligation; `failed` carries a diagnostic +
+ * retry hint. There is intentionally no noop/hot outcome and no
+ * server-owned baseline — repeated same-state hints are cold by design.
+ */
+export type ObserveTerminal = {
+  readonly observeId: string
+  readonly outcome: "cold" | "failed"
+  readonly scope: "global" | { readonly directory: string }
+  readonly reason?: string
+  readonly retryable?: boolean
 }
 
 export class Service extends Context.Service<Service, ConfigFileConvergence>()("@kilocode/ConfigFileConvergence") {}
@@ -485,6 +503,7 @@ export class Service extends Context.Service<Service, ConfigFileConvergence>()("
 export const noopFileConvergence: ConfigFileConvergence = {
   acquire: (leaseId) => Effect.succeed({ acquired: true as const, leaseId }),
   resolve: (leaseId) => Effect.succeed({ leaseId, outcome: "noop" as const, scope: "global" as const }),
+  observe: (observeId) => Effect.succeed({ observeId, outcome: "cold" as const, scope: "global" as const }),
   peerClosed: () => Effect.void,
   shutdown: Effect.void,
   unresolvedCount: () => Effect.succeed(0),
@@ -1061,6 +1080,57 @@ export const layer = Layer.effect(
           ),
         )
 
+      /**
+       * External observe: descriptor-only fail-safe cold hint for canonical
+       * config edits that bypassed the acquire fence (e.g. VS Code watcher
+       * external edits). Authorizes project directories with the existing
+       * convergence guards, resolves canonical paths, raises the existing
+       * ConfigConvergence generation admission fence via begin, registers a
+       * cold obligation via commit, and acknowledges at the existing
+       * non-blocking commit point (never awaiting drain). The worker boots
+       * from latest disk; active generations keep old pins; new admissions
+       * wait. Missing/unreadable/malformed disk still cold-converges — the
+       * boot surfaces normal loader diagnostics, never a false noop. Never
+       * trusts client bytes/hash/outcome; asset descriptors are rejected by
+       * validation before this runs. Duplicate hints coalesce through the
+       * existing ConfigConvergence seq/pending behavior. No baseline, no
+       * adoption callbacks/listeners, no hot/noop classification.
+       */
+      const observeInner = (observeId: string, descriptors: readonly ConvergenceDescriptor[]): Effect.Effect<ObserveTerminal> =>
+        Effect.gen(function* () {
+          if (!isNonEmpty(observeId) || observeId.length > 128) return yield* Effect.die(new Error("observeId invalid"))
+          if (descriptors.some((d) => d.kind !== "config"))
+            return yield* Effect.die(new Error("observe rejects asset descriptors"))
+          if (shuttingDown) return yield* Effect.die(new Error("convergence shutting down"))
+          const auth = yield* authorizeDescriptors(descriptors)
+          // Resolve canonical paths + re-verify directory identity with the
+          // existing guards so symlink/traversal escapes fail closed.
+          const files = resolveDescriptorFiles(descriptors)
+          yield* Effect.sync(() => verifyAllSync(auth))
+          void files
+          const scope = leaseScopeFor(descriptors)
+          const scopeOut: ObserveTerminal["scope"] =
+            scope === "global" ? "global" : { directory: scope.directory }
+          const obligation = yield* convergence.begin(scope)
+          const exit = yield* convergence.commit(obligation).pipe(Effect.exit)
+          if (exit._tag === "Failure") {
+            yield* convergence.abort(obligation).pipe(Effect.catchCause(() => Effect.void))
+            return {
+              observeId,
+              outcome: "failed" as const,
+              scope: scopeOut,
+              reason: `observe cold commit failed: ${String(exit.cause)}`,
+              retryable: true,
+            }
+          }
+          return { observeId, outcome: "cold" as const, scope: scopeOut }
+        })
+
+      const observeEffect = (
+        observeId: string,
+        descriptors: readonly ConvergenceDescriptor[],
+      ): Effect.Effect<ObserveTerminal> => observeInner(observeId, descriptors)
+
       const peerClosedEffect: Effect.Effect<void> = Effect.gen(function* () {
         if (shuttingDown) return
         if (pending.size === 0) return
@@ -1148,6 +1218,7 @@ export const layer = Layer.effect(
       const svc: ConfigFileConvergence = {
         acquire: acquireEffect,
         resolve: (leaseId: string) => resolveLeaseEffect(leaseId, "resolve"),
+        observe: (observeId: string, descriptors: readonly ConvergenceDescriptor[]) => observeEffect(observeId, descriptors),
         peerClosed: () => peerClosedEffect,
         shutdown: shutdownEffect,
         unresolvedCount: () => Effect.sync(() => pending.size),
@@ -1191,4 +1262,38 @@ export function validateResolveRequest(raw: unknown): { leaseId: string } {
   if (raw.idempotencyKey !== raw.opId || raw.requestId !== raw.opId || raw.leaseId !== raw.opId)
     throw new Error("leaseId/opId/idempotencyKey/requestId must bind to one token")
   return { leaseId: raw.leaseId as string }
+}
+
+export function validateObserveRequest(raw: unknown): {
+  observeId: string
+  descriptors: readonly ConvergenceDescriptor[]
+} {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  // Strictly descriptor-only: client bytes/hash/outcome are never trusted.
+  for (const forbidden of ["bytes", "hash", "outcome", "content", "text", "body", "data"]) {
+    if (forbidden in raw) throw new Error(`observe must not carry ${forbidden}`)
+  }
+  const allowed = new Set(["v", "observeId", "opId", "requestId", "idempotencyKey", "context", "descriptors"])
+  for (const k of Object.keys(raw)) if (!allowed.has(k)) throw new Error("unexpected field")
+  if (raw.v !== CONVERGENCE_OBSERVE_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.observeId)) throw new Error("observeId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId || raw.requestId !== raw.opId || raw.observeId !== raw.opId)
+    throw new Error("observeId/opId/idempotencyKey/requestId must bind to one token")
+  if ((raw.observeId as string).length > 128) throw new Error("observeId too long")
+  if (raw.context !== undefined) {
+    if (!isRecord(raw.context)) throw new Error("context must be object when present")
+    const contextAllowed = new Set(["directory"])
+    for (const k of Object.keys(raw.context)) if (!contextAllowed.has(k)) throw new Error("unexpected context field")
+    if (raw.context.directory !== undefined && !isNonEmpty(raw.context.directory))
+      throw new Error("context directory must be non-empty string when present")
+    for (const forbidden of ["bytes", "hash", "outcome"]) {
+      if (forbidden in (raw.context as Record<string, unknown>)) throw new Error(`observe context must not carry ${forbidden}`)
+    }
+  }
+  const descriptors = validateDescriptors(raw.descriptors)
+  if (descriptors.some((d) => d.kind !== "config")) throw new Error("observe rejects asset descriptors")
+  return { observeId: raw.observeId as string, descriptors }
 }

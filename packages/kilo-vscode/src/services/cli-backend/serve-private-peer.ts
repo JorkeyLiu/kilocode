@@ -3724,7 +3724,7 @@ export class ServePrivatePeer {
    * never rewrite). Exact cancel via tryCancelPending by the owner.
    */
   async requestConvergence(
-    method: "config/convergence/acquire" | "config/convergence/resolve",
+    method: "config/convergence/acquire" | "config/convergence/resolve" | "config/convergence/observe",
     params: unknown,
   ): Promise<unknown> {
     if (this.disposed) throw new Error("Peer disposed")

@@ -69,6 +69,7 @@ import {
   rollbackCredential as credentialRollback,
 } from "./credential-rollback"
 import { type ConfigSnapshot, snapshot as makeSnapshot } from "./snapshot"
+import { ExternalObserveCoalescer } from "./external-observe"
 import {
   type ProviderIndex,
   type AgentIndex,
@@ -308,6 +309,7 @@ export class CanonicalConfigService implements Disposable {
 
   /** Disposed flag. */
   private disposed = false
+  private readonly observeCoalescer = new ExternalObserveCoalescer()
 
   constructor(
     private readonly context: any,
@@ -2741,34 +2743,38 @@ export class CanonicalConfigService implements Disposable {
     }
   }
 
-  /**
-   * Handle a config file change from the watcher (Blocker 5, 6).
-   * Uses hash-based coalescing and revision-gated queue.
-   */
+  /** Watcher config change: hash-coalesce own writes, materialize external, then one observe hint. */
   private onFileChanged(scope: "global" | "project"): void {
     if (this.disposed) return
     if (scope === "project" && !this.hasProject) return
-
     const filePath = scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!
-
-    // Read current bytes for hash comparison (Blocker 5)
     const raw = readFile(filePath)
     if (raw.type === "present") {
       if (this.shouldCoalesce(filePath, raw.hash)) return
     } else if (raw.type === "absent") {
-      // File deleted — clear own-write hash and process
       this.ownWriteHashes.delete(filePath)
     }
-    // failure falls through to process
-
-    void this.enqueueAndRunMaterialization("external").catch((err) => {
-      if (!this.disposed) {
-        this.onErrorEmitter.fire({
-          kind: "watcher-error",
-          message: `Config watcher convergence failed: ${String(err)}`,
+    void this.enqueueAndRunMaterialization("external")
+      .then(() => {
+        if (this.disposed) return
+        this.observeCoalescer.notify(scope, {
+          isDisposed: () => this.disposed,
+          hasProject: this.hasProject,
+          projectRoot: this.paths.projectRoot,
+          observe: this.convergence?.observe?.bind(this.convergence),
+          onPending: (message) => {
+            this.onErrorEmitter.fire({ kind: "watcher-error", message })
+          },
         })
-      }
-    })
+      })
+      .catch((err) => {
+        if (!this.disposed) {
+          this.onErrorEmitter.fire({
+            kind: "watcher-error",
+            message: `Config watcher convergence failed: ${String(err)}`,
+          })
+        }
+      })
   }
 
   /**

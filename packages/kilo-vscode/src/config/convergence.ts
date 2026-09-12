@@ -1,5 +1,6 @@
 /**
- * Canonical GUI disk-write convergence adapter (first unit).
+ * Canonical GUI disk-write convergence adapter (first unit) plus external
+ * canonical config observe hints (second unit).
  *
  * CanonicalConfigService-controlled GUI writes acquire a CLI runtime fence
  * first (`config/convergence/acquire`) and best-effort resolve after
@@ -13,6 +14,13 @@
  * fail closed without one (no mutation, no resolve). Intentionally unfenced:
  * agent/skill markdown/asset file writes, legacy mcp.json/mcp_settings.json
  * cleanup, and external watcher edits.
+ *
+ * External canonical config edits (VS Code watcher, not own writes) are
+ * observed via a descriptor-only private hint (`config/convergence/observe`)
+ * after successful local materialization. The hint always requests fail-safe
+ * cold convergence (no hot/noop, no baseline); hint failure leaves local
+ * state intact with a pending diagnostic and never rewrites disk. Asset
+ * watcher events never send observe hints.
  */
 
 export type ConvergenceDescriptor =
@@ -37,6 +45,7 @@ export type AcquireResult =
 export interface ConfigConvergenceAdapter {
   acquire(descriptors: readonly ConvergenceDescriptor[]): Promise<AcquireResult>
   resolve(leaseId: string): Promise<ConvergenceState>
+  observe?(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState>
 }
 
 export interface ConvergencePeer {
@@ -140,6 +149,37 @@ export function parseResolveResponse(raw: unknown, leaseId: string): Convergence
     if (!allowed.has(k)) return { status: "pending", message: "resolve response unknown field; runtime convergence pending" }
   if (outcome === "noop" || outcome === "hot" || outcome === "cold") return { status: "converged", outcome }
   return { status: "pending", message: "resolve response ambiguous; runtime convergence pending" }
+}
+
+/**
+ * Pure observe-wire parser. Strict fail-closed validation of
+ * v/observeId/outcome/scope (+reason/retryable for failed); unknown fields
+ * are rejected. Only `cold` converges; `failed` and malformed resolve to a
+ * persisted `pending` diagnostic — local materialization stays intact, never
+ * rewritten, no SDK fallback. `noop`/`hot` are never produced by the server
+ * and are treated as ambiguous pending (no false ready claim).
+ */
+export function parseObserveResponse(raw: unknown, observeId: string): ConvergenceState {
+  if (!isRecord(raw)) return { status: "pending", message: "observe response malformed; runtime convergence pending" }
+  if (raw.v !== 1) return { status: "pending", message: "observe response version mismatch; runtime convergence pending" }
+  if (raw.observeId !== observeId)
+    return { status: "pending", message: "observe response id mismatch; runtime convergence pending" }
+  const outcome = raw.outcome
+  if (!isValidOutcome(outcome) || !isValidScope(raw.scope))
+    return { status: "pending", message: "observe response ambiguous; runtime convergence pending" }
+  if (outcome === "failed") {
+    const allowed = new Set(["v", "observeId", "outcome", "scope", "reason", "retryable"])
+    for (const k of Object.keys(raw))
+      if (!allowed.has(k)) return { status: "pending", message: "observe response unknown field; runtime convergence pending" }
+    if (typeof raw.reason !== "string")
+      return { status: "pending", message: "observe response ambiguous; runtime convergence pending" }
+    return { status: "pending", message: `runtime convergence failed (${raw.reason}); local state intact` }
+  }
+  const allowed = new Set(["v", "observeId", "outcome", "scope"])
+  for (const k of Object.keys(raw))
+    if (!allowed.has(k)) return { status: "pending", message: "observe response unknown field; runtime convergence pending" }
+  if (outcome === "cold") return { status: "converged", outcome }
+  return { status: "pending", message: "observe response ambiguous; runtime convergence pending" }
 }
 
 /**
@@ -263,16 +303,63 @@ export class PrivateConvergenceAdapter implements ConfigConvergenceAdapter {
       finish()
     }
   }
+
+  /**
+   * External observe hint: descriptor-only, no SDK fallback. Config
+   * descriptors only; asset descriptors are rejected locally without a
+   * transport call. Every call sends one hint — burst bounding lives in the
+   * per-scope trailing-edge coalescer (`external-observe.ts`), so the latest
+   * edit is never dropped here. Failure/unavailable returns pending with
+   * local materialization intact and no rewrite.
+   */
+  async observe(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
+    for (const d of descriptors) {
+      if (d.kind !== "config") return { status: "pending", message: "asset observe not supported; local state intact" }
+    }
+    if (descriptors.length === 0) return { status: "pending", message: "observe requires descriptors; local state intact" }
+    return this.observeOnce(descriptors)
+  }
+
+  private async observeOnce(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
+    const peer = this.current()
+    if (!peer) return { status: "pending", message: "private transport unavailable; runtime convergence pending" }
+    try {
+      if (typeof peer.hasCapability === "function") {
+        if (!peer.hasCapability("config/convergence/observe"))
+          return { status: "pending", message: "runtime observe capability missing; runtime convergence pending" }
+      }
+    } catch {
+      return { status: "pending", message: "capability negotiation failed; runtime convergence pending" }
+    }
+    const id = token().replace("gui-", "obs-")
+    const params = {
+      v: 1,
+      observeId: id,
+      opId: id,
+      requestId: id,
+      idempotencyKey: id,
+      descriptors: [...descriptors],
+    }
+    try {
+      const raw = await withTimeout(peer.request("config/convergence/observe", params), this.timeoutMs, "observe timed out")
+      return parseObserveResponse(raw, id)
+    } catch {
+      return { status: "pending", message: "observe unreachable; runtime convergence pending" }
+    }
+  }
 }
 
 /** Explicit test fake: records acquire-before-write and resolve-finally ordering. */
 export class FakeConvergenceAdapter implements ConfigConvergenceAdapter {
   readonly acquires: ConvergenceDescriptor[][] = []
   readonly resolves: string[] = []
+  readonly observes: ConvergenceDescriptor[][] = []
   writes = 0
   acquireResult: AcquireResult = { ok: true, leaseId: "fake-lease" }
   resolveResult: ConvergenceState = { status: "converged", outcome: "cold" }
+  observeResult: ConvergenceState = { status: "converged", outcome: "cold" }
   resolveThrows = false
+  observeThrows = false
 
   async acquire(descriptors: readonly ConvergenceDescriptor[]): Promise<AcquireResult> {
     this.acquires.push([...descriptors])
@@ -284,6 +371,12 @@ export class FakeConvergenceAdapter implements ConfigConvergenceAdapter {
     this.resolves.push(leaseId)
     if (this.resolveThrows) throw new Error("fake resolve transport loss")
     return this.resolveResult
+  }
+
+  async observe(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
+    this.observes.push([...descriptors])
+    if (this.observeThrows) throw new Error("fake observe transport loss")
+    return this.observeResult
   }
 
   markWrite(): void {

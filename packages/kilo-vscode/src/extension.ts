@@ -133,7 +133,7 @@ export function activate(context: vscode.ExtensionContext) {
       const epoch = connectionService.getPrivateEpoch()
       return {
         request: (method: string, params: unknown) => {
-          if (method !== "config/convergence/acquire" && method !== "config/convergence/resolve")
+          if (method !== "config/convergence/acquire" && method !== "config/convergence/resolve" && method !== "config/convergence/observe")
             return Promise.reject(new Error(`unsupported convergence method ${method}`))
           if (connectionService.getPrivatePeer() !== peer || connectionService.getPrivateEpoch() !== epoch)
             return Promise.reject(new Error("convergence epoch changed"))

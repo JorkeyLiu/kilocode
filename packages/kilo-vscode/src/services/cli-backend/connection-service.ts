@@ -1635,7 +1635,7 @@ export class KiloConnectionService {
     return this.privateEpoch
   }
 
-  async privateConvergenceRequest(method: "config/convergence/acquire" | "config/convergence/resolve", params: unknown): Promise<unknown> {
+  async privateConvergenceRequest(method: "config/convergence/acquire" | "config/convergence/resolve" | "config/convergence/observe", params: unknown): Promise<unknown> {
     const peer = this.privatePeer, epoch = this.privateEpoch
     if (!peer || !this.privateAvailable || !peer.isAvailable()) throw new Error("Private peer unavailable")
     const raw = await peer.requestConvergence(method, params)

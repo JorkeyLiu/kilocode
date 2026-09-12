@@ -32,6 +32,7 @@ export const FD_CAPABILITIES = [
   "session/command",
   "config/convergence/acquire",
   "config/convergence/resolve",
+  "config/convergence/observe",
 ] as const
 
 export const FD_REVERSE_CAPABILITY_MAX_LENGTH = 128

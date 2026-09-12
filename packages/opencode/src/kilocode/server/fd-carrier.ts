@@ -51,8 +51,10 @@ import { Service as PrivatePeerService } from "./private-peer-registry"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 import {
   CONVERGENCE_ACQUIRE_OP,
+  CONVERGENCE_OBSERVE_OP,
   CONVERGENCE_RESOLVE_OP,
   validateAcquireRequest,
+  validateObserveRequest,
   validateResolveRequest,
 } from "./config-file-convergence"
 import { ConfigFileConvergence } from "./config-file-convergence"
@@ -3159,6 +3161,36 @@ export function createFdCarrier(
           const message = e instanceof Error ? e.message : String(e)
           const err = new Error(message) as Error & { code: number }
           err.code = /unknown convergence lease/i.test(message) ? ErrorCode.InvalidParams : ErrorCode.InternalError
+          throw err
+        }
+      }
+      if (method === CONVERGENCE_OBSERVE_OP) {
+        let parsed: { observeId: string; descriptors: readonly unknown[] }
+        try {
+          const v = validateObserveRequest(params)
+          parsed = { observeId: v.observeId, descriptors: v.descriptors }
+        } catch (e) {
+          const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+          err.code = ErrorCode.InvalidParams
+          throw err
+        }
+        try {
+          const result = await AppRuntime.runPromise(
+            Effect.gen(function* () {
+              const svc = yield* ConfigFileConvergence.Service
+              return yield* svc.observe(parsed.observeId, parsed.descriptors as never)
+            }),
+          )
+          return { v: 1, ...(result as object) }
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          const err = new Error(message) as Error & { code: number }
+          err.code =
+            /observe rejects asset|not authorized|not loadable|observeId invalid|observeId too long|must be|must bind|must not carry|rejected|unexpected|empty|closed set|context/i.test(
+              message,
+            )
+              ? ErrorCode.InvalidParams
+              : ErrorCode.InternalError
           throw err
         }
       }
