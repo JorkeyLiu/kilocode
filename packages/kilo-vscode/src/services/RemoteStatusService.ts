@@ -3,28 +3,33 @@ import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { t } from "./cli-backend/i18n"
 import { fetchRemoteStatusPrivateFirst } from "../kilo-provider/remote-status-privatefirst"
 import type { RemoteStatusPrivateConnection } from "../kilo-provider/remote-status-privatefirst"
+import { fetchRemoteTogglePrivateFirst } from "../kilo-provider/remote-toggle-privatefirst"
+import type { RemoteTogglePrivateConnection } from "../kilo-provider/remote-toggle-privatefirst"
 
 export type RemoteState = { enabled: boolean; connected: boolean }
 
 type Listener = (state: RemoteState) => void
+
+type RemotePrivateConnection = RemoteStatusPrivateConnection & RemoteTogglePrivateConnection
 
 /**
  * Singleton service that owns all remote-control state and the VS Code status bar item.
  * Replaces the per-webview polling in RemoteIndicator.tsx and ExperimentalTab.tsx
  * with a push-based model: one status bar item, zero recurring cost for non-remote users.
  *
- * `remote/status` reads are private-first (same `KiloSessions.remoteStatus()`
- * authority as `GET /remote/status`; directory/workspace are routing-only,
- * payload booleans stay process-global): one private attempt plus at most one
- * same-identity SDK fallback per read, never retried. Enable/disable/toggle
- * mutations stay SDK-only with unchanged semantics.
+ * `remote/status` reads and `remote/enable|disable` writes are private-first
+ * (same process-global `KiloSessions` authority as the HTTP routes;
+ * directory/workspace are routing-only, payload booleans stay
+ * process-global): one private attempt plus at most one same-identity SDK
+ * fallback per action, never retried. SSE `remote-status-changed` remains the
+ * subsequent transition authority.
  */
 export class RemoteStatusService implements vscode.Disposable {
   private state: RemoteState = { enabled: false, connected: false }
   private bar: vscode.StatusBarItem
   private listeners = new Set<Listener>()
   private client: KiloClient | null = null
-  private privConn: RemoteStatusPrivateConnection | null = null
+  private privConn: RemotePrivateConnection | null = null
 
   constructor() {
     this.bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
@@ -37,9 +42,9 @@ export class RemoteStatusService implements vscode.Disposable {
   }
 
   /**
-   * Attach the private `remote/status` read boundary. Null detaches (SDK-only).
+   * Attach the private `remote/status` + `remote/enable|disable` boundary. Null detaches (SDK-only).
    */
-  setPrivateConnection(c: RemoteStatusPrivateConnection | null): void {
+  setPrivateConnection(c: RemotePrivateConnection | null): void {
     this.privConn = c
   }
 
@@ -122,12 +127,31 @@ export class RemoteStatusService implements vscode.Disposable {
   /** Enable or disable remote. State updates are pushed via events. */
   async setEnabled(enabled: boolean): Promise<void> {
     if (!this.client) return
-    if (enabled) {
-      await this.client.remote.enable(undefined, { throwOnError: true })
-    } else {
-      await this.client.remote.disable(undefined, { throwOnError: true })
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (!this.privConn || !dir) {
+      const res = enabled
+        ? await this.client.remote.enable(undefined, { throwOnError: true })
+        : await this.client.remote.disable(undefined, { throwOnError: true })
+      const data = res?.data as Partial<RemoteState> | undefined
+      if (data && typeof data.enabled === "boolean" && typeof data.connected === "boolean") {
+        this.update({ enabled: data.enabled, connected: data.connected })
+        return
+      }
+      this.update({ enabled, connected: false })
+      return
     }
-    this.update({ enabled, connected: false })
+    const out = await fetchRemoteTogglePrivateFirst({
+      connection: this.privConn,
+      client: this.client as never,
+      directory: dir,
+      action: enabled ? "enable" : "disable",
+    })
+    if (out.kind === "ok") {
+      this.update(out.state)
+      return
+    }
+    if (out.kind === "terminal") throw new Error(`remote ${enabled ? "enable" : "disable"} failed: ${out.code ?? "terminal"}`)
+    throw out.cause instanceof Error ? out.cause : new Error(`remote ${enabled ? "enable" : "disable"} unavailable`)
   }
 
   /**

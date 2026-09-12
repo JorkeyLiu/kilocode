@@ -14,11 +14,13 @@ function client(opts: { status?: StatusResponse | (() => StatusResponse); fail?:
       },
       enable: async (_body?: unknown, _opts?: unknown) => {
         if (opts.fail) throw new Error("enable failed")
-        return { data: true }
+        const data =
+          typeof opts.status === "function" ? opts.status() : (opts.status ?? { enabled: true, connected: false })
+        return { data }
       },
       disable: async (_body?: unknown, _opts?: unknown) => {
         if (opts.fail) throw new Error("disable failed")
-        return { data: true }
+        return { data: { enabled: false, connected: false } }
       },
     },
   }
@@ -166,9 +168,9 @@ describe("RemoteStatusService", () => {
           status: async (_b?: unknown, _o?: unknown) => ({ data: { enabled: false, connected: false } }),
           enable: async (_b?: unknown, _o?: unknown) => {
             enabled = true
-            return { data: true }
+            return { data: { enabled: true, connected: false } }
           },
-          disable: async (_b?: unknown, _o?: unknown) => ({ data: true }),
+          disable: async (_b?: unknown, _o?: unknown) => ({ data: { enabled: false, connected: false } }),
         },
       }
       svc.setClient(c as never)
@@ -183,10 +185,10 @@ describe("RemoteStatusService", () => {
       const c = {
         remote: {
           status: async (_b?: unknown, _o?: unknown) => ({ data: { enabled: true, connected: true } }),
-          enable: async (_b?: unknown, _o?: unknown) => ({ data: true }),
+          enable: async (_b?: unknown, _o?: unknown) => ({ data: { enabled: true, connected: true } }),
           disable: async (_b?: unknown, _o?: unknown) => {
             disabled = true
-            return { data: true }
+            return { data: { enabled: false, connected: false } }
           },
         },
       }
@@ -305,6 +307,64 @@ describe("RemoteStatusService", () => {
   // ---------------------------------------------------------------------------
 
   describe("private-first", () => {
+    function toggleOkConn(enabled: boolean, connected: boolean) {
+      return {
+        isPrivateAvailable: () => true,
+        privateRemoteStatusOutcomeWithHandle: (req: {
+          requestId: string
+          opId: string
+          idempotencyKey: string
+          context: { directory: string }
+        }) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "remote/status",
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: 1 },
+              accepted: true,
+              data: { status: { enabled, connected } },
+            },
+          }),
+          cancel: () => true,
+        }),
+        privateRemoteToggleOutcomeWithHandle: (req: {
+          requestId: string
+          opId: string
+          idempotencyKey: string
+          op: string
+        }) => {
+          const next =
+            req.op === "remote/enable"
+              ? { enabled: true, connected: false }
+              : { enabled: false, connected: false }
+          return {
+            id: 2,
+            promise: Promise.resolve({
+              kind: "valid",
+              result: {
+                v: 1,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: req.op,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: 1 },
+                accepted: true,
+                data: { status: next },
+              },
+            }),
+            cancel: () => true,
+          }
+        },
+      }
+    }
+
     function okConn(enabled: boolean, connected: boolean, seen?: { priv: number; dir?: string }) {
       return {
         isPrivateAvailable: () => true,
@@ -337,30 +397,55 @@ describe("RemoteStatusService", () => {
             cancel: () => true,
           }
         },
-      }
-    }
-
-    function terminalConn(code = "validation.failed") {
-      return {
-        isPrivateAvailable: () => true,
-        privateRemoteStatusOutcomeWithHandle: (req: { requestId: string; opId: string; idempotencyKey: string }) => ({
-          id: 1,
+        privateRemoteToggleOutcomeWithHandle: (req: {
+          requestId: string
+          opId: string
+          idempotencyKey: string
+          op: string
+        }) => ({
+          id: 2,
           promise: Promise.resolve({
             kind: "valid",
             result: {
               v: 1,
               requestId: req.requestId,
               opId: req.opId,
-              op: "remote/status",
+              op: req.op,
               idempotencyKey: req.idempotencyKey,
-              status: "failed",
-              outcome: { type: "failed", time: 1, failure: { code, message: "m", retryable: false } },
-              accepted: false,
-              failure: { code, message: "m", retryable: false },
+              status: "succeeded",
+              outcome: { type: "succeeded", time: 1 },
+              accepted: true,
+              data: { status: { enabled, connected } },
             },
           }),
           cancel: () => true,
         }),
+      }
+    }
+
+    function terminalConn(code = "validation.failed") {
+      const failed = (req: { requestId: string; opId: string; idempotencyKey: string; op: string }) => ({
+        id: 1,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: req.op,
+            idempotencyKey: req.idempotencyKey,
+            status: "failed",
+            outcome: { type: "failed", time: 1, failure: { code, message: "m", retryable: false } },
+            accepted: false,
+            failure: { code, message: "m", retryable: false },
+          },
+        }),
+        cancel: () => true,
+      })
+      return {
+        isPrivateAvailable: () => true,
+        privateRemoteStatusOutcomeWithHandle: failed,
+        privateRemoteToggleOutcomeWithHandle: failed,
       }
     }
 
@@ -375,8 +460,8 @@ describe("RemoteStatusService", () => {
             seen.args.push(params)
             return { data: status }
           },
-          enable: async () => ({ data: true }),
-          disable: async () => ({ data: true }),
+          enable: async () => ({ data: { enabled: true, connected: false } }),
+          disable: async () => ({ data: { enabled: false, connected: false } }),
         },
       }
     }
@@ -434,8 +519,8 @@ describe("RemoteStatusService", () => {
         svc.setClient({
           remote: {
             status: async () => ({ error: { message: "down" } }),
-            enable: async () => ({ data: true }),
-            disable: async () => ({ data: true }),
+            enable: async () => ({ data: { enabled: true, connected: false } }),
+            disable: async () => ({ data: { enabled: false, connected: false } }),
           },
         } as never)
         svc.setPrivateConnection({ isPrivateAvailable: () => false } as never)
@@ -448,9 +533,8 @@ describe("RemoteStatusService", () => {
       }
     })
 
-    it("toggle pre-read is private-first: one private read plus one mutation, zero status SDK", async () => {
+    it("toggle pre-read is private-first: one private read plus private mutation, zero SDK", async () => {
       const svc = service()
-      const seen = { priv: 0, dir: undefined as string | undefined }
       let enabled = 0
       let disabled = 0
       let statusSdk = 0
@@ -462,40 +546,40 @@ describe("RemoteStatusService", () => {
           },
           enable: async () => {
             enabled += 1
-            return { data: true }
+            return { data: { enabled: true, connected: false } }
           },
           disable: async () => {
             disabled += 1
-            return { data: true }
+            return { data: { enabled: false, connected: false } }
           },
         },
       } as never)
-      svc.setPrivateConnection(okConn(false, false, seen) as never)
+      svc.setPrivateConnection(toggleOkConn(false, false) as never)
       await svc.toggle()
-      expect(seen.priv).toBe(1)
       expect(statusSdk).toBe(0)
-      expect(enabled).toBe(1)
+      expect(enabled).toBe(0)
       expect(disabled).toBe(0)
       expect(svc.getState()).toEqual({ enabled: true, connected: false })
       svc.dispose()
     })
 
-    it("toggle when enabled calls disable exactly once via private pre-read", async () => {
+    it("toggle when enabled disables via private mutation with zero SDK", async () => {
       const svc = service()
       let disabled = 0
       svc.setClient({
         remote: {
           status: async () => ({ data: { enabled: true, connected: true } }),
-          enable: async () => ({ data: true }),
+          enable: async () => ({ data: { enabled: true, connected: true } }),
           disable: async () => {
             disabled += 1
-            return { data: true }
+            return { data: { enabled: false, connected: false } }
           },
         },
       } as never)
-      svc.setPrivateConnection(okConn(true, true) as never)
+      svc.setPrivateConnection(toggleOkConn(true, true) as never)
       await svc.toggle()
-      expect(disabled).toBe(1)
+      expect(disabled).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: false, connected: false })
       svc.dispose()
     })
 
@@ -507,17 +591,115 @@ describe("RemoteStatusService", () => {
           status: async () => ({ data: { enabled: false, connected: false } }),
           enable: async () => {
             mutated += 1
-            return { data: true }
+            return { data: { enabled: true, connected: false } }
           },
           disable: async () => {
             mutated += 1
-            return { data: true }
+            return { data: { enabled: false, connected: false } }
           },
         },
       } as never)
       svc.setPrivateConnection(terminalConn() as never)
       await expect(svc.toggle()).rejects.toThrow()
       expect(mutated).toBe(0)
+      svc.dispose()
+    })
+
+    it("setEnabled(true) adopts private owner status with zero SDK", async () => {
+      const svc = service()
+      let sdk = 0
+      svc.setClient({
+        remote: {
+          status: async () => ({ data: { enabled: false, connected: false } }),
+          enable: async () => {
+            sdk += 1
+            return { data: { enabled: true, connected: false } }
+          },
+          disable: async () => ({ data: { enabled: false, connected: false } }),
+        },
+      } as never)
+      svc.setPrivateConnection(toggleOkConn(true, true) as never)
+      const states: RemoteState[] = []
+      svc.onChange((s) => states.push(s))
+      await svc.setEnabled(true)
+      expect(sdk).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      expect(states).toEqual([{ enabled: true, connected: false }])
+      svc.dispose()
+    })
+
+    it("setEnabled terminal throws with zero SDK and keeps state", async () => {
+      const svc = service()
+      let sdk = 0
+      svc.setClient({
+        remote: {
+          status: async () => ({ data: { enabled: false, connected: false } }),
+          enable: async () => {
+            sdk += 1
+            return { data: { enabled: true, connected: false } }
+          },
+          disable: async () => ({ data: { enabled: false, connected: false } }),
+        },
+      } as never)
+      svc.setPrivateConnection(terminalConn("auth.missing") as never)
+      await expect(svc.setEnabled(true)).rejects.toThrow("auth.missing")
+      expect(sdk).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: false, connected: false })
+      svc.dispose()
+    })
+
+    it("setEnabled falls back exactly once on private unavailable and adopts SDK status", async () => {
+      const svc = service()
+      let sdk = 0
+      svc.setClient({
+        remote: {
+          status: async () => ({ data: { enabled: false, connected: false } }),
+          enable: async () => {
+            sdk += 1
+            return { data: { enabled: true, connected: true } }
+          },
+          disable: async () => ({ data: { enabled: false, connected: false } }),
+        },
+      } as never)
+      svc.setPrivateConnection({ isPrivateAvailable: () => false } as never)
+      await svc.setEnabled(true)
+      expect(sdk).toBe(1)
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      svc.dispose()
+    })
+
+    it("setEnabled SDK failure keeps old state and throws", async () => {
+      const svc = service()
+      svc.updateFromEvent({ enabled: true, connected: true })
+      svc.setClient({
+        remote: {
+          status: async () => ({ data: { enabled: true, connected: true } }),
+          enable: async () => ({ data: { enabled: true, connected: true } }),
+          disable: async () => {
+            throw new Error("disable failed")
+          },
+        },
+      } as never)
+      svc.setPrivateConnection({ isPrivateAvailable: () => false } as never)
+      await expect(svc.setEnabled(false)).rejects.toThrow("disable failed")
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      svc.dispose()
+    })
+
+    it("SSE remains the transition authority after private setEnabled", async () => {
+      const svc = service()
+      svc.setClient({
+        remote: {
+          status: async () => ({ data: { enabled: false, connected: false } }),
+          enable: async () => ({ data: { enabled: true, connected: false } }),
+          disable: async () => ({ data: { enabled: false, connected: false } }),
+        },
+      } as never)
+      svc.setPrivateConnection(toggleOkConn(true, false) as never)
+      await svc.setEnabled(true)
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      svc.updateFromEvent({ enabled: true, connected: true })
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
       svc.dispose()
     })
   })

@@ -399,6 +399,10 @@ export const FD_CHILDREN_VERSION = 1 as const
 export const FD_CHILDREN_OP = "session/children" as const
 export const FD_REMOTE_STATUS_VERSION = 1 as const
 export const FD_REMOTE_STATUS_OP = "remote/status" as const
+export const FD_REMOTE_ENABLE_VERSION = 1 as const
+export const FD_REMOTE_ENABLE_OP = "remote/enable" as const
+export const FD_REMOTE_DISABLE_VERSION = 1 as const
+export const FD_REMOTE_DISABLE_OP = "remote/disable" as const
 export const FD_SESSION_LIST_VERSION = 2 as const
 export const FD_SESSION_LIST_OP = "experimental/session/list" as const
 export const SESSION_LIST_CURSOR_VERSION = 1 as const
@@ -664,6 +668,32 @@ export interface FdRemoteStatusRequest {
   payload: Record<string, never>
 }
 
+export interface FdRemoteEnableRequest {
+  v: typeof FD_REMOTE_ENABLE_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_REMOTE_ENABLE_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdRemoteDisableRequest {
+  v: typeof FD_REMOTE_DISABLE_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_REMOTE_DISABLE_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
+
 export interface FdChildrenRequest {
   v: typeof FD_CHILDREN_VERSION
   requestId: string
@@ -872,6 +902,48 @@ function remoteStatusFailed(
     requestId: req.requestId,
     opId: req.opId,
     op: FD_REMOTE_STATUS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function remoteEnableFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_REMOTE_ENABLE_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_REMOTE_ENABLE_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function remoteDisableFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_REMOTE_DISABLE_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_REMOTE_DISABLE_OP,
     idempotencyKey: req.idempotencyKey,
     status: "failed",
     outcome: { type: "failed", time, failure },
@@ -1146,6 +1218,83 @@ function validateRemoteStatusRequest(raw: unknown): FdRemoteStatusRequest {
   if ((segs[1] as string).includes(":"))
     throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
   return raw as unknown as FdRemoteStatusRequest
+}
+
+function validateRemoteEnableRequest(raw: unknown): FdRemoteEnableRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_REMOTE_ENABLE_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_REMOTE_ENABLE_OP) throw new Error("op must be remote/enable")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for remote-enable")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for remote-enable")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "remote-enable" || segs[1]!.length === 0)
+    throw new Error("opId must be remote-enable:<token> with nonempty colon-free token")
+  if ((segs[1] as string).includes(":"))
+    throw new Error("opId must be remote-enable:<token> with nonempty colon-free token")
+  return raw as unknown as FdRemoteEnableRequest
+}
+
+function validateRemoteDisableRequest(raw: unknown): FdRemoteDisableRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_REMOTE_DISABLE_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_REMOTE_DISABLE_OP) throw new Error("op must be remote/disable")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for remote-disable")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for remote-disable")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "remote-disable" || segs[1]!.length === 0)
+    throw new Error("opId must be remote-disable:<token> with nonempty colon-free token")
+  if ((segs[1] as string).includes(":"))
+    throw new Error("opId must be remote-disable:<token> with nonempty colon-free token")
+  return raw as unknown as FdRemoteDisableRequest
+}
+
+function classifyRemoteEnableError(err: unknown): { code: string; message: string; retryable: boolean } {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (/no Kilo credentials/i.test(msg))
+    return { code: "auth.missing", message: "no Kilo credentials found", retryable: false }
+  if (/invalid or expired/i.test(msg))
+    return { code: "auth.invalid", message: "invalid or expired credentials", retryable: false }
+  if (/failed to verify/i.test(msg))
+    return { code: "auth.unverified", message: "failed to verify credentials", retryable: true }
+  return { code: "internal", message: "internal error", retryable: false }
 }
 
 function validateSessionListRequest(raw: unknown): FdSessionListRequest {
@@ -3665,6 +3814,116 @@ export function createFdCarrier(
               outcome: { type: "succeeded", time: Date.now() },
               accepted: true,
               data: { status: { enabled, connected } },
+            }
+          }),
+        )
+        return result
+      }
+      if (method === "remote/enable") {
+        // Remote-enable mutation: same process-global KiloSessions.enableRemote
+        // owner as POST /remote/enable. Directory/workspace are routing
+        // identity only; no InstanceRef/drain-control/config fence, no new
+        // persistent state, no journal, no replay.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdRemoteEnableRequest
+            try {
+              req = validateRemoteEnableRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return remoteEnableFailed(fallbackIds(params), "validation.failed", boundRemoteStatusMessage(msg), false)
+            }
+            try {
+              canonicalDirectory(req.context.directory)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return remoteEnableFailed(req, "validation.failed", boundRemoteStatusMessage(msg), false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return remoteEnableFailed(req, "validation.failed", "invalid workspace", false)
+            }
+            const out = yield* Effect.promise(() => KiloSessions.enableRemote()).pipe(
+              Effect.map(() => ({ ok: true as const })),
+              Effect.catch((err: unknown) => Effect.succeed({ ok: false as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ ok: false as const, err: defect })),
+            )
+            if (!out.ok) {
+              const mapped = classifyRemoteEnableError((out as { err?: unknown }).err)
+              return remoteEnableFailed(req, mapped.code, mapped.message, mapped.retryable)
+            }
+            const snap = yield* Effect.sync(() => KiloSessions.remoteStatus()).pipe(
+              Effect.map((v) => ({ ok: true as const, v })),
+              Effect.catch(() => Effect.succeed({ ok: false as const })),
+              Effect.catchDefect(() => Effect.succeed({ ok: false as const })),
+            )
+            if (!snap.ok) return remoteEnableFailed(req, "internal", "internal error", false)
+            const raw = snap.v as { enabled?: unknown; connected?: unknown }
+            if (typeof raw.enabled !== "boolean") return remoteEnableFailed(req, "internal", "internal error", false)
+            if (typeof raw.connected !== "boolean") return remoteEnableFailed(req, "internal", "internal error", false)
+            return {
+              v: FD_REMOTE_ENABLE_VERSION,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: FD_REMOTE_ENABLE_OP,
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: Date.now() },
+              accepted: true,
+              data: { status: { enabled: raw.enabled, connected: raw.connected } },
+            }
+          }),
+        )
+        return result
+      }
+      if (method === "remote/disable") {
+        // Remote-disable mutation: same process-global KiloSessions.disableRemote
+        // owner as POST /remote/disable (idempotent). Routing-only
+        // directory/workspace; no InstanceRef/drain-control/config fence, no
+        // new persistent state, no journal, no replay.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdRemoteDisableRequest
+            try {
+              req = validateRemoteDisableRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return remoteDisableFailed(fallbackIds(params), "validation.failed", boundRemoteStatusMessage(msg), false)
+            }
+            try {
+              canonicalDirectory(req.context.directory)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return remoteDisableFailed(req, "validation.failed", boundRemoteStatusMessage(msg), false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return remoteDisableFailed(req, "validation.failed", "invalid workspace", false)
+            }
+            const snap = yield* Effect.sync(() => {
+              KiloSessions.disableRemote()
+              return KiloSessions.remoteStatus()
+            }).pipe(
+              Effect.map((v) => ({ ok: true as const, v })),
+              Effect.catch(() => Effect.succeed({ ok: false as const })),
+              Effect.catchDefect(() => Effect.succeed({ ok: false as const })),
+            )
+            if (!snap.ok) return remoteDisableFailed(req, "internal", "internal error", false)
+            const raw = snap.v as { enabled?: unknown; connected?: unknown }
+            if (typeof raw.enabled !== "boolean") return remoteDisableFailed(req, "internal", "internal error", false)
+            if (typeof raw.connected !== "boolean") return remoteDisableFailed(req, "internal", "internal error", false)
+            return {
+              v: FD_REMOTE_DISABLE_VERSION,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: FD_REMOTE_DISABLE_OP,
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: Date.now() },
+              accepted: true,
+              data: { status: { enabled: raw.enabled, connected: raw.connected } },
             }
           }),
         )

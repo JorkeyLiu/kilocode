@@ -73,6 +73,8 @@ import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-pri
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
+import { wrapRemoteToggleOutcomeForOwner } from "./serve-private-remote-toggle"
+import type { PrivateRemoteToggleWireOutcome, ServePrivateRemoteToggleRequest } from "./serve-private-remote-toggle"
 import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import { isSettledAbortResult, makeAbortAmbiguous } from "./serve-private-abort-contract"
@@ -2973,6 +2975,29 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("remote-status stale observer timeout"),
       peerAtCall.privateRemoteStatusOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  privateRemoteToggleOutcomeWithHandle(req: ServePrivateRemoteToggleRequest): {
+    id: number
+    promise: Promise<PrivateRemoteToggleWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapRemoteToggleOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout(`${req.op} stale observer timeout`),
+      peerAtCall.privateRemoteToggleOutcomeWithHandle(req),
       req,
     )
   }

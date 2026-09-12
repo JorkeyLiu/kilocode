@@ -29,6 +29,8 @@ export const FD_CAPABILITIES = [
   "session/messages",
   "session/children",
   "remote/status",
+  "remote/enable",
+  "remote/disable",
   "experimental/session/list",
   "path/get",
   "command/list",

@@ -75,6 +75,17 @@ import type {
   ServePrivateRemoteStatusRequest,
   ServePrivateRemoteStatusResult,
 } from "./serve-private-remote-status"
+import {
+  makeRemoteToggleCancel,
+  PrivateRemoteToggleValidationError,
+  requestRemoteToggleOutcome,
+  validateRemoteToggleRequest,
+} from "./serve-private-remote-toggle"
+import type {
+  PrivateRemoteToggleWireOutcome,
+  ServePrivateRemoteToggleRequest,
+  ServePrivateRemoteToggleResult,
+} from "./serve-private-remote-toggle"
 import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
 import { requestSessionListOutcome } from "./serve-private-session-list"
 import type {
@@ -393,6 +404,19 @@ export type {
   ServePrivateRemoteStatusRequest,
   ServePrivateRemoteStatusResult,
 } from "./serve-private-remote-status"
+export {
+  makeRemoteToggleCancel,
+  PrivateRemoteToggleValidationError,
+  requestRemoteToggleOutcome,
+  validateRemoteToggleRequest,
+  validateRemoteToggleResult,
+  wrapRemoteToggleOutcomeForOwner,
+} from "./serve-private-remote-toggle"
+export type {
+  PrivateRemoteToggleWireOutcome,
+  ServePrivateRemoteToggleRequest,
+  ServePrivateRemoteToggleResult,
+} from "./serve-private-remote-toggle"
 export {
   canonicalPathOpId,
   comparePathParity,
@@ -2275,6 +2299,8 @@ export const LEGACY_INITIALIZE_CAPABILITIES: readonly string[] = [
   "session/messages",
   "session/children",
   "remote/status",
+  "remote/enable",
+  "remote/disable",
   "experimental/session/list",
   "path/get",
   "find/files",
@@ -2505,6 +2531,8 @@ export class ServePrivatePeer {
       let hasMessages = false
       let hasChildren = false
       let hasRemoteStatus = false
+      let hasRemoteEnable = false
+      let hasRemoteDisable = false
       let hasSessionList = false
       let hasPath = false
       let hasCommandList = false
@@ -2519,6 +2547,8 @@ export class ServePrivatePeer {
         hasMessages = caps.includes("session/messages")
         hasChildren = caps.includes("session/children")
         hasRemoteStatus = caps.includes("remote/status")
+        hasRemoteEnable = caps.includes("remote/enable")
+        hasRemoteDisable = caps.includes("remote/disable")
         hasSessionList = caps.includes("experimental/session/list")
         hasPath = caps.includes("path/get")
         hasCommandList = caps.includes("command/list")
@@ -2604,6 +2634,8 @@ export class ServePrivatePeer {
         else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children)
           hasChildren = true
         if ((c as Record<string, unknown>)["remote/status"]) hasRemoteStatus = true
+        if ((c as Record<string, unknown>)["remote/enable"]) hasRemoteEnable = true
+        if ((c as Record<string, unknown>)["remote/disable"]) hasRemoteDisable = true
         if ((c as Record<string, unknown>)["experimental/session/list"]) hasSessionList = true
         if ((c as Record<string, unknown>)["path/get"]) hasPath = true
         if ((c as Record<string, unknown>)["command/list"]) hasCommandList = true
@@ -2618,6 +2650,8 @@ export class ServePrivatePeer {
           hasMessages = false
           hasChildren = false
           hasRemoteStatus = false
+          hasRemoteEnable = false
+          hasRemoteDisable = false
           hasSessionList = false
           hasPath = false
           hasCommandList = false
@@ -2635,6 +2669,8 @@ export class ServePrivatePeer {
         !hasMessages &&
         !hasChildren &&
         !hasRemoteStatus &&
+        !hasRemoteEnable &&
+        !hasRemoteDisable &&
         !hasSessionList &&
         !hasPath &&
         !hasCommandList &&
@@ -3004,6 +3040,57 @@ export class ServePrivatePeer {
     return { id: outcome.id, promise, cancel: outcome.cancel }
   }
 
+  privateRemoteToggleOutcomeWithHandle(req: ServePrivateRemoteToggleRequest): {
+    id: number
+    promise: Promise<PrivateRemoteToggleWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateRemoteToggleRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(req.op)) throw new Error(`Private peer missing ${req.op} capability`)
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const op = req.op
+    return requestRemoteToggleOutcome(
+      peerAtCall as unknown as import("./serve-private-remote-toggle").RemoteToggleRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeRemoteToggleCancel(
+          id,
+          {
+            isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+            tryCancel: (msg) => this.tryCancelPending(id, msg),
+            invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+          },
+          op,
+        ),
+      req,
+    )
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid toggle results; invalid wire rejects
+   * with PrivateRemoteToggleValidationError and never resolves as a normal result.
+   */
+  privateRemoteToggleWithHandle(req: ServePrivateRemoteToggleRequest): {
+    id: number
+    promise: Promise<ServePrivateRemoteToggleResult>
+    cancel: (msg?: string) => boolean
+  } {
+    const outcome = this.privateRemoteToggleOutcomeWithHandle(req)
+    const promise = (async (): Promise<ServePrivateRemoteToggleResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivateRemoteToggleValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
   privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): {
     id: number
     promise: Promise<ServePrivateCancelQueuedResult>
@@ -3113,6 +3200,8 @@ export class ServePrivatePeer {
         if (sess.children) return true
       }
       if (cap === "remote/status" && c["remote/status"]) return true
+      if (cap === "remote/enable" && c["remote/enable"]) return true
+      if (cap === "remote/disable" && c["remote/disable"]) return true
       if (cap === "experimental/session/list" && c["experimental/session/list"]) return true
       if (cap === "path/get" && c["path/get"]) return true
       if (cap === "command/list" && c["command/list"]) return true
