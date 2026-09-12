@@ -7,7 +7,11 @@
 
 import type { KiloClient, SuggestionRequest } from "@kilocode/sdk/v2/client"
 import { recoveryDirs } from "./permission-handler"
-import { acceptSuggestionPrivateFirst, dismissSuggestionPrivateFirst } from "../suggestion-privatefirst"
+import {
+  acceptSuggestionPrivateFirst,
+  dismissSuggestionPrivateFirst,
+  readSuggestionsForDir,
+} from "../suggestion-privatefirst"
 
 type PrivateConn = Parameters<typeof acceptSuggestionPrivateFirst>[0]["connection"]
 
@@ -159,9 +163,21 @@ export async function fetchAndSendPendingSuggestions(ctx: SuggestionContext): Pr
 
     const seen = new Set<string>()
     for (const dir of dirs) {
-      const { data } = await ctx.client.suggestion.list({ directory: dir })
-      if (!data) continue
-      for (const suggestion of recoverableSuggestions(data, ctx.trackedSessionIds, seen)) {
+      let items: RecoverableSuggestion[]
+      try {
+        const read = await readSuggestionsForDir({
+          connection: ctx.connection ?? null,
+          client: ctx.client,
+          directory: dir,
+        })
+        if (read.kind !== "ok") continue
+        items = read.items as unknown as RecoverableSuggestion[]
+      } catch (error) {
+        console.error(`[Kilo New] KiloProvider: Failed to fetch pending suggestions for ${dir}:`, error)
+        continue
+      }
+      if (!items) continue
+      for (const suggestion of recoverableSuggestions(items, ctx.trackedSessionIds, seen)) {
         ctx.postMessage({
           type: "suggestionRequest",
           suggestion,

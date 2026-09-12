@@ -43,6 +43,7 @@ import {
 } from "@/kilocode/permission/permission-private"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
+import { Suggestion } from "@/kilocode/suggestion"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionStatus } from "@/session/status"
@@ -459,6 +460,8 @@ export const FD_SUGGESTION_ACCEPT_VERSION = 1 as const
 export const FD_SUGGESTION_ACCEPT_OP = "suggestion/accept" as const
 export const FD_SUGGESTION_DISMISS_VERSION = 1 as const
 export const FD_SUGGESTION_DISMISS_OP = "suggestion/dismiss" as const
+export const FD_SUGGESTION_LIST_VERSION = 1 as const
+export const FD_SUGGESTION_LIST_OP = "suggestion/list" as const
 export const FD_MCP_STATUS_VERSION = 1 as const
 export const FD_MCP_STATUS_OP = "mcp/status" as const
 export const FD_PROMPT_VERSION = 1 as const
@@ -578,6 +581,18 @@ export interface FdQuestionListRequest {
   requestId: string
   opId: string
   op: typeof FD_QUESTION_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdSuggestionListRequest {
+  v: typeof FD_SUGGESTION_LIST_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_SUGGESTION_LIST_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -1668,6 +1683,48 @@ function safeQuestionListIdentities(req: { requestId: string; opId: string; idem
   }
 }
 
+function suggestionListFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_SUGGESTION_LIST_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_SUGGESTION_LIST_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function fallbackSuggestionListIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeSuggestionListIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
 function fallbackMcpStatusIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
   const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
   return {
@@ -1750,6 +1807,11 @@ const QUESTION_LIST_FENCE_MESSAGE =
 const QUESTION_LIST_INTERNAL_MESSAGE = "internal error"
 const QUESTION_LIST_VALIDATION_MESSAGE = "invalid question-list request"
 const QUESTION_LIST_SCOPE_MESSAGE = "directory mismatch"
+const SUGGESTION_LIST_FENCE_MESSAGE =
+  "Instance is unavailable during config rebuild; no active runtime for this request"
+const SUGGESTION_LIST_INTERNAL_MESSAGE = "internal error"
+const SUGGESTION_LIST_VALIDATION_MESSAGE = "invalid suggestion-list request"
+const SUGGESTION_LIST_SCOPE_MESSAGE = "directory mismatch"
 const MCP_STATUS_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
 const MCP_STATUS_INTERNAL_MESSAGE = "internal error"
 const MCP_STATUS_VALIDATION_MESSAGE = "invalid mcp-status request"
@@ -1972,6 +2034,40 @@ function validateQuestionListRequest(raw: unknown): FdQuestionListRequest {
   if (token.includes(":") || containsPathMaterial(token))
     throw new Error("opId must be question-list:<token> with nonempty colon-free token")
   return raw as unknown as FdQuestionListRequest
+}
+
+function validateSuggestionListRequest(raw: unknown): FdSuggestionListRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_SUGGESTION_LIST_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_SUGGESTION_LIST_OP) throw new Error("op must be suggestion/list")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for suggestion-list")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for suggestion-list")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "suggestion-list" || segs[1]!.length === 0)
+    throw new Error("opId must be suggestion-list:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be suggestion-list:<token> with nonempty colon-free token")
+  return raw as unknown as FdSuggestionListRequest
 }
 
 function validateMcpStatusRequest(raw: unknown): FdMcpStatusRequest {
@@ -2798,6 +2894,106 @@ export function createFdCarrier(
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(questionListFailed(safe, "internal", QUESTION_LIST_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === FD_SUGGESTION_LIST_OP || method === "suggestion/list") {
+        // Read-only suggestion list: process-global Suggestion.list() via
+        // the existing drain-control + InstanceRef snapshot-first lane held
+        // to completion. Returns all pending suggestions in insertion order
+        // regardless of routed directory, exactly as HTTP GET /suggestion.
+        // Directory selects the runtime/snapshot lane only (canonical
+        // validation + lane coherence) with no ownership filtering. Exact
+        // pending shape, no mutation, no durable operation. Not added to
+        // drain-control classification.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdSuggestionListRequest
+            try {
+              req = validateSuggestionListRequest(params)
+            } catch {
+              return suggestionListFailed(
+                fallbackSuggestionListIds(params),
+                "validation.failed",
+                SUGGESTION_LIST_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeSuggestionListIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return suggestionListFailed(safe, "validation.failed", SUGGESTION_LIST_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? SUGGESTION_LIST_FENCE_MESSAGE : SUGGESTION_LIST_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: suggestionListFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir)
+                return suggestionListFailed(safe, "scope_mismatch", SUGGESTION_LIST_SCOPE_MESSAGE, false)
+              const list = yield* Effect.promise(() => Suggestion.list()).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (list.tag !== "ok")
+                return suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false)
+              if (!Array.isArray(list.value))
+                return suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false)
+              for (const item of list.value) {
+                if (!Schema.is(Suggestion.RequestSchema)(item))
+                  return suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false)
+              }
+              return {
+                v: FD_SUGGESTION_LIST_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_SUGGESTION_LIST_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { suggestions: list.value },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(suggestionListFailed(safe, "internal", SUGGESTION_LIST_INTERNAL_MESSAGE, false))
               }),
             )
           }),
