@@ -59,6 +59,10 @@ An MCP server can expose tools that read data, modify external systems, or run l
 
 Review the item's author, source link, prerequisites, requested parameters, and available tools before installing it. See [Using MCP in Kilo Code](/docs/automate/mcp/using-in-kilo-code) for configuration, transport, authentication, and permission details.
 
+## Skill download validation
+
+Project skill installs download the skill tarball only from the Kilo Marketplace `skills-latest` GitHub release over HTTPS, with redirect allowlisting, download size limits, and full archive validation before anything is written. Release assets can change after publication, so a successful install guarantees transport and archive safety, not authorship or integrity.
+
 ## Removing an item
 
 An item can be installed at both project and global scope. Its Marketplace card shows it as installed and offers a separate remove action for each installed scope. Removing the project copy does not remove the global copy, and vice versa.

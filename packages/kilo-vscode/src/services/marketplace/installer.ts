@@ -1,9 +1,8 @@
 import * as fs from "fs/promises"
 import * as path from "path"
-import * as os from "os"
-import { randomUUID } from "crypto"
 import * as yaml from "yaml"
-import { exec } from "../../util/process"
+import { SkillArchive } from "@opencode-ai/core/kilocode/skill-archive"
+import type { SkillArchiveEntry } from "@opencode-ai/core/kilocode/skill-archive"
 import type {
   MarketplaceItem,
   MarketplaceItemRef,
@@ -18,6 +17,8 @@ import type {
 import { MarketplacePaths } from "./paths"
 import type { ConfigConvergenceAdapter, ConvergenceDescriptor } from "../../config/convergence"
 import { withFence } from "../../config/convergence-guard"
+
+const FETCH_TIMEOUT = 30_000
 
 export class MarketplaceInstaller {
   constructor(
@@ -180,6 +181,14 @@ export class MarketplaceInstaller {
   }
 
   // ── Skill ───────────────────────────────────────────────────────────
+  // Skill tarballs are fetched only from the kilo-marketplace
+  // `skills-latest` GitHub release over https (redirects must land on
+  // release-assets.githubusercontent.com), parsed fully in memory by the
+  // bounded shared parser, then written with fixed modes into staging
+  // beside the skills directory — never inside it, so discovery can never
+  // observe a half-written SKILL.md — before one atomic rename. Release
+  // assets are mutable, so this claims transport allowlisting plus archive
+  // bounds, not authenticity or integrity.
 
   async installSkill(
     item: SkillMarketplaceItem,
@@ -208,7 +217,7 @@ export class MarketplaceInstaller {
       return { success: false, slug: item.id, error: "Skill has no tarball URL" }
     }
 
-    if (!isSafeId(item.id)) {
+    if (!isSafeSkillId(item.id)) {
       return { success: false, slug: item.id, error: "Invalid skill id" }
     }
 
@@ -222,34 +231,37 @@ export class MarketplaceInstaller {
       return { success: false, slug: item.id, error: "Skill already installed. Uninstall it before installing again." }
     }
 
-    // Stage under `base` (not os.tmpdir()) so fs.rename() never crosses filesystems (EXDEV).
+    let url: URL
+    try {
+      url = skillUrl(item.id, item.content)
+    } catch (err) {
+      return { success: false, slug: item.id, error: err instanceof Error ? err.message : String(err) }
+    }
+
+    // Stage beside `base` (same filesystem, so rename never crosses devices)
+    // and outside the skills directory, so skill discovery cannot observe
+    // staging as an installed skill before the atomic rename.
     await fs.mkdir(base, { recursive: true })
-    const staging = await fs.mkdtemp(path.join(base, `.staging-${item.id}-`))
-    const tarball = path.join(os.tmpdir(), `kilo-skill-${item.id}-${randomUUID()}.tar.gz`)
+    const staging = await fs.mkdtemp(path.join(path.dirname(base), `.staging-skills-${item.id}-`))
 
     try {
-      const response = await fetch(item.content)
-      if (!response.ok) {
-        return { success: false, slug: item.id, error: `Download failed: ${response.status}` }
-      }
-
-      const buffer = Buffer.from(await response.arrayBuffer())
-      await fs.writeFile(tarball, buffer)
-      await exec("tar", ["-xzf", tarball, "--strip-components=1", "-C", staging])
-
-      const escaped = await findEscapedPaths(staging)
-      if (escaped.length > 0) {
-        console.warn(`Skill archive ${item.id} contains escaped paths:`, escaped)
-        return { success: false, slug: item.id, error: "Skill archive contains unsafe paths" }
-      }
-
+      const bytes = await download(url)
+      let entries: readonly SkillArchiveEntry[]
       try {
-        await fs.access(path.join(staging, "SKILL.md"))
-      } catch {
-        console.warn(`Extracted skill ${item.id} missing SKILL.md, rolling back`)
+        entries = SkillArchive.parse(bytes)
+      } catch (err) {
+        return {
+          success: false,
+          slug: item.id,
+          error: SkillArchive.isError(err) ? `Skill archive invalid (${err.code}): ${err.message}` : String(err),
+        }
+      }
+
+      if (!entries.some((entry) => entry.type === "file" && entry.name === "SKILL.md")) {
         return { success: false, slug: item.id, error: "Extracted archive missing SKILL.md" }
       }
 
+      await writeEntries(staging, entries)
       await fs.rename(staging, dir)
 
       return { success: true, slug: item.id, filePath: path.join(dir, "SKILL.md"), line: 1 }
@@ -262,16 +274,11 @@ export class MarketplaceInstaller {
         }
       }
       console.warn(`Failed to install skill ${item.id}:`, err)
-      return { success: false, slug: item.id, error: String(err) }
+      return { success: false, slug: item.id, error: err instanceof Error ? err.message : String(err) }
     } finally {
-      await Promise.all([
-        fs.rm(staging, { recursive: true, force: true }).catch((err) => {
-          console.warn(`Failed to clean up staging directory ${staging}:`, err)
-        }),
-        fs.rm(tarball, { force: true }).catch((err) => {
-          console.warn(`Failed to clean up temp file ${tarball}:`, err)
-        }),
-      ])
+      await fs.rm(staging, { recursive: true, force: true }).catch((err) => {
+        console.warn(`Failed to clean up staging directory ${staging}:`, err)
+      })
     }
   }
 
@@ -368,6 +375,151 @@ export class MarketplaceInstaller {
   }
 }
 
+// ── Skill download ────────────────────────────────────────────────────
+
+function skillUrl(id: string, content: string): URL {
+  let url: URL
+  try {
+    url = new URL(content)
+  } catch {
+    throw new Error("Invalid skill download URL")
+  }
+  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port !== "") throw new Error("Invalid skill download URL")
+  if (url.username !== "" || url.password !== "") throw new Error("Invalid skill download URL")
+  if (url.search !== "" || url.hash !== "") throw new Error("Invalid skill download URL")
+  const want = `/Kilo-Org/kilo-marketplace/releases/download/skills-latest/${encodeURIComponent(id)}.tar.gz`
+  if (url.pathname !== want) throw new Error("Invalid skill download URL")
+  return url
+}
+
+function finalUrl(initial: URL, responseUrl: unknown): URL {
+  if (typeof responseUrl !== "string" || responseUrl.length === 0) throw new Error("Unexpected download redirect")
+  let url: URL
+  try {
+    url = new URL(responseUrl)
+  } catch {
+    throw new Error("Unexpected download redirect")
+  }
+  if (url.protocol !== "https:") throw new Error("Unexpected download redirect")
+  if (url.username !== "" || url.password !== "") throw new Error("Unexpected download redirect")
+  if (url.port !== "") throw new Error("Unexpected download redirect")
+  if (url.hostname === "github.com") {
+    if (url.href !== initial.href) throw new Error("Unexpected download redirect")
+    return url
+  }
+  if (url.hostname === "release-assets.githubusercontent.com") {
+    if (url.hash !== "") throw new Error("Unexpected download redirect")
+    return url
+  }
+  throw new Error("Unexpected download redirect")
+}
+
+function throwIfContentLengthTooLarge(headers: { get?: (name: string) => string | null } | undefined): void {
+  const len = headers?.get?.("content-length")
+  if (len === null || len === undefined) return
+  const n = Number(len)
+  if (Number.isFinite(n) && n > SkillArchive.LIMITS.maxCompressedBytes) throw new Error("Download too large")
+}
+
+async function readBounded(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  ctrl: AbortController,
+): Promise<{ chunks: Uint8Array[]; total: number }> {
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const next = await readChunk(reader, ctrl)
+      if (!next) return { chunks, total }
+      total += next.byteLength
+      if (total > SkillArchive.LIMITS.maxCompressedBytes) {
+        ctrl.abort()
+        try {
+          await reader.cancel()
+        } catch {}
+        throw new Error("Download too large")
+      }
+      chunks.push(next)
+    }
+  } finally {
+    try {
+      reader.releaseLock()
+    } catch {}
+  }
+}
+
+async function readChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  ctrl: AbortController,
+): Promise<Uint8Array | undefined> {
+  let next: ReadableStreamReadResult<Uint8Array>
+  try {
+    next = await reader.read()
+  } catch (err) {
+    if (ctrl.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+      throw new Error("Download timed out")
+    }
+    throw err
+  }
+  if (next.done) return undefined
+  const value = next.value
+  if (!value || value.byteLength === 0) return new Uint8Array(0)
+  return value.slice()
+}
+
+function join(chunks: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const chunk of chunks) {
+    if (chunk.byteLength === 0) continue
+    out.set(chunk, off)
+    off += chunk.byteLength
+  }
+  return out
+}
+
+async function download(url: URL): Promise<Uint8Array> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT)
+  try {
+    const response = await fetch(url.toString(), { signal: ctrl.signal })
+    finalUrl(url, (response as { url?: unknown }).url)
+    if (!response.ok) throw new Error(`Download failed: ${response.status}`)
+    throwIfContentLengthTooLarge(response.headers)
+    const body = (response as { body?: unknown }).body as ReadableStream<Uint8Array> | null | undefined
+    if (!body || typeof (body as ReadableStream<Uint8Array>).getReader !== "function") {
+      throw new Error("Download is empty")
+    }
+    const { chunks, total } = await readBounded(body.getReader(), ctrl)
+    if (total === 0) throw new Error("Download is empty")
+    const out = join(chunks, total)
+    if (out.byteLength > SkillArchive.LIMITS.maxCompressedBytes) throw new Error("Download too large")
+    if (out.byteLength === 0) throw new Error("Download is empty")
+    return out
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw new Error("Download timed out")
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function writeEntries(staging: string, entries: readonly SkillArchiveEntry[]): Promise<void> {
+  const dirs = entries.filter((entry) => entry.type === "directory").sort((a, b) => a.name.length - b.name.length)
+  for (const entry of dirs) {
+    const full = path.join(staging, entry.name)
+    if (!contains(staging, full)) throw new Error("Skill archive contains unsafe paths")
+    await fs.mkdir(full, { recursive: true, mode: 0o755 })
+  }
+  for (const entry of entries) {
+    if (entry.type !== "file") continue
+    const full = path.join(staging, entry.name)
+    if (!contains(staging, full)) throw new Error("Skill archive contains unsafe paths")
+    await fs.mkdir(path.dirname(full), { recursive: true, mode: 0o755 })
+    await fs.writeFile(full, entry.data ?? new Uint8Array(0), { mode: 0o644, flag: "wx" })
+  }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 async function exists(filepath: string): Promise<boolean> {
@@ -432,6 +584,14 @@ function isSafeId(id: string): boolean {
   return /^[\w\-@.]+$/.test(id)
 }
 
+function isSafeSkillId(id: string): boolean {
+  if (!id || id.length > 64) return false
+  if (!/^[a-z0-9-]+$/.test(id)) return false
+  if (id.startsWith("-") || id.endsWith("-")) return false
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(id)) return false
+  return true
+}
+
 function escapeJsonValue(raw: string): string {
   return raw
     .replace(/\\/g, "\\\\")
@@ -449,33 +609,4 @@ function substituteParams(template: string, params: Record<string, unknown>): st
     result = result.replaceAll(`\${${key}}`, escaped)
   }
   return result
-}
-
-async function findEscapedPaths(dir: string): Promise<string[]> {
-  const resolved = path.resolve(dir)
-  const escaped: string[] = []
-
-  async function walk(current: string) {
-    const entries = await fs.readdir(current, { withFileTypes: true })
-    for (const entry of entries) {
-      const full = path.resolve(current, entry.name)
-      if (!full.startsWith(resolved + path.sep) && full !== resolved) {
-        escaped.push(full)
-        continue
-      }
-      if (entry.isSymbolicLink()) {
-        const target = await fs.realpath(full)
-        if (!target.startsWith(resolved + path.sep) && target !== resolved) {
-          escaped.push(full)
-          continue
-        }
-      }
-      if (entry.isDirectory()) {
-        await walk(full)
-      }
-    }
-  }
-
-  await walk(dir)
-  return escaped
 }
