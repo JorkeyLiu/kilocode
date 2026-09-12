@@ -437,4 +437,109 @@ describe("prompt private-first", () => {
     expect(priv.opId).toBe(`prompt:${privMid}`)
     expect(priv.idempotencyKey).toBe(`prompt:${privMid}`)
   })
+
+  test("fallback stays on the same promptAsync tuple with full payload and no other endpoint", async () => {
+    const privSeen: unknown[] = []
+    const sdkSeen: unknown[] = []
+    const calls: string[] = []
+    const client = {
+      session: {
+        promptAsync: async (input: Record<string, unknown>) => {
+          calls.push("promptAsync")
+          sdkSeen.push(input)
+          return { data: null }
+        },
+        prompt: async () => {
+          calls.push("prompt")
+          return { data: null }
+        },
+        commandAsync: async () => {
+          calls.push("commandAsync")
+          return { data: null }
+        },
+      },
+    }
+    const connection = {
+      isPrivateAvailable: () => true,
+      privatePromptWithHandle: (req: Record<string, unknown>) => {
+        privSeen.push(req)
+        return { id: 1, promise: Promise.resolve(retryableFor(req)), cancel: () => true }
+      },
+    }
+    await promptSessionPrivateFirst({
+      client: client as never,
+      connection: connection as unknown as KiloConnectionService,
+      sessionId: SID,
+      directory: DIR,
+      messageID: MID,
+      parts: PARTS as unknown as Array<Record<string, unknown>>,
+      model: { providerID: "p", modelID: "m" },
+      agent: "build",
+      variant: "v",
+      noReply: true,
+      tools: { webfetch: true },
+      format: { type: "json" },
+      system: "sys",
+      snapshotInitialization: "wait",
+      editorContext: { active: true },
+    })
+    expect(privSeen).toHaveLength(1)
+    expect(sdkSeen).toHaveLength(1)
+    expect(calls).toEqual(["promptAsync"])
+    const priv = privSeen[0] as Record<string, unknown>
+    const sdk = sdkSeen[0] as Record<string, unknown>
+    const payload = priv.payload as Record<string, unknown>
+    expect(sdk.sessionID).toBe(SID)
+    expect(sdk.directory).toBe(DIR)
+    expect(sdk.messageID).toBe(MID)
+    expect(sdk.parts).toEqual(PARTS)
+    expect(sdk.model).toEqual({ providerID: "p", modelID: "m" })
+    expect(sdk.agent).toBe("build")
+    expect(sdk.variant).toBe("v")
+    expect(sdk.noReply).toBe(true)
+    expect(sdk.tools).toEqual({ webfetch: true })
+    expect(sdk.system).toBe("sys")
+    expect(payload.messageId).toBe(MID)
+    expect(priv.opId).toBe(`prompt:${MID}`)
+  })
+
+  test("private unavailable still uses the same promptAsync tuple and SDK error posts idle once", async () => {
+    let sdk = 0
+    let idle = 0
+    const seen: unknown[] = []
+    const failure = new Error("offline")
+    const client = {
+      session: {
+        promptAsync: async (input: Record<string, unknown>) => {
+          sdk += 1
+          seen.push(input)
+          return { error: failure, response: { status: 500 } as unknown as Response }
+        },
+      },
+    }
+    const connection = { isPrivateAvailable: () => false }
+    let thrown: unknown = null
+    try {
+      await sendPromptOnce(
+        {
+          client: client as never,
+          connection: connection as unknown as KiloConnectionService,
+          sessionId: SID,
+          directory: DIR,
+          messageID: MID,
+          parts: PARTS as unknown as Array<Record<string, unknown>>,
+        },
+        () => {
+          idle += 1
+        },
+      )
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBe(failure)
+    expect(sdk).toBe(1)
+    expect(idle).toBe(1)
+    expect((seen[0] as Record<string, unknown>).messageID).toBe(MID)
+    expect((seen[0] as Record<string, unknown>).sessionID).toBe(SID)
+  })
 })

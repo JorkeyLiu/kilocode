@@ -4539,7 +4539,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Send async message
    *
-   * Create and send a new message to a session asynchronously, starting the session if needed and returning immediately.
+   * Create and send a new message to a session asynchronously, starting the session if needed and returning immediately. With messageID it uses the same SessionPromptDispatch owner as the private carrier; without messageID it keeps the legacy fork behavior.
    */
   public promptAsync<ThrowOnError extends boolean = false>(
     parameters: {

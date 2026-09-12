@@ -2363,4 +2363,42 @@ describe("run stream transport", () => {
       await transport.close()
     }
   })
+
+  test("promptAsync keeps messageID and surfaces dispatch errors instead of silent accept", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const seen: unknown[] = []
+    const failure = Object.assign(new Error("session not found"), { status: 404 })
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async (input) => {
+          seen.push(input)
+          throw failure
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await expect(
+        transport.runPromptTurn({
+          agent: "build",
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "hello", parts: [], messageID: "msg_run00000000000001" },
+          files: [],
+          includeFiles: false,
+        }),
+      ).rejects.toBe(failure)
+      expect(seen).toHaveLength(1)
+      expect((seen[0] as Record<string, unknown>).messageID).toBe("msg_run00000000000001")
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
 })

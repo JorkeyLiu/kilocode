@@ -8890,6 +8890,14 @@ export type SessionPromptAsyncErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionPromptAsyncError = SessionPromptAsyncErrors[keyof SessionPromptAsyncErrors]

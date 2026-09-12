@@ -13,6 +13,11 @@ import {
   type SessionCommandRequest,
   type SessionCommandResult,
 } from "@/kilocode/session/session-command-dispatch" // kilocode_change - command_async same-owner fallback
+import {
+  SessionPromptDispatchService,
+  type SessionPromptRequest,
+  type SessionPromptResult,
+} from "@/kilocode/session/session-prompt-dispatch" // kilocode_change - prompt_async progressive owner
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
 import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - P4.4-G3 double directory contract
 import { WorkspaceRouteContext } from "../middleware/workspace-routing" // kilocode_change - P4.4-G3-B4 effective directory
@@ -60,6 +65,49 @@ const tryParseJson = (text: string) =>
     try: () => JSON.parse(text) as unknown,
     catch: () => new HttpApiError.BadRequest({}),
   })
+
+// kilocode_change - prompt_async progressive owner: pure helpers for request build + outcome mapping
+export function promptAsyncFailureStatus(code: string): 400 | 404 | 409 | 500 {
+  if (code === "session.not_found") return 404
+  if (code === "validation.failed" || code === "scope_mismatch") return 400
+  if (code === "stale" || code === "conflict" || code === "InstanceUnavailableDuringConfigRebuild") return 409
+  return 500
+}
+
+export function buildPromptAsyncDispatchRequest(input: {
+  sessionID: string
+  directory: string
+  payload: typeof PromptPayload.Type
+}): SessionPromptRequest {
+  const raw = input.payload as unknown as Record<string, unknown>
+  const mid = raw.messageID
+  if (typeof mid !== "string" || mid.length === 0) throw new Error("payload.messageID is required for prompt_async dispatch")
+  const dir = canonicalDirectory(input.directory)
+  const opId = SessionOperation.promptId(mid)
+  return {
+    v: 1 as const,
+    requestId: `prompt_async:${input.sessionID}:${mid}`,
+    opId,
+    op: "session/prompt" as const,
+    idempotencyKey: opId,
+    context: { directory: dir, sessionId: input.sessionID, parentSessionId: null },
+    payload: {
+      messageId: mid,
+      parts: raw.parts as unknown[],
+      ...(raw.model !== undefined && raw.model !== null ? { model: raw.model as { providerID: string; modelID: string } } : {}),
+      ...(raw.agent !== undefined && raw.agent !== null ? { agent: raw.agent as string } : {}),
+      ...(raw.variant !== undefined && raw.variant !== null ? { variant: raw.variant as string } : {}),
+      ...(raw.noReply !== undefined && raw.noReply !== null ? { noReply: raw.noReply as boolean } : {}),
+      ...(raw.tools !== undefined && raw.tools !== null ? { tools: raw.tools as Record<string, boolean> } : {}),
+      ...(raw.format !== undefined && raw.format !== null ? { format: raw.format as unknown } : {}),
+      ...(raw.system !== undefined && raw.system !== null ? { system: raw.system as string } : {}),
+      ...(raw.snapshotInitialization !== undefined && raw.snapshotInitialization !== null
+        ? { snapshotInitialization: raw.snapshotInitialization as "wait" }
+        : {}),
+      ...(raw.editorContext !== undefined && raw.editorContext !== null ? { editorContext: raw.editorContext as unknown } : {}),
+    },
+  }
+}
 
 // kilocode_change - command_async same-owner fallback: pure helpers for request build + outcome mapping
 export function commandAsyncFailureStatus(code: string): 400 | 404 | 409 | 500 {
@@ -701,32 +749,70 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
+    const promptDispatch = yield* SessionPromptDispatchService // kilocode_change - prompt_async progressive owner
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      yield* promptSvc
-        .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID } as unknown as SessionPrompt.PromptInput)
-        .pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.void // kilocode_change - Stop is not an error
-            return Effect.gen(function* () {
-              yield* Effect.logError("prompt_async failed").pipe(
-                Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause }),
-              )
-              const error = Cause.squash(cause)
-              yield* events.publish(Session.Event.Error, {
-                sessionID: ctx.params.sessionID,
-                error: AgentRequirementError.isInstance(error)
-                  ? error.toObject()
-                  : new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+      const raw = ctx.payload as unknown as Record<string, unknown>
+      const mid = raw.messageID
+      if (typeof mid !== "string" || mid.length === 0) {
+        yield* requireSession(ctx.params.sessionID)
+        yield* promptSvc
+          .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID } as unknown as SessionPrompt.PromptInput)
+          .pipe(
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.void // kilocode_change - Stop is not an error
+              return Effect.gen(function* () {
+                yield* Effect.logError("prompt_async failed").pipe(
+                  Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause }),
+                )
+                const error = Cause.squash(cause)
+                yield* events.publish(Session.Event.Error, {
+                  sessionID: ctx.params.sessionID,
+                  error: AgentRequirementError.isInstance(error)
+                    ? error.toObject()
+                    : new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+                })
               })
-            })
-          }),
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-      return HttpApiSchema.NoContent.make()
+            }),
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+        return HttpApiSchema.NoContent.make()
+      }
+      const routeOpt = yield* Effect.serviceOption(WorkspaceRouteContext)
+      if (Option.isNone(routeOpt)) return yield* new HttpApiError.BadRequest({})
+      const dir = (() => {
+        try {
+          return canonicalDirectory(routeOpt.value.directory)
+        } catch {
+          return null
+        }
+      })()
+      if (dir === null) return yield* new HttpApiError.BadRequest({})
+      let req: SessionPromptRequest
+      try {
+        req = buildPromptAsyncDispatchRequest({ sessionID: ctx.params.sessionID, directory: dir, payload: ctx.payload })
+      } catch {
+        return yield* new HttpApiError.BadRequest({})
+      }
+      const result = (yield* promptDispatch.dispatch(req).pipe(
+        Effect.catchDefect(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+        Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+      )) as SessionPromptResult
+      if (result.status === "succeeded" && result.accepted) return HttpApiSchema.NoContent.make()
+      if (result.status === "failed") {
+        const status = promptAsyncFailureStatus(result.failure.code)
+        if (status === 404) {
+          return yield* Effect.fail(
+            new ApiNotFoundError({ name: "NotFoundError", data: { message: result.failure.message } }),
+          )
+        }
+        if (status === 400) return yield* new HttpApiError.BadRequest({})
+        if (status === 409) return yield* new HttpApiError.Conflict({})
+        return yield* new HttpApiError.InternalServerError({})
+      }
+      return yield* new HttpApiError.InternalServerError({})
     })
 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {

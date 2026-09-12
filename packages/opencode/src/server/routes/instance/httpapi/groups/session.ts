@@ -372,13 +372,13 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPayload,
           success: described(HttpApiSchema.NoContent, "Prompt accepted"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.Conflict, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt_async",
             summary: "Send async message",
             description:
-              "Create and send a new message to a session asynchronously, starting the session if needed and returning immediately.",
+              "Create and send a new message to a session asynchronously, starting the session if needed and returning immediately. With messageID it uses the same SessionPromptDispatch owner as the private carrier; without messageID it keeps the legacy fork behavior.",
           }),
         ),
         HttpApiEndpoint.post("command", SessionPaths.command, {

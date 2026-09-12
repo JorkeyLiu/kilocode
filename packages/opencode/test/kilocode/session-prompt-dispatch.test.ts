@@ -138,4 +138,74 @@ describe("session-prompt-dispatch accept-only scope ownership", () => {
     })
     await Effect.runPromise(prog.pipe(Effect.scoped))
   })
+
+  test("existing user replay returns accepted without starting a second generation", async () => {
+    const prog = Effect.gen(function* () {
+      let calls = 0
+      const row = {
+        id: MID,
+        session_id: SID,
+        session: SID,
+        data: { role: "user" },
+      }
+      const fakeDb = {
+        select: (..._a: unknown[]) => ({
+          from: (..._b: unknown[]) => ({
+            where: (..._c: unknown[]) => ({
+              get: () => Effect.succeed(row),
+              all: () => Effect.succeed([]),
+            }),
+          }),
+        }),
+      }
+      const fakeCtx = { directory: DIR, worktree: DIR, project: { id: "proj-test" } }
+      const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)
+      const sessionLayer = Layer.succeed(Session.Service, {
+        get: () => Effect.succeed({ directory: DIR, id: SID }),
+      } as any)
+      const promptLayer = Layer.succeed(SessionPrompt.Service, {
+        prompt: () =>
+          Effect.gen(function* () {
+            calls += 1
+            return { id: "dummy" } as any
+          }),
+        cancel: () => Effect.void,
+        loop: () => Effect.die(new Error("unused")),
+        shell: () => Effect.die(new Error("unused")),
+        resolvePromptParts: () => Effect.succeed([] as never),
+      } as any)
+      const eventsLayer = Layer.succeed(EventV2Bridge.Service, {
+        publish: () => Effect.void,
+      } as any)
+      const storeLayer = Layer.succeed(InstanceStore.Service, {
+        load: () => Effect.succeed(fakeCtx),
+        reload: () => Effect.succeed(fakeCtx),
+        dispose: () => Effect.void,
+        disposeSafe: () => Effect.void,
+        disposeDirectory: () => Effect.void,
+        disposeAll: () => Effect.void,
+        provide: (_input: unknown, effect: Effect.Effect<unknown>) => effect as Effect.Effect<unknown>,
+        snapshot: () => Effect.succeed(Option.none()),
+        directories: () => Effect.succeed([]),
+      } as any)
+      const gateLayer = Layer.succeed(GenerationGate.Service, GenerationGate.noop)
+      const leaseLayer = Layer.succeed(ControlLease.Service, ControlLease.noop)
+      const deps = Layer.mergeAll(dbLayer, sessionLayer, promptLayer, eventsLayer, storeLayer, gateLayer, leaseLayer)
+      const full = Layer.provide(DispatchLayer, deps)
+      const all = Layer.mergeAll(full, deps)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* SessionPromptDispatchService
+          const first = (yield* svc.dispatch(base())) as any
+          expect(first.status).toBe("succeeded")
+          expect(first.accepted).toBe(true)
+          const second = (yield* svc.dispatch(base())) as any
+          expect(second.status).toBe("succeeded")
+          expect(second.accepted).toBe(true)
+          expect(calls).toBe(0)
+        }).pipe(Effect.provide(all)),
+      )
+    })
+    await Effect.runPromise(prog.pipe(Effect.scoped))
+  })
 })
