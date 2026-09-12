@@ -28,6 +28,7 @@ export const FD_CAPABILITIES = [
   "config/warnings",
   "project/current",
   "find/files",
+  "agent/requirements",
   "session/model-usage",
   "session/prompt",
   "session/command",

@@ -523,6 +523,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           ? (listener) => vscode.extensions.onDidChange(listener)
           : undefined,
       error: getErrorMessage,
+      private: (agent, directory) => this.readAgentRequirementsPrivate(agent, directory),
     })
 
     TelemetryProxy.getInstance().setProvider(this)
@@ -2740,6 +2741,27 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       console.warn("[Kilo New] KiloProvider: Failed to load session model usage:", error)
       this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID })
     })
+  }
+
+  private async readAgentRequirementsPrivate(agent: string, directory: string) {
+    try {
+      const { attemptAgentRequirementsPrivate, buildAgentRequirementsIdentity } = await import(
+        "./kilo-provider/agent-requirements-privatefirst"
+      )
+      const { opId, idempotencyKey, requestId } = buildAgentRequirementsIdentity(agent)
+      const req = {
+        v: 1 as const,
+        requestId,
+        opId,
+        op: "agent/requirements" as const,
+        idempotencyKey,
+        context: { directory, agent },
+        payload: {},
+      }
+      return await attemptAgentRequirementsPrivate(this.connectionService, req)
+    } catch {
+      return { kind: "fallback", reason: "throw" } as const
+    }
   }
 
   private async handleLoadMessages(

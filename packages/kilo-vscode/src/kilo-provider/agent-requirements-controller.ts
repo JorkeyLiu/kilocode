@@ -34,6 +34,11 @@ export type AgentRequirementsRequest = {
   force?: boolean
 }
 
+export type AgentRequirementsPrivateAttempt =
+  | { kind: "ok"; requirements: BackendAgentRequirementResult }
+  | { kind: "terminal" }
+  | { kind: "fallback"; reason: string }
+
 export type AgentRequirementsControllerOptions = {
   post: (message: LoadedMessage | InvalidatedMessage) => void
   client: () => KiloClient | null
@@ -46,6 +51,7 @@ export type AgentRequirementsControllerOptions = {
   extension: (id: string) => unknown
   subscribe?: (listener: () => void) => Disposable
   error: (error: unknown) => string
+  private?: (agent: string, directory: string) => Promise<AgentRequirementsPrivateAttempt>
 }
 
 export class AgentRequirementsController {
@@ -194,6 +200,36 @@ export class AgentRequirementsController {
     const connection = this.opts.generation()
     const token = {}
     this.generations.set(key, token)
+
+    const read = this.opts.private
+    if (read) {
+      let attempt: AgentRequirementsPrivateAttempt
+      try {
+        attempt = await read(agent, directory)
+      } catch {
+        attempt = { kind: "fallback", reason: "throw" }
+      }
+      if (attempt.kind === "ok") {
+        if (this.opts.generation() !== connection || this.opts.client() !== client) {
+          if (this.generations.get(key) === token) this.generations.delete(key)
+          throw new Error("Connection changed while checking agent requirements")
+        }
+        if (this.generations.get(key) !== token) throw new Error("Agent requirement check was superseded")
+        const result = this.apply(attempt.requirements, directory)
+        this.cache.set(key, result)
+        this.generations.delete(key)
+        return result
+      }
+      if (attempt.kind === "terminal") {
+        if (this.opts.generation() !== connection || this.opts.client() !== client) {
+          if (this.generations.get(key) === token) this.generations.delete(key)
+          throw new Error("Connection changed while checking agent requirements")
+        }
+        if (this.generations.get(key) !== token) throw new Error("Agent requirement check was superseded")
+        if (this.generations.get(key) === token) this.generations.delete(key)
+        throw new Error("Failed to check agent requirements")
+      }
+    }
 
     const endpoint = client.kilocode as typeof client.kilocode & AgentRequirementsClient
     const response = await endpoint.agentRequirements({ agent, directory }, { throwOnError: true }).catch((error) => {

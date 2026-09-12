@@ -6,7 +6,6 @@ import {
   AgentRequirementsValidationError,
   canonicalAgentRequirementsOpId,
   checkAgentRequirementsScope,
-  compareAgentRequirementsParity,
   isAgentRequirementsValidationError,
   makeAgentRequirementsAmbiguous,
   normalizePrivateAgentRequirementsWire,
@@ -61,7 +60,7 @@ function makeSucceeded(req: ReturnType<typeof validateAgentRequirementsContractR
   }
 }
 
-describe("Gate B agentRequirements candidate contract", () => {
+describe("agentRequirements private-first contract", () => {
   test("opId grammar binds agent with idempotency equality", () => {
     expect(canonicalAgentRequirementsOpId(AGENT, "t1")).toBe(`agent-requirements:${AGENT}:t1`)
     expect(() => canonicalAgentRequirementsOpId("", "t1")).toThrow()
@@ -376,187 +375,21 @@ describe("Gate B agentRequirements candidate contract", () => {
     ).toThrow()
   })
 
-  test("detached parity compares shared projection only; order ignored; membership gaps are unknown", () => {
+  test("state:error domain payloads stay succeeded authoritative results", () => {
     const req = validateAgentRequirementsContractRequest(makeReq())
-    const ok = validateAgentRequirementsResult(makeSucceeded(req), req)
-    const sdkData = makeResult()
-    const parity = compareAgentRequirementsParity(ok, { data: sdkData })
-    expect(parity.divergence).toBeNull()
-    expect(parity.details.orderIgnored).toBeTrue()
-    const statusMismatch = compareAgentRequirementsParity(ok, { error: { message: "boom" } })
-    expect(statusMismatch.divergence).toContain("status-mismatch")
-    const gap = compareAgentRequirementsParity(ok, { data: makeResult({ skills: [] }) })
-    expect(gap.divergence).toBe("agent-requirements-membership-unknown")
-    const extGap = compareAgentRequirementsParity(
-      ok,
-      { data: makeResult({ vscode_extensions: [{ name: "Other", id: "publisher.other" }] }) },
-    )
-    expect(extGap.divergence).toBe("agent-requirements-membership-unknown")
-    const stateMismatch = compareAgentRequirementsParity(ok, { data: makeResult({ state: "blocked" }) })
-    expect(stateMismatch.divergence).toBe("agent-requirements-state-mismatch")
-    // skills order is never compared: reversed two-item payloads still hold.
-    const two = makeResult({
-      skills: [
-        { name: "skill-a", status: "ready" },
-        { name: "skill-b", status: "missing" },
-      ],
-    })
-    const privTwo = validateAgentRequirementsResult({ ...makeSucceeded(req), data: { requirements: two } }, req)
-    const sdkReordered = makeResult({
-      skills: [
-        { name: "skill-b", status: "missing" },
-        { name: "skill-a", status: "ready" },
-      ],
-    })
-    expect(compareAgentRequirementsParity(privTwo, { data: sdkReordered }).divergence).toBeNull()
-    // vscode_extensions order is never compared either.
-    const twoExt = makeResult({
-      vscode_extensions: [
-        { name: "Ext A", id: "publisher.a" },
-        { name: "Ext B", id: "publisher.b" },
-      ],
-    })
-    const privExt = validateAgentRequirementsResult(
-      { ...makeSucceeded(req), data: { requirements: twoExt } },
-      req,
-    )
-    const sdkExtReordered = makeResult({
-      vscode_extensions: [
-        { name: "Ext B", id: "publisher.b" },
-        { name: "Ext A", id: "publisher.a" },
-      ],
-    })
-    expect(compareAgentRequirementsParity(privExt, { data: sdkExtReordered }).divergence).toBeNull()
-    expect(compareAgentRequirementsParity(privExt, { data: sdkExtReordered }).details.orderIgnored).toBeTrue()
-    const transport = compareAgentRequirementsParity(makeAgentRequirementsAmbiguous(req), { data: sdkData })
-    expect(transport.divergence).toBe("transport-unknown")
-  })
-
-  test("FND-01 canonical multiset: duplicate identity permutation holds; content gaps diverge; key order ignored", () => {
-    const req = validateAgentRequirementsContractRequest(makeReq())
-    const dupSkills = [
-      { name: "skill-a", status: "ready" },
-      { name: "skill-a", status: "ready" },
-      { name: "skill-b", status: "missing" },
-    ]
-    const privDup = validateAgentRequirementsResult(
-      { ...makeSucceeded(req), data: { requirements: makeResult({ skills: dupSkills }) } },
-      req,
-    )
-    const sdkPermuted = makeResult({
-      skills: [
-        { name: "skill-b", status: "missing" },
-        { name: "skill-a", status: "ready" },
-        { name: "skill-a", status: "ready" },
-      ],
-    })
-    expect(compareAgentRequirementsParity(privDup, { data: sdkPermuted }).divergence).toBeNull()
-    const dupMcps = [
-      { name: "mcp-a", status: "ready" },
-      { name: "mcp-a", status: "ready" },
-    ]
-    const privMcpDup = validateAgentRequirementsResult(
-      { ...makeSucceeded(req), data: { requirements: makeResult({ mcps: dupMcps }) } },
-      req,
-    )
-    const sdkMcpPermuted = makeResult({
-      mcps: [
-        { name: "mcp-a", status: "ready" },
-        { name: "mcp-a", status: "ready" },
-      ],
-    })
-    expect(compareAgentRequirementsParity(privMcpDup, { data: sdkMcpPermuted }).divergence).toBeNull()
-    const dupExt = [
-      { name: "Ext A", id: "publisher.a" },
-      { name: "Ext A", id: "publisher.a" },
-    ]
-    const privExtDup = validateAgentRequirementsResult(
-      { ...makeSucceeded(req), data: { requirements: makeResult({ vscode_extensions: dupExt }) } },
-      req,
-    )
-    const sdkExtDup = makeResult({
-      vscode_extensions: [
-        { name: "Ext A", id: "publisher.a" },
-        { name: "Ext A", id: "publisher.a" },
-      ],
-    })
-    expect(compareAgentRequirementsParity(privExtDup, { data: sdkExtDup }).divergence).toBeNull()
-    const sdkDupCountGap = makeResult({
-      skills: [
-        { name: "skill-a", status: "ready" },
-        { name: "skill-b", status: "missing" },
-      ],
-    })
-    expect(compareAgentRequirementsParity(privDup, { data: sdkDupCountGap }).divergence).toBe(
-      "agent-requirements-membership-unknown",
-    )
-    const sdkDupContentGap = makeResult({
-      skills: [
-        { name: "skill-a", status: "ready" },
-        { name: "skill-a", status: "error" },
-        { name: "skill-b", status: "missing" },
-      ],
-    })
-    const dupContent = compareAgentRequirementsParity(privDup, { data: sdkDupContentGap })
-    expect(dupContent.divergence).not.toBeNull()
-    expect(["agent-requirements-skills-mismatch", "agent-requirements-membership-unknown"]).toContain(
-      dupContent.divergence,
-    )
-    const sdkExtContentGap = makeResult({
-      vscode_extensions: [
-        { name: "Ext A", id: "publisher.a" },
-        { name: "Ext A2", id: "publisher.a" },
-      ],
-    })
-    const extContent = compareAgentRequirementsParity(privExtDup, { data: sdkExtContentGap })
-    expect(extContent.divergence).not.toBeNull()
-    expect(["agent-requirements-vscode-extensions-mismatch", "agent-requirements-membership-unknown"]).toContain(
-      extContent.divergence,
-    )
-    const privKeyOrder = validateAgentRequirementsResult(
+    const err = validateAgentRequirementsResult(
       {
         ...makeSucceeded(req),
         data: {
           requirements: makeResult({
-            skills: [{ status: "ready", name: "skill-a" }],
-            vscode_extensions: [{ id: "publisher.a", name: "Ext A" }],
+            state: "error",
+            error: { code: "discovery_failed", message: "disk boom" },
           }),
         },
       },
       req,
     )
-    const sdkKeyOrder = makeResult({
-      skills: [{ name: "skill-a", status: "ready" }],
-      vscode_extensions: [{ name: "Ext A", id: "publisher.a" }],
-    })
-    expect(compareAgentRequirementsParity(privKeyOrder, { data: sdkKeyOrder }).divergence).toBeNull()
-  })
-
-  test("FND-02 error parity compares code and message; missing/present semantics unchanged", () => {
-    const req = validateAgentRequirementsContractRequest(makeReq())
-    const errBase = { state: "error", error: { code: "discovery_failed", message: "disk boom" } }
-    const privErr = validateAgentRequirementsResult(
-      { ...makeSucceeded(req), data: { requirements: makeResult(errBase) } },
-      req,
-    )
-    expect(compareAgentRequirementsParity(privErr, { data: makeResult(errBase) }).divergence).toBeNull()
-    const sameCodeDiffMsg = compareAgentRequirementsParity(
-      privErr,
-      { data: makeResult({ state: "error", error: { code: "discovery_failed", message: "other detail" } }) },
-    )
-    expect(sameCodeDiffMsg.divergence).toBe("agent-requirements-error-mismatch")
-    const diffCodeSameMsg = compareAgentRequirementsParity(
-      privErr,
-      { data: makeResult({ state: "error", error: { code: "mcp_status_failed", message: "disk boom" } }) },
-    )
-    expect(diffCodeSameMsg.divergence).toBe("agent-requirements-error-mismatch")
-    const missingVsPresent = compareAgentRequirementsParity(privErr, { data: makeResult({ state: "error" }) })
-    expect(missingVsPresent.divergence).toBe("agent-requirements-error-mismatch")
-    const privNoErr = validateAgentRequirementsResult(
-      { ...makeSucceeded(req), data: { requirements: makeResult({ state: "error" }) } },
-      req,
-    )
-    const presentVsMissing = compareAgentRequirementsParity(privNoErr, { data: makeResult(errBase) })
-    expect(presentVsMissing.divergence).toBe("agent-requirements-error-mismatch")
+    expect(err.status).toBe("succeeded")
+    if (err.status === "succeeded") expect(err.data.requirements.state).toBe("error")
   })
 })

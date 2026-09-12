@@ -1,54 +1,37 @@
-// Gate B deferred `kilocode.agentRequirements` read-only candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no runtime observation, no durable state, no guard/evaluator change,
-// no production parity claim.
-// `op:"agent/requirements"` below is a contract-evidence label only; it is
-// never registered as a private capability and never sent over any peer.
-// Production `agentRequirements` stays SDK-only
-// (`GET /kilocode/agent/requirements` via `@kilocode/sdk`
-// `client.kilocode.agentRequirements`).
+// Private-first `agent/requirements` read-only contract (production).
+// Request is strictly `{v:1,requestId,opId,op:"agent/requirements",
+// idempotencyKey,context:{directory,agent},payload:{}}` with
+// `opId === agent-requirements:<agent>:<token>` (agent/token non-empty,
+// no colon) and `idempotencyKey === opId`. Success data is
+// `{requirements: AgentRequirementResult}` preserving the exact HTTP shape
+// from `agents.requirementStatus`, including `state:error` domain results
+// as succeeded authoritative payloads.
 //
-// Source facts (read-only evidence, not imported):
+// Source facts:
 // - Route: `GET /kilocode/agent/requirements` with `AgentRequirementQuery`
-//   (`WorkspaceRoutingQueryFields` + `agent: Schema.String`) in
-//   `packages/opencode/src/kilocode/server/httpapi/groups/kilocode.ts:126-135`
+//   in `packages/opencode/src/kilocode/server/httpapi/groups/kilocode.ts`
 //   (`identifier: "kilocode.agentRequirements"`, success `AgentRequirementResult`).
-// - Handler: `packages/opencode/src/kilocode/server/httpapi/handlers/kilocode.ts:52-56`
+// - Handler: `packages/opencode/src/kilocode/server/httpapi/handlers/kilocode.ts`
 //   `agentRequirements` returns `agents.requirementStatus(ctx.query.agent)`.
-// - Payload/service: `packages/opencode/src/kilocode/agent-requirements.ts:30-44`
+//   The FD handler invokes the same `agents.requirementStatus`.
+// - Payload/service: `packages/opencode/src/kilocode/agent-requirements.ts`
 //   `Result {agent, directory, enabled, state: disabled|ready|blocked|error,
-//   skills: SkillItem[], mcps: MCPItem[], vscode_extensions: VSCodeExtension[],
-//   error?: {code: unknown_agent|malformed_declaration|discovery_failed|
-//   mcp_status_failed, message}}`; `SkillItem`/`MCPItem`
-//   `{name, status: ready|missing|error, message?}`; server `VSCodeExtension`
-//   (`ConfigAgentV1.VSCodeExtension` in `packages/core/src/v1/config/agent.ts:20-23`)
+//   skills, mcps, vscode_extensions, error?}`; server `VSCodeExtension`
 //   is strictly `{name, id}` — NO `message`, NO `status`. Host-side `status`
 //   augmentation (`applyVSCodeExtensionRequirements`) is rejected here by design,
-//   and any `message` key on extensions is rejected as non-authority.
-// - SDK: `client.kilocode.agentRequirements({agent, directory})` is the sole
-//   authority.
-// - Consumer: `packages/kilo-vscode/src/kilo-provider/agent-requirements-controller.ts:190-213,216-240`
-//   calls the SDK endpoint and then applies HOST-SIDE augmentation via
-//   `applyVSCodeExtensionRequirements` (`kilo-provider/agent-requirements.ts:85-101`),
-//   which adds host-computed `status` per extension and may flip `ready` to
-//   `blocked`. That augmented shape is NOT server authority and is excluded
-//   from this contract by design (server `vscode_extensions` entries with a
-//   `status` key are rejected).
+//   and any `message`/`status` key on extensions is rejected as non-authority.
+// - Consumer: `packages/kilo-vscode/src/kilo-provider/agent-requirements-controller.ts`
+//   is private-first: accepted success feeds `applyVSCodeExtensionRequirements`
+//   with zero SDK; validated terminal failure posts `request_failed` with zero
+//   SDK; fallback-eligible outcomes take exactly one SDK `agentRequirements`.
 //
-// ROUTING-ONLY vs PAYLOAD SEMANTICS (explicit, honest v1):
-// - `context.directory`/`context.agent` are ROUTING-ONLY labels. Scope checks
-//   guard request-routing identity only; a scope match says nothing about
-//   payload ownership, discovery freshness, or guard semantics.
-// - Payload `agent`/`directory`/`enabled`/`state`/`skills`/`mcps`/
-//   `vscode_extensions`/`error` are validated shape-only against the server
-//   `AgentRequirementResult` authority. No discovery freshness, no ordering,
-//   no guard/execution-blocking, and no cross-directory claim is made.
-// - Array ordering is explicitly UNRESOLVED here: parity never compares order.
-// - Out of scope: requirement guard / execution blocking
-//   (`agent-requirements.ts:242-261` `guard`), host-side
-//   `applyVSCodeExtensionRequirements` augmentation, skill discovery
-//   freshness, MCP status freshness, transport behavior, and any other
-//   operation.
+// ROUTING vs PAYLOAD SEMANTICS (v1):
+// - `context.directory`/`context.agent` bind request routing and scope.
+//   A scope match says nothing about payload freshness or completeness.
+// - Payload fields are validated shape-only. No discovery freshness,
+//   ordering, guard, or cross-directory claim is made.
+// - Out of scope: requirement guard / execution blocking, host-side
+//   augmentation, skill/MCP freshness, transport behavior, other operations.
 
 import { isAbsolute, normalize, resolve } from "path"
 
@@ -565,117 +548,4 @@ export function validateAgentRequirementsResult(
   if (rec.failure !== undefined) throw new Error("ambiguous must not have failure")
   if (outRec.failure !== undefined) throw new Error("ambiguous outcome must not have failure")
   return raw as unknown as AgentRequirementsResult
-}
-
-// Detached parity only (contract evidence, never production parity):
-// compares ONLY the shared server projection (`agent`, `enabled`, `state`,
-// `skills`, `mcps`, `vscode_extensions` server shape, `error` `{code,message}`)
-// for the same request. Order is never compared (`orderIgnored: true`); `skills`/
-// `mcps`/`vscode_extensions` length/membership gaps are reported as
-// `agent-requirements-membership-unknown`, never as a match. Arrays use
-// stable canonical multiset comparison: order ignored, duplicate identity
-// entries preserved by full semantic projection, object key insertion order
-// ignored (fields read by name, never `JSON.stringify`). The request
-// directory is never compared; only observed payload values are. Host-side
-// `status` augmentation on `vscode_extensions` is not compared — the server
-// shape has no `status`, and any augmented value is outside this contract.
-// Server/OpenAPI authority declares no array identity uniqueness; duplicate
-// `name`/`id` entries are legal and compared as multisets.
-// eslint-disable-next-line complexity
-export function compareAgentRequirementsParity(
-  priv: AgentRequirementsResult,
-  sdk: { data?: unknown; error?: unknown; response?: unknown },
-): { divergence: string | null; details: Record<string, unknown> } {
-  const base = { orderIgnored: true }
-  const privStatus: string = priv.status
-  if (!!(priv as Record<string, unknown>).transportUnknown) {
-    return { divergence: "transport-unknown", details: { privStatus, transportUnknown: true, ...base } }
-  }
-  const sdkError = sdk.error !== undefined && sdk.error !== null
-  const sdkStatus: string = sdkError ? "failed" : "succeeded"
-  if (sdkStatus !== privStatus) {
-    return {
-      divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`,
-      details: { sdkStatus, privStatus, ...base },
-    }
-  }
-  if (sdkStatus === "succeeded" && privStatus === "succeeded") {
-    const sdkPayload = (sdk.data ?? {}) as Record<string, unknown>
-    const pdata = (priv as Extract<AgentRequirementsResult, { status: "succeeded" }>).data as Record<string, unknown>
-    const privPayload = (pdata.requirements ?? {}) as Record<string, unknown>
-    try {
-      validateAgentRequirementsPayload(sdkPayload)
-    } catch {
-      return { divergence: "agent-requirements-shape-mismatch", details: { ...base, mismatch: true } }
-    }
-    if (sdkPayload.agent !== privPayload.agent) {
-      return { divergence: "agent-requirements-agent-mismatch", details: { ...base, mismatch: true, field: "agent" } }
-    }
-    if (sdkPayload.enabled !== privPayload.enabled) {
-      return {
-        divergence: "agent-requirements-enabled-mismatch",
-        details: { ...base, mismatch: true, field: "enabled" },
-      }
-    }
-    if (sdkPayload.state !== privPayload.state) {
-      return { divergence: "agent-requirements-state-mismatch", details: { ...base, mismatch: true, field: "state" } }
-    }
-    const canonicalItem = (entry: unknown): string => {
-      const rec = entry as Record<string, unknown>
-      const name = String(rec.name)
-      const status = String(rec.status)
-      const msg = rec.message === undefined ? "0" : `1:${String(rec.message)}`
-      return `${name}\u0000${status}\u0000${msg}`
-    }
-    const canonicalExt = (entry: unknown): string => {
-      const rec = entry as Record<string, unknown>
-      return `${String(rec.name)}\u0000${String(rec.id)}`
-    }
-    const identityItem = (entry: unknown): string => String((entry as Record<string, unknown>).name)
-    const identityExt = (entry: unknown): string => String((entry as Record<string, unknown>).id)
-    const sorted = (list: string[]): string[] => [...list].sort()
-    for (const field of ["skills", "mcps"] as const) {
-      const sdkList = (sdkPayload[field] ?? []) as unknown[]
-      const privList = (privPayload[field] ?? []) as unknown[]
-      const sdkFull = sorted(sdkList.map(canonicalItem))
-      const privFull = sorted(privList.map(canonicalItem))
-      if (sdkFull.length === privFull.length && sdkFull.every((v, i) => v === privFull[i])) continue
-      const sdkKeys = sorted(sdkList.map(identityItem))
-      const privKeys = sorted(privList.map(identityItem))
-      if (sdkKeys.length !== privKeys.length || sdkKeys.some((k, i) => k !== privKeys[i])) {
-        return { divergence: "agent-requirements-membership-unknown", details: { ...base, mismatch: true } }
-      }
-      return {
-        divergence: `agent-requirements-${field}-mismatch`,
-        details: { ...base, mismatch: true, field },
-      }
-    }
-    const sdkExtList = (sdkPayload.vscode_extensions ?? []) as unknown[]
-    const privExtList = (privPayload.vscode_extensions ?? []) as unknown[]
-    const sdkExtFull = sorted(sdkExtList.map(canonicalExt))
-    const privExtFull = sorted(privExtList.map(canonicalExt))
-    if (sdkExtFull.length === privExtFull.length && sdkExtFull.every((v, i) => v === privExtFull[i])) {
-      // hold: fall through to error comparison below
-    } else {
-      const sdkExtKeys = sorted(sdkExtList.map(identityExt))
-      const privExtKeys = sorted(privExtList.map(identityExt))
-      if (sdkExtKeys.length !== privExtKeys.length || sdkExtKeys.some((k, i) => k !== privExtKeys[i])) {
-        return { divergence: "agent-requirements-membership-unknown", details: { ...base, mismatch: true } }
-      }
-      return {
-        divergence: "agent-requirements-vscode-extensions-mismatch",
-        details: { ...base, mismatch: true, field: "vscode_extensions" },
-      }
-    }
-    const sdkErr = (sdkPayload.error ?? null) as Record<string, unknown> | null
-    const privErr = (privPayload.error ?? null) as Record<string, unknown> | null
-    if ((sdkErr === null) !== (privErr === null)) {
-      return { divergence: "agent-requirements-error-mismatch", details: { ...base, mismatch: true, field: "error" } }
-    }
-    if (sdkErr && privErr && (sdkErr.code !== privErr.code || sdkErr.message !== privErr.message)) {
-      return { divergence: "agent-requirements-error-mismatch", details: { ...base, mismatch: true, field: "error" } }
-    }
-    return { divergence: null, details: { ...base } }
-  }
-  return { divergence: null, details: { ...base } }
 }

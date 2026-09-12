@@ -27,6 +27,8 @@ import {
 } from "@/kilocode/question/question-private"
 import { SessionStatus } from "@/session/status"
 import { ModelUsage } from "@/kilocode/session/model-usage"
+import { Agent } from "@/agent/agent"
+import * as AgentRequirements from "@/kilocode/agent-requirements"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionID } from "@/session/schema"
@@ -409,6 +411,8 @@ export const FD_FIND_FILES_VERSION = 1 as const
 export const FD_FIND_FILES_OP = "find/files" as const
 export const FD_MODEL_USAGE_VERSION = 1 as const
 export const FD_MODEL_USAGE_OP = "session/model-usage" as const
+export const FD_AGENT_REQUIREMENTS_VERSION = 1 as const
+export const FD_AGENT_REQUIREMENTS_OP = "agent/requirements" as const
 export const FD_PROMPT_VERSION = 1 as const
 export const FD_PROMPT_OP = "session/prompt" as const
 export const FD_COMMAND_VERSION = 1 as const
@@ -492,6 +496,19 @@ export interface FdModelUsageRequest {
   context: {
     directory: string
     sessionId: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdAgentRequirementsRequest {
+  v: typeof FD_AGENT_REQUIREMENTS_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_AGENT_REQUIREMENTS_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    agent: string
   }
   payload: Record<string, never>
 }
@@ -1432,6 +1449,48 @@ function modelUsageFailed(
   }
 }
 
+function agentRequirementsFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_AGENT_REQUIREMENTS_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_AGENT_REQUIREMENTS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function fallbackAgentRequirementsIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeAgentRequirementsIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
 function fallbackFindFilesIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
   const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
   return {
@@ -1466,6 +1525,11 @@ const MODEL_USAGE_INTERNAL_MESSAGE = "internal error"
 const MODEL_USAGE_VALIDATION_MESSAGE = "invalid session-model-usage request"
 const MODEL_USAGE_SCOPE_MESSAGE = "directory mismatch"
 const MODEL_USAGE_NOT_FOUND_MESSAGE = "session not found"
+const AGENT_REQUIREMENTS_FENCE_MESSAGE =
+  "Instance is unavailable during config rebuild; no active runtime for this request"
+const AGENT_REQUIREMENTS_INTERNAL_MESSAGE = "internal error"
+const AGENT_REQUIREMENTS_VALIDATION_MESSAGE = "invalid agent-requirements request"
+const AGENT_REQUIREMENTS_SCOPE_MESSAGE = "directory mismatch"
 
 const FIND_FILES_SENSITIVE_SEGMENTS = new Set([".ssh", ".aws", "secret", "secrets"])
 const FIND_FILES_SENSITIVE_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "cer", "crt", "der", "jks"])
@@ -1583,6 +1647,39 @@ function validateModelUsageRequest(raw: unknown): FdModelUsageRequest {
   if (token.length === 0 || token.includes(":"))
     throw new Error("opId must be session-model-usage:<sessionId>:<token> with nonempty colon-free token")
   return raw as unknown as FdModelUsageRequest
+}
+
+function validateAgentRequirementsRequest(raw: unknown): FdAgentRequirementsRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_AGENT_REQUIREMENTS_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_AGENT_REQUIREMENTS_OP) throw new Error("op must be agent/requirements")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for agent-requirements")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "agent"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (!isNonEmpty(ctx.agent)) throw new Error("context.agent must be non-empty string")
+  if ((ctx.agent as string).includes(":")) throw new Error("context.agent must not contain ':'")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for agent-requirements")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const agent = ctx.agent as string
+  const segs = opId.split(":")
+  if (segs.length !== 3 || segs[0] !== "agent-requirements" || segs[1]!.length === 0 || segs[2]!.length === 0)
+    throw new Error("opId must be agent-requirements:<agent>:<token> with nonempty colon-free segments")
+  if (segs[1] !== agent) throw new Error("opId agent binding mismatch")
+  const token = segs[2] as string
+  if (token.includes(":")) throw new Error("opId must be agent-requirements:<agent>:<token> with nonempty colon-free token")
+  return raw as unknown as FdAgentRequirementsRequest
 }
 
 export function createFdCarrier(
@@ -3254,6 +3351,101 @@ export function createFdCarrier(
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === FD_AGENT_REQUIREMENTS_OP || method === "agent/requirements") {
+        // Read-only agent requirements: same-directory agents.requirementStatus
+        // via the existing drain-control + InstanceRef lane (same lane as
+        // session/model-usage — no new lifecycle lane, fence, or convergence).
+        // Invokes the same agents.requirementStatus used by HTTP and preserves
+        // its exact AgentRequirementResult shape, including state:error domain
+        // results as succeeded authoritative payloads. No mutation, no guard.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdAgentRequirementsRequest
+            try {
+              req = validateAgentRequirementsRequest(params)
+            } catch {
+              return agentRequirementsFailed(
+                fallbackAgentRequirementsIds(params),
+                "validation.failed",
+                AGENT_REQUIREMENTS_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeAgentRequirementsIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return agentRequirementsFailed(safe, "validation.failed", AGENT_REQUIREMENTS_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? AGENT_REQUIREMENTS_FENCE_MESSAGE : AGENT_REQUIREMENTS_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: agentRequirementsFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir)
+                return agentRequirementsFailed(safe, "scope_mismatch", AGENT_REQUIREMENTS_SCOPE_MESSAGE, false)
+              const agents = yield* Agent.Service
+              const status = yield* agents.requirementStatus(req.context.agent).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => Effect.succeed({ tag: "fail" as const })),
+                Effect.catchDefect(() => Effect.succeed({ tag: "fail" as const })),
+              )
+              if (status.tag !== "ok")
+                return agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false)
+              if (!Schema.is(AgentRequirements.Result)(status.value))
+                return agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false)
+              return {
+                v: FD_AGENT_REQUIREMENTS_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_AGENT_REQUIREMENTS_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { requirements: status.value },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(
+                  agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false),
+                )
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(
+                  agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false),
+                )
               }),
             )
           }),
