@@ -1001,7 +1001,8 @@ export const layer = Layer.effect(
 )
 
 // kilocode_change start - prevent Kilo runtime cycles from erasing layer requirements
-export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service> = layer.pipe(
+export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service | import("@/snapshot").Snapshot.Service> =
+  layer.pipe(
   // kilocode_change end
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Session.defaultLayer),

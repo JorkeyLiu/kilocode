@@ -60,6 +60,7 @@ import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
 import { SessionStatus } from "@/session/status" // kilocode_change
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - file tools require the canonical journal
+import { Snapshot } from "@/snapshot" // kilocode_change - writers share the worktree exclusive with revert
 import { Reference } from "@/reference/reference"
 import { RepositoryCache } from "@/reference/repository-cache" // kilocode_change
 import { Git } from "@/git" // kilocode_change
@@ -133,6 +134,7 @@ export const layer: Layer.Layer<
   | RuntimeFlags.Service
   | Database.Service
   | SnapshotJournal.Service // kilocode_change - edit/write/apply_patch require the canonical journal
+  | Snapshot.Service // kilocode_change - writers share the worktree exclusive with revert
   | Git.Service // kilocode_change
   | RepositoryCache.Service // kilocode_change
   | Bus.Service // kilocode_change
@@ -438,7 +440,7 @@ export const layer: Layer.Layer<
 )
 
 // kilocode_change start - keep Kilo registry requirements type-checked
-export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service> = Layer.suspend(
+export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service | Snapshot.Service> = Layer.suspend(
   // kilocode_change end
   () =>
     layer

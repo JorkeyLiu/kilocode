@@ -29,7 +29,7 @@ import { stripPartMetadata } from "@/session/message-v2"
 import { TestInstance, disposeAllInstances } from "../fixture/fixture"
 import * as Tool from "@/tool/tool"
 import { InstanceState } from "@/effect/instance-state"
-import { ensureJournalSession } from "../fixture/journal"
+import { ensureJournalSession, SnapshotPassthrough } from "../fixture/journal"
 import { testEffect } from "../lib/effect"
 
 // File-backed DB (tmpdir, unique per file) so restart/rollback tests can hold
@@ -38,7 +38,7 @@ const root = mkdtempSync(path.join(os.tmpdir(), "journal-test-"))
 const dbFile = path.join(root, "journal.db")
 const memory = Database.layerFromPath(dbFile)
 const journalLayer = SnapshotJournal.layer.pipe(Layer.provide(memory), Layer.provide(FSUtil.defaultLayer))
-const registryLive = ToolRegistry.defaultLayer.pipe(Layer.provide(journalLayer)) // kilocode_change - production Registry with same canonical journal
+const registryLive = ToolRegistry.defaultLayer.pipe(Layer.provide(journalLayer), Layer.provide(SnapshotPassthrough)) // kilocode_change - production Registry with same canonical journal
 
 const MARK = "# journal-formatted"
 
@@ -63,6 +63,7 @@ const layer = Layer.mergeAll(
   Agent.defaultLayer,
   memory,
   journalLayer,
+  SnapshotPassthrough,
   registryLive,
 )
 
@@ -1079,7 +1080,9 @@ describe("Snapshot v2 durable mutation journal", () => {
       expect(registrySrc.includes("SnapshotJournal.defaultLayer")).toBe(false)
       const appSrc = yield* Effect.promise(() => fs.readFile("src/effect/app-runtime.ts", "utf-8"))
       expect(appSrc.includes("const JournalLive = SnapshotJournal.defaultLayer")).toBe(true)
-      expect(appSrc.includes("ToolRegistry.defaultLayer.pipe(Layer.provide(JournalLive))")).toBe(true)
+      expect(appSrc.includes("ToolRegistry.defaultLayer.pipe(")).toBe(true)
+      expect(appSrc.includes("Layer.provide(JournalLive)")).toBe(true)
+      expect(appSrc.includes("Layer.provide(SnapshotLive)")).toBe(true)
       expect(appSrc.split("SnapshotJournal.defaultLayer").length - 1).toBe(1)
       for (const src of yield* Effect.promise(() =>
         Promise.all([
@@ -1089,8 +1092,11 @@ describe("Snapshot v2 durable mutation journal", () => {
         ]),
       )) {
         expect(src.includes("yield* SnapshotJournal.Service")).toBe(true)
+        expect(src.includes("yield* Snapshot.Service")).toBe(true)
+        expect(src.includes("JournalWindow.run")).toBe(true)
         expect(src.includes("serviceOption")).toBe(false)
         expect(src.includes("SnapshotJournal.defaultLayer")).toBe(false)
+        expect(src.includes("Snapshot.defaultLayer")).toBe(false)
       }
     }),
   )

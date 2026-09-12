@@ -16,6 +16,8 @@ import { ConfigValidation } from "../kilocode/config-validation" // kilocode_cha
 import * as EncodedIO from "../kilocode/tool/encoded-io" // kilocode_change
 import { Format } from "../format"
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
+import { Snapshot } from "@/snapshot" // kilocode_change - shared worktree exclusive with revert
+import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
 import * as Bom from "@/util/bom"
 
 export const Parameters = Schema.Struct({
@@ -31,6 +33,7 @@ export const ApplyPatchTool = Tool.define(
     const events = yield* EventV2Bridge.Service
     // kilocode_change - Snapshot v2 journal is required: ToolRegistry provides the canonical instance.
     const journal = yield* SnapshotJournal.Service
+    const snap = yield* Snapshot.Service // kilocode_change - shared worktree exclusive with revert
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -348,23 +351,25 @@ export const ApplyPatchTool = Tool.define(
         }).pipe(Effect.ignore)
       const emitBatchFailure = (cause: unknown, doneCount: number, includeCurrent: boolean) =>
         Effect.gen(function* () {
-          const message = Cause.pretty(cause as never)
-          // Caller already failed its prepared rows; publish the honest applied prefix.
+          // Caller already failed its prepared rows; carry the honest applied prefix.
+          // Watcher/LSP publishes happen outside the worktree exclusive.
           const end = includeCurrent ? doneCount + 1 : doneCount
           const prefix = buildResultFiles(fileChanges.slice(0, end))
           const totalPrefix = prefixDiffOf(prefix)
+          progress.end = end
           yield* ctx
             .metadata({ metadata: { journal: { coverage: "failed", ids: [...journalIDs] }, diff: totalPrefix, files: prefix } })
             .pipe(Effect.ignore)
-          for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
-          for (const change of fileChanges.slice(0, end)) {
-            if (change.type === "delete") continue
-            yield* lsp.touchFile(change.movePath ?? change.filePath, "document").pipe(Effect.ignore)
-          }
           return yield* Effect.failCause(cause as never)
         })
-      let item = 0
-      let done = 0
+      const progress = { done: 0, end: 0 }
+      // kilocode_change - batch window is interrupt-safe: every prepared id is
+      // noted synchronously for runScoped's uninterruptible journal-only
+      // finalizer; explicit failures keep their failRows/metadata semantics.
+      const batch = (scope: JournalWindow.Scope) =>
+        Effect.gen(function* () {
+        let item = 0
+        let done = 0
       for (const change of fileChanges) {
         if (change.type === "move" && change.movePath) {
           // Dual-fact move: both prepares before any write of this hunk.
@@ -390,6 +395,7 @@ export const ApplyPatchTool = Tool.define(
               encoding: change.targetEncoding ?? change.encoding,
               bom: change.targetBom ?? change.bom,
             })
+            scope.note(tgt.row.id)
             journalIDs.push(tgt.row.id)
             prepared.push(tgt.row.id)
             const src = yield* journal.prepare({
@@ -407,19 +413,16 @@ export const ApplyPatchTool = Tool.define(
               encoding: change.encoding,
               bom: change.bom,
             })
+            scope.note(src.row.id)
             journalIDs.push(src.row.id)
             prepared.push(src.row.id)
             return { src, tgt }
           }).pipe(Effect.exit)
           if (exit._tag === "Failure") {
             yield* failRows(prepared, Cause.pretty(exit.cause as never))
+            progress.done = done
+            progress.end = done
             yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: [...journalIDs] } } }).pipe(Effect.ignore)
-            // Prefix publish keeps completed work visible even when prepare itself failed.
-            for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
-            for (const prior of fileChanges.slice(0, done)) {
-              if (prior.type === "delete") continue
-              yield* lsp.touchFile(prior.movePath ?? prior.filePath, "document").pipe(Effect.ignore)
-            }
             return yield* Effect.failCause(exit.cause)
           }
           srcID = exit.value.src.row.id
@@ -470,6 +473,7 @@ export const ApplyPatchTool = Tool.define(
             return yield* emitBatchFailure(settleExit.cause, done, targetLanded)
           }
           done += 1
+          progress.done = done
           item += 1
           continue
         }
@@ -491,15 +495,13 @@ export const ApplyPatchTool = Tool.define(
           })
           .pipe(Effect.exit)
         if (prepExit._tag === "Failure") {
+          progress.done = done
+          progress.end = done
           yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: [...journalIDs] } } }).pipe(Effect.ignore)
-          for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
-          for (const prior of fileChanges.slice(0, done)) {
-            if (prior.type === "delete") continue
-            yield* lsp.touchFile(prior.movePath ?? prior.filePath, "document").pipe(Effect.ignore)
-          }
           return yield* Effect.failCause(prepExit.cause)
         }
         const noted = prepExit.value
+        scope.note(noted.row.id)
         journalIDs.push(noted.row.id)
         yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: [...journalIDs] } } })
 
@@ -546,7 +548,23 @@ export const ApplyPatchTool = Tool.define(
           return yield* emitBatchFailure(exit.cause, done, false)
         }
         done += 1
+        progress.done = done
         item += 1
+      }
+      progress.done = done
+        })
+      // kilocode_change - whole batch holds one worktree exclusive; ask/LSP/validation stay outside.
+      // Failure journal.fail already completed inside before release; prefix publishes happen below.
+      // Interruption after any prepare closes still-prepared rows via runScoped's
+      // uninterruptible journal-only finalizer before release.
+      const batchExit = yield* JournalWindow.runScoped(snap, journal, (scope) => batch(scope)).pipe(Effect.exit)
+      if (batchExit._tag === "Failure") {
+        for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
+        for (const prior of fileChanges.slice(0, progress.end || progress.done)) {
+          if (prior.type === "delete") continue
+          yield* lsp.touchFile(prior.movePath ?? prior.filePath, "document").pipe(Effect.ignore)
+        }
+        return yield* Effect.failCause(batchExit.cause)
       }
       // kilocode_change end
 

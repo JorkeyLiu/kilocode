@@ -2504,7 +2504,8 @@ export const layer = Layer.effect(
 )
 
 // kilocode_change start - keep prompt runtime requirements type-checked
-export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service> = Layer.suspend(() =>
+export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service | import("@/snapshot").Snapshot.Service> =
+  Layer.suspend(() =>
   // kilocode_change end
   layer
     .pipe(

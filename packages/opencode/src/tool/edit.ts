@@ -23,6 +23,7 @@ import * as EncodedIO from "../kilocode/tool/encoded-io" // kilocode_change
 import * as Encoding from "../kilocode/encoding" // kilocode_change
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
+import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
 
 export { trimDiff } from "./filediff" // kilocode_change - compat re-export
 
@@ -77,6 +78,7 @@ export const EditTool = Tool.define(
     const events = yield* EventV2Bridge.Service
     // kilocode_change - Snapshot v2 journal is required: ToolRegistry provides the canonical instance.
     const journal = yield* SnapshotJournal.Service
+    const snap = yield* Snapshot.Service // kilocode_change - shared worktree exclusive with revert
 
     return {
       description: DESCRIPTION,
@@ -148,40 +150,52 @@ export const EditTool = Tool.define(
                     filediff: ask.filediff, // kilocode_change
                   },
                 })
-                // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
-                const created = yield* journal
-                  .prepare({
-                    sessionID: ctx.sessionID,
-                    messageID: ctx.messageID,
-                    callID: ctx.callID,
-                    tool: "edit",
-                    item: 0,
-                    sub: 0,
-                    directory: instance.directory,
-                    worktree: instance.worktree,
-                    path: filePath,
-                    op: "add",
-                    before: null,
-                    encoding: Encoding.DEFAULT,
-                    bom: desiredBom,
-                  })
-                  .pipe(
-                    Effect.tapCause(() =>
-                      ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
-                    ),
-                  )
-                journalIDs = [created.row.id]
-                yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
-                yield* runGuarded(
-                  created.row.id,
-                  Effect.gen(function* () {
-                    yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
-                    if (yield* format.file(filePath)) {
-                      contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
-                    }
-                    // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
-                    const createdAfter = Buffer.from(yield* afs.readFile(filePath))
-                    yield* journal.apply({ id: created.row.id, after: createdAfter, encoding: Encoding.DEFAULT, bom: desiredBom })
+                // kilocode_change - lock order: per-file lock (outer) -> worktree exclusive (inner);
+                // ask stays inside per-file but outside worktree so user wait never holds worktree.
+                // Snapshot v2 journal: prepare after ask, before any write (sub 0).
+                // Interruption after prepare closes the row via runScoped's
+                // uninterruptible minimal finalizer (journal-only, no metadata).
+                yield* JournalWindow.runScoped(
+                  snap,
+                  journal,
+                  (scope) =>
+                    Effect.gen(function* () {
+                      const created = yield* journal
+                        .prepare({
+                          sessionID: ctx.sessionID,
+                          messageID: ctx.messageID,
+                          callID: ctx.callID,
+                          tool: "edit",
+                          item: 0,
+                          sub: 0,
+                          directory: instance.directory,
+                          worktree: instance.worktree,
+                          path: filePath,
+                          op: "add",
+                          before: null,
+                          encoding: Encoding.DEFAULT,
+                          bom: desiredBom,
+                        })
+                        .pipe(
+                          Effect.tapCause(() =>
+                            ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
+                          ),
+                        )
+                      scope.note(created.row.id)
+                      journalIDs = [created.row.id]
+                    yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
+                    yield* runGuarded(
+                      created.row.id,
+                      Effect.gen(function* () {
+                        yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
+                        if (yield* format.file(filePath)) {
+                          contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
+                        }
+                        // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
+                        const createdAfter = Buffer.from(yield* afs.readFile(filePath))
+                        yield* journal.apply({ id: created.row.id, after: createdAfter, encoding: Encoding.DEFAULT, bom: desiredBom })
+                      }),
+                    )
                   }),
                 )
                 result = build(filePath, contentOld, contentNew) // kilocode_change - formatter-final truth
@@ -224,46 +238,57 @@ export const EditTool = Tool.define(
                 },
               })
 
-              // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
-              const changed = yield* journal
-                .prepare({
-                  sessionID: ctx.sessionID,
-                  messageID: ctx.messageID,
-                  callID: ctx.callID,
-                  tool: "edit",
-                  item: 0,
-                  sub: 0,
-                  directory: instance.directory,
-                  worktree: instance.worktree,
-                  path: filePath,
-                  op: "update",
-                  before: pre.bytes,
-                  encoding: source.encoding,
-                  bom: source.bom,
-                })
-                .pipe(
-                  Effect.tapCause(() =>
-                    ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
-                  ),
-                )
-              journalIDs = [changed.row.id]
-              yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
-              yield* runGuarded(
-                changed.row.id,
-                Effect.gen(function* () {
-                  yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
-                  if (yield* format.file(filePath)) {
-                    contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, source.encoding)
-                  }
-                  // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
-                  const changedAfter = Buffer.from(yield* afs.readFile(filePath))
-                  yield* journal.apply({
-                    id: changed.row.id,
-                    after: changedAfter,
-                    encoding: source.encoding,
-                    bom: desiredBom,
-                    beforeFallback: pre.bytes,
-                  })
+              // kilocode_change - same lock order as add branch; ask outside worktree exclusive.
+              // Interruption after prepare closes the row via runScoped's
+              // uninterruptible minimal finalizer (journal-only, no metadata).
+              yield* JournalWindow.runScoped(
+                snap,
+                journal,
+                (scope) =>
+                  Effect.gen(function* () {
+                    // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
+                    const changed = yield* journal
+                      .prepare({
+                        sessionID: ctx.sessionID,
+                        messageID: ctx.messageID,
+                        callID: ctx.callID,
+                        tool: "edit",
+                        item: 0,
+                        sub: 0,
+                        directory: instance.directory,
+                        worktree: instance.worktree,
+                        path: filePath,
+                        op: "update",
+                        before: pre.bytes,
+                        encoding: source.encoding,
+                        bom: source.bom,
+                      })
+                      .pipe(
+                        Effect.tapCause(() =>
+                          ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
+                        ),
+                      )
+                    scope.note(changed.row.id)
+                    journalIDs = [changed.row.id]
+                  yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
+                  yield* runGuarded(
+                    changed.row.id,
+                    Effect.gen(function* () {
+                      yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
+                      if (yield* format.file(filePath)) {
+                        contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, source.encoding)
+                      }
+                      // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
+                      const changedAfter = Buffer.from(yield* afs.readFile(filePath))
+                      yield* journal.apply({
+                        id: changed.row.id,
+                        after: changedAfter,
+                        encoding: source.encoding,
+                        bom: desiredBom,
+                        beforeFallback: pre.bytes,
+                      })
+                    }),
+                  )
                 }),
               )
               yield* events.publish(FileSystem.Event.Edited, { file: filePath })

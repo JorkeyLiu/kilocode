@@ -12,6 +12,8 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
+import { Snapshot } from "@/snapshot" // kilocode_change - shared worktree exclusive with revert
+import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { filterDiagnostics } from "./diagnostics" // kilocode_change
 import { ConfigValidation } from "../kilocode/config-validation" // kilocode_change
@@ -36,6 +38,7 @@ export const WriteTool = Tool.define(
     const format = yield* Format.Service
     // kilocode_change - Snapshot v2 journal is required: ToolRegistry provides the canonical instance.
     const journal = yield* SnapshotJournal.Service
+    const snap = yield* Snapshot.Service // kilocode_change - shared worktree exclusive with revert
 
     return {
       description: DESCRIPTION,
@@ -76,53 +79,65 @@ export const WriteTool = Tool.define(
 
           // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
           // Any post-prepare failure marks failed (coverage failed + ids) before the cause propagates.
-          let journalIDs: string[] = []
-          const noted = yield* journal
-            .prepare({
-              sessionID: ctx.sessionID,
-              messageID: ctx.messageID,
-              callID: ctx.callID,
-              tool: "write",
-              item: 0,
-              sub: 0,
-              directory: instance.directory,
-              worktree: instance.worktree,
-              path: filepath,
-              op: exists ? "update" : "add",
-              before: pre.bytes,
-              encoding: source.encoding,
-              bom: source.bom,
-            })
-            .pipe(
-              Effect.tapCause(() =>
-                ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
-              ),
-            )
-          journalIDs = [noted.row.id]
-          yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
-
-          let final = contentNew
-          const exit = yield* Effect.gen(function* () {
-            yield* EncodedIO.write(fs, filepath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces fs.writeWithDirs
-            if (yield* format.file(filepath)) {
-              final = yield* EncodedIO.sync(fs, filepath, desiredBom, source.encoding)
-            }
-            // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
-            const written = Buffer.from(yield* fs.readFile(filepath))
-            yield* journal.apply({
-              id: noted.row.id,
-              after: written,
-              encoding: source.encoding,
-              bom: desiredBom,
-              beforeFallback: pre.bytes,
-            })
-          }).pipe(Effect.exit)
-          if (exit._tag === "Failure") {
-            const message = Cause.pretty(exit.cause as never)
-            yield* journal.fail({ id: noted.row.id, error: message }).pipe(Effect.ignore)
-            yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore)
-            return yield* Effect.failCause(exit.cause)
-          }
+          // Whole prepare -> write/format/sync -> apply/fail window holds one worktree exclusive;
+          // ask stays outside, LSP/metadata validation stays outside.
+          const ids: string[] = []
+          const box = { final: contentNew }
+          const windowExit = yield* JournalWindow.runScoped(
+            snap,
+            journal,
+            (scope) =>
+              Effect.gen(function* () {
+                const noted = yield* journal
+                  .prepare({
+                    sessionID: ctx.sessionID,
+                    messageID: ctx.messageID,
+                    callID: ctx.callID,
+                    tool: "write",
+                    item: 0,
+                    sub: 0,
+                    directory: instance.directory,
+                    worktree: instance.worktree,
+                    path: filepath,
+                    op: exists ? "update" : "add",
+                    before: pre.bytes,
+                    encoding: source.encoding,
+                    bom: source.bom,
+                  })
+                  .pipe(
+                    Effect.tapCause(() =>
+                      ctx.metadata({ metadata: { journal: { coverage: "failed", ids } } }).pipe(Effect.ignore),
+                    ),
+                  )
+                scope.note(noted.row.id)
+                ids.push(noted.row.id)
+              yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids } } })
+              const exit = yield* Effect.gen(function* () {
+                yield* EncodedIO.write(fs, filepath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces fs.writeWithDirs
+                if (yield* format.file(filepath)) {
+                  box.final = yield* EncodedIO.sync(fs, filepath, desiredBom, source.encoding)
+                }
+                // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
+                const written = Buffer.from(yield* fs.readFile(filepath))
+                yield* journal.apply({
+                  id: noted.row.id,
+                  after: written,
+                  encoding: source.encoding,
+                  bom: desiredBom,
+                  beforeFallback: pre.bytes,
+                })
+              }).pipe(Effect.exit)
+              if (exit._tag === "Failure") {
+                const message = Cause.pretty(exit.cause as never)
+                yield* journal.fail({ id: noted.row.id, error: message }).pipe(Effect.ignore)
+                yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids } } }).pipe(Effect.ignore)
+                return yield* Effect.failCause(exit.cause)
+              }
+            }),
+          ).pipe(Effect.exit)
+          if (windowExit._tag === "Failure") return yield* Effect.failCause(windowExit.cause)
+          const journalIDs = ids
+          const final = box.final
           const result = build(filepath, contentOld, final)
           const diff = result.diff
           const filediff = result.filediff

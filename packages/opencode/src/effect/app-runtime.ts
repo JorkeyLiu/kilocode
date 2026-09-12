@@ -157,10 +157,14 @@ const SessionLayerBase = Layer.mergeAll(
 // requires SnapshotJournal.Service; it is explicitly provided here with the same
 // JournalLive node that is also merged as a sibling, so memoMap builds one service.
 const JournalLive = SnapshotJournal.defaultLayer // kilocode_change - canonical Snapshot v2 journal
-const ToolRegistryLive = ToolRegistry.defaultLayer.pipe(Layer.provide(JournalLive)) // kilocode_change - same canonical journal
-const SessionLayerLive = SessionLayerBase.pipe(Layer.provide(JournalLive)) // kilocode_change - SessionPrompt consumes the same canonical journal
+const SnapshotLive = Snapshot.defaultLayer // kilocode_change - canonical Snapshot exclusive shared by writers and revert
+const ToolRegistryLive = ToolRegistry.defaultLayer.pipe(
+  Layer.provide(JournalLive),
+  Layer.provide(SnapshotLive),
+) // kilocode_change - same canonical journal and Snapshot exclusive
+const SessionLayerLive = SessionLayerBase.pipe(Layer.provide(JournalLive), Layer.provide(SnapshotLive)) // kilocode_change - SessionPrompt consumes the same canonical journal
 
-const WorkspaceLive = Workspace.defaultLayer.pipe(Layer.provide(JournalLive)) // kilocode_change - Workspace consumes the same canonical journal
+const WorkspaceLive = Workspace.defaultLayer.pipe(Layer.provide(JournalLive), Layer.provide(SnapshotLive)) // kilocode_change - Workspace consumes the same canonical journal
 
 const FeatureLayer = Layer.mergeAll(
   ToolRegistryLive,
