@@ -181,6 +181,18 @@ Skill removal is private-only over the same `kilo serve` fd3/fd4 into the CLI-ow
 | Ownership | `fd-carrier.ts` validates, resolves canonical directory, acquires the drain-control lane with `InstanceRef` held through the shared cold-convergence mutation. Extension uses `privateSkillRemoveOutcomeWithHandle` via `wrapEpochHandle` with 3 s exact-cancel/epoch semantics; settled terminals survive post-response drift. |
 | Projection | Every outcome refreshes authoritative skills/commands (settings); success additionally clears requirements. No ad-hoc `global.config.update` or `instance.dispose` on this path; backend convergence owns lifecycle. |
 
+## Private `skill/list` carrier — private-first read, same AppLayer
+
+One bounded private path covers `skill/list` (read-only skill inventory) over the same `kilo serve` fd3/fd4 into the same production source the `GET /skill` handler reads. `kilo-provider/skills.ts` `loadSkills` is private-first: a validated private `succeeded`+`accepted` (including empty) returns the safe projection with zero SDK; every other private outcome takes one retry-wrapped same-directory SDK `client.app.skills` fallback. No Unix socket, no second TCP listener, no SDK hand-edit, no second skill store. `skill/remove` paired skills/commands refresh is unchanged.
+
+| Aspect | Behavior |
+|---|---|
+| Spawn & streams | Reuses the same `ServerManager` 5-stdio carrier. `FD_CAPABILITIES` adds `skill/list`. |
+| Identity | `skill-list:<token>` for both `opId` and `idempotencyKey` plus fresh `requestId`, `op` `skill/list`, `context {directory, workspace?}`, empty payload. Strict unknown-field reject; identities must not carry path material. |
+| Ownership | `fd-carrier.ts` validates, resolves canonical directory, reads same-directory `Skill.Service.all()` through the existing drain-control + `InstanceRef` lane (same lane as `command/list`), with no new lane. Extension uses `privateSkillListOutcomeWithHandle` via `wrapEpochHandle` with 3 s exact-cancel/epoch semantics. |
+| Private-first with retry-wrapped SDK fallback | Valid `succeeded`+`accepted` (including empty) is authoritative with zero SDK, preserving carrier order. Every other outcome — `failed` (no domain terminal), ambiguous, invalid, unavailable, transport, closed, timeout — takes one same-directory SDK `client.app.skills({directory})` through the existing retry wrapper (the wrapper may retry transient SDK failures, so this is not exactly-one HTTP attempt). SDK results are projected to the safe shape before cache/post. |
+| Projection | Safe `{name, description?, location}` only; SKILL.md `content` and file bytes never cross the boundary. Order follows `Skill.Service.all()` insertion order with no sorting; empty is authoritative. `skillsLoaded` cache/post semantics unchanged. |
+
 ## Private `session/prompt` and `session/command` carriers — private-first accept-only, same AppLayer
 
 `session/prompt` and `session/command` are private-first accept-only over the same `kilo serve` fd3/fd4 into the same `AppRuntime` (`SessionPromptDispatch`, `SessionCommandDispatch`). Each private path validates then forks generation and returns `succeeded accepted:true` immediately; generation still runs in the CLI runtime under existing owners. The generated SDK `session.promptAsync` / `session.command` remain only as the single same-identity fallback for validated retryable failure. No new TCP listener, no Unix socket, no second runtime, no SDK regeneration.

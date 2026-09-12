@@ -68,6 +68,7 @@ import { FileSystem } from "@opencode-ai/core/filesystem"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Command } from "@/command"
+import { Skill } from "@/skill"
 import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { buildInitializeResult, validateInitialize } from "./fd-carrier-protocol"
@@ -442,6 +443,8 @@ export const FD_PATH_VERSION = 1 as const
 export const FD_PATH_OP = "path/get" as const
 export const FD_COMMAND_LIST_VERSION = 1 as const
 export const FD_COMMAND_LIST_OP = "command/list" as const
+export const FD_SKILL_LIST_VERSION = 1 as const
+export const FD_SKILL_LIST_OP = "skill/list" as const
 export const FD_CONFIG_WARNINGS_VERSION = 1 as const
 export const FD_CONFIG_WARNINGS_OP = "config/warnings" as const
 export const FD_PROJECT_CURRENT_VERSION = 1 as const
@@ -487,6 +490,19 @@ export interface FdCommandListRequest {
   requestId: string
   opId: string
   op: typeof FD_COMMAND_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdSkillListRequest {
+  v: typeof FD_SKILL_LIST_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_SKILL_LIST_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -927,6 +943,27 @@ function commandListFailed(
   }
 }
 
+function skillListFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_SKILL_LIST_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_SKILL_LIST_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 function configWarningsFailed(
   req: { requestId: string; opId: string; idempotencyKey: string },
   code: string,
@@ -1245,6 +1282,48 @@ function validateCommandListRequest(raw: unknown): FdCommandListRequest {
   return raw as unknown as FdCommandListRequest
 }
 
+function validateSkillListRequest(raw: unknown): FdSkillListRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_SKILL_LIST_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_SKILL_LIST_OP) throw new Error("op must be skill/list")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for skill-list")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  // Redaction (audit F-002): unknown field names are never echoed — they may
+  // carry path-bearing keys (e.g. `/tmp/secret`).
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for skill-list")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  // Path-bearing identities are never echoed (audit F-002): reject values
+  // carrying `/`, `\`, or NUL before they can reach the failure wire.
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "skill-list" || segs[1]!.length === 0)
+    throw new Error("opId must be skill-list:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be skill-list:<token> with nonempty colon-free token")
+  return raw as unknown as FdSkillListRequest
+}
+
 function validateConfigWarningsRequest(raw: unknown): FdConfigWarningsRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
   if (raw.v !== FD_CONFIG_WARNINGS_VERSION) throw new Error("v must be 1")
@@ -1450,6 +1529,27 @@ function safeCommandListIdentities(req: { requestId: string; opId: string; idemp
   }
 }
 
+function fallbackSkillListIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeSkillListIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
 function fallbackConfigWarningsIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
   const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
   return {
@@ -1475,6 +1575,10 @@ const PATH_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no ac
 const PATH_INTERNAL_MESSAGE = "internal error"
 const COMMAND_LIST_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
 const COMMAND_LIST_INTERNAL_MESSAGE = "internal error"
+const SKILL_LIST_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const SKILL_LIST_INTERNAL_MESSAGE = "internal error"
+const SKILL_LIST_VALIDATION_MESSAGE = "invalid skill-list request"
+const SKILL_LIST_SCOPE_MESSAGE = "directory mismatch"
 const CONFIG_WARNINGS_FENCE_MESSAGE =
   "Instance is unavailable during config rebuild; no active runtime for this request"
 const CONFIG_WARNINGS_INTERNAL_MESSAGE = "internal error"
@@ -3914,6 +4018,125 @@ export function createFdCarrier(
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "skill/list") {
+        // Skill-list parity-only read: same-directory Skill.Service.all()
+        // via the existing drain-control + InstanceRef lane (same lane as
+        // permission/question/suggestion-list — no new lifecycle lane),
+        // projected to the safe consumer subset ({name, description?,
+        // location}). SKILL.md `content` and file bytes never cross the
+        // boundary. Insertion order is preserved (no sorting); empty is an
+        // authoritative success. Directory/workspace are routing identity;
+        // workspace never reaches the service. No mutation, no durable
+        // operation.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdSkillListRequest
+            try {
+              req = validateSkillListRequest(params)
+            } catch {
+              return skillListFailed(
+                fallbackSkillListIds(params),
+                "validation.failed",
+                SKILL_LIST_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeSkillListIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return skillListFailed(safe, "validation.failed", SKILL_LIST_VALIDATION_MESSAGE, false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return skillListFailed(safe, "validation.failed", SKILL_LIST_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? SKILL_LIST_FENCE_MESSAGE : SKILL_LIST_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: skillListFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir) return skillListFailed(safe, "scope_mismatch", SKILL_LIST_SCOPE_MESSAGE, false)
+              const svc = yield* Skill.Service
+              const list = yield* svc.all().pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (list.tag !== "ok") return skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false)
+              if (!Array.isArray(list.value))
+                return skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false)
+              const skills: Array<{ name: string; description?: string; location: string }> = []
+              for (const item of list.value) {
+                const rec = item as unknown as Record<string, unknown>
+                const name = rec.name
+                if (typeof name !== "string" || name.length === 0)
+                  return skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false)
+                const description = rec.description
+                if (description !== undefined && typeof description !== "string")
+                  return skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false)
+                const location = rec.location
+                if (typeof location !== "string" || location.length === 0)
+                  return skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false)
+                skills.push({
+                  name,
+                  ...(description !== undefined ? { description } : {}),
+                  location,
+                })
+              }
+              return {
+                v: FD_SKILL_LIST_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_SKILL_LIST_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { skills },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(skillListFailed(safe, "internal", SKILL_LIST_INTERNAL_MESSAGE, false))
               }),
             )
           }),

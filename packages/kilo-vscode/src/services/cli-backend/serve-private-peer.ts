@@ -89,6 +89,14 @@ import type {
   CommandListResult,
   CommandListWireOutcome,
 } from "./serve-private-command-list-contract"
+import { validateSkillListContractRequest as validateSkillListRequest } from "./serve-private-skill-list-contract"
+import { SkillListValidationError } from "./serve-private-skill-list-contract"
+import { requestSkillListOutcome } from "./serve-private-skill-list"
+import type {
+  SkillListContractRequest,
+  SkillListResult,
+  SkillListWireOutcome,
+} from "./serve-private-skill-list-contract"
 import { validateConfigWarningsContractRequest as validateConfigWarningsRequest } from "./serve-private-config-warnings-contract"
 import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
 import {
@@ -4663,6 +4671,41 @@ export class ServePrivatePeer {
         isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
         isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
         failInfo: (e) => ({ ...this.parseFailedInfo(e), msg: "private command-list transport failed" }),
+      },
+      (id) => this.makeHandleCancel(id, req.opId, peerAtCall, currentEpoch),
+      req,
+    )
+  }
+
+  async privateSkillList(req: SkillListContractRequest): Promise<SkillListResult> {
+    const handle = this.privateSkillListOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new SkillListValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /** Normalized outcome handle for the read-only skill-list parity observer. */
+  privateSkillListOutcomeWithHandle(req: SkillListContractRequest): {
+    id: number
+    promise: Promise<SkillListWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSkillListRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("skill/list")) {
+      throw new Error("Private peer missing skill/list capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestSkillListOutcome(
+      peerAtCall as unknown as import("./serve-private-skill-list").SkillListRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => ({ ...this.parseFailedInfo(e), msg: "private skill-list transport failed" }),
       },
       (id) => this.makeHandleCancel(id, req.opId, peerAtCall, currentEpoch),
       req,

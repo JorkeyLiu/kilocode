@@ -83,6 +83,7 @@ import { disposeGitChangesTarget } from "./kilo-provider/git-changes-target"
 import { interceptMessage } from "./kilo-provider/git-changes-request"
 import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/followup-session"
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
+import { loadSkills } from "./kilo-provider/skills"
 import { fetchConfigWarningsPrivateFirst } from "./kilo-provider/config-warnings-privatefirst"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
 import { childID } from "./kilo-provider/task-session"
@@ -3785,14 +3786,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const workspaceDir = this.getWorkspaceDirectory()
-      const { data: skills } = await retry(() =>
-        this.client!.app.skills({ directory: workspaceDir }, { throwOnError: true }),
-      )
+      const message = await loadSkills(this.client, workspaceDir, this.connectionService)
 
-      const message = {
-        type: "skillsLoaded",
-        skills,
-      }
       this.cachedSkillsMessage = message
       this.postMessage(message)
     } catch (error) {

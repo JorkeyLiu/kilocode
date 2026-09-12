@@ -62,6 +62,8 @@ import { wrapPathOutcomeForOwner } from "./serve-private-path"
 import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
 import { wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
 import type { CommandListContractRequest, CommandListWireOutcome } from "./serve-private-command-list-contract"
+import { wrapSkillListOutcomeForOwner } from "./serve-private-skill-list"
+import type { SkillListContractRequest, SkillListWireOutcome } from "./serve-private-skill-list-contract"
 import { wrapConfigWarningsOutcomeForOwner } from "./serve-private-config-warnings"
 import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
 import { wrapProjectCurrentOutcomeForOwner } from "./serve-private-project-current"
@@ -2755,6 +2757,33 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("command-list stale private read timeout"),
       peerAtCall.privateCommandListOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  /** Epoch-aware pass-through for the private-first skill-list read. */
+  privateSkillListOutcomeWithHandle(req: SkillListContractRequest): {
+    id: number
+    promise: Promise<SkillListWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("skill/list")) {
+      throw new Error("Private peer missing skill/list capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapSkillListOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("skill-list stale private read timeout"),
+      peerAtCall.privateSkillListOutcomeWithHandle(req),
       req,
     )
   }
