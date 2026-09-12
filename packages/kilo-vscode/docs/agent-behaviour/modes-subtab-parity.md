@@ -16,9 +16,8 @@ The legacy "Modes" sub-tab was a 1794-line component with comprehensive mode man
 | Delete custom mode | Confirmation dialog | Delete button with confirmation dialog |
 | Rename custom mode | Inline text field with save/cancel | Not available — name is immutable after creation |
 | Export mode | Export to file button | Not available |
-| Import mode | Import dialog (project/global) | Not available (marketplace handles this) |
+| Import mode | Import dialog (project/global) | File import for custom agents |
 | Edit modes config (JSON) | Dropdown: "Edit Global Modes" / "Edit Project Modes" | Not available |
-| Marketplace button | Opens mode marketplace | Not available |
 
 ### Per-Mode/Agent Settings
 
@@ -85,7 +84,6 @@ These are CLI capabilities beyond what the legacy had:
 
 - **Rename agent**: Allow renaming custom agents (currently name is immutable after creation)
 - **Edit config JSON buttons**: Quick links to open the raw config file for global/project agent config
-- **Marketplace integration**: Button to open mode marketplace (covered by marketplace.md)
 - **Organization mode features**: Share modes banner and org mode warning (depends on org feature implementation)
 - **Agent mode selector**: Dropdown for subagent/primary/all
 - **Color picker**: Visual agent identification

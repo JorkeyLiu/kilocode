@@ -158,7 +158,7 @@ export const dict = {
   "agentRequirements.blocked.title": "{{agent}} agent prerequisites",
   "agentRequirements.blocked.description": "This agent needs the following tools before it can run.",
   "agentRequirements.prompt.blocked": "Complete the required checks to use this agent first",
-  "agentRequirements.action.openMarketplace": "Open Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "The selected agent could not be found.",
   "agentRequirements.error.malformedDeclaration": "This agent has an invalid requirement declaration.",
   "agentRequirements.error.discoveryFailed": "Kilo could not check the available skills.",
@@ -1401,7 +1401,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Skill Folder Paths",
   "settings.agentBehaviour.skillUrls": "Skill URLs",
   "settings.agentBehaviour.removeSkill.title": "Remove skill",
-  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? This will delete the skill files from disk.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Remove",
   "settings.agentBehaviour.rules.description":
     "Rules are instruction files that guide agent behaviour. They are included in the system prompt for every conversation. Add file paths below to include additional rules.",
@@ -1431,7 +1431,7 @@ export const dict = {
   "settings.agentBehaviour.addMcp.args.placeholder": "e.g.\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.agentBehaviour.addMcp.url": "Server URL",
   "settings.agentBehaviour.addMcp.url.placeholder": "e.g. http://localhost:3000/sse",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Browse Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "No MCP servers configured. Add MCP servers in kilo.jsonc, or ask the agent to add them for you.",
   "settings.agentBehaviour.workflowsPlaceholder": "Workflows are managed via workflow files in your workspace.",

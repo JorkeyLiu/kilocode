@@ -160,7 +160,7 @@ export const dict = {
   "agentRequirements.blocked.description":
     "Deze agent heeft de volgende tools nodig voordat deze kan worden uitgevoerd.",
   "agentRequirements.prompt.blocked": "Voltooi eerst de vereiste controles om deze agent te gebruiken",
-  "agentRequirements.action.openMarketplace": "Marketplace openen",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "De geselecteerde agent kon niet worden gevonden.",
   "agentRequirements.error.malformedDeclaration": "Deze agent heeft een ongeldige vereistenverklaring.",
   "agentRequirements.error.discoveryFailed": "Kilo kon de beschikbare skills niet controleren.",
@@ -1427,8 +1427,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Skill Mappaden",
   "settings.agentBehaviour.skillUrls": "Skill URL's",
   "settings.agentBehaviour.removeSkill.title": "Verwijder skill",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Skill "{{name}}" verwijderen? Dit verwijdert de skill bestanden van schijf.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Verwijderen",
   "settings.agentBehaviour.rules.description":
     "Regels zijn instructiebestanden die het gedrag van de agent sturen. Ze worden opgenomen in de systeemprompt voor elk gesprek. Voeg hieronder bestandspaden toe om aanvullende regels op te nemen.",
@@ -1460,7 +1459,7 @@ export const dict = {
   "settings.agentBehaviour.addMcp.args.placeholder": "e.g.\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.agentBehaviour.addMcp.url": "Server-URL",
   "settings.agentBehaviour.addMcp.url.placeholder": "e.g. http://localhost:3000/sse",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Bladeren door Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Geen MCP-servers geconfigureerd. Voeg MCP-servers toe in kilo.jsonc of vraag de agent om ze toe te voegen.",
   "settings.agentBehaviour.workflowsPlaceholder": "Workflows worden beheerd via workflowbestanden in je workspace.",

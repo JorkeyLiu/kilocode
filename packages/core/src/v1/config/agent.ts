@@ -88,7 +88,7 @@ const AgentSchema = Schema.StructWithRest(
     mode: Schema.optional(Schema.Literals(["subagent", "primary", "all"])),
     // kilocode_change start - typed metadata carriers so they never fall into `options` (provider params)
     displayName: Schema.optional(Schema.String).annotate({
-      description: "Human-readable name shown in the UI (e.g. for organization or marketplace agents)",
+      description: "Human-readable name shown in the UI (e.g. for organization agents)",
     }),
     source: Schema.optional(Schema.String).annotate({
       description: "Origin marker for managed agents (organization | global | project)",

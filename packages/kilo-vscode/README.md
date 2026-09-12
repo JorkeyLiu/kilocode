@@ -43,7 +43,7 @@
 - **Inline Autocomplete:** Get intelligent code completions as you type, powered by AI.
 - **Task Automation:** Kilo can automate repetitive coding tasks to save time..
 - **Automated Refactoring:** Kilo can refactor and improve existing code efficiently.
-- **MCP Server Marketplace**: Kilo can easily find, and use MCP servers to extend the agent capabilities.
+- **MCP Server Configuration**: Kilo can easily find, and use MCP servers to extend the agent capabilities.
 - **Multi Mode**: Plan with Architect, Code with Coder, and Debug with Debugger, and make your own custom modes.
 
 ## Get Started

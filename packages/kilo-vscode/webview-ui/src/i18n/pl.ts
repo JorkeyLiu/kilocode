@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Wymagania wstępne agenta {{agent}}",
   "agentRequirements.blocked.description": "Ten agent potrzebuje następujących narzędzi, zanim będzie mógł działać.",
   "agentRequirements.prompt.blocked": "Najpierw ukończ wymagane sprawdzenia, aby użyć tego agenta",
-  "agentRequirements.action.openMarketplace": "Otwórz Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Nie znaleziono wybranego agenta.",
   "agentRequirements.error.malformedDeclaration": "Ten agent ma nieprawidłową deklarację wymagań.",
   "agentRequirements.error.discoveryFailed": "Kilo nie mógł sprawdzić dostępnych umiejętności.",
@@ -1474,8 +1474,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Ścieżki folderów umiejętności",
   "settings.agentBehaviour.skillUrls": "Adresy URL umiejętności",
   "settings.agentBehaviour.removeSkill.title": "Usuń umiejętność",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Usunąć umiejętność "{{name}}"? Spowoduje to usunięcie plików umiejętności z dysku.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Usuń",
   "settings.agentBehaviour.rules.description":
     "Reguły to pliki instrukcji, które kierują zachowaniem agenta. Są one dołączane do promptu systemowego dla każdej rozmowy. Dodaj poniżej ścieżki plików, aby dołączyć dodatkowe reguły.",
@@ -1490,7 +1489,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Argumenty",
   "settings.agentBehaviour.mcpDetail.env": "Środowisko",
   "settings.agentBehaviour.mcpDetail.disabled": "Ten serwer jest wyłączony.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Przeglądaj Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Brak skonfigurowanych serwerów MCP. Dodaj serwery MCP w kilo.jsonc lub poproś agenta o ich dodanie.",
   "settings.agentBehaviour.workflowsPlaceholder": "Przepływy pracy zarządzane są za pomocą plików przepływów pracy.",

@@ -118,7 +118,7 @@ Kilo, göreve göre aralarında geçiş yapabileceğiniz özelleşmiş agents il
 - Ghost-text önerileri ve kabul etmek için Tab ile **satır içi otomatik tamamlama**.
 - Ajanın kendi çalışmasını inceleyip düzeltmesi için **öz denetim**.
 - Komut çalıştırmak ve web'i otomatikleştirmek için **terminal ve tarayıcı kontrolü**.
-- Ajanın yapabileceklerini genişleten MCP sunucularını bulmak ve bağlamak için **MCP marketplace**.
+- Ajanın yapabileceklerini genişleten MCP sunucularını bulmak ve bağlamak için **MCP configuration**.
 - Gecikme, maliyet ve akıl yürütmeyi işe uygun seçmek için görev sırasında geçiş destekli **500'den fazla model**.
 
 ### Otonom Mod (CI/CD)

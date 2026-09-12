@@ -133,7 +133,7 @@ export namespace KiloSession {
    *                                   -> `metadata.gateway.marketCost`
    *
    * Kilo does not charge end users a per-request fee, so for the Kilo provider the
-   * top-level `cost` field (the gateway/marketplace fee) would understate the user's
+   * top-level `cost` field (the gateway fee) would understate the user's
    * actual upstream spend. Always prefer the upstream/market cost when present.
    *
    * Returns `undefined` when no provider cost is available, so the caller

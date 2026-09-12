@@ -86,7 +86,7 @@ describe("KiloConnectionService retained check-in lifecycle", () => {
 describe("KiloConnectionService retained transport surface (LOCK-009)", () => {
   it("keeps server-info and direct HTTP/consumer access available", () => {
     // getServerInfo + getServerConfig back direct consumers: speech-to-text,
-    // image-generation, Agent Manager terminal routing, Marketplace panel.
+    // image-generation, Agent Manager terminal routing.
     expect(source).toContain("getServerInfo(): { port: number } | null")
     expect(source).toContain("getServerConfig(): ServerConfig | null")
   })

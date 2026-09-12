@@ -1,6 +1,5 @@
 ---
-"@kilocode/cli": patch
 "kilo-code": patch
 ---
 
-Remove skills through one CLI-owned mutation over HTTP or the private channel. Only the skill manifest is deleted, sibling files are preserved, and global skill install is temporarily unavailable.
+Remove skills in Settings through one CLI-owned mutation. Only the skill manifest is deleted and sibling files are preserved.

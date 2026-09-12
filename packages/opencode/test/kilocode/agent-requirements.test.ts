@@ -106,7 +106,7 @@ describe("agent requirements", () => {
     ])
   })
 
-  test("accepts non-empty marketplace skill and MCP IDs", async () => {
+  test("accepts non-empty skill and MCP IDs", async () => {
     const result = await status("demo", {
       active: true,
       agents: {

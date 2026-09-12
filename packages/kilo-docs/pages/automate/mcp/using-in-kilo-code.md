@@ -496,7 +496,6 @@ Add the test MCP server for development:
 
 Kilo Code does not come with any pre-installed MCP servers. You'll need to find and install them separately.
 
-- **Kilo Marketplace:** Browse community-contributed MCP server configurations and agent skills in the [Kilo Marketplace](https://github.com/Kilo-Org/kilo-marketplace). The marketplace includes ready-to-use configs for popular tools like Figma, Sentry, and more.
 - **Community Repositories:** Check for community-maintained lists of MCP servers on GitHub
 - **Ask Kilo Code:** You can ask Kilo Code to help you find or even create MCP servers
 - **Build Your Own:** Create custom MCP servers using the SDK to extend Kilo Code with your own tools

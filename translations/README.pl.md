@@ -118,7 +118,7 @@ Dowiedz się więcej o [agents i niestandardowych agents](https://kilo.ai/docs/c
 - **Autouzupełnianie inline** z sugestiami ghost-text i akceptacją przez Tab.
 - **Samokontrola**, dzięki której agent sprawdza i poprawia własną pracę.
 - **Sterowanie terminalem i przeglądarką** do uruchamiania poleceń i automatyzacji webu.
-- **Marketplace MCP** do znajdowania i podłączania serwerów MCP rozszerzających możliwości agenta.
+- **Configuration MCP** do znajdowania i podłączania serwerów MCP rozszerzających możliwości agenta.
 - **Ponad 500 modeli** z przełączaniem w trakcie zadania, aby dopasować opóźnienie, koszt i rozumowanie do pracy.
 
 ### Tryb autonomiczny (CI/CD)

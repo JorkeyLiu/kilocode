@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Требования агента {{agent}}",
   "agentRequirements.blocked.description": "Этому агенту нужны следующие инструменты перед запуском.",
   "agentRequirements.prompt.blocked": "Сначала выполните необходимые проверки, чтобы использовать этого агента",
-  "agentRequirements.action.openMarketplace": "Открыть Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Выбранный агент не найден.",
   "agentRequirements.error.malformedDeclaration": "У этого агента недопустимое объявление требований.",
   "agentRequirements.error.discoveryFailed": "Kilo не смог проверить доступные навыки.",
@@ -1473,8 +1473,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Пути папок навыков",
   "settings.agentBehaviour.skillUrls": "URL навыков",
   "settings.agentBehaviour.removeSkill.title": "Удалить навык",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Удалить навык "{{name}}"? Это приведет к удалению файлов навыка с диска.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Удалить",
   "settings.agentBehaviour.rules.description":
     "Правила — это файлы инструкций, которые направляют поведение агента. Они включаются в системный промпт для каждого разговора. Добавьте пути к файлам ниже, чтобы включить дополнительные правила.",
@@ -1488,7 +1487,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Аргументы",
   "settings.agentBehaviour.mcpDetail.env": "Окружение",
   "settings.agentBehaviour.mcpDetail.disabled": "Этот сервер отключён.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Обзор Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "MCP-серверы не настроены. Добавьте MCP-серверы в kilo.jsonc или попросите агента добавить их.",
   "settings.agentBehaviour.workflowsPlaceholder": "Рабочие процессы управляются через файлы рабочих процессов.",

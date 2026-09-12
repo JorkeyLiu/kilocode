@@ -48,9 +48,7 @@ import {
   type SessionDetail,
 } from "./kilo-provider/session-detail"
 import { ErrorCode } from "./private-worker/json-rpc"
-import { createMarketplaceRemover, removeMcp } from "./kilo-provider/remove-config-item"
 import { attemptSkillRemovePrivate, buildSkillRemoveReq, skillRemoveFailureMessage } from "./kilo-provider/skill-remove-privatefirst"
-import type { MarketplaceRemoveContext } from "./services/marketplace/actions"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 import { resolveProjectDirectory } from "./project-directory"
@@ -455,9 +453,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private telemetryStateDisposable: vscode.Disposable | null = null
   private viewStateDisposable: vscode.Disposable | null = null
   private autoApproveBridge: ReturnType<typeof createAutoApproveBridge> | null = null
-  private get marketplaceRemove(): MarketplaceRemoveContext["remove"] {
-    return createMarketplaceRemover(this.canonicalConfig?.convergenceAdapter ?? undefined)
-  }
 
   private ignoreController: FileIgnoreController | null = null
   private ignoreControllerDir: string | null = null
@@ -1493,14 +1488,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     })
   }
 
-  private openMarketplacePanel(directory: unknown): void {
-    if (typeof directory === "string" && directory) {
-      vscode.commands.executeCommand("kilo-code.new.marketplaceButtonClicked", directory)
-      return
-    }
-    vscode.commands.executeCommand("kilo-code.new.marketplaceButtonClicked", this.projectDirectory)
-  }
-
   // Strip metadata unused by the webview to keep session switches fast.
   // Logic in kilo-provider/slim-metadata.ts.
   private slimInfo<T>(info: T): T {
@@ -1527,22 +1514,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.postMessage({ type: "sessionForked", sessionID: session.id, forkedFromID: sourceID }),
       status: (sessionID: string) => this.sessionStatusMap.get(sessionID),
       directory: (sessionID: string) => this.getWorkspaceDirectory(sessionID),
-    }
-  }
-
-  private get removeConfigItemCtx() {
-    return {
-      connection: this.connectionService,
-      project: () => this.getProjectDirectory(this.currentSession?.id),
-      directory: () => this.getWorkspaceDirectory(),
-      remove: this.marketplaceRemove,
-      refresh: async () => {
-        this.cachedAgentsMessage = null
-        this.cachedConfigMessage = null
-        await Promise.all([this.fetchAndSendAgents(), this.fetchAndSendConfig()])
-        this.requirements.clear()
-      },
-      storage: this.extensionContext?.globalStorageUri,
     }
   }
 
@@ -1967,9 +1938,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         case "openConfigFile":
           await openConfig(message.scope, message.labels, this.getProjectDirectory(this.currentSession?.id))
-          break
-        case "openMarketplacePanel":
-          this.openMarketplacePanel(message.directory)
           break
         case "forkSession":
           handleForkSession(this.forkCtx, message.sessionId, message.messageId).catch((e) =>
@@ -4096,98 +4064,113 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     name: string,
     msg?: { canonical?: boolean; scope?: "global" | "project"; expectedHash?: string; stamp?: unknown },
   ): Promise<void> {
-    if (this.canonicalConfig) {
-      if (!this.canonicalReady) {
-        // Canonical authority exists but has not materialized yet — never fall
-        // through to the legacy backend path.
-        console.error("[Kilo New] KiloProvider: Canonical MCP removal rejected before canonical readiness")
-        return
-      }
-      const service = this.canonicalConfig
-      const stamp = isCanonicalStamp(msg?.stamp) ? msg.stamp : undefined
-      const expected = typeof msg?.expectedHash === "string" ? msg.expectedHash : undefined
-      const scope = msg?.scope === "global" || msg?.scope === "project" ? msg.scope : undefined
-      // Strict identity: the request must carry an explicit legal scope. Never
-      // fall back to a default scope when scope is missing or invalid, and never
-      // proceed without a matching stamp — report a structured failure instead.
-      if (
-        msg?.canonical !== true ||
-        !scope ||
-        !stamp ||
-        !expected ||
-        !sameStamp(stamp, service.stamp) ||
-        stamp.assetHash !== null
-      ) {
-        console.error("[Kilo New] KiloProvider: Canonical MCP removal rejected as stale")
-        this.postMessage({
-          type: "mcpCleanupError",
-          name,
-          scope,
-          retryID: "",
-          stamp: service.stamp,
-          message: "MCP removal rejected: canonical scope or stamp is missing or invalid",
-        })
-        return
-      }
-      const current = service.getScopeConfig(scope)
-      const prior = isRecord(current.mcp) && isRecord(current.mcp[name]) ? current.mcp[name] : undefined
-      const mcp = isRecord(current.mcp) ? { ...current.mcp } : {}
-      delete mcp[name]
-      const result = await service.writeConfigScopes({ [scope]: { patch: { mcp }, expectedHash: expected } }, stamp)
-      if (!result.ok) {
-        console.error("[Kilo New] KiloProvider: Canonical MCP removal failed:", result.message)
-        return
-      }
-      // Host-owned cleanup: only the exact validated stored ref may be deleted.
-      // Missing/invalid scope/stamp/ref produce a structured failure — never a
-      // reconstructed `secret:kilo.credentials.<scope>.mcp.<name>` fallback.
-      const priorRef = isRecord(prior) && typeof prior.credential === "string" ? prior.credential : undefined
-      const owned = priorRef ? parseSecretKey(priorRef.slice("secret:".length)) : null
-      if (!priorRef || !owned || owned.kind !== "mcp" || owned.id !== name || owned.scope !== scope) {
-        this.postMessage({
-          type: "mcpCleanupError",
-          name,
-          scope,
-          retryID: "",
-          stamp: service.stamp,
-          message: "MCP deletion committed; prior record has no owned credential ref — no credential was removed",
-        })
-        return
-      }
-      const ref = priorRef
-      try {
-        await service.removeSecretRef(ref)
-      } catch (error) {
-        // Store the exact record for host-owned retry — webview cannot choose a
-        // different ref. The retryID is operation-unique: overlapping cleanup
-        // failures for the same MCP server get distinct records.
-        const retryID = crypto.randomUUID()
-        this.cleanupRetries.set(retryID, {
-          kind: "mcp",
-          scope,
-          id: name,
-          mode: "delete",
-          ref,
-          stamp: service.stamp,
-          state: "available",
-        })
-        this.postMessage({
-          type: "mcpCleanupError",
-          name,
-          scope,
-          retryID,
-          stamp: service.stamp,
-          message: `MCP deletion committed; credential cleanup failed: ${String(error)}`,
-        })
-        return
-      }
+    const service = this.canonicalConfig
+    if (!service || !this.canonicalReady) {
+      console.error("[Kilo New] KiloProvider: Canonical MCP removal rejected before canonical readiness")
+      this.postMessage({
+        type: "mcpCleanupError",
+        name,
+        scope: msg?.scope,
+        retryID: "",
+        stamp: service?.stamp ?? null,
+        message: "MCP removal rejected: canonical config is not ready",
+      })
+      return
+    }
+    const stamp = isCanonicalStamp(msg?.stamp) ? msg.stamp : undefined
+    const expected = typeof msg?.expectedHash === "string" ? msg.expectedHash : undefined
+    const scope = msg?.scope === "global" || msg?.scope === "project" ? msg.scope : undefined
+    // Strict identity: the request must carry an explicit legal scope. Never
+    // fall back to a default scope when scope is missing or invalid, and never
+    // proceed without a matching stamp — report a structured failure instead.
+    if (
+      msg?.canonical !== true ||
+      !scope ||
+      !stamp ||
+      !expected ||
+      !sameStamp(stamp, service.stamp) ||
+      stamp.assetHash !== null
+    ) {
+      console.error("[Kilo New] KiloProvider: Canonical MCP removal rejected as stale")
+      this.postMessage({
+        type: "mcpCleanupError",
+        name,
+        scope,
+        retryID: "",
+        stamp: service.stamp,
+        message: "MCP removal rejected: canonical scope or stamp is missing or invalid",
+      })
+      return
+    }
+    const current = service.getScopeConfig(scope)
+    const prior = isRecord(current.mcp) && isRecord(current.mcp[name]) ? current.mcp[name] : undefined
+    const mcp = isRecord(current.mcp) ? { ...current.mcp } : {}
+    delete mcp[name]
+    const result = await service.writeConfigScopes({ [scope]: { patch: { mcp }, expectedHash: expected } }, stamp)
+    if (!result.ok) {
+      console.error("[Kilo New] KiloProvider: Canonical MCP removal failed:", result.message)
+      this.postMessage({
+        type: "mcpCleanupError",
+        name,
+        scope,
+        retryID: "",
+        stamp: service.stamp,
+        message: result.message,
+      })
       this.sendCanonicalConfig("configUpdated")
       return
     }
-    const removed = await removeMcp(this.removeConfigItemCtx, name)
-    if (!removed) {
-      console.error("[Kilo New] KiloProvider: Failed to remove MCP server:", name)
+    // Host-owned cleanup: only the exact validated stored ref may be deleted.
+    // Missing/invalid scope/stamp/ref produce a structured failure — never a
+    // reconstructed `secret:kilo.credentials.<scope>.mcp.<name>` fallback.
+    // The config write above already committed, so every committed branch below
+    // re-publishes canonical config and clears agent requirements for recovery.
+    const priorRef = isRecord(prior) && typeof prior.credential === "string" ? prior.credential : undefined
+    const owned = priorRef ? parseSecretKey(priorRef.slice("secret:".length)) : null
+    if (!priorRef || !owned || owned.kind !== "mcp" || owned.id !== name || owned.scope !== scope) {
+      this.postMessage({
+        type: "mcpCleanupError",
+        name,
+        scope,
+        retryID: "",
+        stamp: service.stamp,
+        message: "MCP deletion committed; prior record has no owned credential ref — no credential was removed",
+      })
+      this.sendCanonicalConfig("configUpdated")
+      this.requirements.clear()
+      return
     }
+    const ref = priorRef
+    try {
+      await service.removeSecretRef(ref)
+    } catch (error) {
+      // Store the exact record for host-owned retry — webview cannot choose a
+      // different ref. The retryID is operation-unique: overlapping cleanup
+      // failures for the same MCP server get distinct records.
+      const retryID = crypto.randomUUID()
+      this.cleanupRetries.set(retryID, {
+        kind: "mcp",
+        scope,
+        id: name,
+        mode: "delete",
+        ref,
+        stamp: service.stamp,
+        state: "available",
+      })
+      this.postMessage({
+        type: "mcpCleanupError",
+        name,
+        scope,
+        retryID,
+        stamp: service.stamp,
+        message: `MCP deletion committed; credential cleanup failed: ${String(error)}`,
+      })
+      this.sendCanonicalConfig("configUpdated")
+      this.requirements.clear()
+      return
+    }
+    this.sendCanonicalConfig("configUpdated")
+    this.requirements.clear()
   }
 
   private async retryCanonicalMcpCleanup(msg: Record<string, unknown>): Promise<void> {
@@ -5493,7 +5476,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // Clear globalState items that are not part of the configuration
     await this.extensionContext?.globalState.update("recentModels", undefined)
     await this.extensionContext?.globalState.update("kilo.agentMigrationBannerDismissed", undefined)
-    await this.extensionContext?.globalState.update("kilo.marketplace.dismissedSuggestions", undefined)
 
     // Re-send all settings to the webview so the UI reflects the reset
     this.sendBrowserSettings()

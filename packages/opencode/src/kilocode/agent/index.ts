@@ -278,7 +278,7 @@ export function preprocessConfig<T>(agentConfig: Record<string, T>): Record<stri
 }
 
 // Lift Kilo-internal metadata onto typed agent fields and remove it from `options`.
-// Older org modes and marketplace agents stored `displayName`/`source` inside the
+// Older org modes and agents stored `displayName`/`source` inside the
 // `options` record, which is otherwise forwarded verbatim to the provider as request
 // parameters. Promoting then deleting them keeps `options` provider-clean at the source
 // (the request boundary still strips as a safety net).

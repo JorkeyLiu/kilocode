@@ -160,7 +160,7 @@ export const dict = {
   "agentRequirements.blocked.title": "{{agent}} 代理前置需求",
   "agentRequirements.blocked.description": "此代理需要以下工具後才能執行。",
   "agentRequirements.prompt.blocked": "請先完成必要檢查，才能使用此代理",
-  "agentRequirements.action.openMarketplace": "開啟 Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "找不到所選代理。",
   "agentRequirements.error.malformedDeclaration": "此代理的需求宣告無效。",
   "agentRequirements.error.discoveryFailed": "Kilo 無法檢查可用技能。",
@@ -1423,7 +1423,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Skill 資料夾路徑",
   "settings.agentBehaviour.skillUrls": "Skill URL",
   "settings.agentBehaviour.removeSkill.title": "移除技能",
-  "settings.agentBehaviour.removeSkill.confirm": '要移除技能 "{{name}}" 嗎？這將從磁碟中刪除該技能檔案。',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "移除",
   "settings.agentBehaviour.rules.description":
     "規則是引導代理行為的指令檔案。它們會被包含在每次對話的系統提示詞中。在下方新增檔案路徑以包含額外的規則。",
@@ -1437,7 +1437,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "引數",
   "settings.agentBehaviour.mcpDetail.env": "環境",
   "settings.agentBehaviour.mcpDetail.disabled": "此伺服器已停用。",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "瀏覽市場",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty": "未設定 MCP 伺服器。在 kilo.jsonc 中新增 MCP 伺服器，或請代理為您新增。",
   "settings.agentBehaviour.workflowsPlaceholder": "工作流程透過工作區中的工作流程檔案管理。",
   "settings.agentBehaviour.workflows.description":

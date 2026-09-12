@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "{{agent}} エージェントの前提条件",
   "agentRequirements.blocked.description": "このエージェントを実行するには、次のツールが必要です。",
   "agentRequirements.prompt.blocked": "このエージェントを使用するには、先に必要な確認を完了してください",
-  "agentRequirements.action.openMarketplace": "Marketplace を開く",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "選択したエージェントが見つかりませんでした。",
   "agentRequirements.error.malformedDeclaration": "このエージェントの要件宣言は無効です。",
   "agentRequirements.error.discoveryFailed": "Kilo は利用可能なスキルを確認できませんでした。",
@@ -1463,8 +1463,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "スキルフォルダパス",
   "settings.agentBehaviour.skillUrls": "スキルURL",
   "settings.agentBehaviour.removeSkill.title": "スキルを削除",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'スキル "{{name}}" を削除しますか？これにより、ディスクからスキルファイルが削除されます。',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "削除",
   "settings.agentBehaviour.rules.description":
     "ルールはエージェントの動作を導く指示ファイルです。すべての会話のシステムプロンプトに含まれます。追加のルールを含めるには、以下にファイルパスを追加してください。",
@@ -1478,7 +1477,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "引数",
   "settings.agentBehaviour.mcpDetail.env": "環境",
   "settings.agentBehaviour.mcpDetail.disabled": "このサーバーは無効です。",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "マーケットプレイスを閲覧",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "MCPサーバーが設定されていません。kilo.jsoncでMCPサーバーを追加するか、エージェントに追加を依頼してください。",
   "settings.agentBehaviour.workflowsPlaceholder":

@@ -185,4 +185,4 @@ Use `{env:VARIABLE_NAME}` syntax in config files to reference environment variab
 
 ## Finding MCP Servers
 
-Browse community-contributed MCP server configurations and agent skills in the [Kilo Marketplace](https://github.com/Kilo-Org/kilo-marketplace). The marketplace includes ready-to-use configs for popular tools like Figma, Sentry, and more.
+Find community-maintained MCP server configurations on GitHub, or ask Kilo Code to help you create one. Add the server manually to your local `kilo.jsonc` under the `mcp` key.

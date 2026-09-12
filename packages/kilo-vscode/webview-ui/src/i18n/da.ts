@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Forudsætninger for {{agent}}-agenten",
   "agentRequirements.blocked.description": "Denne agent skal have følgende værktøjer, før den kan køre.",
   "agentRequirements.prompt.blocked": "Fuldfør først de krævede kontroller for at bruge denne agent",
-  "agentRequirements.action.openMarketplace": "Åbn Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Den valgte agent blev ikke fundet.",
   "agentRequirements.error.malformedDeclaration": "Denne agent har en ugyldig kravdeklaration.",
   "agentRequirements.error.discoveryFailed": "Kilo kunne ikke kontrollere de tilgængelige skills.",
@@ -1466,8 +1466,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Skill-mappestier",
   "settings.agentBehaviour.skillUrls": "Skill-URL'er",
   "settings.agentBehaviour.removeSkill.title": "Fjern færdighed",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Vil du fjerne færdigheden "{{name}}"? Dette vil slette færdighedsfilerne fra disken.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Fjern",
   "settings.agentBehaviour.rules.description":
     "Regler er instruktionsfiler, der styrer agentens adfærd. De inkluderes i systemprompten for hver samtale. Tilføj filstier nedenfor for at inkludere yderligere regler.",
@@ -1481,7 +1480,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Argumenter",
   "settings.agentBehaviour.mcpDetail.env": "Miljø",
   "settings.agentBehaviour.mcpDetail.disabled": "Denne server er deaktiveret.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Gennemse Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Ingen MCP-servere konfigureret. Tilføj MCP-servere i kilo.jsonc, eller bed agenten om at tilføje dem.",
   "settings.agentBehaviour.workflowsPlaceholder": "Workflows administreres via workflow-filer i dit arbejdsområde.",

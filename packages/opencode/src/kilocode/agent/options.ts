@@ -2,7 +2,7 @@
 
 // Kilo stores internal/UI-only metadata on an agent's `options` record:
 //   - `id`:          mode identifier used to recognize built-in modes (see session/prompt.ts)
-//   - `displayName`: human-readable name for org/marketplace modes
+//   - `displayName`: human-readable name for org modes
 //   - `source`:      origin marker ("organization" | "global" | "project")
 //   - `reference`:   configured reference descriptor for Scout/reference agents (see agent/agent.ts)
 //   - `resolved`:    resolved reference data for Scout/reference agents

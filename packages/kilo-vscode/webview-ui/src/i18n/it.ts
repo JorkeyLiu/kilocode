@@ -1240,8 +1240,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Percorsi cartelle skill",
   "settings.agentBehaviour.skillUrls": "URL skill",
   "settings.agentBehaviour.removeSkill.title": "Rimuovi skill",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Rimuovere la skill "{{name}}"? Questo eliminerà i file della skill dal disco.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Rimuovi",
   "settings.agentBehaviour.rules.description":
     "Le regole sono file di istruzioni che guidano il comportamento dell'agente. Sono incluse nel prompt di sistema per ogni conversazione. Aggiungi i percorsi dei file qui sotto per includere regole aggiuntive.",
@@ -1273,7 +1272,7 @@ export const dict = {
   "settings.agentBehaviour.addMcp.args.placeholder": "es.\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.agentBehaviour.addMcp.url": "URL server",
   "settings.agentBehaviour.addMcp.url.placeholder": "es. http://localhost:3000/sse",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Sfoglia Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Nessun server MCP configurato. Aggiungi server MCP in kilo.jsonc, o chiedi all'agente di aggiungerli per te.",
   "settings.agentBehaviour.workflowsPlaceholder": "I workflow sono gestiti tramite file workflow nel workspace.",
@@ -1407,7 +1406,7 @@ export const dict = {
   "settings.saveBar.saving": "Salvataggio...",
   "settings.saveBar.saveFailed": "Impossibile salvare le impostazioni",
 
-  // Marketplace agents (replaces modes)
+  // Agents
   "settings.agentBehaviour.noAgentsFound": "Nessun agente trovato.",
   "settings.agentBehaviour.removeAgent.title": "Rimuovi agente",
   "settings.agentBehaviour.removeAgent.confirm":
@@ -1490,7 +1489,7 @@ export const dict = {
   "agentRequirements.blocked.description":
     "Questo agente richiede i seguenti strumenti prima di poter essere eseguito.",
   "agentRequirements.prompt.blocked": "Completa prima i controlli richiesti per usare questo agente",
-  "agentRequirements.action.openMarketplace": "Apri Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Impossibile trovare l’agente selezionato.",
   "agentRequirements.error.malformedDeclaration": "Questo agente ha una dichiarazione dei requisiti non valida.",
   "agentRequirements.error.discoveryFailed": "Kilo non ha potuto controllare le skill disponibili.",

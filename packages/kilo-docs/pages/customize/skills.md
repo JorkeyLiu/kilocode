@@ -403,19 +403,19 @@ When designing REST APIs, follow these conventions:
 {% tabs %}
 {% tab label="VSCode" %}
 
-The new platform does not have a marketplace UI yet. You can find and share skills through:
+Add skills locally through skill directories, `skills.paths`, or `skills.urls`:
 
-- **[Kilo Marketplace repository](https://github.com/Kilo-Org/kilo-marketplace)** — Browse community skills on GitHub and manually download them into your skills directory
 - **[Agent Skills Specification](https://agentskills.io/home)** — The open specification that skills follow, enabling interoperability across different AI agents
+- **Local directories** — Place skills under `.kilo/skills/<name>/SKILL.md` or add custom folders via `skills.paths` in `kilo.jsonc`
 - **Remote URLs** — Use the `skills.urls` config key to load skills directly from URLs without manually downloading them
 
 {% /tab %}
 {% tab label="CLI" %}
 
-The new platform does not have a marketplace UI yet. You can find and share skills through:
+Add skills locally through skill directories, `skills.paths`, or `skills.urls`:
 
-- **[Kilo Marketplace repository](https://github.com/Kilo-Org/kilo-marketplace)** — Browse community skills on GitHub and manually download them into your skills directory
 - **[Agent Skills Specification](https://agentskills.io/home)** — The open specification that skills follow, enabling interoperability across different AI agents
+- **Local directories** — Place skills under `.kilo/skills/<name>/SKILL.md` or add custom folders via `skills.paths` in `kilo.jsonc`
 - **Remote URLs** — Use the `skills.urls` config key to load skills directly from URLs without manually downloading them
 
 {% /tab %}
@@ -485,30 +485,22 @@ When the agent uses a skill, it invokes the `skill` tool with the skill's name. 
 | "name doesn't match directory" | Mismatch between frontmatter and folder name | Make `name` match exactly |
 | Skill not appearing | Wrong directory structure | Verify path follows `skills/skill-name/SKILL.md` |
 
-## Contributing to the Marketplace
+## Sharing Skills
 
-Have you created a skill that others might find useful? Share it with the community by contributing to the [Kilo Marketplace](https://github.com/Kilo-Org/kilo-marketplace)!
+Share skills by publishing the skill directory and its `SKILL.md` manifest through your own channels (for example a git repository or a hosted URL loaded via `skills.urls`).
 
 {% tabs %}
 {% tab label="VSCode" %}
 
-While the new platform does not yet have a built-in marketplace UI, skills from the [Kilo Marketplace repository](https://github.com/Kilo-Org/kilo-marketplace) can be manually downloaded into your `.kilo/skills/` directory or loaded via `skills.urls` in config.
+Copy the skill directory into your `.kilo/skills/` directory or load it via `skills.urls` in config.
 
 {% /tab %}
 {% tab label="CLI" %}
 
-While the new platform does not yet have a built-in marketplace UI, skills from the [Kilo Marketplace repository](https://github.com/Kilo-Org/kilo-marketplace) can be manually downloaded into your `.kilo/skills/` directory or loaded via `skills.urls` in config.
+Copy the skill directory into your `.kilo/skills/` directory or load it via `skills.urls` in config.
 
 {% /tab %}
 {% /tabs %}
-
-### How to Submit Your Skill
-
-1. **Prepare your skill**: Ensure your skill directory contains a valid `SKILL.md` file with proper frontmatter
-2. **Test thoroughly**: Verify your skill works correctly across different scenarios and modes
-3. **Fork the marketplace repository**: Visit [github.com/Kilo-Org/kilo-marketplace](https://github.com/Kilo-Org/kilo-marketplace) and create a fork
-4. **Add your skill**: Place your skill directory in the appropriate location following the repository's structure
-5. **Submit a pull request**: Create a PR with a clear description of what your skill does and when it's useful
 
 ### Submission Guidelines
 
@@ -516,7 +508,6 @@ While the new platform does not yet have a built-in marketplace UI, skills from 
 - Include a clear `name` and `description` in the frontmatter
 - Document any dependencies or requirements (scripts, external tools, etc.)
 - If your skill includes bundled resources (scripts, templates), ensure they are well-documented
-- Follow the [contribution guidelines](https://github.com/Kilo-Org/kilo-marketplace/blob/main/CONTRIBUTING.md) in the marketplace repository
 
 For more details on contributing to Kilo Code, see the [Contributing Guide](/docs/contributing).
 

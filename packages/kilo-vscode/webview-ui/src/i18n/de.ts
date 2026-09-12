@@ -166,7 +166,7 @@ export const dict = {
   "agentRequirements.blocked.description":
     "Dieser Agent benötigt die folgenden Werkzeuge, bevor er ausgeführt werden kann.",
   "agentRequirements.prompt.blocked": "Schließe zuerst die erforderlichen Prüfungen ab, um diesen Agenten zu verwenden",
-  "agentRequirements.action.openMarketplace": "Marketplace öffnen",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Der ausgewählte Agent wurde nicht gefunden.",
   "agentRequirements.error.malformedDeclaration": "Dieser Agent hat eine ungültige Anforderungsdeklaration.",
   "agentRequirements.error.discoveryFailed": "Kilo konnte die verfügbaren Skills nicht prüfen.",
@@ -1497,8 +1497,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Skill-Ordnerpfade",
   "settings.agentBehaviour.skillUrls": "Skill-URLs",
   "settings.agentBehaviour.removeSkill.title": "Skill entfernen",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Skill "{{name}}" entfernen? Dadurch werden die Skill-Dateien vom Datenträger gelöscht.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Entfernen",
   "settings.agentBehaviour.rules.description":
     "Regeln sind Anweisungsdateien, die das Verhalten des Agenten steuern. Sie werden in den System-Prompt für jede Konversation eingebunden. Fügen Sie unten Dateipfade hinzu, um zusätzliche Regeln einzubinden.",
@@ -1512,7 +1511,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Argumente",
   "settings.agentBehaviour.mcpDetail.env": "Umgebung",
   "settings.agentBehaviour.mcpDetail.disabled": "Dieser Server ist deaktiviert.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Marketplace durchsuchen",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Keine MCP-Server konfiguriert. Fügen Sie MCP-Server in kilo.jsonc hinzu oder bitten Sie den Agenten, sie hinzuzufügen.",
   "settings.agentBehaviour.workflowsPlaceholder":

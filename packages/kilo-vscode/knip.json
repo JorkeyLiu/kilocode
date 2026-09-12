@@ -4,7 +4,6 @@
     "src/extension.ts",
     "src/private-worker/standalone-worker.ts",
     "webview-ui/agent-manager/index.tsx",
-    "webview-ui/marketplace/index.tsx",
     "webview-ui/pierre-worker.ts",
     "webview-ui/src/index.tsx",
     "src/**/__tests__/**/*.{ts,spec.ts}",

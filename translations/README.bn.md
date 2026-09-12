@@ -118,7 +118,7 @@ Kilo বিশেষায়িত agents সহ আসে, কাজ অনু
 - ghost-text suggestion এবং Tab দিয়ে accept করার **inline autocomplete**।
 - agent যেন নিজের কাজ review ও correct করে তার জন্য **self-checking**।
 - command চালানো এবং web automate করার জন্য **terminal ও browser control**।
-- agent-এর ক্ষমতা বাড়ায় এমন MCP server খুঁজে ও যুক্ত করার জন্য **MCP marketplace**।
+- agent-এর ক্ষমতা বাড়ায় এমন MCP server খুঁজে ও যুক্ত করার জন্য **MCP configuration**।
 - latency, cost এবং reasoning কাজের সাথে মেলাতে mid-task switching সহ **500টির বেশি model**।
 
 ### Autonomous Mode (CI/CD)

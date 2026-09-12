@@ -118,7 +118,7 @@ Scopri di più su [agents e agents personalizzati](https://kilo.ai/docs/code-wit
 - **Autocompletamento inline** con suggerimenti ghost-text e Tab per accettare.
 - **Autoverifica** così l'agente rivede e corregge il proprio lavoro.
 - **Controllo di terminale e browser** per eseguire comandi e automatizzare il web.
-- **Marketplace MCP** per trovare e collegare server MCP che estendono ciò che l'agente può fare.
+- **Configuration MCP** per trovare e collegare server MCP che estendono ciò che l'agente può fare.
 - **Oltre 500 modelli** con cambio durante l'attività, per adattare latenza, costo e ragionamento al lavoro.
 
 ### Modalità autonoma (CI/CD)

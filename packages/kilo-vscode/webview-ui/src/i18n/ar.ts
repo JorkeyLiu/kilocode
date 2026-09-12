@@ -158,7 +158,7 @@ export const dict = {
   "agentRequirements.blocked.title": "متطلبات وكيل {{agent}}",
   "agentRequirements.blocked.description": "يحتاج هذا الوكيل إلى الأدوات التالية قبل أن يتمكن من العمل.",
   "agentRequirements.prompt.blocked": "أكمل الفحوصات المطلوبة لاستخدام هذا الوكيل أولاً",
-  "agentRequirements.action.openMarketplace": "فتح Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "تعذر العثور على الوكيل المحدد.",
   "agentRequirements.error.malformedDeclaration": "لدى هذا الوكيل تعريف متطلبات غير صالح.",
   "agentRequirements.error.discoveryFailed": "تعذر على Kilo فحص المهارات المتاحة.",
@@ -1446,8 +1446,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "مسارات مجلدات المهارات",
   "settings.agentBehaviour.skillUrls": "عناوين URL للمهارات",
   "settings.agentBehaviour.removeSkill.title": "إزالة المهارة",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'هل تريد إزالة المهارة "{{name}}"؟ سيؤدي هذا إلى حذف ملفات المهارة من القرص.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "إزالة",
   "settings.agentBehaviour.rules.description":
     "القواعد هي ملفات تعليمات توجه سلوك الوكيل. يتم تضمينها في موجه النظام لكل محادثة. أضف مسارات الملفات أدناه لتضمين قواعد إضافية.",
@@ -1461,7 +1460,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "الوسائط",
   "settings.agentBehaviour.mcpDetail.env": "البيئة",
   "settings.agentBehaviour.mcpDetail.disabled": "هذا الخادم معطّل.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "تصفح Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "لم يتم تهيئة خوادم MCP. أضف خوادم MCP في kilo.jsonc، أو اطلب من الوكيل إضافتها لك.",
   "settings.agentBehaviour.workflowsPlaceholder": "تُدار سير العمل عبر ملفات سير العمل في مساحة العمل.",

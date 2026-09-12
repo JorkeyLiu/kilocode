@@ -42,7 +42,7 @@ Skills are discovered only from canonical `.kilo` locations. The scanner does no
 | Global | `${Global.Path.config}/skill/<name>/SKILL.md` or `${Global.Path.config}/skills/<name>/SKILL.md` |
 | Additional | `skills.paths` entries resolved relative to canonical roots; `skills.urls` for remote |
 
-Within a canonical `.kilo` root, both `skill/` and `skills/` directory names are supported. Symlinked skill directories are followed. Explicit `skills.paths` and `skill` discovery are ordered by `ConfigService.directories()`; global before project. The VS Code extension may still expose marketplace skills via its own storage, but that path is not a CLI discovery root.
+Within a canonical `.kilo` root, both `skill/` and `skills/` directory names are supported. Symlinked skill directories are followed. Explicit `skills.paths` and `skill` discovery are ordered by `ConfigService.directories()`; global before project.
 
 ## Kilo Notifications
 

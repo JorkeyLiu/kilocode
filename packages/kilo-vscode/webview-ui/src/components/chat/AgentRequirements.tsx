@@ -1,12 +1,10 @@
 /** @jsxImportSource solid-js */
 
 import { For, Show, type Component } from "solid-js"
-import { Button } from "@kilocode/kilo-ui/button"
 import { Card } from "@kilocode/kilo-ui/card"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { useAgentRequirements } from "../../context/agent-requirements"
 import { useLanguage } from "../../context/language"
-import { useVSCode } from "../../context/vscode"
 import type { AgentRequirementMCP, AgentRequirementSkill, AgentRequirementVSCodeExtension } from "../../types/messages"
 
 type Status = "ready" | "missing" | "error"
@@ -14,25 +12,17 @@ type Status = "ready" | "missing" | "error"
 export const AgentRequirements: Component = () => {
   const requirements = useAgentRequirements()
   const language = useLanguage()
-  const vscode = useVSCode()
   const result = requirements.result
   const skills = () => result()?.skills ?? []
   const mcps = () => result()?.mcps ?? []
   const extensions = () => result()?.vscode_extensions ?? []
   const total = () => skills().length + mcps().length + extensions().length
-  const marketplace = () =>
-    skills().some((item) => item.status !== "ready") || mcps().some((item) => item.status !== "ready")
   const tools = () => {
     if (skills().length && mcps().length) {
       return `${language.t("agentRequirements.group.skills")} / ${language.t("agentRequirements.group.mcps")}`
     }
     if (skills().length) return language.t("agentRequirements.group.skills")
     return language.t("agentRequirements.group.mcps")
-  }
-  const open = () => {
-    const current = result()
-    if (!current) return
-    vscode.postMessage({ type: "openMarketplacePanel", directory: current.directory })
   }
   const title = () =>
     (result()?.agent ?? "")
@@ -143,13 +133,9 @@ export const AgentRequirements: Component = () => {
                       </ul>
                     </div>
                   </Show>
-                  <Show when={marketplace()}>
-                    <div class="agent-requirements-actions">
-                      <Button variant="primary" onClick={open}>
-                        {language.t("agentRequirements.action.openMarketplace")}
-                      </Button>
-                    </div>
-                  </Show>
+                  <p data-slot="agent-requirements-local-hint">
+                    {language.t("agentRequirements.localHint")}
+                  </p>
                 </div>
               </section>
             </Show>

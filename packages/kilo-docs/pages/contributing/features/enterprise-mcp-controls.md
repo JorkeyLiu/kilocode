@@ -11,17 +11,17 @@ Proposal - no matching organization MCP allowlist implementation exists yet. Sch
 
 ## Overview
 
-Developers can configure MCP (Model Context Protocol) servers, including marketplace servers and custom servers. Enterprise customers may need organization policy for which MCP servers their developers can use.
+Developers configure MCP (Model Context Protocol) servers locally. Enterprise customers may need organization policy for which MCP servers their developers can use.
 
-This proposal adds an organization-managed allowlist of approved marketplace MCP servers and dashboard-managed member configuration. It is a design document, not current architecture.
+This proposal adds an organization-managed allowlist of approved MCP servers and dashboard-managed member configuration. It is a design document, not current architecture.
 
 ## MVP requirements
 
 ### Dashboard app
 
 - Give organization administrators a dashboard section for MCP policy.
-- Show marketplace MCP servers and let administrators select approved entries.
-- Default policy to disabled. If policy is enabled, start with marketplace MCP servers selected to avoid unexpected disruption.
+- Show available MCP servers and let administrators select approved entries.
+- Default policy to disabled.
 - Record allowlist changes in audit logs.
 - Let organization members configure approved servers in dashboard.
 
@@ -31,7 +31,7 @@ This proposal adds an organization-managed allowlist of approved marketplace MCP
 - When organization policy is enabled, replace local MCP configuration with dashboard-managed configuration scoped to organization and member.
 - Do not activate or use disallowed local MCP entries.
 - If client still detects disallowed local entries while policy is enabled, it may show non-blocking policy feedback. Those entries do not need to appear as activatable MCP options.
-- Replace extension marketplace configuration UI with link to dashboard while organization policy is enabled.
+- Replace extension MCP configuration UI with link to dashboard while organization policy is enabled.
 
 This resolves two distinct cases: local entries rejected by policy need not be activated, while dashboard-managed configuration replacement is proposed behavior only when policy is enabled.
 
@@ -58,7 +58,7 @@ Organization settings could hold allowlist policy:
 ```ts
 const OrganizationSettings_MCPControls = z.object({
   mcp_controls_enabled: z.boolean().optional(),
-  mcp_controls_allowed_marketplace_servers: z.string().optional(),
+  mcp_controls_allowed_servers: z.string().optional(),
 })
 ```
 
@@ -87,7 +87,7 @@ const OrganizationMemberMCPConfig = z
 | Surface | Proposed behavior |
 |---|---|
 | `/organizations/:id/mcp-control` | Let owners manage allowlist and members configure approved MCP servers |
-| `GET /api/marketplace/mcps` | Retrieve marketplace MCP list for policy UI |
+| `GET /api/mcps` | Retrieve MCP list for policy UI |
 | Organization settings API | Read and update enabled state and allowlist |
 | Member MCP config API | Store encrypted approved MCP configuration |
 
@@ -103,6 +103,6 @@ These routes and endpoints are placeholders for implementation design. They are 
 
 ## Future work
 
-- Organization-provided custom MCP server configurations outside marketplace
+- Organization-provided custom MCP server configurations
 - Project-level MCP configurations
 - Tool-call audit reports grouped by user, project, and MCP server

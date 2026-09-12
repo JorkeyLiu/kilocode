@@ -267,9 +267,6 @@ async function main() {
     "dist/agent-manager.js",
   )
 
-  // Build Marketplace webview (SolidJS, standalone catalog panel)
-  const marketplaceCtx = await createBrowserWebviewContext("webview-ui/marketplace/index.tsx", "dist/marketplace.js")
-
   // Build webview
   const webviewCtx = await createBrowserWebviewContext("webview-ui/src/index.tsx", "dist/webview.js")
 
@@ -283,7 +280,6 @@ async function main() {
       standaloneWorkerCtx.watch(),
       webviewCtx.watch(),
       agentManagerCtx.watch(),
-      marketplaceCtx.watch(),
       shikiWorkerCtx.watch(),
     ])
   } else {
@@ -293,7 +289,6 @@ async function main() {
       standaloneWorkerCtx.rebuild(),
       webviewCtx.rebuild(),
       agentManagerCtx.rebuild(),
-      marketplaceCtx.rebuild(),
       shikiWorkerCtx.rebuild(),
     ])
     await Promise.all([
@@ -302,7 +297,6 @@ async function main() {
       standaloneWorkerCtx.dispose(),
       webviewCtx.dispose(),
       agentManagerCtx.dispose(),
-      marketplaceCtx.dispose(),
       shikiWorkerCtx.dispose(),
     ])
   }

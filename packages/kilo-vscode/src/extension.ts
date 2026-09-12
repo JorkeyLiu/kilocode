@@ -2,8 +2,6 @@ import * as vscode from "vscode"
 import { AgentManagerProvider } from "./agent-manager/AgentManagerProvider"
 import { VscodeHost } from "./agent-manager/vscode-host"
 import { SettingsEditorProvider } from "./SettingsEditorProvider"
-import { MarketplacePanelProvider } from "./MarketplacePanelProvider"
-import { MarketplaceNotifier } from "./services/marketplace/notifier"
 import { KiloConnectionService } from "./services/cli-backend"
 import { AttentionService } from "./services/attention"
 import { BrowserAutomationService } from "./services/browser-automation"
@@ -340,14 +338,7 @@ export function activate(context: vscode.ExtensionContext) {
     canonicalConfig,
   )
   settingsEditorProvider.setRemoteService(remoteService)
-  const marketplacePanelProvider = new MarketplacePanelProvider(context.extensionUri, connectionService, context)
-  context.subscriptions.push(settingsEditorProvider, marketplacePanelProvider)
-
-  const marketplaceNotifier = new MarketplaceNotifier(connectionService, context, (item) =>
-    marketplacePanelProvider.openInstall(item),
-  )
-  context.subscriptions.push(marketplaceNotifier)
-  marketplaceNotifier.start()
+  context.subscriptions.push(settingsEditorProvider)
 
   const settingsViews = ["settingsPanel", "profilePanel"] as const
   for (const suffix of settingsViews) {
@@ -362,23 +353,11 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer(MarketplacePanelProvider.viewType, {
-      deserializeWebviewPanel(panel: vscode.WebviewPanel) {
-        marketplacePanelProvider.deserializePanel(panel)
-        return Promise.resolve()
-      },
-    }),
-  )
-
-  context.subscriptions.push(
     vscode.commands.registerCommand("kilo-code.new.plusButtonClicked", async () => {
       await postToAgentManager({ type: "action", action: "newTab" })
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManagerOpen", () => {
       agentManagerProvider.openPanel()
-    }),
-    vscode.commands.registerCommand("kilo-code.new.marketplaceButtonClicked", (directory?: string | null) => {
-      marketplacePanelProvider.openPanel(directory)
     }),
     vscode.commands.registerCommand("kilo-code.new.historyButtonClicked", async () => {
       await postToAgentManager({ type: "navigate", view: "history" })

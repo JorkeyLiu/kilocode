@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Preduslovi za agenta {{agent}}",
   "agentRequirements.blocked.description": "Ovom agentu su potrebni sljedeći alati prije pokretanja.",
   "agentRequirements.prompt.blocked": "Prvo dovršite potrebne provjere da biste koristili ovog agenta",
-  "agentRequirements.action.openMarketplace": "Otvori Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Odabrani agent nije pronađen.",
   "agentRequirements.error.malformedDeclaration": "Ovaj agent ima neispravnu deklaraciju zahtjeva.",
   "agentRequirements.error.discoveryFailed": "Kilo nije mogao provjeriti dostupne vještine.",
@@ -1472,8 +1472,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Putanje mapa vještina",
   "settings.agentBehaviour.skillUrls": "URL-ovi vještina",
   "settings.agentBehaviour.removeSkill.title": "Ukloni vještinu",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Ukloniti vještinu "{{name}}"? Ovo će obrisati datoteke vještine sa diska.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Ukloni",
   "settings.agentBehaviour.rules.description":
     "Pravila su datoteke uputa koje usmjeravaju ponašanje agenta. Uključena su u sistemski prompt za svaki razgovor. Dodajte putanje datoteka ispod kako biste uključili dodatna pravila.",
@@ -1487,7 +1486,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Argumenti",
   "settings.agentBehaviour.mcpDetail.env": "Okruženje",
   "settings.agentBehaviour.mcpDetail.disabled": "Ovaj server je onemogućen.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Pregledaj Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Nema konfiguriranih MCP servera. Dodajte MCP servere u kilo.jsonc ili zamolite agenta da ih doda.",
   "settings.agentBehaviour.workflowsPlaceholder": "Tokovi rada se upravljaju putem datoteka tokova rada.",

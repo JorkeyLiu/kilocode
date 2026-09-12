@@ -1,4 +1,3 @@
-import type { InstallMarketplaceItemOptions, MarketplaceFilters, MarketplaceItem } from "../marketplace"
 import type { FileAttachment } from "./parts"
 import type { MessageLoadMode } from "./sessions"
 import type { ModelSelection, ProviderConfig } from "./providers"
@@ -174,11 +173,6 @@ export interface OpenConfigFileRequest {
     sourceGlobal: string
     sourceLocal: string
   }
-}
-
-export interface OpenMarketplacePanelRequest {
-  type: "openMarketplacePanel"
-  directory?: string
 }
 
 export interface RequestAgentsMessage {
@@ -859,27 +853,6 @@ export interface RequestModelSelectionsMessage {
   type: "requestModelSelections"
 }
 
-export interface FetchMarketplaceDataMessage {
-  type: "fetchMarketplaceData"
-}
-
-export interface FilterMarketplaceItemsMessage {
-  type: "filterMarketplaceItems"
-  filters: MarketplaceFilters
-}
-
-export interface InstallMarketplaceItemMessage {
-  type: "installMarketplaceItem"
-  mpItem: MarketplaceItem
-  mpInstallOptions: InstallMarketplaceItemOptions
-}
-
-export interface RemoveInstalledMarketplaceItemMessage {
-  type: "removeInstalledMarketplaceItem"
-  mpItem: MarketplaceItem
-  mpInstallOptions: InstallMarketplaceItemOptions
-}
-
 export interface DismissAgentMigrationBannerMessage {
   type: "dismissAgentMigrationBanner"
 }
@@ -915,7 +888,6 @@ export type WebviewMessage =
   | OpenProfilePanelRequest
   | OpenVSCodeSettingsRequest
   | OpenConfigFileRequest
-  | OpenMarketplacePanelRequest
   | OpenFileRequest
   | ValidateFilesRequest
   | CancelLoginRequest
@@ -1002,10 +974,6 @@ export type WebviewMessage =
   | RequestSandboxDefaultMessage
   | SetSandboxDefaultMessage
   | ToggleSandboxMessage
-  | FetchMarketplaceDataMessage
-  | FilterMarketplaceItemsMessage
-  | InstallMarketplaceItemMessage
-  | RemoveInstalledMarketplaceItemMessage
   | DismissAgentMigrationBannerMessage
   | ConnectProviderMessage
   | AuthorizeProviderOAuthMessage

@@ -80,12 +80,6 @@
         "icon": "$(organization)"
       },
       {
-        "command": "kilo-code.new.marketplaceButtonClicked",
-        "title": "Marketplace",
-        "category": "Kilo Code",
-        "icon": "$(extensions)"
-      },
-      {
         "command": "kilo-code.new.historyButtonClicked",
         "title": "History",
         "category": "Kilo Code",

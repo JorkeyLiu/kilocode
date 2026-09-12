@@ -118,7 +118,7 @@ Saznajte više o [agents i prilagođenim agents](https://kilo.ai/docs/code-with-
 - **Inline autocomplete** sa ghost-text prijedlozima i Tab za prihvatanje.
 - **Samoprovjera** kako bi agent pregledao i ispravio vlastiti rad.
 - **Kontrola terminala i browsera** za pokretanje komandi i automatizaciju weba.
-- **MCP marketplace** za pronalaženje i povezivanje MCP servera koji proširuju mogućnosti agenta.
+- **MCP configuration** za pronalaženje i povezivanje MCP servera koji proširuju mogućnosti agenta.
 - **Više od 500 modela** sa prebacivanjem usred zadatka, da uskladite latenciju, cijenu i rezonovanje s poslom.
 
 ### Autonomni način rada (CI/CD)

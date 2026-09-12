@@ -162,7 +162,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Forutsetninger for agenten {{agent}}",
   "agentRequirements.blocked.description": "Denne agenten trenger følgende verktøy før den kan kjøre.",
   "agentRequirements.prompt.blocked": "Fullfør først de nødvendige sjekkene for å bruke denne agenten",
-  "agentRequirements.action.openMarketplace": "Åpne Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Den valgte agenten ble ikke funnet.",
   "agentRequirements.error.malformedDeclaration": "Denne agenten har en ugyldig kravdeklarasjon.",
   "agentRequirements.error.discoveryFailed": "Kilo kunne ikke sjekke tilgjengelige skills.",
@@ -1472,8 +1472,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Ferdighetsmappe-stier",
   "settings.agentBehaviour.skillUrls": "Ferdighets-URLer",
   "settings.agentBehaviour.removeSkill.title": "Fjern ferdighet",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Vil du fjerne ferdigheten "{{name}}"? Dette vil slette ferdighetsfilene fra disken.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Fjern",
   "settings.agentBehaviour.rules.description":
     "Regler er instruksjonsfiler som styrer agentens atferd. De inkluderes i systemprompten for hver samtale. Legg til filstier nedenfor for å inkludere ekstra regler.",
@@ -1487,7 +1486,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Argumenter",
   "settings.agentBehaviour.mcpDetail.env": "Miljø",
   "settings.agentBehaviour.mcpDetail.disabled": "Denne serveren er deaktivert.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Bla gjennom Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Ingen MCP-servere konfigurert. Legg til MCP-servere i kilo.jsonc, eller be agenten om å legge dem til.",
   "settings.agentBehaviour.workflowsPlaceholder": "Arbeidsflyter administreres via arbeidsflytfiler i arbeidsområdet.",

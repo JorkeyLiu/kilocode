@@ -54,4 +54,4 @@ The new extension has none of this expandable detail.
 
 ## Notes
 
-The mcp-and-mcp-hub.md doc in `non-agent-features/` tracks MCP configuration as a broader feature. This doc focuses specifically on the MCP Servers sub-tab within the Agent Behaviour settings tab. The Marketplace covers MCP server discovery and installation from a registry.
+The mcp-and-mcp-hub.md doc in `non-agent-features/` tracks MCP configuration as a broader feature. This doc focuses specifically on the MCP Servers sub-tab within the Agent Behaviour settings tab. MCP servers are configured locally via `kilo.jsonc` or the settings UI.

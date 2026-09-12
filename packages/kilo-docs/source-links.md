@@ -63,8 +63,6 @@
   <!-- packages/opencode/src/lsp/server.ts -->
 - <https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/utils/editCorrector.ts>
   <!-- packages/opencode/src/tool/edit.ts -->
-- <https://github.com/Kilo-Org/kilo-marketplace>
-  <!-- packages/kilo-vscode/webview-ui/src/components/marketplace/MarketplaceContribute.tsx -->
 - <https://github.com/Kilo-Org/kilocode>
   <!-- packages/kilo-vscode/webview-ui/src/components/settings/AboutKiloCodeTab.tsx -->
 - <https://github.com/Kilo-Org/kilocode/issues/9618>
@@ -111,13 +109,8 @@
   <!-- packages/opencode/src/kilocode/provider/error.ts -->
 - <https://kilo.ai/docs/ai-providers#custom-provider>
   <!-- packages/kilo-vscode/webview-ui/src/components/settings/CustomProviderDialog.tsx -->
-- <https://kilo.ai/docs/automate/mcp/what-is-mcp>
-  <!-- packages/kilo-vscode/webview-ui/src/components/marketplace/InstallModal.tsx -->
 - <https://kilo.ai/docs/code-with-ai/platforms/github>
   <!-- packages/opencode/src/cli/cmd/github.handler.ts -->
-- <https://kilo.ai/docs/customize/marketplace>
-  <!-- packages/kilo-vscode/webview-ui/src/components/marketplace/InstallModal.tsx -->
-  <!-- packages/kilo-vscode/webview-ui/src/components/marketplace/MarketplaceListView.tsx -->
 - <https://kilo.ai/pricing>
   <!-- packages/opencode/src/cli/cmd/tui/component/dialog-retry-action.tsx -->
 - <https://kilo.ai/pricing/kilo-pass>

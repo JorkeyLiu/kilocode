@@ -60,7 +60,7 @@ const AgentBehaviourTab: Component = () => {
   const [newSkillUrl, setNewSkillUrl] = createSignal("")
   const [newInstruction, setNewInstruction] = createSignal("")
   const [claudeCompat, setClaudeCompat] = createSignal(false)
-  const browse = () => vscode.postMessage({ type: "openMarketplacePanel" })
+  const refresh = () => session.refreshSkills()
 
   // Load the VS Code setting for Claude Code compatibility
   vscode.postMessage({ type: "requestClaudeCompatSetting" })
@@ -350,13 +350,10 @@ const AgentBehaviourTab: Component = () => {
         >
           <div data-slot="settings-row-label-title">{language.t("settings.agentBehaviour.availableAgents")}</div>
           <div style={{ display: "flex", gap: "8px" }}>
-             <Button variant="ghost" size="small" onClick={triggerImport} disabled={importPending() !== null}>
+            <Button variant="ghost" size="small" onClick={triggerImport} disabled={importPending() !== null}>
               {language.t("settings.agentBehaviour.importMode")}
             </Button>
-            <Button variant="ghost" size="small" onClick={browse}>
-              {language.t("settings.agentBehaviour.mcpBrowseMarketplace")}
-            </Button>
-             <Button variant="secondary" size="small" onClick={() => setAgentView("create")}>
+            <Button variant="secondary" size="small" onClick={() => setAgentView("create")}>
               {language.t("settings.agentBehaviour.createMode")}
             </Button>
           </div>
@@ -395,12 +392,12 @@ const AgentBehaviourTab: Component = () => {
               {(name, index) => {
                 const agent = () => session.allAgents().find((a) => a.name === name)
                 const isCustom = () => !agent()?.native
-                 const agentCfg = () => {
-                   const value = agent()?.frontmatter?.disable
-                   return typeof value === "boolean" ? value : false
-                 }
-                 const disabled = agentCfg
-                 const hidden = () => agent()?.hidden ?? false
+                const agentCfg = () => {
+                  const value = agent()?.frontmatter?.disable
+                  return typeof value === "boolean" ? value : false
+                }
+                const disabled = agentCfg
+                const hidden = () => agent()?.hidden ?? false
                 const deprecated = () => agent()?.deprecated ?? false
                 return (
                   <div
@@ -605,25 +602,24 @@ const AgentBehaviourTab: Component = () => {
 
     return (
       <div>
-        <div
-          style={{
-            display: "flex",
-            "align-items": "center",
-            "justify-content": "flex-end",
-            "margin-bottom": "8px",
-          }}
-        >
-           <Button variant="secondary" size="small" onClick={browse} disabled={canonical?.() === true}>
-            {language.t("settings.agentBehaviour.mcpBrowseMarketplace")}
-          </Button>
-        </div>
         <Show when={session.mcpCleanupDiagnostic()}>
           <Card style={{ "margin-bottom": "12px", "border-color": "var(--vscode-testing-iconFailed, #f44336)" }}>
-            <div style={{ "font-size": "var(--kilo-font-size-12)", color: "var(--vscode-testing-iconFailed, #f44336)", "margin-bottom": "8px" }}>
-              MCP credential cleanup failed for {session.mcpCleanupDiagnostic()!.name}: {session.mcpCleanupDiagnostic()!.message}
+            <div
+              style={{
+                "font-size": "var(--kilo-font-size-12)",
+                color: "var(--vscode-testing-iconFailed, #f44336)",
+                "margin-bottom": "8px",
+              }}
+            >
+              MCP credential cleanup failed for {session.mcpCleanupDiagnostic()!.name}:{" "}
+              {session.mcpCleanupDiagnostic()!.message}
             </div>
             <Show when={session.mcpCleanupDiagnostic()!.retry}>
-              <Button variant="secondary" size="small" onClick={() => session.retryMcpCleanup(session.mcpCleanupDiagnostic()!.retry!)}>
+              <Button
+                variant="secondary"
+                size="small"
+                onClick={() => session.retryMcpCleanup(session.mcpCleanupDiagnostic()!.retry!)}
+              >
                 Retry cleanup
               </Button>
             </Show>
@@ -708,7 +704,7 @@ const AgentBehaviourTab: Component = () => {
                             <Button
                               variant="secondary"
                               size="small"
-                               disabled={canonical?.() === true || session.mcpLoading() === name}
+                              disabled={canonical?.() === true || session.mcpLoading() === name}
                               onClick={() => session.authenticateMcp(name)}
                             >
                               {language.t("common.signIn")}
@@ -718,7 +714,7 @@ const AgentBehaviourTab: Component = () => {
                         <div onClick={(e: MouseEvent) => e.stopPropagation()}>
                           <Switch
                             checked={isConnected(name)}
-                             disabled={canonical?.() === true || session.mcpLoading() === name}
+                            disabled={canonical?.() === true || session.mcpLoading() === name}
                             onChange={() => {
                               if (isConnected(name)) {
                                 session.disconnectMcp(name)
@@ -735,21 +731,21 @@ const AgentBehaviourTab: Component = () => {
                           size="small"
                           variant="ghost"
                           icon="close"
-                           disabled={canonical?.() === true}
-                           onClick={(e: MouseEvent) => {
+                          disabled={canonical?.() === true}
+                          onClick={(e: MouseEvent) => {
                             e.stopPropagation()
                             confirmRemoveMcp(name)
                           }}
                         />
-                           <IconButton
-                             size="small"
-                             variant="ghost"
-                             icon="chevron-right"
+                        <IconButton
+                          size="small"
+                          variant="ghost"
+                          icon="chevron-right"
                           onClick={(e: MouseEvent) => {
                             e.stopPropagation()
-                             setEditingMcp(name)
-                           }}
-                           disabled={canonical?.() === true}
+                            setEditingMcp(name)
+                          }}
+                          disabled={canonical?.() === true}
                         />
                       </div>
                     </div>
@@ -854,8 +850,8 @@ const AgentBehaviourTab: Component = () => {
           "margin-bottom": "8px",
         }}
       >
-        <Button variant="secondary" size="small" onClick={browse}>
-          {language.t("settings.agentBehaviour.mcpBrowseMarketplace")}
+        <Button variant="secondary" size="small" onClick={refresh}>
+          {language.t("settings.agentBehaviour.refreshSkills")}
         </Button>
       </div>
       {/* Discovered skills */}
@@ -898,7 +894,13 @@ const AgentBehaviourTab: Component = () => {
                   </div>
                 </div>
                 {!builtin(skill) && (
-                 <IconButton size="small" variant="ghost" icon="close" onClick={() => confirmRemoveSkill(skill)} disabled={canonical?.() === true} />
+                  <IconButton
+                    size="small"
+                    variant="ghost"
+                    icon="close"
+                    onClick={() => confirmRemoveSkill(skill)}
+                    disabled={canonical?.() === true}
+                  />
                 )}
               </div>
             )}
@@ -919,17 +921,17 @@ const AgentBehaviourTab: Component = () => {
           }}
         >
           <div style={{ flex: 1 }}>
-             <TextField
+            <TextField
               value={newSkillPath()}
               placeholder="e.g. ./skills"
-               onChange={(val) => setNewSkillPath(val)}
-               disabled={canonical?.() === true}
+              onChange={(val) => setNewSkillPath(val)}
+              disabled={canonical?.() === true}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === "Enter") addSkillPath()
               }}
             />
           </div>
-           <Button variant="secondary" onClick={addSkillPath} disabled={canonical?.() === true}>
+          <Button variant="secondary" onClick={addSkillPath} disabled={canonical?.() === true}>
             {language.t("common.add")}
           </Button>
         </div>
@@ -952,7 +954,13 @@ const AgentBehaviourTab: Component = () => {
               >
                 {path}
               </span>
-               <IconButton size="small" variant="ghost" icon="close" onClick={() => removeSkillPath(index())} disabled={canonical?.() === true} />
+              <IconButton
+                size="small"
+                variant="ghost"
+                icon="close"
+                onClick={() => removeSkillPath(index())}
+                disabled={canonical?.() === true}
+              />
             </div>
           )}
         </For>
@@ -974,14 +982,14 @@ const AgentBehaviourTab: Component = () => {
             <TextField
               value={newSkillUrl()}
               placeholder="e.g. https://example.com/skills"
-               onChange={(val) => setNewSkillUrl(val)}
-               disabled={canonical?.() === true}
+              onChange={(val) => setNewSkillUrl(val)}
+              disabled={canonical?.() === true}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === "Enter") addSkillUrl()
               }}
             />
           </div>
-           <Button variant="secondary" onClick={addSkillUrl} disabled={canonical?.() === true}>
+          <Button variant="secondary" onClick={addSkillUrl} disabled={canonical?.() === true}>
             {language.t("common.add")}
           </Button>
         </div>
@@ -1004,7 +1012,13 @@ const AgentBehaviourTab: Component = () => {
               >
                 {url}
               </span>
-               <IconButton size="small" variant="ghost" icon="close" onClick={() => removeSkillUrl(index())} disabled={canonical?.() === true} />
+              <IconButton
+                size="small"
+                variant="ghost"
+                icon="close"
+                onClick={() => removeSkillUrl(index())}
+                disabled={canonical?.() === true}
+              />
             </div>
           )}
         </For>
@@ -1136,7 +1150,9 @@ const AgentBehaviourTab: Component = () => {
     if (canonical?.() === true && unsupported) {
       return (
         <Card aria-disabled="true" title="Unsupported in canonical GUI config">
-          <div role="note" style={{ color: "var(--text-weak-base)" }}>This section is read-only in canonical GUI configuration.</div>
+          <div role="note" style={{ color: "var(--text-weak-base)" }}>
+            This section is read-only in canonical GUI configuration.
+          </div>
         </Card>
       )
     }
@@ -1159,7 +1175,11 @@ const AgentBehaviourTab: Component = () => {
   return (
     <div>
       <Show when={session.agentDiagnostic()}>
-        {(message) => <div role="alert" style={{ color: "var(--vscode-errorForeground)", "margin-bottom": "8px" }}>{message()}</div>}
+        {(message) => (
+          <div role="alert" style={{ color: "var(--vscode-errorForeground)", "margin-bottom": "8px" }}>
+            {message()}
+          </div>
+        )}
       </Show>
       {/* Horizontal subtab bar */}
       <div

@@ -1,5 +1,11 @@
 module.exports = [
   {
+    source: "/docs/customize/marketplace",
+    destination: "/docs/customize/skills",
+    basePath: false,
+    permanent: true,
+  },
+  {
     source: "/docs/getting-started/settings/auto-cleanup",
     destination: "https://github.com/Kilo-Org/kilocode-legacy/blob/main/docs/legacy-ides/getting-started/settings/auto-cleanup.md",
     basePath: false,

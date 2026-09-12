@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Передумови агента {{agent}}",
   "agentRequirements.blocked.description": "Цьому агенту потрібні такі інструменти, перш ніж він зможе працювати.",
   "agentRequirements.prompt.blocked": "Спочатку завершіть необхідні перевірки, щоб використати цього агента",
-  "agentRequirements.action.openMarketplace": "Відкрити Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Вибраного агента не знайдено.",
   "agentRequirements.error.malformedDeclaration": "Цей агент має недійсну декларацію вимог.",
   "agentRequirements.error.discoveryFailed": "Kilo не зміг перевірити доступні навички.",
@@ -1424,7 +1424,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Шляхи до папок навичок",
   "settings.agentBehaviour.skillUrls": "URL навичок",
   "settings.agentBehaviour.removeSkill.title": "Видалити навичку",
-  "settings.agentBehaviour.removeSkill.confirm": 'Видалити навичку "{{name}}"? Це видалить файли навичок з диска.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Видалити",
   "settings.agentBehaviour.rules.description":
     "Правила — це файли інструкцій, що спрямовують поведінку агента. Вони включаються до системного запиту для кожної розмови. Додайте шляхи до файлів нижче для додаткових правил.",
@@ -1454,7 +1454,7 @@ export const dict = {
   "settings.agentBehaviour.addMcp.args.placeholder": "напр.\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.agentBehaviour.addMcp.url": "URL сервера",
   "settings.agentBehaviour.addMcp.url.placeholder": "напр. http://localhost:3000/sse",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Переглянути Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "MCP-серверів не налаштовано. Додайте MCP-сервери до kilo.jsonc або попросіть агента додати їх.",
   "settings.agentBehaviour.workflowsPlaceholder":

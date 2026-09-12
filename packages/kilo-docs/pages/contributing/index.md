@@ -17,7 +17,7 @@ There are many ways to contribute to Kilo Code:
 
 1. **Code Contributions**: Implement new features or fix bugs
 2. **Documentation**: Improve existing docs or create new guides
-3. **Marketplace Contributions**: Create and share custom modes, skills, and MCP servers via the [Kilo Marketplace](https://github.com/Kilo-Org/kilo-marketplace)
+3. **Local Configuration Contributions**: Create and share custom agents, skills, and MCP servers through local configuration and documentation
 4. **Bug Reports**: Report issues you encounter
 5. **Feature Requests**: Suggest new features or improvements
 6. **Community Support**: Help other users in the community
@@ -160,21 +160,19 @@ Maintainers may close issues or PRs that disregard the contribution guide, bypas
 
 Kilo has bug bounties. To be eligible, make sure your GitHub account is connected in your Kilo account.
 
-## Contributing to the Kilo Marketplace
+## Sharing Local Agents, Skills, and MCP Servers
 
-The [Kilo Marketplace](https://github.com/Kilo-Org/kilo-marketplace) is a community-driven repository of agent tooling that extends Kilo Code's capabilities. You can contribute:
+Local agents, skills, and MCP servers extend Kilo Code's capabilities. You can share them through your own channels:
 
 - **Skills**: Modular workflows and domain expertise that teach agents how to perform specific tasks
 - **MCP Servers**: Standardized integrations that connect agents to external tools and services
-- **Modes**: Custom agent personalities and behaviors with tailored tool access
+- **Agents**: Custom agent personalities and behaviors with tailored tool access
 
-To contribute:
+To share:
 
 1. Follow the documentation for [Custom Modes](/docs/customize/custom-modes), [Skills](/docs/customize/skills), or [MCP Servers](/docs/automate/mcp/overview) to create your resource
 
 2. Test your contribution thoroughly
-
-3. Submit a pull request to the [Kilo Marketplace repository](https://github.com/Kilo-Org/kilo-marketplace)
 
 ## Engineering Specs
 

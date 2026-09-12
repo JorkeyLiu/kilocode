@@ -118,7 +118,7 @@ Tìm hiểu thêm về [agents và agents tùy chỉnh](https://kilo.ai/docs/cod
 - **Tự động hoàn thành inline** với gợi ý ghost-text và Tab để chấp nhận.
 - **Tự kiểm tra** để agent review và sửa công việc của chính nó.
 - **Điều khiển terminal và trình duyệt** để chạy lệnh và tự động hóa web.
-- **MCP marketplace** để tìm và kết nối MCP server mở rộng khả năng của agent.
+- **MCP configuration** để tìm và kết nối MCP server mở rộng khả năng của agent.
 - **Hơn 500 mô hình** với chuyển đổi giữa chừng tác vụ, để bạn khớp độ trễ, chi phí và reasoning với công việc.
 
 ### Chế độ tự động (CI/CD)

@@ -163,7 +163,7 @@ export const dict = {
   "agentRequirements.blocked.title": "{{agent}} 에이전트 필수 조건",
   "agentRequirements.blocked.description": "이 에이전트를 실행하려면 다음 도구가 필요합니다.",
   "agentRequirements.prompt.blocked": "이 에이전트를 사용하려면 먼저 필요한 확인을 완료하세요",
-  "agentRequirements.action.openMarketplace": "Marketplace 열기",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "선택한 에이전트를 찾을 수 없습니다.",
   "agentRequirements.error.malformedDeclaration": "이 에이전트의 요구 사항 선언이 올바르지 않습니다.",
   "agentRequirements.error.discoveryFailed": "Kilo가 사용 가능한 스킬을 확인하지 못했습니다.",
@@ -1454,8 +1454,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "스킬 폴더 경로",
   "settings.agentBehaviour.skillUrls": "스킬 URL",
   "settings.agentBehaviour.removeSkill.title": "스킬 제거",
-  "settings.agentBehaviour.removeSkill.confirm":
-    '스킬 "{{name}}"을(를) 제거하시겠습니까? 디스크에서 스킬 파일이 삭제됩니다.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "제거",
   "settings.agentBehaviour.rules.description":
     "규칙은 에이전트 동작을 안내하는 지시 파일입니다. 모든 대화의 시스템 프롬프트에 포함됩니다. 추가 규칙을 포함하려면 아래에 파일 경로를 추가하세요.",
@@ -1469,7 +1468,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "인수",
   "settings.agentBehaviour.mcpDetail.env": "환경",
   "settings.agentBehaviour.mcpDetail.disabled": "이 서버는 비활성화되어 있습니다.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "마켓플레이스 둘러보기",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "MCP 서버가 구성되지 않았습니다. kilo.jsonc에서 MCP 서버를 추가하거나 에이전트에게 추가를 요청하세요.",
   "settings.agentBehaviour.workflowsPlaceholder": "워크플로우는 워크스페이스의 워크플로우 파일을 통해 관리됩니다.",

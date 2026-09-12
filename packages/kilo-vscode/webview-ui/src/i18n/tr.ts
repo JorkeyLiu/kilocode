@@ -159,7 +159,7 @@ export const dict = {
   "agentRequirements.blocked.title": "{{agent}} ajanı ön koşulları",
   "agentRequirements.blocked.description": "Bu ajanın çalışmadan önce aşağıdaki araçlara ihtiyacı var.",
   "agentRequirements.prompt.blocked": "Bu ajanı kullanmak için önce gerekli denetimleri tamamlayın",
-  "agentRequirements.action.openMarketplace": "Marketplace’i Aç",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "Seçili ajan bulunamadı.",
   "agentRequirements.error.malformedDeclaration": "Bu ajanın geçersiz bir gereksinim bildirimi var.",
   "agentRequirements.error.discoveryFailed": "Kilo mevcut yetenekleri denetleyemedi.",
@@ -1421,8 +1421,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Beceri Klasör Yolları",
   "settings.agentBehaviour.skillUrls": "Beceri URL'leri",
   "settings.agentBehaviour.removeSkill.title": "Beceriyi kaldır",
-  "settings.agentBehaviour.removeSkill.confirm":
-    '"{{name}}" becerisi kaldırılsın mı? Bu, beceri dosyalarını diskten silecek.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Kaldır",
   "settings.agentBehaviour.rules.description":
     "Kurallar, ajanın davranışını yönlendiren talimat dosyalarıdır. Her konuşma için sistem komutuna dahil edilirler. Ek kurallar eklemek için aşağıya dosya yolları ekleyin.",
@@ -1453,7 +1452,7 @@ export const dict = {
   "settings.agentBehaviour.addMcp.args.placeholder": "e.g.\n-y\n@modelcontextprotocol/server-filesystem\n/tmp",
   "settings.agentBehaviour.addMcp.url": "Sunucu URL'si",
   "settings.agentBehaviour.addMcp.url.placeholder": "e.g. http://localhost:3000/sse",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Marketplace'e Göz At",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Yapılandırılmış MCP sunucusu yok. kilo.jsonc dosyasına MCP sunucuları ekleyin veya ajanın eklemesini isteyin.",
   "settings.agentBehaviour.workflowsPlaceholder": "İş akışları çalışma alanınızdaki iş akışı dosyaları ile yönetilir.",

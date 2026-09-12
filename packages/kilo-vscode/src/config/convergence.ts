@@ -9,11 +9,10 @@
  * blocks the write (zero bytes persisted, zero secret side-effects). Resolve
  * loss never rewrites files and never falls back to SDK: the write stays
  * persisted with a structured `runtime convergence pending` diagnostic and the
- * backend auto-resolves after a bounded grace. MarketplaceInstaller canonical
- * config writes use the same fence through the activation-owned adapter and
- * fail closed without one (no mutation, no resolve). Intentionally unfenced:
- * agent/skill markdown/asset file writes, legacy mcp.json/mcp_settings.json
- * cleanup, and external watcher edits.
+ * backend auto-resolves after a bounded grace. Canonical GUI config writes
+ * use the same fence through the activation-owned adapter and fail closed
+ * without one (no mutation, no resolve). Intentionally unfenced:
+ * agent/skill markdown/asset file writes and external watcher edits.
  *
  * External canonical config edits (VS Code watcher, not own writes) are
  * observed via a descriptor-only private hint (`config/convergence/observe`)

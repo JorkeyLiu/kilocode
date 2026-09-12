@@ -160,7 +160,7 @@ export const dict = {
   "agentRequirements.blocked.title": "Prérequis de l’agent {{agent}}",
   "agentRequirements.blocked.description": "Cet agent a besoin des outils suivants avant de pouvoir s’exécuter.",
   "agentRequirements.prompt.blocked": "Terminez d’abord les vérifications requises pour utiliser cet agent",
-  "agentRequirements.action.openMarketplace": "Ouvrir Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "L’agent sélectionné est introuvable.",
   "agentRequirements.error.malformedDeclaration": "Cet agent a une déclaration de prérequis invalide.",
   "agentRequirements.error.discoveryFailed": "Kilo n’a pas pu vérifier les compétences disponibles.",
@@ -1505,8 +1505,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Chemins des dossiers de compétences",
   "settings.agentBehaviour.skillUrls": "URLs de compétences",
   "settings.agentBehaviour.removeSkill.title": "Supprimer la compétence",
-  "settings.agentBehaviour.removeSkill.confirm":
-    'Supprimer la compétence "{{name}}" ? Cela supprimera les fichiers de la compétence du disque.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Supprimer",
   "settings.agentBehaviour.rules.description":
     "Les règles sont des fichiers d'instructions qui guident le comportement de l'agent. Elles sont incluses dans le prompt système pour chaque conversation. Ajoutez des chemins de fichiers ci-dessous pour inclure des règles supplémentaires.",
@@ -1520,7 +1519,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Arguments",
   "settings.agentBehaviour.mcpDetail.env": "Environnement",
   "settings.agentBehaviour.mcpDetail.disabled": "Ce serveur est désactivé.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Parcourir le Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "Aucun serveur MCP configuré. Ajoutez des serveurs MCP dans kilo.jsonc ou demandez à l'agent de les ajouter.",
   "settings.agentBehaviour.workflowsPlaceholder":

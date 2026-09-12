@@ -31,7 +31,6 @@ This document tracks remaining work needed for feature parity with the old exten
 | [Codebase Indexing & Semantic Search](non-agent-features/codebase-indexing-semantic-search.md) | Vector indexing, semantic search, embeddings infrastructure | CLI has grep/glob endpoints; semantic indexing is extension or cloud | P2 |
 | [Contribution Tracking](non-agent-features/contribution-tracking.md) | AI attribution tracking, line fingerprinting, reporting | Extension-side | P3 |
 | [Custom Commands](non-agent-features/custom-command-system.md) | Slash command system, project-level command discovery, YAML frontmatter support | CLI has custom commands; extension provides UI entry points | P2 |
-| [Marketplace](non-agent-features/marketplace.md) | Catalog, install, update capabilities (toolbar button exists but renders a stub) | Extension-side | P2 |
 | [MCP & MCP Hub](non-agent-features/mcp-and-mcp-hub.md) | MCP configuration UI (add/edit/delete servers), tool allowlisting | CLI owns MCP lifecycle; extension provides config UI | P1 |
 | [Repository Initialization](non-agent-features/repository-initialization.md) | /init command support for setting up agentic engineering | CLI /init endpoint; extension provides UI trigger | P3 |
 | [Rules & Workflows](non-agent-features/rules-and-workflows.md) | Workflow management UI (rules subtab exists, workflows subtab is a stub) | CLI owns rules runtime; extension provides management UI | P3 |
@@ -135,11 +134,11 @@ Before publishing this extension to the VS Code Marketplace or deploying to user
 - [ ] **Multi-theme visual check** — Verify the webview renders correctly in at least one light theme, one dark theme, and one high-contrast theme
 - [ ] **Multi-platform smoke test** — Test on macOS, Windows, and Linux. Particularly: CLI binary provisioning, path handling, `chmod`-based credential protection on Windows
 
-### Packaging & Marketplace
+### Packaging & Publishing
 
 - [ ] **Bundle size audit** — With kilo-ui and its transitive dependencies (shiki, marked, katex, dompurify, etc.) now bundled, measure `dist/webview.js` size and verify the total `.vsix` package size is acceptable
 - [ ] **`.vscodeignore` review** — Ensure only necessary files are included in the package (no `docs/`, `src/`, test artifacts, or development scripts)
-- [ ] **Marketplace metadata** — Verify [`README.md`](../README.md), [`CHANGELOG.md`](../CHANGELOG.md), publisher name, extension icon, and [`package.json`](../package.json) fields (`displayName`, `description`, `categories`, `keywords`, `repository`) are production-ready
+- [ ] **Publishing metadata** — Verify [`README.md`](../README.md), [`CHANGELOG.md`](../CHANGELOG.md), publisher name, extension icon, and [`package.json`](../package.json) fields (`displayName`, `description`, `categories`, `keywords`, `repository`) are production-ready
 - [ ] **`activationEvents` review** — Confirm the extension only activates when needed (not `*`), to avoid impacting VS Code startup time
 - [ ] **Minimum VS Code version** — Verify `engines.vscode` in [`package.json`](../package.json) matches the minimum API features actually used
 

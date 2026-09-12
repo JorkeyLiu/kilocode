@@ -61,7 +61,7 @@ export namespace KilocodePaths {
         directories.push(global) // Return parent, not skills/
       }
 
-      // 2. VSCode extension global storage (marketplace-installed skills)
+      // 2. VSCode extension global storage skills
       const vscode = vscodeGlobalStorage()
       const vscodeSkills = path.join(vscode, "skills")
       if (await Filesystem.isDir(vscodeSkills)) {

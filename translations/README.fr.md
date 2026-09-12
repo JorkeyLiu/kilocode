@@ -118,7 +118,7 @@ En savoir plus sur les [agents et agents personnalisés](https://kilo.ai/docs/co
 - **Autocomplétion en ligne** avec suggestions ghost-text et Tab pour accepter.
 - **Auto-vérification** pour que l'agent relise et corrige son propre travail.
 - **Contrôle du terminal et du navigateur** pour exécuter des commandes et automatiser le web.
-- **Marketplace MCP** pour trouver et connecter des serveurs MCP qui étendent les capacités de l'agent.
+- **Configuration MCP** pour trouver et connecter des serveurs MCP qui étendent les capacités de l'agent.
 - **Plus de 500 modèles** avec changement en cours de tâche, pour adapter latence, coût et raisonnement au travail.
 
 ### Mode autonome (CI/CD)

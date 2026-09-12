@@ -160,7 +160,7 @@ export const dict = {
   "agentRequirements.blocked.title": "{{agent}} 代理前置要求",
   "agentRequirements.blocked.description": "此代理需要以下工具后才能运行。",
   "agentRequirements.prompt.blocked": "请先完成所需检查，然后再使用此代理",
-  "agentRequirements.action.openMarketplace": "打开 Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "找不到所选代理。",
   "agentRequirements.error.malformedDeclaration": "此代理的要求声明无效。",
   "agentRequirements.error.discoveryFailed": "Kilo 无法检查可用技能。",
@@ -1420,7 +1420,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "技能文件夹路径",
   "settings.agentBehaviour.skillUrls": "技能 URL",
   "settings.agentBehaviour.removeSkill.title": "移除技能",
-  "settings.agentBehaviour.removeSkill.confirm": '移除技能 "{{name}}" 吗？这会从磁盘中删除该技能文件。',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "移除",
   "settings.agentBehaviour.rules.description":
     "规则是指导代理行为的指令文件。它们会被包含在每次对话的系统提示词中。在下方添加文件路径以包含额外的规则。",
@@ -1434,7 +1434,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "参数",
   "settings.agentBehaviour.mcpDetail.env": "环境",
   "settings.agentBehaviour.mcpDetail.disabled": "此服务器已禁用。",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "浏览市场",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty": "未配置 MCP 服务器。在 kilo.jsonc 中添加 MCP 服务器，或让代理为您添加。",
   "settings.agentBehaviour.workflowsPlaceholder": "工作流通过工作区中的工作流文件管理。",
   "settings.agentBehaviour.workflows.description":

@@ -17,14 +17,10 @@ const REPO = path.resolve(ROOT, "../..")
 const TARGETS = [
   path.join(ROOT, "webview-ui/src"),
   path.join(ROOT, "webview-ui/agent-manager"),
-  path.join(ROOT, "webview-ui/marketplace"),
   path.join(REPO, "packages/kilo-ui/src/components"),
 ]
 
-const WATCHED_PROVIDERS = [
-  path.join(ROOT, "src/KiloProvider.ts"),
-  path.join(ROOT, "src/MarketplacePanelProvider.ts"),
-]
+const WATCHED_PROVIDERS = [path.join(ROOT, "src/KiloProvider.ts")]
 
 const ALLOWED_DIRS = new Set(["stories"])
 const EXTENSIONS = new Set([".css", ".ts", ".tsx"])

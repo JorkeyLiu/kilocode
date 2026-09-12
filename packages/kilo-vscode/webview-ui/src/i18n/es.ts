@@ -160,7 +160,7 @@ export const dict = {
   "agentRequirements.blocked.description":
     "Este agente necesita las siguientes herramientas antes de poder ejecutarse.",
   "agentRequirements.prompt.blocked": "Completa primero las comprobaciones requeridas para usar este agente",
-  "agentRequirements.action.openMarketplace": "Abrir Marketplace",
+  "agentRequirements.localHint": "Configure missing skills and MCP servers in Settings > Agent Behaviour > MCP Servers / Skills.",
   "agentRequirements.error.unknownAgent": "No se pudo encontrar el agente seleccionado.",
   "agentRequirements.error.malformedDeclaration": "Este agente tiene una declaración de requisitos no válida.",
   "agentRequirements.error.discoveryFailed": "Kilo no pudo comprobar las habilidades disponibles.",
@@ -1489,8 +1489,7 @@ export const dict = {
   "settings.agentBehaviour.skillPaths": "Rutas de carpetas de habilidades",
   "settings.agentBehaviour.skillUrls": "URLs de habilidades",
   "settings.agentBehaviour.removeSkill.title": "Eliminar habilidad",
-  "settings.agentBehaviour.removeSkill.confirm":
-    '¿Eliminar la habilidad "{{name}}"? Esto borrará los archivos de la habilidad del disco.',
+  "settings.agentBehaviour.removeSkill.confirm": 'Remove skill "{{name}}"? Only the skill manifest is removed; other files are preserved.',
   "settings.agentBehaviour.removeSkill.button": "Eliminar",
   "settings.agentBehaviour.rules.description":
     "Las reglas son archivos de instrucciones que guían el comportamiento del agente. Se incluyen en el prompt del sistema para cada conversación. Añada rutas de archivos a continuación para incluir reglas adicionales.",
@@ -1505,7 +1504,7 @@ export const dict = {
   "settings.agentBehaviour.mcpDetail.args": "Argumentos",
   "settings.agentBehaviour.mcpDetail.env": "Entorno",
   "settings.agentBehaviour.mcpDetail.disabled": "Este servidor está deshabilitado.",
-  "settings.agentBehaviour.mcpBrowseMarketplace": "Explorar Marketplace",
+  "settings.agentBehaviour.refreshSkills": "Refresh",
   "settings.agentBehaviour.mcpEmpty":
     "No hay servidores MCP configurados. Añada servidores MCP en kilo.jsonc o pida al agente que los añada.",
   "settings.agentBehaviour.workflowsPlaceholder":

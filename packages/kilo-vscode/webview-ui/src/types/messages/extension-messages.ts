@@ -1,6 +1,5 @@
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@kilocode/sdk/v2/client"
 import type { PartBatch, PartRemove, PartUpdate } from "../../../../src/shared/stream-messages"
-import type { MarketplaceItem, MarketplaceInstalledMetadata, MarketplaceRelevanceMetadata } from "../marketplace"
 import type { ConnectionState, ServerInfo, SessionStatus } from "./connection"
 import type { FileAttachment, Part } from "./parts"
 import type { ImageAttachment } from "../../hooks/useImageAttachments"
@@ -285,7 +284,7 @@ export interface DeviceAuthCancelledMessage {
 
 export interface NavigateMessage {
   type: "navigate"
-  view: "newTask" | "marketplace" | "history" | "profile" | "settings"
+  view: "newTask" | "history" | "profile" | "settings"
   tab?: string
 }
 
@@ -837,38 +836,6 @@ export interface TelemetryStateMessage {
   enabled: boolean
 }
 
-// ============================================
-// Marketplace Messages
-// ============================================
-
-export interface MarketplaceDataMessage {
-  type: "marketplaceData"
-  marketplaceItems: MarketplaceItem[]
-  marketplaceInstalledMetadata: MarketplaceInstalledMetadata
-  marketplaceRelevance: MarketplaceRelevanceMetadata
-  errors?: string[]
-  showAgentMigrationBanner?: boolean
-}
-
-export interface MarketplaceInstallResultMessage {
-  type: "marketplaceInstallResult"
-  success: boolean
-  slug: string
-  error?: string
-}
-
-export interface OpenInstallModalMessage {
-  type: "openInstallModal"
-  mpItem: MarketplaceItem
-}
-
-export interface MarketplaceRemoveResultMessage {
-  type: "marketplaceRemoveResult"
-  success: boolean
-  slug: string
-  error?: string
-}
-
 export interface ProviderOAuthReadyMessage {
   type: "providerOAuthReady"
   requestId: string
@@ -1133,10 +1100,6 @@ export type ExtensionMessage =
   | AgentManagerTerminalErrorMessage
   | EnhancePromptResultMessage
   | EnhancePromptErrorMessage
-  | MarketplaceDataMessage
-  | MarketplaceInstallResultMessage
-  | MarketplaceRemoveResultMessage
-  | OpenInstallModalMessage
   | ProviderOAuthReadyMessage
   | ProviderConnectedMessage
   | CanonicalProviderConnectedMessage

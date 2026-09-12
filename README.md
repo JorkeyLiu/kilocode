@@ -117,7 +117,7 @@ Learn more about [agents and custom agents](https://kilo.ai/docs/code-with-ai/ag
 - **Code generation** from natural language, across multiple files.
 - **Self-checking** so the agent reviews and corrects its own work.
 - **Terminal and browser control** to run commands and automate the web.
-- **MCP marketplace** to find and wire up MCP servers that extend what the agent can do.
+- **MCP configuration** to wire up MCP servers that extend what the agent can do.
 - **500+ models** with mid-task switching, so you can match latency, cost, and reasoning to the job.
 
 ### Autonomous Mode (CI/CD)
