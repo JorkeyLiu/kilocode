@@ -2696,17 +2696,50 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private fetchAndSendSessionModelUsage(sessionID: string, requestID: string): Promise<void> {
     const directory = this.getWorkspaceDirectory(sessionID)
-    return this.connectionService
-      .getClientAsync(directory)
-      .then((client) => client.kilocode.sessionModelUsage({ sessionID, directory }, { throwOnError: true }))
-      .then((response) => {
-        this.modelUsageSessionIds = new Set(response.data.sessionIDs)
-        this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID, data: response.data })
-      })
-      .catch((error: unknown) => {
-        console.warn("[Kilo New] KiloProvider: Failed to load session model usage:", error)
-        this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID })
-      })
+    return (async () => {
+      try {
+        const { attemptSessionModelUsagePrivate, buildSessionModelUsageIdentity } = await import(
+          "./kilo-provider/session-model-usage"
+        )
+        const { opId, idempotencyKey, requestId } = buildSessionModelUsageIdentity(sessionID)
+        const req = {
+          v: 1 as const,
+          requestId,
+          opId,
+          op: "session/model-usage" as const,
+          idempotencyKey,
+          context: { directory, sessionId: sessionID },
+          payload: {},
+        }
+        const attempt = await attemptSessionModelUsagePrivate(this.connectionService, req)
+        if (attempt.kind === "ok") {
+          this.modelUsageSessionIds = new Set(attempt.usage.sessionIDs)
+          this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID, data: attempt.usage })
+          return
+        }
+        if (attempt.kind === "terminal") {
+          console.warn("[Kilo New] KiloProvider: Failed to load session model usage:", {
+            terminal: true,
+          })
+          this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID })
+          return
+        }
+        console.warn("[Kilo New] KiloProvider: private session model usage fallback", {
+          fallback: true,
+        })
+      } catch {
+        console.warn("[Kilo New] KiloProvider: private session model usage fallback", {
+          fallback: true,
+        })
+      }
+      const client = await this.connectionService.getClientAsync(directory)
+      const response = await client.kilocode.sessionModelUsage({ sessionID, directory }, { throwOnError: true })
+      this.modelUsageSessionIds = new Set(response.data.sessionIDs)
+      this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID, data: response.data })
+    })().catch((error: unknown) => {
+      console.warn("[Kilo New] KiloProvider: Failed to load session model usage:", error)
+      this.postMessage({ type: "sessionModelUsageLoaded", sessionID, requestID })
+    })
   }
 
   private async handleLoadMessages(

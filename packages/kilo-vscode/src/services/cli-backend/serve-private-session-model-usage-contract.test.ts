@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   canonicalSessionModelUsageOpId,
   checkSessionModelUsageScope,
-  compareSessionModelUsageParity,
   isSessionModelUsageValidationError,
   makeSessionModelUsageAmbiguous,
   normalizePrivateSessionModelUsageWire,
@@ -65,7 +64,7 @@ function makeSucceeded(req: ReturnType<typeof validateSessionModelUsageContractR
   }
 }
 
-describe("Gate B sessionModelUsage candidate contract", () => {
+describe("sessionModelUsage private-first contract", () => {
   test("opId grammar binds sessionId with idempotency equality", () => {
     expect(canonicalSessionModelUsageOpId(SID, "t1")).toBe(`session-model-usage:${SID}:t1`)
     expect(() => canonicalSessionModelUsageOpId("", "t1")).toThrow()
@@ -247,53 +246,13 @@ describe("Gate B sessionModelUsage candidate contract", () => {
     ).toThrow()
   })
 
-  test("detached parity compares shared projection only; order ignored; membership gaps are unknown", () => {
+  test("succeeded preserves exact usage shape", () => {
     const req = validateSessionModelUsageContractRequest(makeReq())
     const ok = validateSessionModelUsageResult(makeSucceeded(req), req)
-    const sdkData = makeUsage()
-    const parity = compareSessionModelUsageParity(ok, { data: sdkData })
-    expect(parity.divergence).toBeNull()
-    expect(parity.details.orderIgnored).toBeTrue()
-    const statusMismatch = compareSessionModelUsageParity(ok, { error: { message: "boom" } })
-    expect(statusMismatch.divergence).toContain("status-mismatch")
-    const gap = compareSessionModelUsageParity(ok, { data: makeUsage({ sessionIDs: [SID, "ses_other"] }) })
-    expect(gap.divergence).toBe("session-model-usage-membership-unknown")
-    const totalsMismatch = compareSessionModelUsageParity(
-      ok,
-      { data: makeUsage({ totals: { ...(makeUsage().totals as object), steps: 99 } }) },
-    )
-    expect(totalsMismatch.divergence).toBe("session-model-usage-totals-mismatch")
-    // models order is never compared: reversed two-model payloads still hold.
-    const two = makeUsage({
-      sessionIDs: [SID],
-      models: [
-        { providerID: "p-a", modelID: "m-1", steps: 1, cost: 1, tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
-        { providerID: "p-b", modelID: "m-2", steps: 2, cost: 2, tokens: { input: 2, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
-      ],
-    })
-    const privTwo = validateSessionModelUsageResult(
-      { ...makeSucceeded(req), data: { usage: two } },
-      req,
-    )
-    const sdkReordered = makeUsage({
-      sessionIDs: [SID],
-      models: [...(two.models as unknown[])].reverse(),
-    })
-    expect(compareSessionModelUsageParity(privTwo, { data: sdkReordered }).divergence).toBeNull()
-    // sessionIDs order is never compared: same members in different order hold.
-    const idsTwo = makeUsage({ sessionIDs: [SID, "ses_other"] })
-    const privIds = validateSessionModelUsageResult(
-      { ...makeSucceeded(req), data: { usage: idsTwo } },
-      req,
-    )
-    const sdkIdsReordered = makeUsage({ sessionIDs: ["ses_other", SID] })
-    expect(compareSessionModelUsageParity(privIds, { data: sdkIdsReordered }).divergence).toBeNull()
-    expect(compareSessionModelUsageParity(privIds, { data: sdkIdsReordered }).details.orderIgnored).toBeTrue()
-    const sdkMissing = makeUsage({ sessionIDs: [SID], models: [(two.models as unknown[])[0]] })
-    expect(compareSessionModelUsageParity(privTwo, { data: sdkMissing }).divergence).toBe(
-      "session-model-usage-membership-unknown",
-    )
-    const transport = compareSessionModelUsageParity(makeSessionModelUsageAmbiguous(req), { data: sdkData })
-    expect(transport.divergence).toBe("transport-unknown")
+    expect(ok.status).toBe("succeeded")
+    if (ok.status === "succeeded") {
+      expect(ok.data.usage.sessionIDs).toEqual([SID])
+      expect(ok.data.usage.models).toHaveLength(1)
+    }
   })
 })

@@ -29,6 +29,18 @@ import {
 } from "./serve-private-provider-http-execute"
 import type { PrivateChildrenWireOutcome, ServePrivateChildrenRequest } from "./serve-private-children"
 import {
+  makeSessionModelUsageAmbiguous,
+  normalizePrivateSessionModelUsageWire,
+  SessionModelUsageValidationError,
+  validateSessionModelUsageContractRequest,
+  validateSessionModelUsageResult,
+} from "./serve-private-session-model-usage-contract"
+import type {
+  SessionModelUsageContractRequest,
+  SessionModelUsageResult,
+  SessionModelUsageWireOutcome,
+} from "./serve-private-session-model-usage-contract"
+import {
   makeRemoteStatusCancel,
   PrivateRemoteStatusValidationError,
   requestRemoteStatusOutcome,
@@ -190,6 +202,25 @@ export type {
   ServePrivateChildrenRequest,
   ServePrivateChildrenResult,
 } from "./serve-private-children"
+export {
+  canonicalSessionModelUsageOpId,
+  checkSessionModelUsageScope,
+  isSessionModelUsageValidationError,
+  makeSessionModelUsageAmbiguous,
+  normalizePrivateSessionModelUsageWire,
+  parseSessionModelUsageOpId,
+  SessionModelUsageValidationError,
+  validateSessionModelUsageContractRequest,
+  validateSessionModelUsageFailure,
+  validateSessionModelUsagePayload,
+  validateSessionModelUsageResult,
+} from "./serve-private-session-model-usage-contract"
+export type {
+  SessionModelUsageContractRequest,
+  SessionModelUsagePayload,
+  SessionModelUsageResult,
+  SessionModelUsageWireOutcome,
+} from "./serve-private-session-model-usage-contract"
 export {
   canonicalRemoteStatusOpId,
   compareRemoteStatusParity,
@@ -3487,6 +3518,108 @@ export class ServePrivatePeer {
       return normalizePrivateMessagesWire(raw, req)
     })()
     const cancel = this.makeMessagesHandleCancel(id as unknown as number, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedSessionModelUsage(
+    req: SessionModelUsageContractRequest,
+    code: string,
+    msg: string,
+  ): SessionModelUsageResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/model-usage",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  async privateSessionModelUsage(req: SessionModelUsageContractRequest): Promise<SessionModelUsageResult> {
+    const handle = this.privateSessionModelUsageWithHandle(req)
+    return handle.promise
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid results; invalid wire rejects
+   * with SessionModelUsageValidationError and never resolves as a normal result.
+   */
+  privateSessionModelUsageWithHandle(req: SessionModelUsageContractRequest): {
+    id: number
+    promise: Promise<SessionModelUsageResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSessionModelUsageContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/model-usage")) {
+      throw new Error("Private peer missing session/model-usage capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/model-usage", req)
+    const promise = (async (): Promise<SessionModelUsageResult> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return makeSessionModelUsageAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedSessionModelUsage(req, code, msg)
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeSessionModelUsageAmbiguous(req, true)
+      const out: SessionModelUsageWireOutcome = normalizePrivateSessionModelUsageWire(raw, req)
+      if (out.kind === "invalid") throw new SessionModelUsageValidationError(out.detail)
+      return out.result
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the read-only session-model-usage private-first read.
+   * Resolves the discriminated wire outcome so invalid wire is an explicit
+   * `{ kind: "invalid" }` value consumed before any SDK fallback, never a
+   * normal result. Transport/closed/epoch semantics match the public handle.
+   */
+  privateSessionModelUsageOutcomeWithHandle(req: SessionModelUsageContractRequest): {
+    id: number
+    promise: Promise<SessionModelUsageWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSessionModelUsageContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/model-usage")) {
+      throw new Error("Private peer missing session/model-usage capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/model-usage", req)
+    const promise = (async (): Promise<SessionModelUsageWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeSessionModelUsageAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedSessionModelUsage(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeSessionModelUsageAmbiguous(req, true) }
+      return normalizePrivateSessionModelUsageWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }
   }
 

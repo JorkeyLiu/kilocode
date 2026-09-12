@@ -1,41 +1,34 @@
-// Gate B deferred `sessionModelUsage` read-only candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no runtime observation, no durable state, no enable/disable, no event stream,
-// and no production parity claim.
-// `op:"session/model-usage"` below is a contract-evidence label only; it is
-// never registered as a private capability and never sent over any peer.
-// Production `sessionModelUsage` stays SDK-only
-// (`GET /session/:sessionID/model-usage` via `@kilocode/sdk`
-// `client.kilocode.sessionModelUsage`).
+// Private-first `session/model-usage` read-only contract (production).
+// Request is strictly `{v:1,requestId,opId,op:"session/model-usage",
+// idempotencyKey,context:{directory,sessionId},payload:{}}` with
+// `opId === session-model-usage:<sessionId>:<token>` (token non-empty,
+// no colon) and `idempotencyKey === opId`. Success data is
+// `{usage: ModelUsage.Info}` (`sessionIDs`, `totals`, `models`) preserving
+// the exact HTTP shape/order from `ModelUsage.get` (SQL
+// `ORDER BY cost DESC, providerID, modelID`).
 //
-// Source facts (read-only evidence, not imported):
+// Source facts:
 // - Route: `GET /session/:sessionID/model-usage` with `WorkspaceRoutingQuery`
-//   (`directory?`, `workspace?`) in
-//   `packages/opencode/src/kilocode/server/httpapi/groups/kilocode.ts:197-208`
+//   in `packages/opencode/src/kilocode/server/httpapi/groups/kilocode.ts`
 //   (`identifier: "kilocode.sessionModelUsage"`, success `ModelUsage.Info`
 //   `{sessionIDs, totals, models}`, error `NotFound`).
-// - Handler: `packages/opencode/src/kilocode/server/httpapi/handlers/kilocode.ts:158-164`
+// - Handler: `packages/opencode/src/kilocode/server/httpapi/handlers/kilocode.ts`
 //   `sessionModelUsage` returns `ModelUsage.get(sessionID)` and maps missing
-//   usage to `NotFound`.
-// - Model: `packages/opencode/src/kilocode/session/model-usage.ts:10-40,115-186`
+//   usage to `NotFound`. The FD handler invokes the same `ModelUsage.get`.
+// - Model: `packages/opencode/src/kilocode/session/model-usage.ts`
 //   `Tokens {input,output,reasoning,cache:{read,write}}` (all NonNegativeInt),
 //   `Usage {steps,cost,tokens}`, `Model {providerID,modelID,...Usage}`,
 //   `Info {sessionIDs: SessionID[], totals: Usage, models: Model[]}`.
-// - SDK: `client.kilocode.sessionModelUsage({sessionID, directory})` is the
-//   sole authority.
-// - Consumer: `packages/kilo-vscode/src/KiloProvider.ts:2782-2794`
-//   `fetchAndSendSessionModelUsage` calls the SDK with `{sessionID, directory}`
-//   and posts `sessionModelUsageLoaded` (reads only `response.data.sessionIDs`
-//   plus the opaque `response.data`).
+// - Consumer: `KiloProvider.fetchAndSendSessionModelUsage` is private-first:
+//   accepted success posts `sessionModelUsageLoaded` with zero SDK; validated
+//   terminal failure posts the empty payload with zero SDK; fallback-eligible
+//   outcomes take exactly one SDK `client.kilocode.sessionModelUsage` call.
 //
-// ROUTING-ONLY vs PAYLOAD SEMANTICS (explicit, honest v1):
-// - `context.directory`/`context.sessionId` are ROUTING-ONLY labels. Scope
-//   checks guard request-routing identity only; a scope match says nothing
-//   about payload ownership, freshness, or completeness.
+// ROUTING vs PAYLOAD SEMANTICS (v1):
+// - `context.directory`/`context.sessionId` bind request routing and scope.
+//   A scope match says nothing about payload freshness or completeness.
 // - Payload `sessionIDs`/`totals`/`models` are validated shape-only. No
-//   freshness, ordering, cost-completeness, or cross-directory claim is made.
-// - `models` ordering (production SQL `ORDER BY cost DESC, providerID,
-//   modelID`) is explicitly UNRESOLVED here: parity never compares order.
+//   freshness, cost-completeness, or cross-directory claim is made.
 // - Out of scope: prompt submission, lifecycle mutations, abort/cancelQueued,
 //   event-stream/SSE parity, transport behavior, and any other operation.
 
@@ -496,76 +489,4 @@ export function validateSessionModelUsageResult(
   if (rec.failure !== undefined) throw new Error("ambiguous must not have failure")
   if (outRec.failure !== undefined) throw new Error("ambiguous outcome must not have failure")
   return raw as unknown as SessionModelUsageResult
-}
-
-// Detached parity only (contract evidence, never production parity):
-// compares ONLY the shared `sessionIDs`/`totals`/`models` projection for the
-// same request. Order is never compared (`orderIgnored: true`); `sessionIDs`
-// and `models` length/membership gaps are reported as
-// `session-model-usage-membership-unknown`, never as a match. The request
-// directory is never compared; only observed payload values are.
-// eslint-disable-next-line complexity
-export function compareSessionModelUsageParity(
-  priv: SessionModelUsageResult,
-  sdk: { data?: unknown; error?: unknown; response?: unknown },
-): { divergence: string | null; details: Record<string, unknown> } {
-  const base = { orderIgnored: true }
-  const privStatus: string = priv.status
-  if (!!(priv as Record<string, unknown>).transportUnknown) {
-    return { divergence: "transport-unknown", details: { privStatus, transportUnknown: true, ...base } }
-  }
-  const sdkError = sdk.error !== undefined && sdk.error !== null
-  const sdkStatus: string = sdkError ? "failed" : "succeeded"
-  if (sdkStatus !== privStatus) {
-    return {
-      divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`,
-      details: { sdkStatus, privStatus, ...base },
-    }
-  }
-  if (sdkStatus === "succeeded" && privStatus === "succeeded") {
-    const sdkPayload = (sdk.data ?? {}) as Record<string, unknown>
-    const pdata = (priv as Extract<SessionModelUsageResult, { status: "succeeded" }>).data as Record<string, unknown>
-    const privPayload = (pdata.usage ?? {}) as Record<string, unknown>
-    try {
-      validateSessionModelUsagePayload(sdkPayload)
-    } catch {
-      return { divergence: "session-model-usage-shape-mismatch", details: { ...base, mismatch: true } }
-    }
-    const sdkIds = [...((sdkPayload.sessionIDs ?? []) as string[])].sort()
-    const privIds = [...((privPayload.sessionIDs ?? []) as string[])].sort()
-    if (sdkIds.length !== privIds.length || sdkIds.some((id, i) => id !== (privIds[i] as string))) {
-      return { divergence: "session-model-usage-membership-unknown", details: { ...base, mismatch: true } }
-    }
-    if (JSON.stringify(sdkPayload.totals) !== JSON.stringify(privPayload.totals)) {
-      return {
-        divergence: "session-model-usage-totals-mismatch",
-        details: { ...base, mismatch: true, field: "totals" },
-      }
-    }
-    const key = (m: Record<string, unknown>) => `${String(m.providerID)}::${String(m.modelID)}`
-    const sdkModels = ((sdkPayload.models ?? []) as Record<string, unknown>[]).map((m) => ({
-      k: key(m),
-      v: JSON.stringify(m),
-    }))
-    const privModels = ((privPayload.models ?? []) as Record<string, unknown>[]).map((m) => ({
-      k: key(m),
-      v: JSON.stringify(m),
-    }))
-    const sdkKeys = sdkModels.map((m) => m.k).sort()
-    const privKeys = privModels.map((m) => m.k).sort()
-    if (sdkKeys.length !== privKeys.length || sdkKeys.some((k, i) => k !== privKeys[i])) {
-      return { divergence: "session-model-usage-membership-unknown", details: { ...base, mismatch: true } }
-    }
-    const privByKey = new Map(privModels.map((m) => [m.k, m.v] as const))
-    for (const m of sdkModels) {
-      if (privByKey.get(m.k) !== m.v) {
-        return {
-          divergence: "session-model-usage-model-mismatch",
-          details: { ...base, mismatch: true, field: "models" },
-        }
-      }
-    }
-    return { divergence: null, details: { ...base } }
-  }
-  return { divergence: null, details: { ...base } }
 }

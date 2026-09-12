@@ -26,6 +26,7 @@ import {
   validateQuestionReplyRequest,
 } from "@/kilocode/question/question-private"
 import { SessionStatus } from "@/session/status"
+import { ModelUsage } from "@/kilocode/session/model-usage"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionID } from "@/session/schema"
@@ -406,6 +407,8 @@ export const FD_PROJECT_CURRENT_VERSION = 1 as const
 export const FD_PROJECT_CURRENT_OP = "project/current" as const
 export const FD_FIND_FILES_VERSION = 1 as const
 export const FD_FIND_FILES_OP = "find/files" as const
+export const FD_MODEL_USAGE_VERSION = 1 as const
+export const FD_MODEL_USAGE_OP = "session/model-usage" as const
 export const FD_PROMPT_VERSION = 1 as const
 export const FD_PROMPT_OP = "session/prompt" as const
 export const FD_COMMAND_VERSION = 1 as const
@@ -478,6 +481,19 @@ export interface FdFindFilesRequest {
     type: "file" | "directory"
     limit?: number
   }
+}
+
+export interface FdModelUsageRequest {
+  v: typeof FD_MODEL_USAGE_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_MODEL_USAGE_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    sessionId: string
+  }
+  payload: Record<string, never>
 }
 
 export interface FdSessionListRequest {
@@ -1395,6 +1411,27 @@ function findFilesFailed(
   }
 }
 
+function modelUsageFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_MODEL_USAGE_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_MODEL_USAGE_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 function fallbackFindFilesIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
   const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
   return {
@@ -1424,6 +1461,11 @@ const FIND_FILES_FENCE_MESSAGE = "Instance is unavailable during config rebuild;
 const FIND_FILES_INTERNAL_MESSAGE = "internal error"
 const FIND_FILES_VALIDATION_MESSAGE = "invalid find-files request"
 const FIND_FILES_SCOPE_MESSAGE = "directory mismatch"
+const MODEL_USAGE_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const MODEL_USAGE_INTERNAL_MESSAGE = "internal error"
+const MODEL_USAGE_VALIDATION_MESSAGE = "invalid session-model-usage request"
+const MODEL_USAGE_SCOPE_MESSAGE = "directory mismatch"
+const MODEL_USAGE_NOT_FOUND_MESSAGE = "session not found"
 
 const FIND_FILES_SENSITIVE_SEGMENTS = new Set([".ssh", ".aws", "secret", "secrets"])
 const FIND_FILES_SENSITIVE_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "cer", "crt", "der", "jks"])
@@ -1508,6 +1550,39 @@ function validateFindFilesRequest(raw: unknown): FdFindFilesRequest {
   if (token.includes(":") || containsPathMaterial(token))
     throw new Error("opId must be find-files:<token> with nonempty colon-free token")
   return raw as unknown as FdFindFilesRequest
+}
+
+function validateModelUsageRequest(raw: unknown): FdModelUsageRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_MODEL_USAGE_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_MODEL_USAGE_OP) throw new Error("op must be session/model-usage")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for session-model-usage")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "sessionId"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (typeof ctx.sessionId !== "string" || !Schema.is(SessionID)(ctx.sessionId))
+    throw new Error("context.sessionId must be SessionID")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for session-model-usage")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const sid = ctx.sessionId as string
+  const prefix = `session-model-usage:${sid}:`
+  if (!opId.startsWith(prefix))
+    throw new Error("opId must be session-model-usage:<sessionId>:<token> with nonempty colon-free token")
+  const token = opId.slice(prefix.length)
+  if (token.length === 0 || token.includes(":"))
+    throw new Error("opId must be session-model-usage:<sessionId>:<token> with nonempty colon-free token")
+  return raw as unknown as FdModelUsageRequest
 }
 
 export function createFdCarrier(
@@ -3078,6 +3153,107 @@ export function createFdCarrier(
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "session/model-usage") {
+        // Read-only session model usage: same-directory ModelUsage.Info via
+        // the existing drain-control + InstanceRef lane (same lane as
+        // session/get — no new lifecycle lane, fence, or convergence).
+        // Invokes the same ModelUsage.get used by HTTP and preserves its
+        // exact response shape/order. No durable operation row, no mutation.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdModelUsageRequest
+            try {
+              req = validateModelUsageRequest(params)
+            } catch {
+              return modelUsageFailed(fallbackIds(params), "validation.failed", MODEL_USAGE_VALIDATION_MESSAGE, false)
+            }
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return modelUsageFailed(req, "validation.failed", MODEL_USAGE_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? MODEL_USAGE_FENCE_MESSAGE : MODEL_USAGE_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: modelUsageFailed(req, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* Session.Service
+              const sid = SessionID.make(req.context.sessionId)
+              const found = yield* svc.get(sid).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch((err: unknown) => {
+                  const missing = err instanceof NotFoundError || (err as { _tag?: string })?._tag === "NotFoundError"
+                  const code = missing ? "session.not_found" : "internal"
+                  const message = missing ? MODEL_USAGE_NOT_FOUND_MESSAGE : MODEL_USAGE_INTERNAL_MESSAGE
+                  return Effect.succeed({ tag: "fail" as const, code, message })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const, code: "internal", message: MODEL_USAGE_INTERNAL_MESSAGE })
+                }),
+              )
+              if (found.tag !== "ok") return modelUsageFailed(req, found.code, found.message, false)
+              let stored: string
+              try {
+                stored = canonicalDirectory(found.value.directory)
+              } catch {
+                return modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir) return modelUsageFailed(req, "scope_mismatch", MODEL_USAGE_SCOPE_MESSAGE, false)
+              const usage = yield* ModelUsage.get(sid).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (usage.tag !== "ok") return modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false)
+              if (!usage.value) return modelUsageFailed(req, "session.not_found", MODEL_USAGE_NOT_FOUND_MESSAGE, false)
+              if (!Schema.is(ModelUsage.Info)(usage.value))
+                return modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false)
+              return {
+                v: FD_MODEL_USAGE_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_MODEL_USAGE_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { usage: usage.value },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(modelUsageFailed(req, "internal", MODEL_USAGE_INTERNAL_MESSAGE, false))
               }),
             )
           }),
