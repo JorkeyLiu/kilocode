@@ -2155,7 +2155,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             dir: (id) => this.getWorkspaceDirectory(id),
             open: (dir) => this.getOpenTabPaths(dir),
             post: (msg) => this.postMessage(msg),
-            parity: this.connectionService,
+            connection: this.connectionService as never,
           })
           break
         case "requestFilePicker":

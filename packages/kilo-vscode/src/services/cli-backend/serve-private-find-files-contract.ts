@@ -1,13 +1,9 @@
-// Gate B deferred `find/files` candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no carrier, no peer lifecycle, no consumer cutover, no runtime observation,
-// no durable state, and no production parity claim.
-// `op:"find/files"` below is a contract-evidence label only; it is never
-// registered as a private capability and never sent over any peer. Production
-// search stays SDK-only (`GET /find/file` via `@kilocode/sdk`
-// `client.find.files`). `find/files` remains deferred — Gate B blocking;
-// Gate B open, G3 Active, Gates C-D unchanged/open. This module claims no
-// runtime parity, no production composition, and no Gate B progress.
+// `find/files` bounded-search private carrier contract (Active,
+// private-first `handleFileSearch` only). Strict v1 envelope helpers plus the
+// locked safe `{path,type}` projection. The safe list is consumed
+// private-first via `kilo-provider/find-files-privatefirst.ts` with exactly
+// one same-tuple SDK fallback per logical type; the SDK string array stays
+// the fallback user-visible surface only.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /find/file` with `FindFileQuery`

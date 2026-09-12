@@ -3,7 +3,12 @@ import * as vscode from "vscode"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { mergeFileSearchResults } from "./file-search-results"
 import { mergeFileSearchItems } from "./file-search-items"
-import { observeFindFilesParityFromSdkPromises, type FindFilesParityConnection } from "./find-files-parity"
+import {
+  fetchFindFilesTypePrivateFirst,
+  FIND_FILES_PRIVATE_LIMIT,
+  type FindFilesPrivateConnection,
+  type FindFilesTypePrivateFirstOutcome,
+} from "./find-files-privatefirst"
 
 type Message = {
   query: string
@@ -19,11 +24,17 @@ type Input = {
   dir: (id?: string) => string
   open: (dir: string) => Promise<Set<string>>
   post: (message: unknown) => void
-  parity?: FindFilesParityConnection | null
+  connection?: FindFilesPrivateConnection | null
   workspace?: string
-  parityTimeoutMs?: number
+  timeoutMs?: number
 }
 
+// Private-first `find/files` production consumer: each logical query
+// (`type:file` and `type:directory`, limit 50) runs one private attempt
+// first via the shared helper, falling back to exactly one same-tuple SDK
+// `client.find.files` only on fallback-eligible private outcomes. Valid
+// private success (including empty) and validated terminal close with zero
+// SDK. Merge/dedup/order and fail-soft post behavior are unchanged.
 export async function handleFileSearch(input: Input): Promise<void> {
   const client = input.client
   if (!client) {
@@ -36,38 +47,47 @@ export async function handleFileSearch(input: Input): Promise<void> {
   const open = dir ? await input.open(dir) : new Set<string>()
 
   const query = input.message.query
-  const fileReq = client.find.files({ query, directory: dir, type: "file", limit: 50 }, { throwOnError: true })
-  const folderReq = client.find.files({ query, directory: dir, type: "directory", limit: 50 }, { throwOnError: true })
-  if (input.parity) {
-    observeFindFilesParityFromSdkPromises(
-      input.parity,
-      fileReq,
-      folderReq,
-      dir,
+  const limit = FIND_FILES_PRIVATE_LIMIT
+  const [fileOut, folderOut] = await Promise.all([
+    fetchFindFilesTypePrivateFirst({
+      connection: input.connection ?? null,
+      client: client as never,
+      directory: dir,
       query,
-      input.workspace,
-      input.parityTimeoutMs,
-    )
-  }
-  void Promise.allSettled([fileReq, folderReq]).then(([fileRes, folderRes]) => {
-    const files = settled(fileRes, "file")
-    const folders = settled(folderRes, "folder")
-    const uri = vscode.window.activeTextEditor?.document.uri
-    const rel = uri?.scheme === "file" && dir ? path.relative(dir, uri.fsPath) : undefined
-    const active = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.replaceAll("\\", "/") : undefined
-    const result = mergeFileSearchResults({ query, backend: files, open, active })
-    const items = mergeFileSearchItems({
+      type: "file",
+      limit,
+      workspace: input.workspace,
+      timeoutMs: input.timeoutMs,
+    }),
+    fetchFindFilesTypePrivateFirst({
+      connection: input.connection ?? null,
+      client: client as never,
+      directory: dir,
       query,
-      files: result,
-      folders,
-      open: new Set(active ? [active, ...open] : open),
-    })
-    input.post({ type: "fileSearchResult", paths: result, items, dir, requestId: input.message.requestId })
+      type: "directory",
+      limit,
+      workspace: input.workspace,
+      timeoutMs: input.timeoutMs,
+    }),
+  ])
+  const files = settled(fileOut, "file")
+  const folders = settled(folderOut, "folder")
+  const uri = vscode.window.activeTextEditor?.document.uri
+  const rel = uri?.scheme === "file" && dir ? path.relative(dir, uri.fsPath) : undefined
+  const active = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.replaceAll("\\", "/") : undefined
+  const result = mergeFileSearchResults({ query, backend: files, open, active })
+  const items = mergeFileSearchItems({
+    query,
+    files: result,
+    folders,
+    open: new Set(active ? [active, ...open] : open),
   })
+  input.post({ type: "fileSearchResult", paths: result, items, dir, requestId: input.message.requestId })
 }
 
-function settled(result: PromiseSettledResult<{ data: string[] }>, kind: "file" | "folder"): string[] {
-  if (result.status === "fulfilled") return result.value.data
-  console.error(`[Kilo New] File search (${kind}) failed:`, result.reason)
+function settled(out: FindFilesTypePrivateFirstOutcome, kind: "file" | "folder"): string[] {
+  if (out.kind === "ok") return out.files
+  if (out.kind === "terminal") return []
+  console.error(`[Kilo New] File search (${kind}) failed:`, { failed: true })
   return []
 }

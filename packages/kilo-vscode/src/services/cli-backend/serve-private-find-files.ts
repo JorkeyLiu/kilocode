@@ -1,19 +1,7 @@
-import * as crypto from "crypto"
-import { normalize } from "path"
-import { resolve } from "path"
-import {
-  FIND_FILES_FAILED_CODE,
-  FIND_FILES_FAILED_MESSAGE,
-  makeFindFilesAmbiguous,
-  normalizePrivateFindFilesWire,
-} from "./serve-private-find-files-contract"
-import type {
-  FindFilesContractRequest,
-  FindFilesResult,
-  FindFilesWireOutcome,
-} from "./serve-private-find-files-contract"
+import { makeFindFilesAmbiguous, normalizePrivateFindFilesWire } from "./serve-private-find-files-contract"
+import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-private-find-files-contract"
 
-// `find/files` read-only parity mechanics (detached, warn-only).
+// `find/files` read-only private-first mechanics (bounded search).
 // Success data is `{files: [{path, type}]}` with relative POSIX-normalized
 // paths and explicit `file|directory` type; absolute paths, URIs, sensitive
 // names, contents, and raw filesystem metadata never cross the boundary.
@@ -26,29 +14,15 @@ import type {
 // until source completion. No AbortSignal/source-cancellation plumbing is
 // added here.
 
-export const FIND_FILES_TRANSPORT_FAILURE_MESSAGE = FIND_FILES_FAILED_MESSAGE
-
-export function failedFindFilesResult(req: FindFilesContractRequest): FindFilesResult {
-  const failure = { code: FIND_FILES_FAILED_CODE, message: FIND_FILES_FAILED_MESSAGE, retryable: false }
-  return {
-    v: 1,
-    requestId: req.requestId,
-    opId: req.opId,
-    op: "find/files",
-    idempotencyKey: req.idempotencyKey,
-    status: "failed",
-    outcome: { type: "failed", time: Date.now(), failure },
-    accepted: false,
-    failure,
-  }
-}
-
 /** Minimal raw transport surface a peer owner needs for the find/files outcome handle. */
 export interface FindFilesRawTransport {
   requestWithId(method: string, params: unknown): { id: number; promise: Promise<unknown> }
 }
 
-/** Epoch/closure semantics the peer owner supplies; diagnostics stay fixed-shape. */
+/** Epoch/closure semantics the peer owner supplies; diagnostics stay fixed-shape.
+ * `isClosed`/`failInfo` stay for caller compatibility; every inner rejection
+ * maps uniformly to ambiguous so closed and non-closed are both
+ * fallback-eligible. */
 interface FindFilesRequestHost {
   isStale(): boolean
   isClosed(err: unknown): boolean
@@ -56,12 +30,15 @@ interface FindFilesRequestHost {
 }
 
 /**
- * Peer-side normalized outcome handle core for the read-only find/files
- * parity observer. The caller validates the request and checks availability
- * and capability first. Transport/closed maps to ambiguous transportUnknown,
- * thrown errors map to failed results with a fixed message, and malformed
- * wire resolves as `{ kind: "invalid" }` before any comparator. No retries,
- * no replays.
+ * Peer-side normalized outcome handle core for the private-first find/files
+ * read. The caller validates the request and checks availability
+ * and capability first. A non-closed inner rawPromise rejection carries no
+ * trustworthy wire result, so it maps to fallback-eligible ambiguous
+ * transportUnknown (same as closed) rather than validated non-retryable
+ * `find.failed`; genuine validated server `failed retryable:false` still
+ * flows through `normalizePrivateFindFilesWire` as terminal. Thrown errors
+ * never echo query/paths; malformed wire resolves as `{ kind: "invalid" }`
+ * before any consumer. No retries, no replays.
  */
 export function requestFindFilesOutcome(
   raw: FindFilesRawTransport,
@@ -74,11 +51,8 @@ export function requestFindFilesOutcome(
     let wire: unknown
     try {
       wire = await rawPromise
-    } catch (e: unknown) {
-      if (host.isClosed(e)) return { kind: "valid", result: makeFindFilesAmbiguous(req, true) }
-      void host.failInfo
-      void e
-      return { kind: "valid", result: failedFindFilesResult(req) }
+    } catch {
+      return { kind: "valid", result: makeFindFilesAmbiguous(req, true) }
     }
     if (host.isStale()) return { kind: "valid", result: makeFindFilesAmbiguous(req, true) }
     return normalizePrivateFindFilesWire(wire, req)
@@ -162,7 +136,7 @@ export function wrapFindFilesOutcomeForOwner(
 }
 
 /**
- * Exact-id timeout cancel ownership for a find/files observer handle.
+ * Exact-id timeout cancel ownership for a find/files private-first handle.
  * Only fixed categories reach diagnostics: the constant op plus booleans.
  * Stale handles clean only their captured peer; current-epoch miss/throw
  * reports through `invalidate` so the owner can fail-closed. Never echoes
@@ -221,7 +195,7 @@ export function makeFindFilesCancel(
 }
 
 /**
- * Shared observer-timeout branch classification for the peer invalidation
+ * Shared private-first timeout branch classification for the peer invalidation
  * switch. Covers the `find/files` safe reasons so the peer method stays
  * within the complexity budget. Returns the redacted op label or null.
  */
@@ -234,106 +208,4 @@ export function findFilesObserverTimeoutBranch(reason: string): { op: string } |
   )
     return { op: "find/files" }
   return null
-}
-
-/**
- * Keyed deferred find/files observers: at most one deferred private
- * find/files observation per backend epoch + canonical directory +
- * workspace identity + exact query (query/type/limit). Every component is
- * opaque and domain-separated (`e-`/`d-`/`w-`/`q-`/`t-`/`l-` SHA-256 digests
- * with `find-files/epoch`, `find-files/dir`, `find-files/workspace`,
- * `find-files/query`, `find-files/type`, `find-files/limit` domains):
- * serialized keys never carry raw directory/workspace/query material and
- * `:` inside a raw value cannot collide across tuples. Exact
- * `dir`/`workspace`/`query` closure values stay with the caller for request
- * construction; only the digest key is stored here. Owner-managed: wrappers
- * live in the owner's one-shot listener set; this store only provides the
- * dedupe key. No timers, no polling, no detached work, no new peer
- * lifecycle.
- */
-export class DeferredFindFiles {
-  private readonly keys = new Map<string, () => void>()
-  constructor(private readonly listeners: Set<() => void>) {}
-
-  key(
-    epoch: number | null,
-    dir: string,
-    workspace: string | undefined,
-    query: string,
-    type: string,
-    limit: number | undefined,
-  ): string {
-    let canonical = dir
-    try {
-      canonical = normalize(resolve(dir))
-    } catch {
-      canonical = dir
-    }
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`find-files/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const dirPart = `d-${crypto.createHash("sha256").update(`find-files/dir\x00${canonical}`, "utf8").digest("hex")}`
-    const wsPart =
-      workspace === undefined
-        ? "none"
-        : `w-${crypto.createHash("sha256").update(`find-files/workspace\x00${workspace}`, "utf8").digest("hex")}`
-    const qPart = `q-${crypto.createHash("sha256").update(`find-files/query\x00${query}`, "utf8").digest("hex")}`
-    const tPart = `t-${crypto.createHash("sha256").update(`find-files/type\x00${type}`, "utf8").digest("hex")}`
-    const lPart =
-      limit === undefined
-        ? "none"
-        : `l-${crypto.createHash("sha256").update(`find-files/limit\x00${limit}`, "utf8").digest("hex")}`
-    return `find-files:${epochPart}:${dirPart}:${wsPart}:${qPart}:${tPart}:${lPart}`
-  }
-
-  add(
-    epoch: number | null,
-    failedEpoch: number | null,
-    available: boolean,
-    dir: string,
-    workspace: string | undefined,
-    query: string,
-    type: string,
-    limit: number | undefined,
-    listener: () => void,
-  ): () => void {
-    if (epoch === null) return () => {}
-    if (failedEpoch !== null && epoch === failedEpoch) return () => {}
-    if (available) return () => {}
-    const key = this.key(epoch, dir, workspace, query, type, limit)
-    if (this.keys.has(key)) return () => {}
-    let wrapper: () => void = () => {
-      this.remove(key, wrapper)
-      listener()
-    }
-    this.keys.set(key, wrapper)
-    this.listeners.add(wrapper)
-    return () => {
-      this.remove(key, wrapper)
-    }
-  }
-
-  clearForEpoch(epoch: number | null): void {
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`find-files/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const prefix = `find-files:${epochPart}:`
-    for (const [key, wrapper] of [...this.keys]) {
-      if (!key.startsWith(prefix)) continue
-      this.keys.delete(key)
-      this.listeners.delete(wrapper)
-    }
-  }
-
-  clearAll(): void {
-    for (const [, wrapper] of [...this.keys]) this.listeners.delete(wrapper)
-    this.keys.clear()
-  }
-
-  private remove(key: string, wrapper: () => void): void {
-    if (this.keys.get(key) === wrapper) this.keys.delete(key)
-    this.listeners.delete(wrapper)
-  }
 }

@@ -4455,7 +4455,7 @@ export class ServePrivatePeer {
     return outcome.result
   }
 
-  /** Normalized outcome handle for the read-only find/files parity observer. */
+  /** Normalized outcome handle for the private-first `find/files` bounded-search read. */
   privateFindFilesOutcomeWithHandle(req: FindFilesContractRequest): {
     id: number
     promise: Promise<FindFilesWireOutcome>

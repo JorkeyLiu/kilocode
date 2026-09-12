@@ -66,7 +66,7 @@ import { wrapConfigWarningsOutcomeForOwner } from "./serve-private-config-warnin
 import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
 import { wrapProjectCurrentOutcomeForOwner } from "./serve-private-project-current"
 import type { ProjectCurrentContractRequest, ProjectCurrentWireOutcome } from "./serve-private-project-current-contract"
-import { DeferredFindFiles, wrapFindFilesOutcomeForOwner } from "./serve-private-find-files"
+import { wrapFindFilesOutcomeForOwner } from "./serve-private-find-files"
 import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-private-find-files-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
@@ -217,7 +217,6 @@ export class KiloConnectionService {
   private readonly deferredMessagesObservers: Map<string, () => void> = new Map()
   private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
   private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
-  private readonly deferredFindFiles: DeferredFindFiles = new DeferredFindFiles(this.privateAvailableListeners)
   private readonly deferredSessionList: DeferredSessionList = new DeferredSessionList(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
@@ -785,7 +784,6 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
-    this.deferredFindFiles.clearAll()
     this.deferredSessionList.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
@@ -832,7 +830,6 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
-    this.deferredFindFiles.clearAll()
     this.deferredSessionList.clearAll()
     const sse = this.sseClient
     this.sseClient = null
@@ -1102,7 +1099,6 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
-    this.deferredFindFiles.clearAll()
     this.deferredSessionList.clearAll()
   }
 
@@ -1258,29 +1254,6 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
-  /** One-shot deferred find/files observation; dedupe/lifecycle live in DeferredFindFiles. */
-  addDeferredFindFilesObserver(
-    dir: string,
-    workspace: string | undefined,
-    query: string,
-    type: string,
-    limit: number | undefined,
-    listener: () => void,
-  ): () => void {
-    const store = this.deferredFindFiles
-    return store.add(
-      this.privateEpoch,
-      this.privateFailedGetEpoch,
-      this.isPrivateAvailable(),
-      dir,
-      workspace,
-      query,
-      type,
-      limit,
-      listener,
-    )
-  }
-
   /** One-shot deferred session-list observation; dedupe/lifecycle live in DeferredSessionList. */
   addDeferredSessionListObserver(
     dir: string,
@@ -1370,7 +1343,6 @@ export class KiloConnectionService {
       this.clearDeferredMessagesObserversForEpoch(staleEpoch)
       this.deferredChildren.clearForEpoch(staleEpoch)
       this.deferredRemoteStatus.clearForEpoch(staleEpoch)
-      this.deferredFindFiles.clearForEpoch(staleEpoch)
       this.deferredSessionList.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
@@ -1394,7 +1366,6 @@ export class KiloConnectionService {
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
-    this.deferredFindFiles.clearForEpoch(epochAtStart)
     this.deferredSessionList.clearForEpoch(epochAtStart)
     return true
   }
@@ -1436,7 +1407,6 @@ export class KiloConnectionService {
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
-    this.deferredFindFiles.clearForEpoch(epochAtStart)
     this.deferredSessionList.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
@@ -1481,7 +1451,6 @@ export class KiloConnectionService {
       this.clearDeferredMessagesObserversForEpoch(server.epoch)
       this.deferredChildren.clearForEpoch(server.epoch)
       this.deferredRemoteStatus.clearForEpoch(server.epoch)
-      this.deferredFindFiles.clearForEpoch(server.epoch)
       this.deferredSessionList.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
@@ -2809,7 +2778,7 @@ export class KiloConnectionService {
     )
   }
 
-  /** Epoch-aware pass-through for the read-only find/files parity observer. */
+  /** Epoch-aware pass-through for the private-first `find/files` bounded-search read. */
   privateFindFilesOutcomeWithHandle(req: FindFilesContractRequest): {
     id: number
     promise: Promise<FindFilesWireOutcome>

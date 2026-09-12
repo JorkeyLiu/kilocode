@@ -10,11 +10,7 @@ import {
   normalizePrivateFindFilesWire,
   validateFindFilesContractRequest,
 } from "./serve-private-find-files-contract"
-import {
-  FIND_FILES_TRANSPORT_FAILURE_MESSAGE,
-  findFilesObserverTimeoutBranch,
-  requestFindFilesOutcome,
-} from "./serve-private-find-files"
+import { findFilesObserverTimeoutBranch, requestFindFilesOutcome } from "./serve-private-find-files"
 import { KiloConnectionService } from "./connection-service"
 
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
@@ -183,7 +179,7 @@ describe("find/files private peer", () => {
     expect(JSON.stringify(outcome.result).includes("hello")).toBeFalse()
   })
 
-  test("transport failure maps to redacted fixed failure without query echo", async () => {
+  test("non-closed transport rejection maps to fallback-eligible ambiguous without query echo", async () => {
     const req = makeReq()
     const rawErr = new Error("secret transport boom hello detail=hidden")
     const raw = { requestWithId: () => ({ id: 7, promise: Promise.reject(rawErr) }) }
@@ -195,13 +191,9 @@ describe("find/files private peer", () => {
     const handle = requestFindFilesOutcome(raw as never, host, () => () => true, req as never)
     const outcome = await handle.promise
     expect(outcome.kind).toBe("valid")
-    if (outcome.kind !== "valid") throw new Error("expected valid failure outcome")
-    expect(outcome.result.status).toBe("failed")
-    const failed = outcome.result as unknown as {
-      failure: { code: string; message: string; retryable: boolean }
-    }
-    expect(failed.failure.code).toBe(FIND_FILES_FAILED_CODE)
-    expect(failed.failure.message).toBe(FIND_FILES_TRANSPORT_FAILURE_MESSAGE)
+    if (outcome.kind !== "valid") throw new Error("expected valid ambiguous outcome")
+    expect(outcome.result.status).toBe("ambiguous")
+    expect((outcome.result as { transportUnknown?: boolean }).transportUnknown).toBeTrue()
     const leaked = JSON.stringify(outcome.result)
     expect(leaked.includes("secret transport boom")).toBeFalse()
     expect(leaked.includes("hello")).toBeFalse()
