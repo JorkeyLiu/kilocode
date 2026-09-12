@@ -7,6 +7,7 @@ import { SessionUpdateDispatchService, validatePrivateRequest } from "@/kilocode
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch"
+import { SessionRevertDispatchService } from "@/kilocode/session/session-revert-dispatch"
 import { SessionPromptDispatchService, validateRequest as validatePromptRequest } from "@/kilocode/session/session-prompt-dispatch"
 import {
   SessionCommandDispatchService,
@@ -1751,6 +1752,36 @@ export function createFdCarrier(
             return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
           }),
         )
+        return result
+      }
+      if (method === "session/revert") {
+        const result = (await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const svc = yield* SessionRevertDispatchService
+            return yield* (svc.dispatchRevert as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )) as Record<string, unknown>
+        if (result && (result as { status?: string }).status === "succeeded" && (result as { data?: unknown }).data) {
+          const data = (result as { data: unknown }).data
+          if (data && typeof data === "object" && !Array.isArray(data) && (data as Record<string, unknown>).session === undefined) {
+            return { ...(result as object), data: { session: data } }
+          }
+        }
+        return result
+      }
+      if (method === "session/unrevert") {
+        const result = (await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const svc = yield* SessionRevertDispatchService
+            return yield* (svc.dispatchUnrevert as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )) as Record<string, unknown>
+        if (result && (result as { status?: string }).status === "succeeded" && (result as { data?: unknown }).data) {
+          const data = (result as { data: unknown }).data
+          if (data && typeof data === "object" && !Array.isArray(data) && (data as Record<string, unknown>).session === undefined) {
+            return { ...(result as object), data: { session: data } }
+          }
+        }
         return result
       }
       if (method === "session/prompt" || method === FD_PROMPT_OP) {

@@ -48,5 +48,6 @@ export const migrations = (
     import("./migration/20260903000000_add_create_operation"),
     import("./migration/20260908000000_add_delete_tombstone"),
     import("./migration/20260911125620_add_snapshot_journal"),
+    import("./migration/20260912000000_add_revert_operation"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

@@ -61,6 +61,7 @@ import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
 import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
+import { revertSessionPrivateFirst, unrevertSessionPrivateFirst } from "./kilo-provider/session-revert"
 import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
 import { ensureCommandMessageId, sendCommandOnce } from "./kilo-provider/session-command"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
@@ -5078,13 +5079,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async handleRevertSession(sessionID: string, messageID: string, partID?: string): Promise<void> {
     if (!this.client) return
     const dir = this.getWorkspaceDirectory(sessionID)
-    const { data, error } = await this.client.session.revert({ sessionID, messageID, partID, directory: dir })
-    if (error) {
+    let data: Session
+    try {
+      data = await revertSessionPrivateFirst({ client: this.client, connection: this.connectionService, sessionId: sessionID, directory: dir, messageId: messageID, partId: partID })
+    } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to revert session:", error)
       this.postMessage({ type: "error", message: "Failed to revert session", sessionID })
       throw error
     }
-    if (!data) throw new Error("Revert returned no session")
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
     const detail = sdkSessionToDetail(data as Session)
     if (this.currentSession?.id === sessionID) this.setCurrentSession(detail)
@@ -5094,13 +5096,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async handleUnrevertSession(sessionID: string): Promise<void> {
     if (!this.client) return
     const dir = this.getWorkspaceDirectory(sessionID)
-    const { data, error } = await this.client.session.unrevert({ sessionID, directory: dir })
-    if (error) {
+    let data: Session
+    try {
+      data = await unrevertSessionPrivateFirst({ client: this.client, connection: this.connectionService, sessionId: sessionID, directory: dir })
+    } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to unrevert session:", error)
       this.postMessage({ type: "error", message: "Failed to redo session", sessionID })
       throw error
     }
-    if (!data) throw new Error("Redo returned no session")
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
     const detail = sdkSessionToDetail(data as Session)
     if (this.currentSession?.id === sessionID) this.setCurrentSession(detail)

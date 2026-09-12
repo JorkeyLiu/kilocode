@@ -12,7 +12,7 @@ import { SessionRevision } from "./revision"
 // ---------------------------------------------------------------------------
 // R12-compatible record shape (persist tier = full redacted record)
 // ---------------------------------------------------------------------------
-export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create", "delete"] as const
+export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create", "delete", "revert", "unrevert"] as const
 export type OpKind = (typeof OP_KINDS)[number]
 
 export const OUTCOMES = ["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"] as const
@@ -223,6 +223,22 @@ export function deleteId(sessionID: string, token: string): string {
   return `delete:${sessionID}:${token}`
 }
 
+export function revertId(sessionID: string, token: string): string {
+  if (typeof sessionID !== "string" || sessionID.length === 0) throw new TypeError("sessionID must be non-empty string")
+  assertNoColon(sessionID, "sessionID")
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  assertNoColon(token, "token")
+  return `revert:${sessionID}:${token}`
+}
+
+export function unrevertId(sessionID: string, token: string): string {
+  if (typeof sessionID !== "string" || sessionID.length === 0) throw new TypeError("sessionID must be non-empty string")
+  assertNoColon(sessionID, "sessionID")
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  assertNoColon(token, "token")
+  return `unrevert:${sessionID}:${token}`
+}
+
 export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   const segments = opId.split(":")
@@ -257,6 +273,12 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   } else if (kind === "delete") {
     if (rest.length !== 2) throw new TypeError(`delete opId must have 2 segments: ${opId}`)
     if (rest[1]!.length === 0) throw new TypeError(`delete token must be non-empty: ${opId}`)
+  } else if (kind === "revert") {
+    if (rest.length !== 2) throw new TypeError(`revert opId must have 2 segments: ${opId}`)
+    if (rest[1]!.length === 0) throw new TypeError(`revert token must be non-empty: ${opId}`)
+  } else if (kind === "unrevert") {
+    if (rest.length !== 2) throw new TypeError(`unrevert opId must have 2 segments: ${opId}`)
+    if (rest[1]!.length === 0) throw new TypeError(`unrevert token must be non-empty: ${opId}`)
   }
   return { kind: kind as OpKind, parts: rest }
 }
@@ -294,6 +316,40 @@ export function parseDeleteOpIdForSession(opId: string, sessionId: string): { ki
   if (parsed.parts[0] !== sessionId) throw new TypeError(`opId session binding mismatch: ${opId} vs ${sessionId}`)
   if (parsed.parts.length !== 2) throw new TypeError(`delete opId must have 2 segments: ${opId}`)
   return { kind: "delete", sessionId, token: parsed.parts[1]! }
+}
+
+export function parseRevertOpIdForSession(opId: string, sessionId: string): { kind: "revert"; sessionId: string; token: string } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  if (typeof sessionId !== "string" || sessionId.length === 0) throw new TypeError("sessionId must be non-empty string")
+  const prefix = `revert:${sessionId}:`
+  if (opId.startsWith(prefix)) {
+    const token = opId.slice(prefix.length)
+    if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+    if (token.includes(":")) throw new TypeError(`token must not contain ':'`)
+    return { kind: "revert", sessionId, token }
+  }
+  const parsed = parseOpId(opId)
+  if (parsed.kind !== "revert") throw new TypeError(`opId kind must be revert: ${opId}`)
+  if (parsed.parts[0] !== sessionId) throw new TypeError(`opId session binding mismatch: ${opId} vs ${sessionId}`)
+  if (parsed.parts.length !== 2) throw new TypeError(`revert opId must have 2 segments: ${opId}`)
+  return { kind: "revert", sessionId, token: parsed.parts[1]! }
+}
+
+export function parseUnrevertOpIdForSession(opId: string, sessionId: string): { kind: "unrevert"; sessionId: string; token: string } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  if (typeof sessionId !== "string" || sessionId.length === 0) throw new TypeError("sessionId must be non-empty string")
+  const prefix = `unrevert:${sessionId}:`
+  if (opId.startsWith(prefix)) {
+    const token = opId.slice(prefix.length)
+    if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+    if (token.includes(":")) throw new TypeError(`token must not contain ':'`)
+    return { kind: "unrevert", sessionId, token }
+  }
+  const parsed = parseOpId(opId)
+  if (parsed.kind !== "unrevert") throw new TypeError(`opId kind must be unrevert: ${opId}`)
+  if (parsed.parts[0] !== sessionId) throw new TypeError(`opId session binding mismatch: ${opId} vs ${sessionId}`)
+  if (parsed.parts.length !== 2) throw new TypeError(`unrevert opId must have 2 segments: ${opId}`)
+  return { kind: "unrevert", sessionId, token: parsed.parts[1]! }
 }
 
 function assertOpIdMatchesKind(opId: string, opKind: OpKind) {
@@ -1432,4 +1488,155 @@ export function insertSessionDeleteSucceededTx(
     if (!rowRaw) yield* Effect.die(new Error(`delete tombstone missing after insert ${normalized.opId}`))
     return rowToSessionDeleteRecord(rowRaw as typeof SessionDeleteTombstoneTable.$inferSelect)
   })
+}
+
+export interface SessionRevertMeta {
+  idempotencyHash: string
+  requestId: string
+  directory: string
+  parentSessionId?: string | null
+  configVersion?: number | null
+  sessionRevision?: number | null
+  messageId?: string | null
+  partId?: string | null
+}
+
+export interface SessionRevertRecord extends FailureRecord {
+  meta: SessionRevertMeta
+  resultSnapshot?: unknown
+  revision: number
+}
+
+function rowToSessionRevertRecord(row: typeof SessionOperationTable.$inferSelect, kind: "revert" | "unrevert"): SessionRevertRecord {
+  const base = rowToRecord(row)
+  let snapshot: unknown | undefined
+  const rawSnap = (row as unknown as Record<string, unknown>).result_snapshot as string | null | undefined
+  if (rawSnap !== null && rawSnap !== undefined) {
+    if (typeof rawSnap === "string") {
+      try {
+        snapshot = JSON.parse(rawSnap)
+      } catch {
+        snapshot = rawSnap
+      }
+    } else snapshot = rawSnap
+  }
+  return {
+    ...base,
+    revision: row.revision as number,
+    meta: {
+      idempotencyHash: row.idempotency_hash ?? "",
+      requestId: row.request_id ?? "",
+      directory: row.directory ?? "",
+      parentSessionId: row.parent_session_id ?? null,
+      configVersion: row.config_version ?? null,
+      sessionRevision: row.session_revision ?? null,
+      messageId: (row as unknown as { message_id?: string | null }).message_id ?? null,
+      partId: (row as unknown as { title?: string | null }).title ?? null,
+    },
+    ...(snapshot !== undefined ? { resultSnapshot: snapshot } : {}),
+  }
+}
+
+function getSessionCheckpointByHash(
+  db: Database.Interface["db"] | DbOrTx,
+  sessionID: SessionSchema.ID,
+  hash: string,
+  kind: "revert" | "unrevert",
+  tx: boolean,
+): Effect.Effect<SessionRevertRecord | undefined> {
+  return Effect.gen(function* () {
+    const q = tx
+      ? (db as DbOrTx).select().from(SessionOperationTable).where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash), eq(SessionOperationTable.op_kind, kind))).get()
+      : (db as Database.Interface["db"]).select().from(SessionOperationTable).where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash), eq(SessionOperationTable.op_kind, kind))).get()
+    const row = yield* q.pipe(Effect.orDie)
+    if (!row) return undefined
+    return rowToSessionRevertRecord(row as typeof SessionOperationTable.$inferSelect, kind)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionRevertRecord | undefined>
+}
+
+export function getSessionRevertByIdempotencyHash(db: Database.Interface["db"], sessionID: SessionSchema.ID, hash: string) {
+  return getSessionCheckpointByHash(db, sessionID, hash, "revert", false)
+}
+
+export function getSessionRevertByIdempotencyHashTx(tx: DbOrTx, sessionID: SessionSchema.ID, hash: string) {
+  return getSessionCheckpointByHash(tx, sessionID, hash, "revert", true)
+}
+
+export function getSessionUnrevertByIdempotencyHash(db: Database.Interface["db"], sessionID: SessionSchema.ID, hash: string) {
+  return getSessionCheckpointByHash(db, sessionID, hash, "unrevert", false)
+}
+
+export function getSessionUnrevertByIdempotencyHashTx(tx: DbOrTx, sessionID: SessionSchema.ID, hash: string) {
+  return getSessionCheckpointByHash(tx, sessionID, hash, "unrevert", true)
+}
+
+export function isSessionCheckpointConflict(
+  prev: SessionRevertRecord,
+  next: { opId: string; directory: string; parentSessionId?: string | null; configVersion?: number | null; sessionRevision?: number | null; messageId?: string | null; partId?: string | null },
+): boolean {
+  if (prev.opId !== next.opId) return true
+  if (prev.meta.directory !== next.directory) return true
+  if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
+  if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
+  if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
+  if ((prev.meta.messageId ?? null) !== (next.messageId ?? null)) return true
+  if ((prev.meta.partId ?? null) !== (next.partId ?? null)) return true
+  return false
+}
+
+function insertSessionCheckpointSucceededTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  meta: SessionRevertMeta,
+  snapshotJson: string | null,
+  kind: "revert" | "unrevert",
+): Effect.Effect<SessionRevertRecord> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.outcome !== "succeeded") yield* Effect.die(new Error("insertSessionCheckpointSucceededTx requires succeeded outcome"))
+    if (record.opKind !== kind) yield* Effect.die(new Error(`insertSessionCheckpointSucceededTx requires ${kind} opKind`))
+    const normalized = normalizeRecord(record)
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
+    const cur = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    const nextRev = cur ? (cur as unknown as { rev: number }).rev : 0
+    yield* tx
+      .insert(SessionOperationTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: sessionID,
+        op_kind: normalized.opKind,
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        cancel: normalized.cancel?.source ?? null,
+        detail: normalized.detail ?? null,
+        stack: normalized.stack ?? null,
+        revision: nextRev,
+        idempotency_hash: meta.idempotencyHash,
+        request_id: meta.requestId,
+        directory: meta.directory,
+        parent_session_id: meta.parentSessionId ?? null,
+        config_version: meta.configVersion ?? null,
+        session_revision: meta.sessionRevision ?? null,
+        message_id: meta.messageId ?? null,
+        title: meta.partId ?? null,
+        result_snapshot: snapshotJson,
+      } as unknown as typeof SessionOperationTable.$inferInsert)
+      .run()
+      .pipe(Effect.orDie)
+    const rowRaw = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
+    if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
+    return rowToSessionRevertRecord(rowRaw as typeof SessionOperationTable.$inferSelect, kind)
+  })
+}
+
+export function insertSessionRevertSucceededTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord, meta: SessionRevertMeta, snapshotJson: string | null) {
+  return insertSessionCheckpointSucceededTx(tx, sessionID, record, meta, snapshotJson, "revert")
+}
+
+export function insertSessionUnrevertSucceededTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord, meta: SessionRevertMeta, snapshotJson: string | null) {
+  return insertSessionCheckpointSucceededTx(tx, sessionID, record, meta, snapshotJson, "unrevert")
 }

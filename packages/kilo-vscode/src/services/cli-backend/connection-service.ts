@@ -42,6 +42,13 @@ import {
 } from "./serve-private-peer"
 import type { PromptContractRequest, PromptResult } from "./serve-private-prompt-contract"
 import type { CommandContractRequest, CommandResult } from "./serve-private-command-contract"
+import type {
+  ServePrivateRevertRequest,
+  ServePrivateRevertResult,
+  ServePrivateUnrevertRequest,
+  ServePrivateUnrevertResult,
+} from "./serve-private-revert-contract"
+import { revertHandle, unrevertHandle } from "./serve-private-revert-connection"
 import { commandSendHandle, promptSendHandle } from "./serve-private-send-connection"
 import { DeferredSessionList, wrapSessionListOutcomeForOwner } from "./serve-private-session-list"
 import type {
@@ -2024,6 +2031,38 @@ export class KiloConnectionService {
 
   async privateDelete(req: ServePrivateDeleteRequest): Promise<ServePrivateDeleteResult> {
     const handle = this.privateDeleteWithHandle(req)
+    return handle.promise
+  }
+
+  privateRevertWithHandle(req: ServePrivateRevertRequest): {
+    id: number
+    promise: Promise<ServePrivateRevertResult>
+    cancel: (msg?: string) => boolean
+  } {
+    return revertHandle(
+      { peer: this.privatePeer, live: this.privateAvailable, epoch: this.privateEpoch, invalidate: (r) => this.invalidatePrivatePeerOnObserverTimeout(r) },
+      req,
+    )
+  }
+
+  async privateRevert(req: ServePrivateRevertRequest): Promise<ServePrivateRevertResult> {
+    const handle = this.privateRevertWithHandle(req)
+    return handle.promise
+  }
+
+  privateUnrevertWithHandle(req: ServePrivateUnrevertRequest): {
+    id: number
+    promise: Promise<ServePrivateUnrevertResult>
+    cancel: (msg?: string) => boolean
+  } {
+    return unrevertHandle(
+      { peer: this.privatePeer, live: this.privateAvailable, epoch: this.privateEpoch, invalidate: (r) => this.invalidatePrivatePeerOnObserverTimeout(r) },
+      req,
+    )
+  }
+
+  async privateUnrevert(req: ServePrivateUnrevertRequest): Promise<ServePrivateUnrevertResult> {
+    const handle = this.privateUnrevertWithHandle(req)
     return handle.promise
   }
 

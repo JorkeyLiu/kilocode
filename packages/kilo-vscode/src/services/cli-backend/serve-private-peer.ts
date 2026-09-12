@@ -117,6 +117,20 @@ import {
   validatePromptContractRequest,
   validatePromptResult,
 } from "./serve-private-prompt-contract"
+import {
+  makeRevertAmbiguous,
+  makeUnrevertAmbiguous,
+  validateRevertRequest,
+  validateRevertResult,
+  validateUnrevertRequest,
+  validateUnrevertResult,
+} from "./serve-private-revert-contract"
+import type {
+  ServePrivateRevertRequest,
+  ServePrivateRevertResult,
+  ServePrivateUnrevertRequest,
+  ServePrivateUnrevertResult,
+} from "./serve-private-revert-contract"
 import type { PromptContractRequest, PromptResult, PrivatePromptWireOutcome } from "./serve-private-prompt-contract"
 import {
   makeCommandAmbiguous,
@@ -1943,6 +1957,8 @@ export const LEGACY_INITIALIZE_CAPABILITIES: readonly string[] = [
   "session/fork",
   "session/create",
   "session/delete",
+  "session/revert",
+  "session/unrevert",
   "session/abort",
   "session/status",
   "session/get",
@@ -2925,6 +2941,84 @@ export class ServePrivatePeer {
   async privateDelete(req: ServePrivateDeleteRequest): Promise<ServePrivateDeleteResult> {
     const handle = this.privateDeleteWithHandle(req)
     return handle.promise
+  }
+
+  async privateRevert(req: ServePrivateRevertRequest): Promise<ServePrivateRevertResult> {
+    const handle = this.privateRevertWithHandle(req)
+    return handle.promise
+  }
+
+  privateRevertWithHandle(req: ServePrivateRevertRequest): {
+    id: number
+    promise: Promise<ServePrivateRevertResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateRevertRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/revert")) {
+      throw new Error("Private peer missing session/revert capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/revert", req)
+    const promise = (async (): Promise<ServePrivateRevertResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeRevertAmbiguous(req, true)
+        try {
+          return validateRevertResult(raw, req)
+        } catch {
+          return makeRevertAmbiguous(req, true)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeRevertAmbiguous(req, true)
+        return makeRevertAmbiguous(req, true)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateUnrevert(req: ServePrivateUnrevertRequest): Promise<ServePrivateUnrevertResult> {
+    const handle = this.privateUnrevertWithHandle(req)
+    return handle.promise
+  }
+
+  privateUnrevertWithHandle(req: ServePrivateUnrevertRequest): {
+    id: number
+    promise: Promise<ServePrivateUnrevertResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateUnrevertRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/unrevert")) {
+      throw new Error("Private peer missing session/unrevert capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/unrevert", req)
+    const promise = (async (): Promise<ServePrivateUnrevertResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeUnrevertAmbiguous(req, true)
+        try {
+          return validateUnrevertResult(raw, req)
+        } catch {
+          return makeUnrevertAmbiguous(req, true)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeUnrevertAmbiguous(req, true)
+        return makeUnrevertAmbiguous(req, true)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
   }
 
   privateDeleteWithHandle(req: ServePrivateDeleteRequest): {

@@ -12,6 +12,8 @@ export const FD_CAPABILITIES = [
   "session/fork",
   "session/create",
   "session/delete",
+  "session/revert",
+  "session/unrevert",
   "session/abort",
   "question/reply",
   "question/reject",

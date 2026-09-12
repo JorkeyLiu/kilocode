@@ -102,7 +102,18 @@ export default [
      // KiloConnectionService wiring) remain inline. Both capped files
      // measure 4323/3642 lines, so 3650 is the smallest passing cap for
      // connection-service.ts (serve-private-peer.ts is eslint-disable max-lines).
-    rules: { "max-lines": ["error", 3650] },
+     // Raised 3650 → 3740 for the `session/revert` + `session/unrevert`
+     // private-first checkpoint batch: the new revert/unrevert
+     // capability/peer/owner surface (contract validation, epoch-guarded
+     // exact-cancel handles, single-SDK-fallback provider helpers) must live
+     // alongside the existing branches per the same convention. New logic
+     // lives in serve-private-revert-contract.ts,
+     // serve-private-revert-connection.ts, and
+     // kilo-provider/session-revert.ts; only the required insertion points
+     // (peer methods plus thin owner delegations) remain inline.
+     // connection-service.ts measures 3735 lines, so 3740 is the smallest
+     // passing cap.
+    rules: { "max-lines": ["error", 3740] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],
