@@ -71,14 +71,20 @@ export namespace SnapshotJournalCas {
           status: "applied",
         })
 
+      // Bounded batch read: single load for all rows+blobs (chunked
+      // internally under the SQLite variable limit). Per-step validation
+      // order and error priority below are unchanged; missing rows still fail
+      // on the first missing id in flat order, blob checks still fail per
+      // step/side with the same Conflict wording.
+      const facts = yield* journal.load(flat.map((item) => item.id)).pipe(
+        Effect.catch((cause) => Effect.fail(cause as SnapshotJournal.DbError)),
+        Effect.catchDefect((def) =>
+          Effect.fail(new SnapshotJournal.DbError({ op: "cas-load", message: String(def) })),
+        ),
+      )
       const steps: Step[] = []
       for (const item of flat) {
-        const row = yield* journal.get(item.id).pipe(
-          Effect.catch((cause) => Effect.fail(cause as SnapshotJournal.DbError)),
-          Effect.catchDefect((def) =>
-            Effect.fail(new SnapshotJournal.DbError({ op: "cas-get", message: String(def) })),
-          ),
-        )
+        const row = facts.rows.get(item.id)
         if (!row)
           return yield* new SnapshotJournal.NotFound({ message: `journal mutation not found: ${item.id}`, id: item.id })
         if (row.status !== "applied")
@@ -127,12 +133,7 @@ export namespace SnapshotJournalCas {
               id: row.id,
               status: row.status,
             })
-          const bytes = yield* journal.readBlob(ref).pipe(
-            Effect.catch((cause) => Effect.fail(cause as SnapshotJournal.DbError)),
-            Effect.catchDefect((def) =>
-              Effect.fail(new SnapshotJournal.DbError({ op: "cas-readBlob", message: String(def) })),
-            ),
-          )
+          const bytes = facts.blobs.get(ref)
           if (!bytes)
             return yield* new SnapshotJournal.Conflict({
               message: `journal cas ${label} blob missing: ${row.id}`,

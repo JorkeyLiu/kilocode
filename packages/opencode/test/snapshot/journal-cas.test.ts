@@ -391,26 +391,31 @@ describe("SnapshotJournalCas bounded executor", () => {
           const row = yield* prepareApply({ session: id.session, message: id.message, call: id.call, dir, file, op: "update", before: v1, after: v2 })
           yield* put(file, v2)
           const base = (yield* journal.get(row.id))!
-          const corruptGet = (mut: (r: typeof base) => typeof base) =>
-            ({
-              ...real,
-              readFile: real.readFile,
-              writeFile: real.writeFile,
-            }) as FSUtil.Interface
-          void corruptGet
+          const facts = yield* journal.load([row.id])
+          let gets = 0
+          let reads = 0
           const journalProxy = {
             ...journal,
-            get: (_rowId: string) => {
-              if (name === "ref-mismatch") return Effect.succeed({ ...base, after_blob: "ff".repeat(32) })
-              if (name === "incomplete-fact") return Effect.succeed({ ...base, after_blob: null })
-              return Effect.succeed(base)
+            get: (rowId: string) => {
+              gets++
+              return journal.get(rowId)
             },
             readBlob: (ref: string) => {
-              if (name === "blob-missing") return Effect.succeed(undefined)
-              if (name === "size-mismatch") return Effect.succeed(Buffer.from("x"))
-              if (name === "hash-mismatch") return Effect.succeed(Buffer.from("different-bytes\n"))
+              reads++
               return journal.readBlob(ref)
             },
+            load: (wanted: readonly string[]) =>
+              Effect.gen(function* () {
+                const rows = new Map(facts.rows)
+                const blobs = new Map(facts.blobs)
+                if (name === "ref-mismatch") rows.set(row.id, { ...base, after_blob: "ff".repeat(32) })
+                if (name === "incomplete-fact") rows.set(row.id, { ...base, after_blob: null })
+                if (name === "blob-missing" && base.after_blob) blobs.delete(base.after_blob)
+                if (name === "size-mismatch" && base.after_blob) blobs.set(base.after_blob, Buffer.from("x"))
+                if (name === "hash-mismatch" && base.after_blob) blobs.set(base.after_blob, Buffer.from("different-bytes\n"))
+                void wanted
+                return { rows, blobs }
+              }),
           } as unknown as SnapshotJournal.Interface
           const exit = yield* SnapshotJournalCas.run({
             sessionID: id.session,
@@ -423,6 +428,8 @@ describe("SnapshotJournalCas bounded executor", () => {
           )
           expect(Exit.isFailure(exit)).toBe(true)
           if (Exit.isFailure(exit)) expect(tagOf(Cause.squash(exit.cause))).toBe("SnapshotJournalConflict")
+          expect(gets).toBe(0)
+          expect(reads).toBe(0)
           expect((yield* loadRaw(file)).equals(v2)).toBe(true)
           expect((yield* journal.get(row.id))!.status).toBe("applied")
         } finally {

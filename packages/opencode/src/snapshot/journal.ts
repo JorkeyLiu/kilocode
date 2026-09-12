@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import path from "path"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Hash } from "@opencode-ai/core/util/hash"
@@ -104,6 +104,11 @@ function uniqueViolation(err: unknown): boolean {
 
 const dbFail = (op: string, err: unknown) => new DbError({ op, message: err instanceof Error ? err.message : String(err) })
 
+export interface Facts {
+  readonly rows: Map<string, Row>
+  readonly blobs: Map<string, Buffer>
+}
+
 export interface Interface {
   readonly prepare: (
     input: PrepareInput,
@@ -115,6 +120,7 @@ export interface Interface {
   readonly get: (id: string) => Effect.Effect<Row | undefined, DbError>
   readonly list: (filter: Filter) => Effect.Effect<Row[], DbError>
   readonly readBlob: (sha256: string) => Effect.Effect<Buffer | undefined, DbError>
+  readonly load: (ids: readonly string[]) => Effect.Effect<Facts, DbError>
   readonly gc: () => Effect.Effect<number, DbError>
 }
 
@@ -508,6 +514,61 @@ export const layer: Layer.Layer<Service, never, Database.Service | FSUtil.Servic
         Effect.catchDefect((def) => Effect.fail(dbFail("readBlob", def))),
       )
 
+    // Bounded batch read for journal CAS: one (or constant) roundtrip for
+    // rows plus one (or constant) for content-addressed blobs. Duplicate ids
+    // and shared blob shas query once; order/validation stays in the caller
+    // (first missing id in flat order still reports NotFound there).
+    // Chunked under the SQLite variable limit via Drizzle inArray (no
+    // string interpolation). No read transaction: blobs are content-addressed
+    // immutable (insert onConflictDoNothing, never updated, gc only deletes
+    // unreferenced shas) and CAS rows are already applied (never mutated by
+    // undo/redo), and CAS runs inside the caller-held Snapshot.exclusive
+    // which serializes writers vs revert; a torn read can only surface as a
+    // missing row/blob that CAS already fails closed as NotFound/Conflict.
+    const LOAD_CHUNK = 800
+    const chunksOf = <T>(items: readonly T[], size: number): T[][] => {
+      const out: T[][] = []
+      for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+      return out
+    }
+    const load: Interface["load"] = Effect.fn("SnapshotJournal.load")(function* (ids: readonly string[]) {
+      if (ids.length === 0) return { rows: new Map(), blobs: new Map() }
+      const unique = [...new Set(ids)]
+      const rows = new Map<string, Row>()
+      for (const chunk of chunksOf(unique, LOAD_CHUNK)) {
+        const hits = (yield* db
+          .select()
+          .from(SnapshotMutationTable)
+          .where(inArray(SnapshotMutationTable.id, chunk))
+          .all()
+          .pipe(
+            Effect.catch((cause) => Effect.fail(dbFail("load", cause))),
+            Effect.catchDefect((def) => Effect.fail(dbFail("load", def))),
+          )) as unknown as Row[]
+        for (const row of hits) rows.set(row.id, row)
+      }
+      const shas = new Set<string>()
+      for (const row of rows.values()) {
+        if (row.before_blob) shas.add(row.before_blob)
+        if (row.after_blob) shas.add(row.after_blob)
+      }
+      const blobs = new Map<string, Buffer>()
+      if (shas.size === 0) return { rows, blobs }
+      for (const chunk of chunksOf([...shas], LOAD_CHUNK)) {
+        const hits = (yield* db
+          .select()
+          .from(SnapshotBlobTable)
+          .where(inArray(SnapshotBlobTable.sha256, chunk))
+          .all()
+          .pipe(
+            Effect.catch((cause) => Effect.fail(dbFail("load", cause))),
+            Effect.catchDefect((def) => Effect.fail(dbFail("load", def))),
+          )) as unknown as { sha256: string; bytes: Buffer }[]
+        for (const hit of hits) blobs.set(hit.sha256, Buffer.from(hit.bytes))
+      }
+      return { rows, blobs }
+    })
+
     // Single-transaction, single-SQL gc: delete exactly the blobs with no
     // current mutation reference. All statuses (prepared/applied/failed) are
     // recovery facts, so every referenced blob is retained; nothing is
@@ -531,7 +592,7 @@ export const layer: Layer.Layer<Service, never, Database.Service | FSUtil.Servic
       return deleted.length
     })
 
-    return Service.of({ prepare, apply, fail, get, list, readBlob, gc })
+    return Service.of({ prepare, apply, fail, get, list, readBlob, load, gc })
   }),
 )
 
