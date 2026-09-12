@@ -1,10 +1,9 @@
 /* eslint-disable complexity */
 // Config-warnings production evidence: ServerManager → real `kilo serve` child →
-// fd3/fd4 → same AppLayer `config/warnings` (parity-only, read-only).
-// SDK HTTP (`client.config.warnings`) remains the sole authority; the private
-// path is non-blocking parity diagnostics only (no state/event/error impact,
-// no mutation/durable operation, no warnings authority change, no freshness
-// claim). Darwin + Linux run; other platforms skip per B4 convention. Windows/
+// fd3/fd4 → same AppLayer `config/warnings` (read-only safe projection).
+// The safe list is consumed private-first with exactly-one same-directory SDK
+// fallback (no state/event/error impact, no mutation/durable operation, no
+// freshness claim). Darwin + Linux run; other platforms skip per B4 convention. Windows/
 // live Extension Host evidence is not claimed. Process-global VS Code/env mutation
 // is serialized with the B5 tests via server-manager-b5-global-serialization
 // (reuse only, no B5 test edits). Cross-directory coverage asserts
@@ -29,7 +28,6 @@ import {
   normalizePrivateConfigWarningsWire,
   validateConfigWarningsResult,
 } from "./serve-private-config-warnings-contract"
-import { observeConfigWarningsParityDetached } from "../../kilo-provider/config-warnings-parity"
 import { createKiloClient } from "@kilocode/sdk/v2/client"
 import { acquireB5GlobalLock } from "./server-manager-b5-global-serialization"
 
@@ -90,9 +88,9 @@ function safeKeyOf(item: unknown): string {
   return JSON.stringify([rec.pathCategory, rec.messageCategory])
 }
 
-describe("ServerManager → real kilo serve → fd3/fd4 → ConfigWarnings parity-only production", () => {
+describe("ServerManager → real kilo serve → fd3/fd4 → ConfigWarnings safe projection", () => {
   test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
-    "covers initialize config/warnings capability + same-directory safe projection vs SDK authoritative + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
+    "covers initialize config/warnings capability + same-directory safe projection vs SDK + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")
       const binPath = path.join(extensionPath, "bin", process.platform === "win32" ? "kilo.exe" : "kilo")
@@ -235,32 +233,13 @@ describe("ServerManager → real kilo serve → fd3/fd4 → ConfigWarnings parit
           expect(() => validateConfigWarningsResult(fullPriv as unknown, fullReq as unknown as never)).not.toThrow()
         }
 
-        // 6. Parity diagnostics only: same-input safe agreement, no authority change.
+        // 6. Same-input safe agreement: the private projection carries only
+        // safe categories, with `compareConfigWarningsParity` as pure
+        // diagnostic evidence (no third request in production).
         const fullParity = compareConfigWarningsParity(fullPriv, sdkFull as unknown as never)
         expect(fullParity.divergence).toBeNull()
 
-        // 7. SDK authority / non-blocking: SDK snapshot untouched by private
-        // reads; detached observer returns synchronously and leaves SDK data intact.
-        const beforeSdk = JSON.stringify(sdkFullItems)
-        const parityConn = {
-          isPrivateAvailable: () => peer!.isAvailable(),
-          privateConfigWarningsOutcomeWithHandle: (r: unknown) =>
-            peer!.privateConfigWarningsOutcomeWithHandle(r as never),
-          getPrivateEpoch: () => peer!.getEpoch(),
-        }
-        const ret = observeConfigWarningsParityDetached(
-          parityConn as unknown as Parameters<typeof observeConfigWarningsParityDetached>[0],
-          sdkFull as unknown as Parameters<typeof observeConfigWarningsParityDetached>[1],
-          workspace,
-          undefined,
-          3000,
-        )
-        expect(ret).toBeUndefined()
-        expect(JSON.stringify((sdkFull as unknown as { data: unknown }).data)).toBe(beforeSdk)
-        await new Promise((r) => setTimeout(r, 300))
-        expect(JSON.stringify((sdkFull as unknown as { data: unknown }).data)).toBe(beforeSdk)
-
-        // 8. Invalid request fails closed client-side without touching the
+        // 7. Invalid request fails closed client-side without touching the
         // transport (fail-closed validation parity with the carrier, whose
         // server-side `validation.failed` redaction is proven over real
         // dispatch in `fd-carrier-config-warnings.test.ts`). Redacted failure

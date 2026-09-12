@@ -4380,7 +4380,7 @@ export class ServePrivatePeer {
     )
   }
 
-  /** Normalized outcome handle for the read-only config-warnings parity observer. */
+  /** Normalized outcome handle for the private-first `config/warnings` safe-projection read. */
   privateConfigWarningsOutcomeWithHandle(req: ConfigWarningsContractRequest): {
     id: number
     promise: Promise<ConfigWarningsWireOutcome>

@@ -1,14 +1,14 @@
-// `config/warnings` read-only private carrier contract (Active, parity-only).
-// Strict v1 envelope helpers plus the locked safe warning projection. The
-// private path never transmits raw paths, raw diagnostic text, or detail:
-// success data is `{warnings: [{pathCategory, messageCategory}]}` with finite
-// categories only. Production `config/warnings` stays SDK-only (`GET
-// /config/warnings` via `@kilocode/sdk` `client.config.warnings`), which
-// remains the sole user-visible authority; the private path is detached
-// warn-only observation of the current directory instance snapshot with no
-// freshness claim. Read-only diagnostics only; out of scope are `config.get`,
-// `config.update`, `config.providers`, any config write/fence/convergence
-// behavior, and any transport/wiring/cache.
+// `config/warnings` safe-projection private carrier contract (Active,
+// private-first `checkConfigWarnings` only). Strict v1 envelope helpers plus
+// the locked safe warning projection. The private path never transmits raw
+// paths, raw diagnostic text, or detail: success data is
+// `{warnings: [{pathCategory, messageCategory}]}` with finite categories
+// only. The safe list is consumed private-first via
+// `kilo-provider/config-warnings-privatefirst.ts` with exactly-one
+// same-directory SDK fallback; the SDK raw list stays the fallback
+// user-visible surface only. Read-only diagnostics only; out of scope are
+// `config.get`, `config.update`, `config.providers`, any config
+// write/fence/convergence behavior, and any transport/wiring/cache.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /config/warnings` with `WorkspaceRoutingQuery`
@@ -31,8 +31,10 @@
 //   `GET /config/warnings`; v2 generated `ConfigWarningsResponses[200]` is
 //   exactly `Array<{path,message,detail?}>`.
 // - Consumer: `packages/kilo-vscode/src/KiloProvider.ts`
-//   `checkConfigWarnings()` calls `client.config.warnings({directory: dir})`,
-//   reads `data ?? []`, shows one consolidated warning once per lifecycle.
+//   `checkConfigWarnings()` reads private-first via
+//   `kilo-provider/config-warnings-privatefirst.ts` (safe list authoritative
+//   with zero SDK, else exactly one same-directory SDK fallback), showing one
+//   consolidated warning once per lifecycle.
 // - Other consumer: `packages/opencode/src/kilocode/config-validation.ts`
 //   reads `svc.warnings()`; CLI `config` command prints count via same service.
 //
@@ -533,9 +535,11 @@ export function validateConfigWarningsResult(raw: unknown, req: ConfigWarningsCo
   return raw as unknown as ConfigWarningsResult
 }
 
-// Detached parity only (never production parity): the SDK raw entries are
-// projected with the same `projectConfigWarningToSafe` mapping the carrier
-// applies, then both sides compare as a multiset of safe category tuples.
+// Pure diagnostic only (never wired to production: private-first issues at
+// most one private result plus at most one SDK result per read, so a
+// comparator would need a third request to add signal): the SDK raw entries
+// are projected with the same `projectConfigWarningToSafe` mapping the
+// carrier applies, then both sides compare as a multiset of safe category tuples.
 // Order is never compared; length/membership/duplicate-count gaps on either
 // side are reported as explicit unknowns
 // (`config-warnings-membership-unknown`) because freshness is unknown.

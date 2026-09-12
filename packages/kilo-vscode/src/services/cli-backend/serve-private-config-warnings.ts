@@ -1,6 +1,3 @@
-import * as crypto from "crypto"
-import { normalize } from "path"
-import { resolve } from "path"
 import {
   CONFIG_WARNINGS_FAILURE_MESSAGES,
   CONFIG_WARNINGS_FAILURE_RETRYABLE,
@@ -14,7 +11,7 @@ import type {
   ConfigWarningsWireOutcome,
 } from "./serve-private-config-warnings-contract"
 
-// `config/warnings` read-only parity mechanics (detached, warn-only).
+// `config/warnings` read-only private-first mechanics (safe projection).
 // Success data is `{warnings: [{pathCategory, messageCategory}]}`; raw paths,
 // raw diagnostic text, and detail never cross the boundary. Diagnostics never
 // expose paths, messages, details, directories, workspaces, op/request ids,
@@ -65,11 +62,11 @@ interface ConfigWarningsRequestHost {
 }
 
 /**
- * Peer-side normalized outcome handle core for the read-only config-warnings
- * parity observer. The caller validates the request and checks availability
+ * Peer-side normalized outcome handle core for the private-first
+ * config-warnings read. The caller validates the request and checks availability
  * and capability first. Transport/closed maps to ambiguous transportUnknown,
  * thrown errors map to failed results with a fixed message, and malformed
- * wire resolves as `{ kind: "invalid" }` before any comparator. No retries,
+ * wire resolves as `{ kind: "invalid" }` before any consumer. No retries,
  * no replays.
  */
 export function requestConfigWarningsOutcome(
@@ -107,7 +104,7 @@ interface ConfigWarningsOwner {
  * handle. Epoch drift or peer replacement maps to ambiguous transportUnknown;
  * exact cancel preserves the peer while current-epoch cancel miss/throw
  * fail-closed via owner invalidation. A stale captured handle cleans only its
- * captured peer and returns `"stale"` so the observer never invalidates the
+ * captured peer and returns `"stale"` so the private-first read never invalidates the
  * replacement peer.
  */
 export function wrapConfigWarningsOutcomeForOwner(
@@ -171,7 +168,7 @@ export function wrapConfigWarningsOutcomeForOwner(
 }
 
 /**
- * Exact-id timeout cancel ownership for a config-warnings observer handle.
+ * Exact-id timeout cancel ownership for a config-warnings private-first handle.
  * Only fixed categories reach diagnostics: the constant op plus booleans.
  * Stale handles clean only their captured peer; current-epoch miss/throw
  * reports through `invalidate` so the owner can fail-closed. Never echoes
@@ -229,7 +226,7 @@ export function makeConfigWarningsCancel(
 }
 
 /**
- * Shared observer-timeout branch classification for the peer invalidation
+ * Shared private-first timeout branch classification for the peer invalidation
  * switch. Covers the `config/warnings` safe reasons so the peer method stays
  * within the complexity budget. Returns the redacted op label or null.
  */
@@ -242,88 +239,4 @@ export function configWarningsObserverTimeoutBranch(reason: string): { op: strin
   )
     return { op: "config/warnings" }
   return null
-}
-
-/**
- * Keyed deferred config-warnings observers: at most one deferred private
- * config-warnings observation per backend epoch + canonical directory +
- * workspace identity. Every component is opaque and domain-separated
- * (`e-`/`d-`/`w-` SHA-256 digests with `config-warnings/epoch`,
- * `config-warnings/dir`, `config-warnings/workspace` domains): serialized
- * keys never carry raw directory/workspace material and `:` inside a raw
- * value cannot collide across tuples. Exact `dir`/`workspace` closure values
- * stay with the caller for request construction; only the digest key is
- * stored here. Owner-managed: wrappers live in the owner's one-shot listener
- * set; this store only provides the dedupe key. No timers, no polling, no
- * detached work, no new peer lifecycle.
- */
-export class DeferredConfigWarnings {
-  private readonly keys = new Map<string, () => void>()
-  constructor(private readonly listeners: Set<() => void>) {}
-
-  key(epoch: number | null, dir: string, workspace: string | undefined): string {
-    let canonical = dir
-    try {
-      canonical = normalize(resolve(dir))
-    } catch {
-      canonical = dir
-    }
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`config-warnings/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const dirPart = `d-${crypto.createHash("sha256").update(`config-warnings/dir\x00${canonical}`, "utf8").digest("hex")}`
-    const wsPart =
-      workspace === undefined
-        ? "none"
-        : `w-${crypto.createHash("sha256").update(`config-warnings/workspace\x00${workspace}`, "utf8").digest("hex")}`
-    return `config-warnings:${epochPart}:${dirPart}:${wsPart}`
-  }
-
-  add(
-    epoch: number | null,
-    failedEpoch: number | null,
-    available: boolean,
-    dir: string,
-    workspace: string | undefined,
-    listener: () => void,
-  ): () => void {
-    if (epoch === null) return () => {}
-    if (failedEpoch !== null && epoch === failedEpoch) return () => {}
-    if (available) return () => {}
-    const key = this.key(epoch, dir, workspace)
-    if (this.keys.has(key)) return () => {}
-    let wrapper: () => void = () => {
-      this.remove(key, wrapper)
-      listener()
-    }
-    this.keys.set(key, wrapper)
-    this.listeners.add(wrapper)
-    return () => {
-      this.remove(key, wrapper)
-    }
-  }
-
-  clearForEpoch(epoch: number | null): void {
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`config-warnings/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const prefix = `config-warnings:${epochPart}:`
-    for (const [key, wrapper] of [...this.keys]) {
-      if (!key.startsWith(prefix)) continue
-      this.keys.delete(key)
-      this.listeners.delete(wrapper)
-    }
-  }
-
-  clearAll(): void {
-    for (const [, wrapper] of [...this.keys]) this.listeners.delete(wrapper)
-    this.keys.clear()
-  }
-
-  private remove(key: string, wrapper: () => void): void {
-    if (this.keys.get(key) === wrapper) this.keys.delete(key)
-    this.listeners.delete(wrapper)
-  }
 }

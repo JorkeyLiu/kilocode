@@ -9,12 +9,7 @@ import {
   validateConfigWarningsContractRequest as validateConfigWarningsRequest,
   validateConfigWarningsResult,
 } from "./serve-private-config-warnings-contract"
-import {
-  buildConfigWarningsIdentity,
-  observeConfigWarningsParityDetached,
-  sdkConfigWarningsHasTerminal,
-  type ConfigWarningsParityConnection,
-} from "../../kilo-provider/config-warnings-parity"
+import { buildConfigWarningsIdentity } from "../../kilo-provider/config-warnings-privatefirst"
 import {
   CONFIG_WARNINGS_TRANSPORT_FAILURE_MESSAGE,
   requestConfigWarningsOutcome,
@@ -286,17 +281,6 @@ describe("config-warnings private peer", () => {
     clientWriter.destroy()
   })
 
-  test("sdkConfigWarningsHasTerminal gates success arrays and terminal failures only", () => {
-    expect(sdkConfigWarningsHasTerminal({ data: [rawWarning("/p", "m")] } as never)).toBeTrue()
-    expect(sdkConfigWarningsHasTerminal(sdkSuccess([]) as never)).toBeTrue()
-    expect(sdkConfigWarningsHasTerminal({ data: {} } as never)).toBeFalse()
-    expect(sdkConfigWarningsHasTerminal({ error: { status: 500 }, response: { status: 500 } } as never)).toBeTrue()
-    expect(sdkConfigWarningsHasTerminal({ error: { message: "boom" } } as never)).toBeFalse()
-    expect(sdkConfigWarningsHasTerminal({ error: { code: "ECONNRESET" } } as never)).toBeFalse()
-    expect(sdkConfigWarningsHasTerminal({ data: undefined } as never)).toBeFalse()
-    expect(sdkConfigWarningsHasTerminal({} as never)).toBeFalse()
-  })
-
   test("config-warnings transport failures are redacted to a fixed safe message", async () => {
     const req = makeReq()
     const rawErr = new Error("secret transport boom /tmp/cfg-abc detail=hidden")
@@ -371,148 +355,6 @@ describe("config-warnings private peer", () => {
       backendPeer.dispose()
       clientReader.destroy()
       clientWriter.destroy()
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("observer is detached, warn-only, and never mutates SDK state", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const sdk = sdkSuccess([rawWarning("/w/agent/a.md", "Config file at /w/agent/a.md is invalid: bad")])
-      const before = JSON.stringify(sdk)
-      const conn: ConfigWarningsParityConnection = {
-        isPrivateAvailable: () => true,
-        privateConfigWarningsOutcomeWithHandle: (req) => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "config/warnings",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: { warnings: [safeEntry()] },
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      const ret = observeConfigWarningsParityDetached(conn, sdk as never, "/tmp", undefined)
-      expect(ret).toBeUndefined()
-      expect(JSON.stringify(sdk)).toBe(before)
-      await new Promise((r) => setTimeout(r, 50))
-      expect(JSON.stringify(sdk)).toBe(before)
-      expect(warns.filter((w) => String(w[0]).includes("divergence"))).toHaveLength(0)
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("observer never launches private work for non-terminal SDK input", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const calls: string[] = []
-      const conn: ConfigWarningsParityConnection = {
-        isPrivateAvailable: () => true,
-        privateConfigWarningsOutcomeWithHandle: (req) => {
-          calls.push(req.opId)
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: {} }) }
-        },
-        getPrivateEpoch: () => 1,
-      }
-      observeConfigWarningsParityDetached(conn, { error: { message: "boom" } } as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 30))
-      expect(calls).toHaveLength(0)
-      expect(warns).toHaveLength(0)
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("membership logs and details never leak warning content", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const sdk = sdkSuccess([
-        rawWarning("/secret/dir/agent/a.md", "Config file at /secret/dir/agent/a.md is invalid: classified"),
-      ])
-      const conn: ConfigWarningsParityConnection = {
-        isPrivateAvailable: () => true,
-        privateConfigWarningsOutcomeWithHandle: (req) => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "config/warnings",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: { warnings: [safeEntry("config-file", "invalid-json")] },
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      observeConfigWarningsParityDetached(conn, sdk as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 50))
-      expect(warns.length).toBeGreaterThan(0)
-      const wire = JSON.stringify(warns)
-      expect(wire.includes("secret")).toBe(false)
-      expect(wire.includes("classified")).toBe(false)
-      expect(wire.includes("agent/a.md")).toBe(false)
-      expect(wire.includes("detail")).toBe(false)
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("observer defers without work while the peer negotiates", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const calls: string[] = []
-      let deferred: (() => void) | null = null
-      const conn: ConfigWarningsParityConnection = {
-        isPrivateAvailable: () => false,
-        privateConfigWarningsOutcomeWithHandle: (req) => {
-          calls.push(req.opId)
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: {} }) }
-        },
-        getPrivateEpoch: () => 3,
-        addDeferredConfigWarningsObserver: (_d, _w, listener) => {
-          deferred = listener
-          return () => {
-            deferred = null
-          }
-        },
-      }
-      observeConfigWarningsParityDetached(conn, sdkSuccess([]) as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(calls).toHaveLength(0)
-      expect(deferred).not.toBeNull()
     } finally {
       console.warn = origWarn
     }

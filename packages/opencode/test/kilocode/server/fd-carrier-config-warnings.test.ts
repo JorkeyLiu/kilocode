@@ -268,7 +268,7 @@ function projectRaw(item: unknown): string {
   return JSON.stringify([configWarningsPathCategory(p), configWarningsMessageCategory(m)])
 }
 
-describe("fd-carrier config/warnings (parity-only read)", () => {
+describe("fd-carrier config/warnings (safe-projection private-first read)", () => {
   afterEach(async () => {
     await disposeAllInstances()
     await resetDatabase()

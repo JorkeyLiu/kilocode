@@ -83,7 +83,7 @@ import { disposeGitChangesTarget } from "./kilo-provider/git-changes-target"
 import { interceptMessage } from "./kilo-provider/git-changes-request"
 import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/followup-session"
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
-import { observeConfigWarningsParity } from "./kilo-provider/config-warnings"
+import { fetchConfigWarningsPrivateFirst } from "./kilo-provider/config-warnings-privatefirst"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
 import { childID } from "./kilo-provider/task-session"
 import { VisibleTaskStreams } from "./kilo-provider/visible-task-streams"
@@ -4480,22 +4480,43 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     try {
       const dir = this.getWorkspaceDirectory()
       console.log("[Kilo New] KiloProvider: checking config warnings", { from })
-      const result = await this.client.config.warnings({ directory: dir })
-      const list = result?.data ?? []
+      // Private-first: the private `config/warnings` read runs first via the
+      // shared helper (same source, same directory); only fallback-eligible
+      // private outcomes issue exactly one same-directory SDK read.
+      const out = await fetchConfigWarningsPrivateFirst({
+        connection: this.connectionService as unknown as never,
+        client: this.client as unknown as never,
+        directory: dir,
+      })
+      if (out.kind === "terminal") {
+        console.warn("[Kilo New] KiloProvider: checkConfigWarnings failed:", { from, failed: true })
+        return
+      }
+      if (out.kind === "unavailable") {
+        console.warn("[Kilo New] KiloProvider: checkConfigWarnings failed:", { from, failed: true })
+        return
+      }
+      if (out.via === "private") {
+        const list = out.warnings
+        console.log("[Kilo New] KiloProvider: config warnings fetched", { from, count: list.length })
+        if (list.length === 0) return
+        this.configWarningsShown = true
+        const first = list[0]!
+        const head = `${first.pathCategory}/${first.messageCategory}`
+        const summary = list.length === 1 ? head : `${head} (and ${list.length - 1} more)`
+        console.warn("[Kilo New] KiloProvider: showing config warnings", { from, count: list.length })
+        const action = await vscode.window.showWarningMessage(`Config: ${summary}`, "Show Details")
+        if (action === "Show Details") {
+          const lines = list.map((w) => `${w.pathCategory}\n  ${w.messageCategory}`)
+          const channel = vscode.window.createOutputChannel("Kilo Config Warnings")
+          channel.clear()
+          channel.appendLine(lines.join("\n\n"))
+          channel.show()
+        }
+        return
+      }
+      const list = out.warnings
       console.log("[Kilo New] KiloProvider: config warnings fetched", { from, count: list.length })
-      // Detached SDK-first private parity: SDK stays the sole authority.
-      // The observer is non-blocking and warn-only; it never touches the
-      // warning UI, the once-per-lifecycle flag, or error handling.
-      // The settled SDK error (if any) is forwarded so failed-vs-failed
-      // agreement holds; list stays `result.data ?? []` with UI unchanged.
-      observeConfigWarningsParity(
-        {
-          data: list,
-          error: (result as unknown as { error?: unknown })?.error,
-          response: (result as unknown as { response?: unknown })?.response,
-        },
-        dir,
-      )
       if (list.length === 0) return
       this.configWarningsShown = true
 
@@ -4514,10 +4535,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         channel.appendLine(lines.join("\n\n"))
         channel.show()
       }
-    } catch (err) {
-      // Fail-closed redaction: the thrown SDK error may carry warning
-      // payload content, so only fixed fields are logged.
-      observeConfigWarningsParity({ error: err }, this.getWorkspaceDirectory())
+    } catch {
+      // Fail-closed redaction: warning payload content never reaches logs.
       console.warn("[Kilo New] KiloProvider: checkConfigWarnings failed:", { from, failed: true })
     }
   }

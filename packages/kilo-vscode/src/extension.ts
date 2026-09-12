@@ -17,7 +17,6 @@ import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathPrivateConnection } from "./kilo-provider/model-state"
-import { setConfigWarningsParityConnection } from "./kilo-provider/config-warnings"
 import { setProjectCurrentPrivateConnection } from "./kilo-provider/git-status"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
@@ -197,11 +196,10 @@ export function activate(context: vscode.ExtensionContext) {
   // Private-first `path/get` connection for `model-state.ts` resolve.
   // Only `Path.state` is consumed; no new isolation contract.
   setPathPrivateConnection(connectionService)
-  // Detached SDK-first `config/warnings` parity boundary for the narrowest
-  // existing SDK consumer (`KiloProvider.checkConfigWarnings`). Same
-  // authority/observer contract: SDK stays the sole user-visible authority
-  // and the private path is warn-only observation of safe categories.
-  setConfigWarningsParityConnection(connectionService)
+  // Private-first `config/warnings` read for `KiloProvider.checkConfigWarnings`.
+  // `KiloProvider` passes `connectionService` directly to the shared helper;
+  // no global parity connection is retained. `compareConfigWarningsParity`
+  // stays as pure diagnostic/test evidence only with no third request.
   // Private-first `project/current` narrow projection for the `hasGit`
   // production boolean consumer (`kilo-provider/git-status.ts` hasGit).
   // Only the derived `vcs === "git"` boolean is consumed; full
@@ -744,7 +742,6 @@ export function activate(context: vscode.ExtensionContext) {
 export async function deactivate() {
   shuttingDown = true
   setPathPrivateConnection(null)
-  setConfigWarningsParityConnection(null)
   setProjectCurrentPrivateConnection(null)
   await agentManager?.shutdown()
   TelemetryProxy.getInstance().shutdown()
