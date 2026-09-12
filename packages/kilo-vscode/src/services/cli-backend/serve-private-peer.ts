@@ -213,6 +213,20 @@ import type {
   McpStatusResult,
   McpStatusWireOutcome,
 } from "./serve-private-mcp-status-contract"
+import {
+  makeMcpConnectAmbiguous,
+  makeMcpDisconnectAmbiguous,
+  normalizePrivateMcpConnectWire,
+  normalizePrivateMcpDisconnectWire,
+  validateMcpConnectContractRequest,
+  validateMcpDisconnectContractRequest,
+} from "./serve-private-mcp-connection-contract"
+import type {
+  McpConnectContractRequest,
+  McpConnectWireOutcome,
+  McpDisconnectContractRequest,
+  McpDisconnectWireOutcome,
+} from "./serve-private-mcp-connection-contract"
 import type {
   PermissionAmbiguous,
   PermissionContractRequest,
@@ -3604,6 +3618,84 @@ export class ServePrivatePeer {
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeMcpStatusAmbiguous(req, true) }
       return normalizePrivateMcpStatusWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the private-only mcp/connect mutation.
+   * Resolves the discriminated wire outcome so invalid wire is an explicit
+   * `{ kind: "invalid" }` value consumed before any refresh decision, never
+   * a normal result. Transport/closed/epoch semantics match the skill/remove
+   * mutation handle. There is no SDK fallback: every non-succeeded outcome
+   * fails closed and re-observes authoritative mcp/status.
+   */
+  privateMcpConnectOutcomeWithHandle(req: McpConnectContractRequest): {
+    id: number
+    promise: Promise<McpConnectWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMcpConnectContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("mcp/connect")) {
+      throw new Error("Private peer missing mcp/connect capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("mcp/connect", req)
+    const promise = (async (): Promise<McpConnectWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMcpConnectAmbiguous(req, true) }
+        return { kind: "valid", result: makeMcpConnectAmbiguous(req, true) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMcpConnectAmbiguous(req, true) }
+      return normalizePrivateMcpConnectWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the private-only mcp/disconnect mutation,
+   * same fail-closed semantics as mcp/connect above.
+   */
+  privateMcpDisconnectOutcomeWithHandle(req: McpDisconnectContractRequest): {
+    id: number
+    promise: Promise<McpDisconnectWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMcpDisconnectContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("mcp/disconnect")) {
+      throw new Error("Private peer missing mcp/disconnect capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("mcp/disconnect", req)
+    const promise = (async (): Promise<McpDisconnectWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMcpDisconnectAmbiguous(req, true) }
+        return { kind: "valid", result: makeMcpDisconnectAmbiguous(req, true) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMcpDisconnectAmbiguous(req, true) }
+      return normalizePrivateMcpDisconnectWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }

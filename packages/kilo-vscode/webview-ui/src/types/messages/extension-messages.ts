@@ -961,6 +961,13 @@ export interface McpStatusLoadedMessage {
   status: Record<string, McpStatusEntry>
 }
 
+export interface McpActionDoneMessage {
+  type: "mcpActionDone"
+  name: string
+  ok: boolean
+  message?: string
+}
+
 export interface McpCleanupErrorMessage {
   type: "mcpCleanupError"
   name: string
@@ -1121,6 +1128,7 @@ export type ExtensionMessage =
   | ModelSelectionsLoadedMessage
   | LanguageChangedMessage
   | McpStatusLoadedMessage
+  | McpActionDoneMessage
   | McpCleanupErrorMessage
   | McpCleanupRetryResultMessage
   | ExtensionDataReadyMessage

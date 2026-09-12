@@ -1188,6 +1188,13 @@ export const SessionProvider: ParentComponent = (props) => {
       setMcpStatus(message.status)
       setMcpLoading(null)
     }
+    if (message.type === "mcpActionDone") {
+      // Minimal completion for a single-slot MCP action whose status
+      // re-observation failed: clear only the matching loading slot without
+      // touching the real status cache.
+      if (message.name !== "" && mcpLoading() === message.name) setMcpLoading(null)
+      else if (message.name === "") setMcpLoading(null)
+    }
     if (message.type === "mcpCleanupError") {
       setMcpCleanupDiagnostic({
         name: message.name,

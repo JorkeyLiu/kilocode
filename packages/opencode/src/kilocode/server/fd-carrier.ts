@@ -78,6 +78,17 @@ import {
   fallbackSkillRemoveIds,
   removeSkillPrivate,
 } from "@/kilocode/skill-remove-private"
+import {
+  CONNECT_OP as MCP_CONNECT_OP,
+  CONNECT_VERSION as MCP_CONNECT_VERSION,
+  DISCONNECT_OP as MCP_DISCONNECT_OP,
+  DISCONNECT_VERSION as MCP_DISCONNECT_VERSION,
+  INTERNAL_MESSAGE as MCP_CONNECTION_INTERNAL_MESSAGE,
+  connectMcpPrivate,
+  disconnectMcpPrivate,
+  fallbackMcpConnectIds,
+  fallbackMcpDisconnectIds,
+} from "@/kilocode/mcp-connection-private"
 import { ConfigFileConvergence } from "./config-file-convergence"
 
 export interface FdCarrierHandle {
@@ -3973,6 +3984,105 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: SKILL_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === MCP_CONNECT_OP || method === "mcp/connect") {
+        // Private-only MCP connect: same-directory MCP.Service.connect() via
+        // the existing drain-control + InstanceRef lane (same lane as
+        // mcp/status — no new lifecycle lane, fence, or convergence). The
+        // directory-keyed MCP.Service stays the sole connection/stdio
+        // child/defs/watch owner; this op only routes the call. Accepted
+        // success carries no state snapshot; failures are typed terminal
+        // (validation/scope/not-found/internal) or retryable fence. No cache,
+        // no durable journal, no SDK/HTTP forwarding, no replay.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* connectMcpPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: MCP_CONNECT_VERSION,
+                  requestId: fallbackMcpConnectIds(params).requestId,
+                  opId: fallbackMcpConnectIds(params).opId,
+                  op: MCP_CONNECT_OP,
+                  idempotencyKey: fallbackMcpConnectIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: MCP_CONNECT_VERSION,
+                  requestId: fallbackMcpConnectIds(params).requestId,
+                  opId: fallbackMcpConnectIds(params).opId,
+                  op: MCP_CONNECT_OP,
+                  idempotencyKey: fallbackMcpConnectIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === MCP_DISCONNECT_OP || method === "mcp/disconnect") {
+        // Private-only MCP disconnect: same-directory MCP.Service.disconnect()
+        // via the existing drain-control + InstanceRef lane. Same ownership
+        // and no-replay semantics as mcp/connect above.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* disconnectMcpPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: MCP_DISCONNECT_VERSION,
+                  requestId: fallbackMcpDisconnectIds(params).requestId,
+                  opId: fallbackMcpDisconnectIds(params).opId,
+                  op: MCP_DISCONNECT_OP,
+                  idempotencyKey: fallbackMcpDisconnectIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: MCP_DISCONNECT_VERSION,
+                  requestId: fallbackMcpDisconnectIds(params).requestId,
+                  opId: fallbackMcpDisconnectIds(params).opId,
+                  op: MCP_DISCONNECT_OP,
+                  idempotencyKey: fallbackMcpDisconnectIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

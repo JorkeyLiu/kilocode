@@ -49,6 +49,13 @@ import {
 } from "./kilo-provider/session-detail"
 import { ErrorCode } from "./private-worker/json-rpc"
 import { fetchMcpStatusPrivateFirst } from "./kilo-provider/mcp-status-privatefirst"
+import {
+  attemptMcpConnectPrivate,
+  attemptMcpDisconnectPrivate,
+  buildMcpConnectReq,
+  buildMcpDisconnectReq,
+  mcpConnectionFailureMessage,
+} from "./kilo-provider/mcp-connection-privatefirst"
 import { attemptSkillRemovePrivate, buildSkillRemoveReq, skillRemoveFailureMessage } from "./kilo-provider/skill-remove-privatefirst"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
@@ -2080,12 +2087,19 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendMcpStatus().catch((e) => console.error("[Kilo New] fetchAndSendMcpStatus failed:", e))
           break
         case "connectMcp": {
+          this.handleMcpConnect(message.name).catch((e) =>
+            console.error("[Kilo New] handleMcpConnect failed:", e),
+          )
           break
         }
         case "disconnectMcp": {
+          this.handleMcpDisconnect(message.name).catch((e) =>
+            console.error("[Kilo New] handleMcpDisconnect failed:", e),
+          )
           break
         }
         case "authenticateMcp": {
+          this.handleMcpAuthenticate(message.name)
           break
         }
 
@@ -4283,6 +4297,103 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.postMessage(message)
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to fetch MCP status:", error)
+    }
+  }
+
+  /**
+   * Private-only MCP connect for the Settings switch: at most one private
+   * `mcp/connect` call per user action with zero SDK fallback and zero retry.
+   * Every completion (success, terminal, ambiguous, unavailable) re-observes
+   * authoritative `mcp/status`; a failed re-observation posts the minimal
+   * `mcpActionDone` completion so the webview single-slot `mcpLoading` never
+   * hangs, without overwriting the real status cache with an empty payload.
+   */
+  private async handleMcpConnect(name: unknown): Promise<void> {
+    if (typeof name !== "string" || name.length === 0) {
+      console.error("[Kilo New] handleMcpConnect rejected: missing server name")
+      this.postMessage({ type: "mcpActionDone", name: "", ok: false })
+      return
+    }
+    if (this.canonicalConfig && this.canonicalReady) {
+      console.error("[Kilo New] handleMcpConnect rejected while canonical config is ready")
+      void vscode.window.showErrorMessage(`MCP connect "${name}" is disabled while canonical config is ready.`)
+      this.postMessage({ type: "mcpActionDone", name, ok: false })
+      await this.convergeMcpStatusAfterAction(name)
+      return
+    }
+    const dir = this.getWorkspaceDirectory()
+    const attempt = await attemptMcpConnectPrivate(this.connectionService, buildMcpConnectReq(dir, name))
+    if (attempt.kind === "failed")
+      void vscode.window.showErrorMessage(`MCP connect "${name}" failed: ${mcpConnectionFailureMessage(attempt.code)}.`)
+    else if (attempt.kind === "closed")
+      void vscode.window.showErrorMessage(
+        `MCP connect "${name}" did not complete (${mcpConnectionFailureMessage(attempt.reason)}). Status refreshed — retry if needed.`,
+      )
+    await this.convergeMcpStatusAfterAction(name)
+  }
+
+  /** Private-only MCP disconnect, same once-only semantics as connect above. */
+  private async handleMcpDisconnect(name: unknown): Promise<void> {
+    if (typeof name !== "string" || name.length === 0) {
+      console.error("[Kilo New] handleMcpDisconnect rejected: missing server name")
+      this.postMessage({ type: "mcpActionDone", name: "", ok: false })
+      return
+    }
+    if (this.canonicalConfig && this.canonicalReady) {
+      console.error("[Kilo New] handleMcpDisconnect rejected while canonical config is ready")
+      void vscode.window.showErrorMessage(`MCP disconnect "${name}" is disabled while canonical config is ready.`)
+      this.postMessage({ type: "mcpActionDone", name, ok: false })
+      await this.convergeMcpStatusAfterAction(name)
+      return
+    }
+    const dir = this.getWorkspaceDirectory()
+    const attempt = await attemptMcpDisconnectPrivate(this.connectionService, buildMcpDisconnectReq(dir, name))
+    if (attempt.kind === "failed")
+      void vscode.window.showErrorMessage(
+        `MCP disconnect "${name}" failed: ${mcpConnectionFailureMessage(attempt.code)}.`,
+      )
+    else if (attempt.kind === "closed")
+      void vscode.window.showErrorMessage(
+        `MCP disconnect "${name}" did not complete (${mcpConnectionFailureMessage(attempt.reason)}). Status refreshed — retry if needed.`,
+      )
+    await this.convergeMcpStatusAfterAction(name)
+  }
+
+  /**
+   * MCP authenticate stays unmigrated: fail closed immediately so the click
+   * never leaves `mcpLoading` hanging. No HTTP/SDK auth is attempted here.
+   */
+  private handleMcpAuthenticate(name: unknown): void {
+    const label = typeof name === "string" && name.length > 0 ? name : ""
+    void vscode.window.showErrorMessage("MCP sign-in is not available in this version.")
+    this.postMessage({ type: "mcpActionDone", name: label, ok: false })
+  }
+
+  /**
+   * Post-mutation mcp/status convergence shared by connect/disconnect. A
+   * successful re-observation pushes the existing `mcpStatusLoaded` (which
+   * clears the webview loading slot); any failure posts the minimal
+   * `mcpActionDone` completion for the same name without touching the real
+   * status cache.
+   */
+  private async convergeMcpStatusAfterAction(name: string): Promise<void> {
+    try {
+      const directory = this.getWorkspaceDirectory()
+      const outcome = await fetchMcpStatusPrivateFirst({
+        connection: this.connectionService,
+        client: this.client,
+        directory,
+      })
+      if (outcome.kind !== "ok") {
+        this.postMessage({ type: "mcpActionDone", name, ok: false })
+        return
+      }
+      const message = { type: "mcpStatusLoaded", status: outcome.status }
+      this.cachedMcpStatusMessage = message
+      this.postMessage(message)
+    } catch (error) {
+      console.error("[Kilo New] KiloProvider: Failed to converge MCP status after action:", error)
+      this.postMessage({ type: "mcpActionDone", name, ok: false })
     }
   }
 

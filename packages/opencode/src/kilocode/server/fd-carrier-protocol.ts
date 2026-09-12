@@ -34,6 +34,8 @@ export const FD_CAPABILITIES = [
   "agent/requirements",
   "session/model-usage",
   "mcp/status",
+  "mcp/connect",
+  "mcp/disconnect",
   "session/prompt",
   "session/command",
   "skill/remove",
