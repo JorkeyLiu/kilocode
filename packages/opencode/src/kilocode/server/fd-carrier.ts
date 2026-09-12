@@ -34,6 +34,7 @@ import {
   validatePermissionSaveRequest,
 } from "@/kilocode/permission/permission-private"
 import { Permission } from "@/permission"
+import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionStatus } from "@/session/status"
 import { ModelUsage } from "@/kilocode/session/model-usage"
@@ -432,6 +433,8 @@ export const FD_AGENT_REQUIREMENTS_VERSION = 1 as const
 export const FD_AGENT_REQUIREMENTS_OP = "agent/requirements" as const
 export const FD_PERMISSION_LIST_VERSION = 1 as const
 export const FD_PERMISSION_LIST_OP = "permission/list" as const
+export const FD_MCP_STATUS_VERSION = 1 as const
+export const FD_MCP_STATUS_OP = "mcp/status" as const
 export const FD_PROMPT_VERSION = 1 as const
 export const FD_PROMPT_OP = "session/prompt" as const
 export const FD_COMMAND_VERSION = 1 as const
@@ -537,6 +540,18 @@ export interface FdPermissionListRequest {
   requestId: string
   opId: string
   op: typeof FD_PERMISSION_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdMcpStatusRequest {
+  v: typeof FD_MCP_STATUS_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_MCP_STATUS_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -1522,6 +1537,27 @@ function permissionListFailed(
   }
 }
 
+function mcpStatusFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_MCP_STATUS_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_MCP_STATUS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 function fallbackAgentRequirementsIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
   const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
   return {
@@ -1549,6 +1585,27 @@ function fallbackPermissionListIds(raw: unknown): { requestId: string; opId: str
     requestId: sanitizePathId(o.requestId),
     opId: sanitizePathId(o.opId),
     idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function fallbackMcpStatusIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeMcpStatusIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
   }
 }
 
@@ -1608,6 +1665,10 @@ const PERMISSION_LIST_FENCE_MESSAGE =
 const PERMISSION_LIST_INTERNAL_MESSAGE = "internal error"
 const PERMISSION_LIST_VALIDATION_MESSAGE = "invalid permission-list request"
 const PERMISSION_LIST_SCOPE_MESSAGE = "directory mismatch"
+const MCP_STATUS_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const MCP_STATUS_INTERNAL_MESSAGE = "internal error"
+const MCP_STATUS_VALIDATION_MESSAGE = "invalid mcp-status request"
+const MCP_STATUS_SCOPE_MESSAGE = "directory mismatch"
 
 const FIND_FILES_SENSITIVE_SEGMENTS = new Set([".ssh", ".aws", "secret", "secrets"])
 const FIND_FILES_SENSITIVE_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "cer", "crt", "der", "jks"])
@@ -1792,6 +1853,40 @@ function validatePermissionListRequest(raw: unknown): FdPermissionListRequest {
   if (token.includes(":") || containsPathMaterial(token))
     throw new Error("opId must be permission-list:<token> with nonempty colon-free token")
   return raw as unknown as FdPermissionListRequest
+}
+
+function validateMcpStatusRequest(raw: unknown): FdMcpStatusRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_MCP_STATUS_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_MCP_STATUS_OP) throw new Error("op must be mcp/status")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for mcp-status")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for mcp-status")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "mcp-status" || segs[1]!.length === 0)
+    throw new Error("opId must be mcp-status:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be mcp-status:<token> with nonempty colon-free token")
+  return raw as unknown as FdMcpStatusRequest
 }
 
 export function createFdCarrier(
@@ -2402,6 +2497,103 @@ export function createFdCarrier(
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === FD_MCP_STATUS_OP || method === "mcp/status") {
+        // Read-only MCP status: same-directory MCP.Service.status() via the
+        // existing drain-control + InstanceRef lane (same lane as
+        // permission/list — no new lifecycle lane, fence, or convergence).
+        // Invokes the same status() used by HTTP, preserves the exact
+        // Record<string, Status> five-state shape. No cache, no mutation.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdMcpStatusRequest
+            try {
+              req = validateMcpStatusRequest(params)
+            } catch {
+              return mcpStatusFailed(
+                fallbackMcpStatusIds(params),
+                "validation.failed",
+                MCP_STATUS_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeMcpStatusIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return mcpStatusFailed(safe, "validation.failed", MCP_STATUS_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? MCP_STATUS_FENCE_MESSAGE : MCP_STATUS_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: mcpStatusFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir) return mcpStatusFailed(safe, "scope_mismatch", MCP_STATUS_SCOPE_MESSAGE, false)
+              const svc = yield* MCP.Service
+              const found = yield* svc.status().pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (found.tag !== "ok") return mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false)
+              const raw = found.value as unknown
+              if (!raw || typeof raw !== "object" || Array.isArray(raw))
+                return mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false)
+              for (const entry of Object.values(raw as Record<string, unknown>)) {
+                if (!Schema.is(MCP.Status)(entry))
+                  return mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false)
+              }
+              return {
+                v: FD_MCP_STATUS_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_MCP_STATUS_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { status: found.value },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(mcpStatusFailed(safe, "internal", MCP_STATUS_INTERNAL_MESSAGE, false))
               }),
             )
           }),

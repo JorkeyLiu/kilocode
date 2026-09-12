@@ -33,6 +33,7 @@ export const FD_CAPABILITIES = [
   "find/files",
   "agent/requirements",
   "session/model-usage",
+  "mcp/status",
   "session/prompt",
   "session/command",
   "skill/remove",

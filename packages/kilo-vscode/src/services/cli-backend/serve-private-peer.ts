@@ -203,6 +203,16 @@ import type {
   PermissionListResult,
   PermissionListWireOutcome,
 } from "./serve-private-permission-list-contract"
+import {
+  makeMcpStatusAmbiguous,
+  normalizePrivateMcpStatusWire,
+  validateMcpStatusContractRequest,
+} from "./serve-private-mcp-status-contract"
+import type {
+  McpStatusContractRequest,
+  McpStatusResult,
+  McpStatusWireOutcome,
+} from "./serve-private-mcp-status-contract"
 import type {
   PermissionAmbiguous,
   PermissionContractRequest,
@@ -3502,6 +3512,101 @@ export class ServePrivatePeer {
     const outcome = await handle.promise
     if (outcome.kind === "invalid") throw new Error(outcome.detail)
     return outcome.result
+  }
+
+  async privateMcpStatus(req: McpStatusContractRequest): Promise<McpStatusResult> {
+    const handle = this.privateMcpStatusWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new Error(outcome.detail)
+    return outcome.result
+  }
+
+  private failedMcpStatus(req: McpStatusContractRequest, code: string, msg: string): McpStatusResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "mcp/status",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  privateMcpStatusWithHandle(req: McpStatusContractRequest): {
+    id: number
+    promise: Promise<McpStatusWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMcpStatusContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("mcp/status")) {
+      throw new Error("Private peer missing mcp/status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("mcp/status", req)
+    const promise = (async (): Promise<McpStatusWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMcpStatusAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedMcpStatus(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMcpStatusAmbiguous(req, true) }
+      return normalizePrivateMcpStatusWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the read-only mcp/status private-first read.
+   * Resolves the discriminated wire outcome so invalid wire is an explicit
+   * `{ kind: "invalid" }` value consumed before any SDK fallback, never a
+   * normal result. Transport/closed/epoch semantics match the public handle.
+   */
+  privateMcpStatusOutcomeWithHandle(req: McpStatusContractRequest): {
+    id: number
+    promise: Promise<McpStatusWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMcpStatusContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("mcp/status")) {
+      throw new Error("Private peer missing mcp/status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("mcp/status", req)
+    const promise = (async (): Promise<McpStatusWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMcpStatusAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedMcpStatus(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMcpStatusAmbiguous(req, true) }
+      return normalizePrivateMcpStatusWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
   }
 
   private failedPermissionList(req: PermissionListContractRequest, code: string, msg: string): PermissionListResult {

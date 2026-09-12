@@ -15,6 +15,7 @@ import type { KiloConnectionService } from "../services/cli-backend"
 import type { ConnectionState } from "../services/cli-backend/connection-service"
 import { getErrorMessage } from "../kilo-provider-utils"
 import { observeSessionChildrenParityDetached } from "../kilo-provider/session-children-parity"
+import { fetchMcpStatusPrivateFirst } from "../kilo-provider/mcp-status-privatefirst"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
@@ -1062,6 +1063,7 @@ export class AgentManagerProvider implements Disposable {
                 sandboxInheritanceToken: source?.sandboxInheritanceToken,
               }),
             (...args) => this.log(...args),
+            this.connectionService,
           )
           const sid = (session as unknown as Session).id ?? (session as unknown as { id: string }).id
           this.addSession(sid, { recent: true })
@@ -1419,9 +1421,8 @@ export class AgentManagerProvider implements Disposable {
         })
       }
     }
-    const mcp = await client.mcp
-      .status({ directory: root })
-      .then((r) => summarizeMcp(r.data ?? {}))
+    const mcp = await fetchMcpStatusPrivateFirst({ connection: this.connectionService, client, directory: root })
+      .then((outcome) => (outcome.kind === "ok" ? summarizeMcp(outcome.status) : undefined))
       .catch((err) => {
         this.log("fixture backendSnapshot: mcp.status failed:", err)
         return undefined

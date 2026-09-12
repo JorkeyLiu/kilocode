@@ -48,6 +48,7 @@ import {
   type SessionDetail,
 } from "./kilo-provider/session-detail"
 import { ErrorCode } from "./private-worker/json-rpc"
+import { fetchMcpStatusPrivateFirst } from "./kilo-provider/mcp-status-privatefirst"
 import { attemptSkillRemovePrivate, buildSkillRemoveReq, skillRemoveFailureMessage } from "./kilo-provider/skill-remove-privatefirst"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
@@ -4271,12 +4272,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const directory = this.getWorkspaceDirectory()
-      const { data } = await retry(() => this.client!.mcp.status({ directory }))
-      if (data) {
-        const message = { type: "mcpStatusLoaded", status: data }
-        this.cachedMcpStatusMessage = message
-        this.postMessage(message)
-      }
+      const outcome = await fetchMcpStatusPrivateFirst({
+        connection: this.connectionService,
+        client: this.client,
+        directory,
+      })
+      if (outcome.kind !== "ok") return
+      const message = { type: "mcpStatusLoaded", status: outcome.status }
+      this.cachedMcpStatusMessage = message
+      this.postMessage(message)
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to fetch MCP status:", error)
     }
