@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Flag } from "@opencode-ai/core/flag/flag"
@@ -240,30 +240,41 @@ describe("journal window real Snapshot exclusive", () => {
     Effect.gen(function* () {
       const dirA = yield* tmpdirScoped({ git: true })
       const dirB = yield* tmpdirScoped({ git: true })
+      const enteredA = yield* Deferred.make<void>()
+      const enteredB = yield* Deferred.make<void>()
+      const active = yield* Ref.make(0)
+      const max = yield* Ref.make(0)
       const worktrees: string[] = []
-      const run = (dir: string, name: string, content: string) =>
+      const run = (dir: string, enteredSelf: Deferred.Deferred<void>, enteredOther: Deferred.Deferred<void>) =>
         provideInstance(dir)(
           Effect.gen(function* () {
             const ctx = yield* InstanceState.context
             worktrees.push(ctx.worktree)
-            const session = yield* Session.Service
-            const journal = yield* SnapshotJournal.Service
-            const tool = yield* WriteTool
-            const def = yield* tool.init()
-            const sid = (yield* session.create({})).id
-            const tctx = ctxFor(sid, MessageID.ascending())
-            yield* def.execute({ filePath: path.join(dir, name), content }, tctx as never)
-            const rows = yield* journal.list({ sessionID: sid })
-            expect(rows.length).toBe(1)
-            expect(rows[0]!.status).toBe("applied")
+            const snap = yield* Snapshot.Service
+            yield* snap.exclusive(() =>
+              Effect.gen(function* () {
+                const cur = yield* Ref.updateAndGet(active, (n) => n + 1)
+                yield* Ref.update(max, (m) => Math.max(m, cur))
+                yield* Deferred.succeed(enteredSelf, void 0)
+                // Rendezvous inside the real gitdir window: the other worktree
+                // must enter its own window while we hold ours. Same-key
+                // serialization would deadlock here and hit the timeout.
+                yield* Deferred.await(enteredOther).pipe(
+                  Effect.timeoutOrElse({
+                    duration: "10 seconds",
+                    orElse: () =>
+                      Effect.fail(new Error("other worktree never entered exclusive; windows did not overlap")),
+                  }),
+                )
+              }).pipe(Effect.ensuring(Ref.update(active, (n) => n - 1))),
+            )
           }),
         )
-      const start = Date.now()
-      yield* Effect.all([run(dirA, "a.txt", "aaa"), run(dirB, "b.txt", "bbb")], { concurrency: "unbounded" })
-      const elapsed = Date.now() - start
+      yield* Effect.all([run(dirA, enteredA, enteredB), run(dirB, enteredB, enteredA)], { concurrency: "unbounded" })
       expect(worktrees[0]).not.toBe(worktrees[1])
-      // Two 200ms windows on different gitdirs run in parallel (~200ms).
-      expect(elapsed).toBeLessThan(350)
+      // Both gitdir windows overlapped: max active inside exclusive was 2.
+      expect(yield* Ref.get(max)).toBe(2)
+      expect(yield* Ref.get(active)).toBe(0)
     }).pipe(Effect.provide(realEnv)),
   )
 
