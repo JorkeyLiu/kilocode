@@ -75,6 +75,7 @@ import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import { isSettledAbortResult, makeAbortAmbiguous } from "./serve-private-abort-contract"
 import { questionRejectHandle, questionReplyHandle } from "./serve-private-question-connection"
+import { suggestionAcceptHandle, suggestionDismissHandle } from "./serve-private-suggestion-connection"
 import { wrapEpochHandle } from "./serve-private-epoch"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
@@ -1994,6 +1995,40 @@ export class KiloConnectionService {
     if ((req as { op: string }).op === "question/reply")
       return questionReplyHandle(deps, req as ServePrivateQuestionReplyRequest)
     return questionRejectHandle(deps, req as ServePrivateQuestionRejectRequest)
+  }
+
+  privateSuggestionWithHandle(
+    req: import("./serve-private-peer").ServePrivateSuggestionAcceptRequest | import("./serve-private-peer").ServePrivateSuggestionDismissRequest,
+  ) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    if ((req as { op: string }).op === "suggestion/accept")
+      return suggestionAcceptHandle(deps, req as import("./serve-private-peer").ServePrivateSuggestionAcceptRequest)
+    return suggestionDismissHandle(deps, req as import("./serve-private-peer").ServePrivateSuggestionDismissRequest)
+  }
+
+  privateSuggestionAcceptWithHandle(req: import("./serve-private-peer").ServePrivateSuggestionAcceptRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    return suggestionAcceptHandle(deps, req)
+  }
+
+  privateSuggestionDismissWithHandle(req: import("./serve-private-peer").ServePrivateSuggestionDismissRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    return suggestionDismissHandle(deps, req)
   }
 
   privateStatusWithHandle(req: ServePrivateStatusRequest): {

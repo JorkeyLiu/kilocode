@@ -26,6 +26,14 @@ import {
   validateQuestionReplyRequest,
 } from "@/kilocode/question/question-private"
 import {
+  OP_ACCEPT as SUGGESTION_ACCEPT_OP,
+  OP_DISMISS as SUGGESTION_DISMISS_OP,
+  acceptSuggestionPrivate,
+  dismissSuggestionPrivate,
+  validateSuggestionAcceptRequest,
+  validateSuggestionDismissRequest,
+} from "@/kilocode/suggestion/suggestion-private"
+import {
   OP_REPLY as PERMISSION_REPLY_OP,
   OP_SAVE as PERMISSION_SAVE_OP,
   replyPermissionPrivate,
@@ -447,6 +455,10 @@ export const FD_PERMISSION_LIST_VERSION = 1 as const
 export const FD_PERMISSION_LIST_OP = "permission/list" as const
 export const FD_QUESTION_LIST_VERSION = 1 as const
 export const FD_QUESTION_LIST_OP = "question/list" as const
+export const FD_SUGGESTION_ACCEPT_VERSION = 1 as const
+export const FD_SUGGESTION_ACCEPT_OP = "suggestion/accept" as const
+export const FD_SUGGESTION_DISMISS_VERSION = 1 as const
+export const FD_SUGGESTION_DISMISS_OP = "suggestion/dismiss" as const
 export const FD_MCP_STATUS_VERSION = 1 as const
 export const FD_MCP_STATUS_OP = "mcp/status" as const
 export const FD_PROMPT_VERSION = 1 as const
@@ -2429,6 +2441,91 @@ export function createFdCarrier(
             if (acquired.tag !== "ok") throw acquired.err
             const inner = Effect.gen(function* () {
               return yield* rejectQuestionPrivate(params)
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner
+          }),
+        )
+        return result
+      }
+      if (method === SUGGESTION_ACCEPT_OP || method === "suggestion/accept") {
+        // Drain-control suggestion accept: globally unique request ID lookup
+        // via Suggestion.accept with delete-wins/event/waiter semantics
+        // preserved. Directory is routing/snapshot binding only (canonical
+        // validation, no ownership filtering). Invalid index runs the current
+        // delete+reject side effect then surfaces suggestion.not_found.
+        try {
+          validateSuggestionAcceptRequest(params)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!msg.includes("op must be suggestion/")) {
+            const err = new Error(msg) as Error & { code: number }
+            err.code = ErrorCode.InvalidParams
+            throw err
+          }
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const dir = (() => {
+              try {
+                const p = params as Record<string, unknown>
+                const ctx = p.context as Record<string, unknown> | undefined
+                if (typeof ctx?.directory !== "string") throw new Error("context.directory must be non-empty string")
+                return canonicalDirectory(ctx.directory)
+              } catch (e) {
+                const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+                err.code = ErrorCode.InvalidParams
+                throw err
+              }
+            })()
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => Effect.succeed({ tag: "fail" as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
+            )
+            if (acquired.tag !== "ok") throw acquired.err
+            const inner = Effect.gen(function* () {
+              return yield* acceptSuggestionPrivate(params)
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner
+          }),
+        )
+        return result
+      }
+      if (method === SUGGESTION_DISMISS_OP || method === "suggestion/dismiss") {
+        // Drain-control suggestion dismiss: same lane/semantics as accept,
+        // without an index payload.
+        try {
+          validateSuggestionDismissRequest(params)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!msg.includes("op must be suggestion/")) {
+            const err = new Error(msg) as Error & { code: number }
+            err.code = ErrorCode.InvalidParams
+            throw err
+          }
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const dir = (() => {
+              try {
+                const p = params as Record<string, unknown>
+                const ctx = p.context as Record<string, unknown> | undefined
+                if (typeof ctx?.directory !== "string") throw new Error("context.directory must be non-empty string")
+                return canonicalDirectory(ctx.directory)
+              } catch (e) {
+                const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+                err.code = ErrorCode.InvalidParams
+                throw err
+              }
+            })()
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => Effect.succeed({ tag: "fail" as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
+            )
+            if (acquired.tag !== "ok") throw acquired.err
+            const inner = Effect.gen(function* () {
+              return yield* dismissSuggestionPrivate(params)
             }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner
           }),

@@ -28,6 +28,7 @@ import { GlobalBus } from "../../../src/bus/global"
 import { AppRuntime } from "../../../src/effect/app-runtime"
 import { Permission } from "../../../src/permission"
 import { Question } from "../../../src/question"
+import { Suggestion } from "../../../src/kilocode/suggestion"
 import { Session } from "../../../src/session/session"
 import { SessionID, MessageID } from "../../../src/session/schema"
 import { TestLLMServer } from "../../lib/llm-server"
@@ -72,6 +73,18 @@ afterEach(async () => {
   }
   dirs.clear()
   for (const dispose of ownedListeners) dispose()
+  try {
+    const list = await Suggestion.list()
+    for (const entry of list) {
+      try {
+        await Suggestion.dismiss(entry.id)
+      } catch {
+        // waiter already settled; ignore
+      }
+    }
+  } catch {
+    // Suggestion global is best-effort cleanup; ignore
+  }
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -310,6 +323,8 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/session/ses_a/permissions/per_1")).toBe("permissionReply")
       expect(classifyDrainControl("POST", "/question/que_1/reply")).toBe("questionReply")
       expect(classifyDrainControl("POST", "/question/que_1/reject")).toBe("questionReject")
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/accept")).toBe("suggestionAccept")
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/dismiss")).toBe("suggestionDismiss")
     }))
 
   it.effect("rejects near-match and traversal shapes", () =>
@@ -321,6 +336,9 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/sessions/ses_a/abort")).toBeUndefined()
       expect(classifyDrainControl("POST", "/permission/per_1/replies")).toBeUndefined()
       expect(classifyDrainControl("POST", "/question/que_1/reject/extra")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/accept/extra")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/dismiss/extra")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/approve")).toBeUndefined()
       expect(classifyDrainControl("PATCH", "/config")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a/message")).toBeUndefined()
       // legacy permission reply near-matches (LOCK-007)
@@ -339,6 +357,8 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/session/ses_a/abort/")).toBeUndefined()
       expect(classifyDrainControl("POST", "/permission/per_1/reply/")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a/permissions/per_1/")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/accept/")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/sug_1/dismiss/")).toBeUndefined()
     }))
 
   it.effect("rejects malformed leading, empty, and extra segments fail-closed", () =>
@@ -378,6 +398,8 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/permission/not-a-permission/reply")).toBeUndefined()
       expect(classifyDrainControl("POST", "/question/not-a-question/reply")).toBeUndefined()
       expect(classifyDrainControl("POST", "/question/not-a-question/reject")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/not-a-suggestion/accept")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/suggestion/not-a-suggestion/dismiss")).toBeUndefined()
       // legacy permission reply validates BOTH variable segments (LOCK-007)
       expect(classifyDrainControl("POST", "/session/not-a-session/permissions/per_1")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a/permissions/not-a-permission")).toBeUndefined()
@@ -391,6 +413,8 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/permission/per%5F1/reply")).toBe("permissionReply")
       expect(classifyDrainControl("POST", "/session/ses%5F1/permissions/per%5F1")).toBe("permissionReply")
       expect(classifyDrainControl("POST", "/question/que%5F1/reject")).toBe("questionReject")
+      expect(classifyDrainControl("POST", "/suggestion/sug%5F1/accept")).toBe("suggestionAccept")
+      expect(classifyDrainControl("POST", "/suggestion/sug%5F1/dismiss")).toBe("suggestionDismiss")
     }))
 })
 
@@ -783,6 +807,148 @@ describe("drain-control bypass - web handler path", () => {
         yield* Deferred.succeed(gate, void 0)
         yield* Fiber.await(fiber)
         yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
+      }),
+    30_000,
+  )
+
+  it.live(
+    "suggestion accept and dismiss complete during an active cold save drain",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        const gate = yield* Deferred.make<void>()
+        // Always release the held stream on scope close so a body failure
+        // cannot wedge the convergence rebuild behind the fence (which would
+        // surface as an afterEach hook timeout instead of the real error).
+        // Double-succeed is harmless (ignored).
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, void 0).pipe(Effect.ignore))
+        const instanceDisposed = yield* eventLatch("server.instance.disposed", f.project)
+        const session = yield* Effect.promise(() => createSession(f.project))
+        const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
+        yield* waitForBusy(f.project, session.id)
+
+        // Two real pending suggestions on the pre-fence instance: one to
+        // accept, one to dismiss. Forked as detached waiters so the test can
+        // prove each settles while the fence is still held.
+        const actions = [
+          { label: "yes", description: "continue", prompt: "proceed" },
+          { label: "no", description: "stop", prompt: "halt" },
+        ]
+        const acceptedEvts = yield* eventCapture<{ requestID: string }>("suggestion.accepted", f.project)
+        const dismissedEvts = yield* eventCapture<{ requestID: string }>("suggestion.dismissed", f.project)
+        const show = (text: string) =>
+          withInstance(f.project)(
+            Effect.promise(() => Suggestion.show({ sessionID: session.id, text, actions })) as unknown as Effect.Effect<
+              { label: string; description?: string; prompt: string },
+              unknown,
+              never
+            >,
+          )
+        const acceptFiber = yield* Effect.forkDetach(show("Proceed?"))
+        const dismissFiber = yield* Effect.forkDetach(show("Discard?"))
+        const [acceptID, dismissID] = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const list = yield* Effect.promise(() => Suggestion.list())
+            const scoped = list.filter((entry) => String(entry.sessionID) === session.id)
+            if (scoped.length >= 2) return [String(scoped[0]!.id), String(scoped[1]!.id)] as const
+            return undefined
+          }),
+          "two suggestions never became pending",
+        )
+
+        // Cold PATCH: the save drains on the held stream.
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
+        expect(patch.status).toBe(200)
+        expect(yield* instanceDisposed.done).toBe(false)
+
+        // Both suggestion controls must complete during the fence drain.
+        const accepted = yield* Effect.promise(async () => {
+          const response = await request(f.project, `/suggestion/${acceptID}/accept`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ index: 0 }),
+          })
+          return response.status
+        })
+        expect(accepted).toBe(200)
+        const dismissed = yield* Effect.promise(async () => {
+          const response = await request(f.project, `/suggestion/${dismissID}/dismiss`, { method: "POST" })
+          return response.status
+        })
+        expect(dismissed).toBe(200)
+
+        // Both settled BEFORE the fence releases: accept resolves with the
+        // chosen action, dismiss rejects with DismissedError by design, and
+        // each emitted its bus event on the pre-fence instance.
+        const acceptExit = yield* Fiber.join(acceptFiber).pipe(Effect.exit)
+        expect(Exit.isSuccess(acceptExit)).toBe(true)
+        if (Exit.isSuccess(acceptExit))
+          expect(acceptExit.value).toEqual({ label: "yes", description: "continue", prompt: "proceed" })
+        const dismissExit = yield* Fiber.join(dismissFiber).pipe(Effect.exit)
+        expect(Exit.isFailure(dismissExit)).toBe(true)
+        expect(acceptedEvts.received.length).toBe(1)
+        expect(acceptedEvts.received[0]!.requestID).toBe(acceptID)
+        expect(dismissedEvts.received.length).toBe(1)
+        expect(dismissedEvts.received[0]!.requestID).toBe(dismissID)
+
+        // The fence still drains normally on the held stream.
+        yield* Deferred.succeed(gate, void 0)
+        yield* Fiber.await(fiber)
+        yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
+      }),
+    30_000,
+  )
+
+  it.live(
+    "suggestion drain-control with no instance during a convergence fence refuses deterministically",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        const gate = yield* Deferred.make<void>()
+        const session = yield* Effect.promise(() => createSession(f.project))
+        const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
+        yield* waitForBusy(f.project, session.id)
+
+        // A second directory with a persisted session but NO live instance.
+        // Same scope-close release as the accept/dismiss test above: a body
+        // failure must not leave the held stream (and the global fence behind
+        // it) dangling into afterEach.
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, void 0).pipe(Effect.ignore))
+        const disposed = yield* Effect.promise(() => createSession(f.other))
+        expect(disposed.id).toBeTruthy()
+        yield* Effect.promise(async () => {
+          const response = await request(f.other, "/instance/dispose", { method: "POST" })
+          expect(response.status).toBe(200)
+        })
+
+        // Global cold PATCH: the fence covers every directory.
+        const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
+        expect(patch.status).toBe(200)
+
+        // Suggestion controls for the no-instance directory: no snapshot, no
+        // boot, no synthetic context — a deterministic 409 instead of hanging
+        // or dying, for both accept and dismiss.
+        const accept = yield* Effect.promise(async () => {
+          const response = await request(f.other, "/suggestion/sug_noinstance0001/accept", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ index: 0 }),
+          })
+          return { status: response.status, body: (await response.json()) as { _tag?: string } }
+        })
+        expect(accept.status).toBe(409)
+        expect(accept.body._tag).toBe("InstanceUnavailableDuringConfigRebuild")
+        const dismiss = yield* Effect.promise(async () => {
+          const response = await request(f.other, "/suggestion/sug_noinstance0002/dismiss", { method: "POST" })
+          return { status: response.status, body: (await response.json()) as { _tag?: string } }
+        })
+        expect(dismiss.status).toBe(409)
+        expect(dismiss.body._tag).toBe("InstanceUnavailableDuringConfigRebuild")
+
+        // The fence still drains normally on the held stream.
+        yield* Deferred.succeed(gate, void 0)
+        const exit = yield* Fiber.await(fiber)
+        expect(Exit.isSuccess(exit)).toBe(true)
       }),
     30_000,
   )

@@ -4,9 +4,13 @@
  * During a cold config convergence drain, instance-gated reader admission
  * starves behind the fence. The only requests that must still complete are the
  * pre-fence lifecycle controls: session abort, queued-message cancel,
- * permission reply, and question reply/reject. These operate on the OLD
+ * permission reply, question reply/reject, and suggestion accept/dismiss.
+ * These operate on the OLD
  * (pre-fence) runtime — the exact instance that owns the pending
  * permission/question/run-state entries and the generation holding the drain.
+ * Suggestion pending entries are globally unique by request ID; the
+ * suggestion drain-control lane still settles on the pre-fence instance that
+ * owns the waiter/event ordering for the directory that routed the request.
  *
  * The middleware (instance-context.ts) classifies these paths with
  * `classifyDrainControl` (exact segment matching, never a regex, so no
@@ -40,7 +44,14 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { SessionID, MessageID } from "@/session/schema"
 import { QuestionID } from "@/question/schema"
 
-export type DrainControlKind = "abort" | "cancelQueued" | "permissionReply" | "questionReply" | "questionReject"
+export type DrainControlKind =
+  | "abort"
+  | "cancelQueued"
+  | "permissionReply"
+  | "questionReply"
+  | "questionReject"
+  | "suggestionAccept"
+  | "suggestionDismiss"
 
 /**
  * Fail-closed segment decode (LOCK-004). Returns undefined when the segment is
@@ -74,6 +85,12 @@ const isQuestionID = (value: string): boolean => {
   }
 }
 
+const isSuggestionID = (value: string): boolean => {
+  if (value.length === 0 || !value.startsWith("sug")) return false
+  if (value.includes("\0") || value.includes(":") || value.includes("/") || value.includes("\\")) return false
+  return true
+}
+
 /**
  * Classify an instance-route request as a drain-control path. Exact segment
  * matching against the declared route shapes:
@@ -84,6 +101,8 @@ const isQuestionID = (value: string): boolean => {
  * - POST /session/:sessionID/permissions/:permissionID  (legacy permission reply, LOCK-007)
  * - POST /question/:requestID/reply
  * - POST /question/:requestID/reject
+ * - POST /suggestion/:requestID/accept
+ * - POST /suggestion/:requestID/dismiss
  *
  * Returns undefined for every other path/method. The raw path must be exactly
  * one leading slash followed by non-empty segments (rejects duplicate leading
@@ -122,6 +141,12 @@ export function classifyDrainControl(method: string, path: string): DrainControl
   }
   if (method === "POST" && raw.length === 3 && raw[0] === "question" && raw[2] === "reject") {
     return isQuestionID(ids[1]) ? "questionReject" : undefined
+  }
+  if (method === "POST" && raw.length === 3 && raw[0] === "suggestion" && raw[2] === "accept") {
+    return isSuggestionID(ids[1]) ? "suggestionAccept" : undefined
+  }
+  if (method === "POST" && raw.length === 3 && raw[0] === "suggestion" && raw[2] === "dismiss") {
+    return isSuggestionID(ids[1]) ? "suggestionDismiss" : undefined
   }
   return undefined
 }

@@ -185,6 +185,23 @@ import type {
   QuestionTerminalFailure,
 } from "./serve-private-question-contract"
 import {
+  makeSuggestionAmbiguous,
+  validateSuggestionAcceptContractRequest,
+  validateSuggestionAcceptResult,
+  validateSuggestionDismissContractRequest,
+  validateSuggestionDismissResult,
+  validateSuggestionTerminalFailure,
+} from "./serve-private-suggestion-contract"
+import type {
+  SuggestionAcceptContractRequest,
+  SuggestionAmbiguous,
+  SuggestionContractRequest,
+  SuggestionDismissContractRequest,
+  SuggestionAcceptTerminal,
+  SuggestionDismissTerminal,
+  SuggestionTerminalFailure,
+} from "./serve-private-suggestion-contract"
+import {
   makePermissionAmbiguous,
   validatePermissionReplyContractRequest,
   validatePermissionReplyResult,
@@ -1313,6 +1330,72 @@ export function validateQuestionRejectOutcome(
     return raw as unknown as ServePrivateQuestionResult
   }
   throw new Error(`question reject result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export type ServePrivateSuggestionAcceptRequest = SuggestionAcceptContractRequest
+export type ServePrivateSuggestionDismissRequest = SuggestionDismissContractRequest
+export type ServePrivateSuggestionResult =
+  | SuggestionAcceptTerminal
+  | SuggestionDismissTerminal
+  | SuggestionTerminalFailure
+  | SuggestionAmbiguous
+
+export function validateSuggestionAcceptRequest(raw: unknown): ServePrivateSuggestionAcceptRequest {
+  return validateSuggestionAcceptContractRequest(raw)
+}
+
+export function validateSuggestionDismissRequest(raw: unknown): ServePrivateSuggestionDismissRequest {
+  return validateSuggestionDismissContractRequest(raw)
+}
+
+function checkSuggestionAmbiguous(
+  raw: Record<string, unknown>,
+  req: SuggestionAcceptContractRequest | SuggestionDismissContractRequest,
+): ServePrivateSuggestionResult {
+  const allowed = new Set([
+    "kind",
+    "v",
+    "requestId",
+    "opId",
+    "idempotencyKey",
+    "accepted",
+    "terminal",
+    "transportUnknown",
+  ])
+  for (const k of Object.keys(raw)) {
+    if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+  }
+  if (raw.v !== 1) throw new Error("v must be 1")
+  if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+  if (raw.opId !== req.opId) throw new Error("opId mismatch")
+  if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+  if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+  if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+  return raw as unknown as ServePrivateSuggestionResult
+}
+
+export function validateSuggestionAcceptOutcome(
+  raw: unknown,
+  req: ServePrivateSuggestionAcceptRequest,
+): ServePrivateSuggestionResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validateSuggestionAcceptResult(raw, req)
+  if (kind === "terminal-failure") return validateSuggestionTerminalFailure(raw, req)
+  if (kind === "ambiguous") return checkSuggestionAmbiguous(raw as Record<string, unknown>, req)
+  throw new Error(`suggestion accept result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export function validateSuggestionDismissOutcome(
+  raw: unknown,
+  req: ServePrivateSuggestionDismissRequest,
+): ServePrivateSuggestionResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validateSuggestionDismissResult(raw, req)
+  if (kind === "terminal-failure") return validateSuggestionTerminalFailure(raw, req)
+  if (kind === "ambiguous") return checkSuggestionAmbiguous(raw as Record<string, unknown>, req)
+  throw new Error(`suggestion dismiss result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
 }
 
 export type ServePrivatePermissionSaveRequest = PermissionSaveContractRequest
@@ -3449,6 +3532,82 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeQuestionAmbiguous(req)
         return makeQuestionAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateSuggestionAccept(req: ServePrivateSuggestionAcceptRequest): Promise<ServePrivateSuggestionResult> {
+    const handle = this.privateSuggestionAcceptWithHandle(req)
+    return handle.promise
+  }
+
+  privateSuggestionAcceptWithHandle(req: ServePrivateSuggestionAcceptRequest): {
+    id: number
+    promise: Promise<ServePrivateSuggestionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSuggestionAcceptRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("suggestion/accept")) {
+      throw new Error("Private peer missing suggestion/accept capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("suggestion/accept", req)
+    const promise = (async (): Promise<ServePrivateSuggestionResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validateSuggestionAcceptOutcome(raw, req)
+        } catch {
+          return makeSuggestionAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeSuggestionAmbiguous(req)
+        return makeSuggestionAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateSuggestionDismiss(req: ServePrivateSuggestionDismissRequest): Promise<ServePrivateSuggestionResult> {
+    const handle = this.privateSuggestionDismissWithHandle(req)
+    return handle.promise
+  }
+
+  privateSuggestionDismissWithHandle(req: ServePrivateSuggestionDismissRequest): {
+    id: number
+    promise: Promise<ServePrivateSuggestionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSuggestionDismissRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("suggestion/dismiss")) {
+      throw new Error("Private peer missing suggestion/dismiss capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("suggestion/dismiss", req)
+    const promise = (async (): Promise<ServePrivateSuggestionResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validateSuggestionDismissOutcome(raw, req)
+        } catch {
+          return makeSuggestionAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeSuggestionAmbiguous(req)
+        return makeSuggestionAmbiguous(req)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

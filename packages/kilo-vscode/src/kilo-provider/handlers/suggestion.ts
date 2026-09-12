@@ -7,6 +7,9 @@
 
 import type { KiloClient, SuggestionRequest } from "@kilocode/sdk/v2/client"
 import { recoveryDirs } from "./permission-handler"
+import { acceptSuggestionPrivateFirst, dismissSuggestionPrivateFirst } from "../suggestion-privatefirst"
+
+type PrivateConn = Parameters<typeof acceptSuggestionPrivateFirst>[0]["connection"]
 
 export type RecoverableSuggestion = SuggestionRequest
 
@@ -15,6 +18,7 @@ export interface SuggestionContext {
   readonly currentSessionId: string | undefined
   readonly trackedSessionIds: Set<string>
   readonly sessionDirectories: ReadonlyMap<string, string>
+  readonly connection?: PrivateConn
   postMessage(msg: unknown): void
   getWorkspaceDirectory(sessionId?: string): string
 }
@@ -45,6 +49,23 @@ export async function routeSuggestionWebviewMessage(
   }
 }
 
+function isNotFoundError(error: unknown): boolean {
+  const record = (value: unknown) =>
+    value && typeof value === "object" ? (value as Record<string, unknown>) : undefined
+  const obj = record(error)
+  if (!obj) return false
+
+  const cause = record(obj.cause)
+  const body = record(cause?.body)
+  return [obj, record(obj.data), cause, body, record(body?.data)].some(
+    (value) => value?.name === "NotFoundError" || value?._tag === "NotFound" || value?.status === 404,
+  )
+}
+
+function stale(ctx: SuggestionContext, requestID: string): void {
+  ctx.postMessage({ type: "suggestionResolved", requestID })
+}
+
 export async function handleSuggestionAccept(
   ctx: SuggestionContext,
   requestID: string,
@@ -56,13 +77,37 @@ export async function handleSuggestionAccept(
     return
   }
 
+  const dir = ctx.getWorkspaceDirectory(sessionID ?? ctx.currentSessionId)
+
   try {
-    await ctx.client.suggestion.accept(
-      { requestID, index, directory: ctx.getWorkspaceDirectory(sessionID ?? ctx.currentSessionId) },
-      { throwOnError: true },
-    )
+    const priv = await acceptSuggestionPrivateFirst({
+      connection: ctx.connection ?? null,
+      directory: dir,
+      requestID,
+      index,
+    })
+    if (priv.outcome.kind === "terminal") return
+    if (priv.outcome.kind === "terminal-failure") {
+      if (priv.outcome.code === "suggestion.not_found") {
+        stale(ctx, requestID)
+        return
+      }
+      console.error("[Kilo New] KiloProvider: Failed to accept suggestion:", priv.outcome.code)
+      ctx.postMessage({ type: "suggestionError", requestID })
+      return
+    }
+  } catch (error) {
+    console.error("[Kilo New] KiloProvider: Private accept attempt failed, falling back:", error)
+  }
+
+  try {
+    await ctx.client.suggestion.accept({ requestID, index, directory: dir }, { throwOnError: true })
   } catch (error) {
     console.error("[Kilo New] KiloProvider: Failed to accept suggestion:", error)
+    if (isNotFoundError(error)) {
+      stale(ctx, requestID)
+      return
+    }
     ctx.postMessage({ type: "suggestionError", requestID })
   }
 }
@@ -77,13 +122,32 @@ export async function handleSuggestionDismiss(
     return
   }
 
+  const dir = ctx.getWorkspaceDirectory(sessionID ?? ctx.currentSessionId)
+
   try {
-    await ctx.client.suggestion.dismiss(
-      { requestID, directory: ctx.getWorkspaceDirectory(sessionID ?? ctx.currentSessionId) },
-      { throwOnError: true },
-    )
+    const priv = await dismissSuggestionPrivateFirst({ connection: ctx.connection ?? null, directory: dir, requestID })
+    if (priv.outcome.kind === "terminal") return
+    if (priv.outcome.kind === "terminal-failure") {
+      if (priv.outcome.code === "suggestion.not_found") {
+        stale(ctx, requestID)
+        return
+      }
+      console.error("[Kilo New] KiloProvider: Failed to dismiss suggestion:", priv.outcome.code)
+      ctx.postMessage({ type: "suggestionError", requestID })
+      return
+    }
+  } catch (error) {
+    console.error("[Kilo New] KiloProvider: Private dismiss attempt failed, falling back:", error)
+  }
+
+  try {
+    await ctx.client.suggestion.dismiss({ requestID, directory: dir }, { throwOnError: true })
   } catch (error) {
     console.error("[Kilo New] KiloProvider: Failed to dismiss suggestion:", error)
+    if (isNotFoundError(error)) {
+      stale(ctx, requestID)
+      return
+    }
     ctx.postMessage({ type: "suggestionError", requestID })
   }
 }

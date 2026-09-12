@@ -18,6 +18,8 @@ export const FD_CAPABILITIES = [
   "question/reply",
   "question/reject",
   "question/list",
+  "suggestion/accept",
+  "suggestion/dismiss",
   "permission/save-always-rules",
   "permission/reply",
   "permission/list",
