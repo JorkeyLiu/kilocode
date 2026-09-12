@@ -1527,7 +1527,7 @@ export function validateCancelQueuedResult(
     if (failure.code !== outFailure.code) throw new Error("failure code mismatch")
     if (failure.message !== outFailure.message) throw new Error("failure message mismatch")
     if (failure.retryable !== outFailure.retryable) throw new Error("failure retryable mismatch")
-    assertFailureDetailMirror(failure, outFailure)
+    if (String(failure.detail ?? "") !== String(outFailure.detail ?? "")) throw new Error("failure detail mismatch")
     if (rec.data !== undefined) throw new Error("failed must not have data")
     if (outRec.data !== undefined) throw new Error("failed outcome must not have data")
     return raw as unknown as ServePrivateCancelQueuedResult
