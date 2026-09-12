@@ -92,7 +92,7 @@ export async function commandSessionPrivateFirst(opts: CommandPrivateFirstInput)
   }
 
   const sdkFallback = async (): Promise<SdkResult> => {
-    const res = (await opts.client.session.command(
+    const res = (await opts.client.session.commandAsync(
       {
         sessionID: opts.sessionId,
         directory: opts.directory,

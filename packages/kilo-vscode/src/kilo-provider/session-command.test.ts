@@ -160,7 +160,19 @@ describe("command private-first", () => {
   test("authoritative success uses zero SDK", async () => {
     const seen: unknown[] = []
     let sdk = 0
-    const client = { session: { command: async () => { sdk += 1; return { data: null } } } }
+    let legacy = 0
+    const client = {
+      session: {
+        commandAsync: async () => {
+          sdk += 1
+          return { data: null }
+        },
+        command: async () => {
+          legacy += 1
+          return { data: null }
+        },
+      },
+    }
     const connection = {
       isPrivateAvailable: () => true,
       privateCommandWithHandle: (req: Record<string, unknown>) => {
@@ -171,6 +183,7 @@ describe("command private-first", () => {
     const out = await commandSessionPrivateFirst(baseOpts(client, connection))
     expect((out as { error?: unknown }).error).toBeUndefined()
     expect(sdk).toBe(0)
+    expect(legacy).toBe(0)
     expect(seen).toHaveLength(1)
     const req = seen[0] as Record<string, unknown>
     expect(req.op).toBe("session/command")
@@ -186,7 +199,19 @@ describe("command private-first", () => {
   test("validated terminal failure uses zero SDK including command.not_found", async () => {
     for (const code of ["session.not_found", "scope_mismatch", "validation.failed", "command.not_found"]) {
       let sdk = 0
-      const client = { session: { command: async () => { sdk += 1; return { data: null } } } }
+      let legacy = 0
+      const client = {
+        session: {
+          commandAsync: async () => {
+            sdk += 1
+            return { data: null }
+          },
+          command: async () => {
+            legacy += 1
+            return { data: null }
+          },
+        },
+      }
       const connection = {
         isPrivateAvailable: () => true,
         privateCommandWithHandle: (req: Record<string, unknown>) => ({
@@ -204,16 +229,22 @@ describe("command private-first", () => {
       expect(thrown).not.toBeNull()
       expect((thrown as Error & { code?: string }).code).toBe(code)
       expect(sdk).toBe(0)
+      expect(legacy).toBe(0)
     }
   })
 
   test("retryable failed falls back exactly once with same tuple", async () => {
     const seenPrivate: unknown[] = []
     const seenSdk: unknown[] = []
+    let legacy = 0
     const client = {
       session: {
-        command: async (input: Record<string, unknown>) => {
+        commandAsync: async (input: Record<string, unknown>) => {
           seenSdk.push(input)
+          return { data: null }
+        },
+        command: async () => {
+          legacy += 1
           return { data: null }
         },
       },
@@ -262,29 +293,36 @@ describe("command private-first", () => {
     expect(sdk.messageID).toBe(payload.messageId)
     expect(priv.opId).toBe(`prompt:${sdk.messageID as string}`)
     expect(JSON.stringify(sdk.parts)).toBe(JSON.stringify(payload.parts))
+    expect(legacy).toBe(0)
   })
 
   test("unavailable/invalid/ambiguous/closed/timeout each fallback exactly once same message", async () => {
     const cases: Array<{ name: string }> = []
     const mkSdk = () => {
       let n = 0
+      let legacy = 0
       const seen: unknown[] = []
       const client = {
         session: {
-          command: async (input: Record<string, unknown>) => {
+          commandAsync: async (input: Record<string, unknown>) => {
             n += 1
             seen.push(input)
             return { data: null }
           },
+          command: async () => {
+            legacy += 1
+            return { data: null }
+          },
         },
       }
-      return { client, count: () => n, seen }
+      return { client, count: () => n, seen, legacy: () => legacy }
     }
     {
       const s = mkSdk()
       const conn = { isPrivateAvailable: () => false }
       await commandSessionPrivateFirst(baseOpts(s.client, conn))
       expect(s.count()).toBe(1)
+      expect(s.legacy()).toBe(0)
       expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
       cases.push({ name: "unavailable" })
     }
@@ -300,6 +338,8 @@ describe("command private-first", () => {
       }
       await commandSessionPrivateFirst(baseOpts(s.client, conn))
       expect(s.count()).toBe(1)
+      expect(s.legacy()).toBe(0)
+      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
       cases.push({ name: "invalid" })
     }
     {
@@ -314,6 +354,8 @@ describe("command private-first", () => {
       }
       await commandSessionPrivateFirst(baseOpts(s.client, conn))
       expect(s.count()).toBe(1)
+      expect(s.legacy()).toBe(0)
+      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
       cases.push({ name: "ambiguous" })
     }
     {
@@ -326,6 +368,8 @@ describe("command private-first", () => {
       }
       await commandSessionPrivateFirst(baseOpts(s.client, conn))
       expect(s.count()).toBe(1)
+      expect(s.legacy()).toBe(0)
+      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
       cases.push({ name: "closed" })
     }
     {
@@ -337,6 +381,7 @@ describe("command private-first", () => {
       }
       await commandSessionPrivateFirst(baseOpts(s.client, conn))
       expect(s.count()).toBe(1)
+      expect(s.legacy()).toBe(0)
       expect(cancelled).toBeTrue()
       expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
       cases.push({ name: "timeout" })
@@ -347,10 +392,15 @@ describe("command private-first", () => {
   test("missing messageID stays stable across private and SDK fallback", async () => {
     const privSeen: unknown[] = []
     const sdkSeen: unknown[] = []
+    let legacy = 0
     const client = {
       session: {
-        command: async (input: Record<string, unknown>) => {
+        commandAsync: async (input: Record<string, unknown>) => {
           sdkSeen.push(input)
+          return { data: null }
+        },
+        command: async () => {
+          legacy += 1
           return { data: null }
         },
       },
@@ -381,18 +431,24 @@ describe("command private-first", () => {
     expect(sdk.messageID).toBe(privMid)
     expect(priv.opId).toBe(`prompt:${privMid}`)
     expect(priv.idempotencyKey).toBe(`prompt:${privMid}`)
+    expect(legacy).toBe(0)
   })
 
   test("single-attempt seam never re-enters wrapper on retryable SDK status", async () => {
     let priv = 0
     let sdk = 0
+    let legacy = 0
     let idle = 0
     const retryableErr = new Error("rate limited")
     const retryableRes = { status: 429, headers: new Headers() } as unknown as Response
     const client = {
       session: {
-        command: async () => {
+        commandAsync: async () => {
           sdk += 1
+          return { error: retryableErr, response: retryableRes }
+        },
+        command: async () => {
+          legacy += 1
           return { error: retryableErr, response: retryableRes }
         },
       },
@@ -426,6 +482,7 @@ describe("command private-first", () => {
     expect(thrown).toBe(retryableErr)
     expect(priv).toBe(1)
     expect(sdk).toBe(1)
+    expect(legacy).toBe(0)
     expect(idle).toBe(1)
   })
 })

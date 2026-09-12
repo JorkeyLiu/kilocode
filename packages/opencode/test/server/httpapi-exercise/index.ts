@@ -1219,6 +1219,28 @@ const scenarios: Scenario[] = [
       "status",
     ),
   http.protected
+    .post("/session/{sessionID}/command_async", "session.command_async")
+    .preserveDatabase()
+    .withLlm()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Async command session" })
+        yield* ctx.llmText("async command done")
+        yield* ctx.llmText("async command done")
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/command_async", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { messageID: "msg_asynccmd000000000001", command: "init", arguments: "", model: "test/test-model" },
+    }))
+    .status(204, (ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.llmWait(1)
+      }),
+    ),
+  http.protected
     .post("/session/{sessionID}/shell", "session.shell")
     .preserveDatabase()
     .mutating()
@@ -1378,6 +1400,7 @@ const llmScenarios = new Set([
   "session.prompt",
   "session.prompt_async",
   "session.command",
+  "session.command_async",
 ])
 
 const main = Effect.gen(function* () {

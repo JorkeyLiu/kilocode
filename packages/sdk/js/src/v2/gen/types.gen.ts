@@ -8956,6 +8956,64 @@ export type SessionCommandResponses = {
 
 export type SessionCommandResponse = SessionCommandResponses[keyof SessionCommandResponses]
 
+export type SessionCommandAsyncData = {
+  body?: {
+    messageID?: string
+    agent?: string
+    model?: string
+    arguments: string
+    command: string
+    variant?: string
+    snapshotInitialization?: "wait"
+    parts?: Array<{
+      id?: string
+      type: "file"
+      mime: string
+      filename?: string
+      url: string
+      source?: FilePartSource
+    }>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/command_async"
+}
+
+export type SessionCommandAsyncErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
+}
+
+export type SessionCommandAsyncError = SessionCommandAsyncErrors[keyof SessionCommandAsyncErrors]
+
+export type SessionCommandAsyncResponses = {
+  /**
+   * Command accepted
+   */
+  204: void
+}
+
+export type SessionCommandAsyncResponse = SessionCommandAsyncResponses[keyof SessionCommandAsyncResponses]
+
 export type SessionShellData = {
   body?: {
     messageID?: string

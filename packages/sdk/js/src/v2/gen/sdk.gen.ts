@@ -297,6 +297,8 @@ import type {
   SessionCancelQueuedResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
+  SessionCommandAsyncErrors,
+  SessionCommandAsyncResponses,
   SessionCommandErrors,
   SessionCommandResponses,
   SessionCreateErrors,
@@ -4661,6 +4663,68 @@ export class Session2 extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  /**
+   * Send async command
+   *
+   * Accept a session command through the same SessionCommandDispatch owner as the private carrier and return immediately.
+   */
+  public commandAsync<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID?: string
+      agent?: string
+      model?: string
+      arguments?: string
+      command?: string
+      variant?: string
+      snapshotInitialization?: "wait"
+      parts?: Array<{
+        id?: string
+        type: "file"
+        mime: string
+        filename?: string
+        url: string
+        source?: FilePartSource
+      }>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "messageID" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "model" },
+            { in: "body", key: "arguments" },
+            { in: "body", key: "command" },
+            { in: "body", key: "variant" },
+            { in: "body", key: "snapshotInitialization" },
+            { in: "body", key: "parts" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionCommandAsyncResponses, SessionCommandAsyncErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/command_async",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**

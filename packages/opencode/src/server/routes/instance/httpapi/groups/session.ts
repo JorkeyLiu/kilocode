@@ -145,6 +145,7 @@ export const SessionPaths = {
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
+  commandAsync: `${root}/:sessionID/command_async`,
   shell: `${root}/:sessionID/shell`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
@@ -391,6 +392,20 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.command",
             summary: "Send command",
             description: "Send a new command to a session for execution by the AI assistant.",
+          }),
+        ),
+        HttpApiEndpoint.post("commandAsync", SessionPaths.commandAsync, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: CommandPayload,
+          success: described(HttpApiSchema.NoContent, "Command accepted"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.Conflict, HttpApiError.InternalServerError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.command_async",
+            summary: "Send async command",
+            description:
+              "Accept a session command through the same SessionCommandDispatch owner as the private carrier and return immediately.",
           }),
         ),
         HttpApiEndpoint.post("shell", SessionPaths.shell, {

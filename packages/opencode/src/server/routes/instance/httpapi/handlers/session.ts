@@ -8,6 +8,11 @@ import { SessionUpdateDispatchService, type SessionUpdateResult } from "@/kiloco
 import { SessionForkDispatchService, type SessionForkResult } from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
 import { SessionCreateDispatchService, type SessionCreateResult } from "@/kilocode/session/session-create-dispatch" // kilocode_change - P4.4-G3-B4 create
 import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch" // kilocode_change - P4.4-G3-B5 delete
+import {
+  SessionCommandDispatchService,
+  type SessionCommandRequest,
+  type SessionCommandResult,
+} from "@/kilocode/session/session-command-dispatch" // kilocode_change - command_async same-owner fallback
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
 import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - P4.4-G3 double directory contract
 import { WorkspaceRouteContext } from "../middleware/workspace-routing" // kilocode_change - P4.4-G3-B4 effective directory
@@ -55,6 +60,46 @@ const tryParseJson = (text: string) =>
     try: () => JSON.parse(text) as unknown,
     catch: () => new HttpApiError.BadRequest({}),
   })
+
+// kilocode_change - command_async same-owner fallback: pure helpers for request build + outcome mapping
+export function commandAsyncFailureStatus(code: string): 400 | 404 | 409 | 500 {
+  if (code === "session.not_found") return 404
+  if (code === "validation.failed" || code === "scope_mismatch" || code === "command.not_found") return 400
+  if (code === "stale" || code === "conflict" || code === "InstanceUnavailableDuringConfigRebuild") return 409
+  return 500
+}
+
+export function buildCommandAsyncDispatchRequest(input: {
+  sessionID: string
+  directory: string
+  payload: typeof CommandPayload.Type
+}): SessionCommandRequest {
+  const mid = input.payload.messageID
+  if (typeof mid !== "string" || mid.length === 0) throw new Error("payload.messageId is required for command_async")
+  const dir = canonicalDirectory(input.directory)
+  const opId = SessionOperation.promptId(mid)
+  const payload = input.payload as unknown as Record<string, unknown>
+  return {
+    v: 1 as const,
+    requestId: `command_async:${input.sessionID}:${mid}`,
+    opId,
+    op: "session/command" as const,
+    idempotencyKey: opId,
+    context: { directory: dir, sessionId: input.sessionID, parentSessionId: null },
+    payload: {
+      messageId: mid,
+      command: payload.command as string,
+      arguments: payload.arguments as string,
+      ...(payload.model !== undefined && payload.model !== null ? { model: payload.model as string } : {}),
+      ...(payload.agent !== undefined && payload.agent !== null ? { agent: payload.agent as string } : {}),
+      ...(payload.variant !== undefined && payload.variant !== null ? { variant: payload.variant as string } : {}),
+      ...(payload.parts !== undefined && payload.parts !== null ? { parts: payload.parts as unknown[] } : {}),
+      ...(payload.snapshotInitialization !== undefined && payload.snapshotInitialization !== null
+        ? { snapshotInitialization: payload.snapshotInitialization as "wait" }
+        : {}),
+    },
+  }
+}
 
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
@@ -694,6 +739,46 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
+    const commandDispatch = yield* SessionCommandDispatchService // kilocode_change - command_async same-owner fallback
+    const commandAsync = Effect.fn("SessionHttpApi.commandAsync")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof CommandPayload.Type
+    }) {
+      const routeOpt = yield* Effect.serviceOption(WorkspaceRouteContext)
+      if (Option.isNone(routeOpt)) return yield* new HttpApiError.BadRequest({})
+      const dir = (() => {
+        try {
+          return canonicalDirectory(routeOpt.value.directory)
+        } catch {
+          return null
+        }
+      })()
+      if (dir === null) return yield* new HttpApiError.BadRequest({})
+      let req: SessionCommandRequest
+      try {
+        req = buildCommandAsyncDispatchRequest({ sessionID: ctx.params.sessionID, directory: dir, payload: ctx.payload })
+      } catch {
+        return yield* new HttpApiError.BadRequest({})
+      }
+      const result = (yield* commandDispatch.dispatch(req).pipe(
+        Effect.catchDefect(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+        Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+      )) as SessionCommandResult
+      if (result.status === "succeeded" && result.accepted) return HttpApiSchema.NoContent.make()
+      if (result.status === "failed") {
+        const status = commandAsyncFailureStatus(result.failure.code)
+        if (status === 404) {
+          return yield* Effect.fail(
+            new ApiNotFoundError({ name: "NotFoundError", data: { message: result.failure.message } }),
+          )
+        }
+        if (status === 400) return yield* new HttpApiError.BadRequest({})
+        if (status === 409) return yield* new HttpApiError.Conflict({})
+        return yield* new HttpApiError.InternalServerError({})
+      }
+      return yield* new HttpApiError.InternalServerError({})
+    })
+
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof ShellPayload.Type
@@ -843,6 +928,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)
+      .handle("commandAsync", commandAsync)
       .handle("shell", shell)
       .handle("revert", revert)
       .handle("unrevert", unrevert)
