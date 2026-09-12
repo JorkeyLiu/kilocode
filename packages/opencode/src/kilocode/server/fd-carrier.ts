@@ -33,6 +33,8 @@ import {
   validatePermissionReplyRequest,
   validatePermissionSaveRequest,
 } from "@/kilocode/permission/permission-private"
+import { Permission } from "@/permission"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionStatus } from "@/session/status"
 import { ModelUsage } from "@/kilocode/session/model-usage"
 import { Agent } from "@/agent/agent"
@@ -421,6 +423,8 @@ export const FD_MODEL_USAGE_VERSION = 1 as const
 export const FD_MODEL_USAGE_OP = "session/model-usage" as const
 export const FD_AGENT_REQUIREMENTS_VERSION = 1 as const
 export const FD_AGENT_REQUIREMENTS_OP = "agent/requirements" as const
+export const FD_PERMISSION_LIST_VERSION = 1 as const
+export const FD_PERMISSION_LIST_OP = "permission/list" as const
 export const FD_PROMPT_VERSION = 1 as const
 export const FD_PROMPT_OP = "session/prompt" as const
 export const FD_COMMAND_VERSION = 1 as const
@@ -517,6 +521,18 @@ export interface FdAgentRequirementsRequest {
   context: {
     directory: string
     agent: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdPermissionListRequest {
+  v: typeof FD_PERMISSION_LIST_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_PERMISSION_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
   }
   payload: Record<string, never>
 }
@@ -1478,6 +1494,27 @@ function agentRequirementsFailed(
   }
 }
 
+function permissionListFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_PERMISSION_LIST_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_PERMISSION_LIST_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 function fallbackAgentRequirementsIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
   const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
   return {
@@ -1488,6 +1525,27 @@ function fallbackAgentRequirementsIds(raw: unknown): { requestId: string; opId: 
 }
 
 function safeAgentRequirementsIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
+function fallbackPermissionListIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safePermissionListIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
   requestId: string
   opId: string
   idempotencyKey: string
@@ -1538,6 +1596,11 @@ const AGENT_REQUIREMENTS_FENCE_MESSAGE =
 const AGENT_REQUIREMENTS_INTERNAL_MESSAGE = "internal error"
 const AGENT_REQUIREMENTS_VALIDATION_MESSAGE = "invalid agent-requirements request"
 const AGENT_REQUIREMENTS_SCOPE_MESSAGE = "directory mismatch"
+const PERMISSION_LIST_FENCE_MESSAGE =
+  "Instance is unavailable during config rebuild; no active runtime for this request"
+const PERMISSION_LIST_INTERNAL_MESSAGE = "internal error"
+const PERMISSION_LIST_VALIDATION_MESSAGE = "invalid permission-list request"
+const PERMISSION_LIST_SCOPE_MESSAGE = "directory mismatch"
 
 const FIND_FILES_SENSITIVE_SEGMENTS = new Set([".ssh", ".aws", "secret", "secrets"])
 const FIND_FILES_SENSITIVE_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "cer", "crt", "der", "jks"])
@@ -1688,6 +1751,40 @@ function validateAgentRequirementsRequest(raw: unknown): FdAgentRequirementsRequ
   const token = segs[2] as string
   if (token.includes(":")) throw new Error("opId must be agent-requirements:<agent>:<token> with nonempty colon-free token")
   return raw as unknown as FdAgentRequirementsRequest
+}
+
+function validatePermissionListRequest(raw: unknown): FdPermissionListRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_PERMISSION_LIST_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_PERMISSION_LIST_OP) throw new Error("op must be permission/list")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for permission-list")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for permission-list")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "permission-list" || segs[1]!.length === 0)
+    throw new Error("opId must be permission-list:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be permission-list:<token> with nonempty colon-free token")
+  return raw as unknown as FdPermissionListRequest
 }
 
 export function createFdCarrier(
@@ -2203,6 +2300,103 @@ export function createFdCarrier(
               return yield* replyPermissionPrivate(params)
             }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner
+          }),
+        )
+        return result
+      }
+      if (method === FD_PERMISSION_LIST_OP || method === "permission/list") {
+        // Read-only permission list: same-directory Permission.Service.list()
+        // via the existing drain-control + InstanceRef snapshot-first lane
+        // held to completion. Exact pending shape, no mutation, no durable
+        // operation. Not added to drain-control classification.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdPermissionListRequest
+            try {
+              req = validatePermissionListRequest(params)
+            } catch {
+              return permissionListFailed(
+                fallbackPermissionListIds(params),
+                "validation.failed",
+                PERMISSION_LIST_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safePermissionListIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return permissionListFailed(safe, "validation.failed", PERMISSION_LIST_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? PERMISSION_LIST_FENCE_MESSAGE : PERMISSION_LIST_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: permissionListFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir)
+                return permissionListFailed(safe, "scope_mismatch", PERMISSION_LIST_SCOPE_MESSAGE, false)
+              const svc = yield* Permission.Service
+              const list = yield* svc.list().pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (list.tag !== "ok")
+                return permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false)
+              if (!Array.isArray(list.value))
+                return permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false)
+              for (const item of list.value) {
+                if (!Schema.is(PermissionV1.Request)(item))
+                  return permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false)
+              }
+              return {
+                v: FD_PERMISSION_LIST_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_PERMISSION_LIST_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { permissions: list.value },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(permissionListFailed(safe, "internal", PERMISSION_LIST_INTERNAL_MESSAGE, false))
+              }),
+            )
           }),
         )
         return result

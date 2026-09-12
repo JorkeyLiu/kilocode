@@ -6,7 +6,7 @@
  */
 
 import type { KiloClient, PermissionRequest } from "@kilocode/sdk/v2/client"
-import { replyPermissionPrivateFirst, savePermissionPrivateFirst } from "../permission-privatefirst"
+import { readPermissionsForDir, replyPermissionPrivateFirst, savePermissionPrivateFirst } from "../permission-privatefirst"
 
 type PrivateConn = Parameters<typeof replyPermissionPrivateFirst>[0]["connection"]
 
@@ -209,14 +209,21 @@ export async function fetchAndSendPendingPermissions(ctx: PermissionContext): Pr
     const seen = new Set<string>()
     const valid = new Set<string>()
     for (const dir of dirs) {
-      const { data, error } = await ctx.client.permission.list({ directory: dir })
-      if (error) {
+      let perms: RecoverablePermission[]
+      try {
+        const read = await readPermissionsForDir({
+          connection: ctx.connection ?? null,
+          client: ctx.client,
+          directory: dir,
+        })
+        if (read.kind !== "ok") continue
+        perms = read.perms as unknown as RecoverablePermission[]
+      } catch (error) {
         console.error(`[Kilo New] KiloProvider: Failed to fetch pending permissions for ${dir}:`, error)
         continue
       }
       valid.add(dir)
-      if (!data) continue
-      for (const perm of recoverablePermissions(data, ctx.trackedSessionIds, seen)) {
+      for (const perm of recoverablePermissions(perms, ctx.trackedSessionIds, seen)) {
         ctx.recordPermissionDirectory(perm.id, dir)
         ctx.postMessage({
           type: "permissionRequest",

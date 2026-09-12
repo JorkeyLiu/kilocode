@@ -14,6 +14,16 @@ import type {
 } from "../services/cli-backend/serve-private-permission-contract"
 import type { KiloConnectionService } from "../services/cli-backend"
 import { permissionReplyHandle, permissionSaveHandle } from "../services/cli-backend/serve-private-permission-connection"
+import { permissionListHandle } from "../services/cli-backend/serve-private-permission-list-connection"
+import {
+  canonicalPermissionListOpId,
+  validatePermissionListContractRequest,
+  validatePermissionListResult,
+} from "../services/cli-backend/serve-private-permission-list-contract"
+import type {
+  PermissionListContractRequest,
+  PermissionListEntry,
+} from "../services/cli-backend/serve-private-permission-list-contract"
 import type { ServePrivatePeer } from "../services/cli-backend/serve-private-peer"
 
 export type PermissionPrivateOutcome =
@@ -103,7 +113,14 @@ type Conn = Pick<KiloConnectionService, "isPrivateAvailable" | "getPrivatePeer" 
   privatePermissionWithHandle?: (req: PermissionSaveContractRequest | PermissionReplyContractRequest) => Handle
   privatePermissionSaveWithHandle?: (req: PermissionSaveContractRequest) => Handle
   privatePermissionReplyWithHandle?: (req: PermissionReplyContractRequest) => Handle
+  privatePermissionListOutcomeWithHandle?: (req: PermissionListContractRequest) => Handle
+  privatePermissionListWithHandle?: (req: PermissionListContractRequest) => Handle
 }
+
+export type PermissionListPrivateOutcome =
+  | { kind: "ok"; perms: PermissionListEntry[] }
+  | { kind: "unknown" }
+  | { kind: "fallback"; reason: string }
 
 function ownerDeps(conn: Conn): { peer: ServePrivatePeer | null; live: boolean; epoch: number | null; invalidate: (reason: string) => void } | null {
   const typed = conn as unknown as {
@@ -211,6 +228,147 @@ function settleReply(req: PermissionReplyContractRequest, result: unknown): Perm
     }
   }
   return { kind: "fallback", reason: "invalid" }
+}
+
+export function buildPermissionListIdentity(): { opId: string; idempotencyKey: string; requestId: string } {
+  const token = crypto.randomUUID()
+  const opId = canonicalPermissionListOpId(token)
+  return { opId, idempotencyKey: opId, requestId: crypto.randomUUID() }
+}
+
+function buildListReq(directory: string): PermissionListContractRequest {
+  const ids = buildPermissionListIdentity()
+  return {
+    v: 1 as const,
+    requestId: ids.requestId,
+    opId: ids.opId,
+    op: "permission/list" as const,
+    idempotencyKey: ids.idempotencyKey,
+    context: { directory },
+    payload: {},
+  }
+}
+
+function validList(req: PermissionListContractRequest): boolean {
+  try {
+    validatePermissionListContractRequest(req)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function acquireList(conn: Conn, req: PermissionListContractRequest): { ok: true; handle: Handle | null; promise: Promise<unknown> } | { ok: false; reason: string } {
+  try {
+    const outcome = conn.privatePermissionListOutcomeWithHandle?.bind(conn) ?? null
+    if (outcome) {
+      const got = outcome(req)
+      return { ok: true, handle: got, promise: got.promise }
+    }
+    const direct = conn.privatePermissionListWithHandle?.bind(conn) ?? null
+    if (direct) {
+      const got = direct(req)
+      return { ok: true, handle: got, promise: got.promise }
+    }
+    const deps = ownerDeps(conn)
+    if (!deps || !deps.peer) return { ok: false, reason: "missing-capability" }
+    const got = permissionListHandle({ peer: deps.peer, live: deps.live, epoch: deps.epoch, invalidate: deps.invalidate }, req)
+    return { ok: true, handle: got, promise: got.promise }
+  } catch (err) {
+    return { ok: false, reason: String(err instanceof Error ? err.message : err).slice(0, 200) }
+  }
+}
+
+function settleList(req: PermissionListContractRequest, result: unknown): PermissionListPrivateOutcome {
+  const rec = result as { kind?: unknown; status?: unknown } | null
+  if (!rec || typeof rec !== "object") return { kind: "fallback", reason: "invalid" }
+  if (rec.kind === "invalid") return { kind: "fallback", reason: "invalid" }
+  const wire = rec as { kind?: string; result?: unknown }
+  const inner = wire.kind === "valid" ? wire.result : result
+  const typed = inner as { status?: unknown }
+  if (typed.status === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (typed.status === "succeeded") {
+    try {
+      const out = validatePermissionListResult(inner, req)
+      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "fallback", reason: "invalid" }
+      return { kind: "ok", perms: out.data.permissions }
+    } catch {
+      return { kind: "fallback", reason: "invalid" }
+    }
+  }
+  if (typed.status === "failed") {
+    try {
+      const out = validatePermissionListResult(inner, req)
+      if (out.status !== "failed") return { kind: "fallback", reason: "invalid" }
+      if (out.failure.retryable === true) return { kind: "fallback", reason: out.failure.code }
+      return { kind: "unknown" }
+    } catch {
+      return { kind: "fallback", reason: "invalid" }
+    }
+  }
+  return { kind: "fallback", reason: "invalid" }
+}
+
+export async function listPermissionsPrivateFirst(opts: {
+  connection?: Conn | null
+  directory: string
+}): Promise<{ outcome: PermissionListPrivateOutcome; req: PermissionListContractRequest }> {
+  let req: PermissionListContractRequest
+  try {
+    req = buildListReq(opts.directory)
+  } catch {
+    const token = crypto.randomUUID()
+    const fallback: PermissionListContractRequest = {
+      v: 1 as const,
+      requestId: crypto.randomUUID(),
+      opId: `permission-list:${token}`,
+      op: "permission/list" as const,
+      idempotencyKey: `permission-list:${token}`,
+      context: { directory: opts.directory },
+      payload: {},
+    }
+    return { outcome: { kind: "fallback", reason: "invalid" }, req: fallback }
+  }
+  if (!validList(req)) return { outcome: { kind: "fallback", reason: "invalid" }, req }
+  const conn = opts.connection ?? null
+  if (!conn) return { outcome: { kind: "fallback", reason: "unavailable" }, req }
+  try {
+    if (!conn.isPrivateAvailable()) return { outcome: { kind: "fallback", reason: "unavailable" }, req }
+  } catch {
+    return { outcome: { kind: "fallback", reason: "unavailable" }, req }
+  }
+  const acq = acquireList(conn, req)
+  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  let result: unknown
+  try {
+    result = await withTimeout(acq.promise, 3000)
+  } catch {
+    expired(acq.handle, req.opId)
+    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+  }
+  return { outcome: settleList(req, result), req }
+}
+
+export async function readPermissionsForDir(opts: {
+  connection?: Conn | null
+  client: unknown
+  directory: string
+}): Promise<{ kind: "ok"; perms: PermissionListEntry[] } | { kind: "unknown" }> {
+  const attempt = await listPermissionsPrivateFirst({ connection: opts.connection ?? null, directory: opts.directory })
+  if (attempt.outcome.kind === "ok") return { kind: "ok", perms: attempt.outcome.perms }
+  if (attempt.outcome.kind === "unknown") return { kind: "unknown" }
+  const client = opts.client as {
+    permission?: { list?: (args: { directory: string }) => Promise<{ data?: unknown; error?: unknown }> }
+  } | null
+  if (!client?.permission?.list) return { kind: "unknown" }
+  try {
+    const res = await client.permission.list({ directory: opts.directory })
+    if (res.error) return { kind: "unknown" }
+    const perms = Array.isArray(res.data) ? (res.data as PermissionListEntry[]) : []
+    return { kind: "ok", perms }
+  } catch {
+    return { kind: "unknown" }
+  }
 }
 
 export async function savePermissionPrivateFirst(opts: {

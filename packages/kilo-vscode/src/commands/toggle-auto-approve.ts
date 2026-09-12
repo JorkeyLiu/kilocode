@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import type { Event, KiloClient } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
-import { replyPermissionPrivateFirst } from "../kilo-provider/permission-privatefirst"
+import { readPermissionsForDir, replyPermissionPrivateFirst } from "../kilo-provider/permission-privatefirst"
 
 /**
  * Callback that resolves the correct working directory for a session.
@@ -96,8 +96,9 @@ export function registerToggleAutoApprove(
     for (const dir of directories()) {
       if (generation !== snapshot) break
       try {
-        const { data: pending } = await client.permission.list({ directory: dir }, { throwOnError: true })
-        for (const req of pending) {
+        const read = await readPermissionsForDir({ connection: connectionService, client, directory: dir })
+        if (read.kind !== "ok") continue
+        for (const req of read.perms) {
           if (generation !== snapshot) break
           const out = await replyOncePrivateFirst(connectionService, client, dir, req.id)
           if (!out.ok) console.error("[Kilo New] toggleAutoApprove: failed to drain pending:", out.detail)

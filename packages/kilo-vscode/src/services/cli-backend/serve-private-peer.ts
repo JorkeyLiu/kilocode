@@ -181,6 +181,17 @@ import {
   validatePermissionSaveResult,
   validatePermissionTerminalFailure,
 } from "./serve-private-permission-contract"
+import {
+  makePermissionListAmbiguous,
+  normalizePrivatePermissionListWire,
+  validatePermissionListContractRequest,
+  validatePermissionListResult,
+} from "./serve-private-permission-list-contract"
+import type {
+  PermissionListContractRequest,
+  PermissionListResult,
+  PermissionListWireOutcome,
+} from "./serve-private-permission-list-contract"
 import type {
   PermissionAmbiguous,
   PermissionContractRequest,
@@ -3455,6 +3466,61 @@ export class ServePrivatePeer {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makePermissionAmbiguous(req)
         return makePermissionAmbiguous(req)
       }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privatePermissionList(req: PermissionListContractRequest): Promise<PermissionListResult> {
+    const handle = this.privatePermissionListWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new Error(outcome.detail)
+    return outcome.result
+  }
+
+  private failedPermissionList(req: PermissionListContractRequest, code: string, msg: string): PermissionListResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "permission/list",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  privatePermissionListWithHandle(req: PermissionListContractRequest): {
+    id: number
+    promise: Promise<PermissionListWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validatePermissionListContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("permission/list")) {
+      throw new Error("Private peer missing permission/list capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("permission/list", req)
+    const promise = (async (): Promise<PermissionListWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makePermissionListAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedPermissionList(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makePermissionListAmbiguous(req, true) }
+      return normalizePrivatePermissionListWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }
