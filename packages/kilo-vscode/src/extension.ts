@@ -17,7 +17,6 @@ import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathParityConnection } from "./kilo-provider/model-state"
-import { setCommandListParityConnection } from "./kilo-provider/commands"
 import { setConfigWarningsParityConnection } from "./kilo-provider/config-warnings"
 import { setProjectCurrentParityConnection } from "./kilo-provider/git-status"
 import { markWorkspace } from "./util/spotlight"
@@ -199,10 +198,6 @@ export function activate(context: vscode.ExtensionContext) {
   // SDK consumer (`model-state.ts` resolve). SDK stays the sole authority;
   // the observer is non-blocking, warn-only, and never mutates SDK state.
   setPathParityConnection(connectionService)
-  // Detached SDK-first `command/list` parity boundary for the narrowest
-  // existing SDK consumer (`kilo-provider/commands.ts` loadCommands). Same
-  // authority/observer contract as the path boundary.
-  setCommandListParityConnection(connectionService)
   // Detached SDK-first `config/warnings` parity boundary for the narrowest
   // existing SDK consumer (`KiloProvider.checkConfigWarnings`). Same
   // authority/observer contract: SDK stays the sole user-visible authority
@@ -750,7 +745,6 @@ export function activate(context: vscode.ExtensionContext) {
 export async function deactivate() {
   shuttingDown = true
   setPathParityConnection(null)
-  setCommandListParityConnection(null)
   setConfigWarningsParityConnection(null)
   setProjectCurrentParityConnection(null)
   await agentManager?.shutdown()

@@ -1,13 +1,12 @@
-// Gate B deferred `command/list` instance-inventory candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no runtime observation, no durable state, no cache policy, and no
-// production parity claim.
-// `op:"command/list"` below is a contract-evidence label only; it is never
-// registered as a private capability and never sent over any peer.
-// Production listing stays SDK-only (`GET /command` via
-// `@kilocode/sdk` `client.command.list`).
+// Private-first `command/list` instance-inventory contract (production).
+// Strict request/result validation plus the safe consumer projection
+// (`{name, description?, source?, hints?}`). The FD carrier invokes the same
+// `Command.Service.list()` used by `GET /command`; the extension
+// `loadCommands` is private-first with exactly one SDK `client.command.list`
+// fallback. `template` (lazy promise content), `agent`, `model`, and
+// `subtask` never cross the boundary.
 //
-// Source facts (read-only evidence, not imported):
+// Source facts (read-only, not imported):
 // - Route: `GET /command` with `WorkspaceRoutingQuery` (`directory?`,
 //   `workspace?`) in
 //   `packages/opencode/src/server/routes/instance/httpapi/groups/instance.ts`
@@ -22,23 +21,16 @@
 //   non-skill command (`names.has(item.name)` push), so one skill/non-skill
 //   same-name pair (two entries, same `name`, different `source`) is a legal
 //   production shape.
-// - SDK: `client.command.list({directory})` issues `GET /command`; malformed
-//   SDK array entries are never coerced here (divergence, not throw).
-// - Consumer: `packages/kilo-vscode/src/kilo-provider/commands.ts:14`
+// - SDK: `client.command.list({directory})` issues `GET /command` and remains
+//   the exactly-one fallback for retryable/unavailable/invalid/ambiguous/
+//   transport/closed/timeout outcomes.
+// - Consumer: `packages/kilo-vscode/src/kilo-provider/commands.ts`
 //   `loadCommands` maps each entry to `{name, description, source, hints}`
-//   only; `agent`/`model`/`template`/`subtask` never cross that boundary.
+//   only, preserving the carrier's `Command.Service.list()` order;
+//   `agent`/`model`/`template`/`subtask` never cross that boundary.
 // - Distinct from `session/command` (per-session command execution),
 //   `v2.command.list` (`GET /api/command`), `app.agents`, and `app.skills`.
 //   This contract never matches those operations.
-//
-// EXPLICIT UNKNOWNS (no inference without evidence):
-// - Ordering: list order across calls is unknown; parity never compares order.
-// - Snapshot: whether one call observes a single atomic command table or a
-//   torn read across config/MCP/skill sources is unknown.
-// - Freshness: staleness across calls (config edits, MCP prompt changes,
-//   skill installs) is unknown.
-// - Template resolution: `template` (lazy promise/string) resolution timing
-//   and content are unknown and never projected or compared.
 
 import { isAbsolute, normalize, resolve } from "path"
 
@@ -361,96 +353,4 @@ export function validateCommandListResult(raw: unknown, req: CommandListContract
   return raw as unknown as CommandListResult
 }
 
-function entryKey(name: string, source: unknown): string {
-  return `${name}::${typeof source === "string" ? source : ""}`
-}
 
-function isSdkEntryShape(raw: unknown): raw is Record<string, unknown> {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
-  const rec = raw as Record<string, unknown>
-  if (typeof rec.name !== "string" || rec.name.length === 0) return false
-  if (rec.description !== undefined && typeof rec.description !== "string") return false
-  if (rec.source !== undefined && (typeof rec.source !== "string" || !COMMAND_LIST_ENTRY_SOURCES.has(rec.source as string))) return false
-  if (rec.hints !== undefined) {
-    if (!Array.isArray(rec.hints)) return false
-    for (const h of rec.hints as unknown[]) if (typeof h !== "string") return false
-  }
-  return true
-}
-
-// Detached parity only (contract evidence, never production parity):
-// compares ONLY the projected entry fields (`name`, `description`, `source`)
-// for keys present on both sides. Entries are keyed by `name::source` so one
-// skill/non-skill same-name pair stays representable. Order is never
-// compared; length/membership gaps are reported as explicit unknowns
-// (`command-list-membership-unknown`) rather than matches or mismatches,
-// because ordering, snapshot atomicity, freshness, and template resolution
-// are unknown. `hints` is validated for shape only and never compared. The
-// request directory is never compared.
-export function compareCommandListParity(
-  priv: CommandListResult,
-  sdk: { data?: unknown; error?: unknown; response?: unknown },
-): { divergence: string | null; details: Record<string, unknown> } {
-  const base = { orderingUnknown: true, snapshotUnknown: true, freshnessUnknown: true, templateUnknown: true }
-  const privStatus: string = priv.status
-  if (!!(priv as Record<string, unknown>).transportUnknown) {
-    return { divergence: "transport-unknown", details: { privStatus, transportUnknown: true, ...base } }
-  }
-  const sdkError = sdk.error !== undefined && sdk.error !== null
-  const sdkStatus: string = sdkError ? "failed" : "succeeded"
-  if (sdkStatus !== privStatus) {
-    return { divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`, details: { sdkStatus, privStatus, ...base } }
-  }
-  if (sdkStatus === "succeeded" && privStatus === "succeeded") {
-    const sdkRaw = sdk.data
-    if (!Array.isArray(sdkRaw)) {
-      return { divergence: "command-list-non-array", details: { ...base, mismatch: true } }
-    }
-    for (const item of sdkRaw as unknown[]) {
-      if (!isSdkEntryShape(item)) {
-        return { divergence: "command-list-shape-mismatch", details: { ...base, mismatch: true } }
-      }
-    }
-    const privEntries = (priv as Extract<CommandListResult, { status: "succeeded" }>).data.commands
-    const sdkByKey = new Map<string, Record<string, unknown>>()
-    for (const item of sdkRaw as unknown[]) {
-      const rec = item as Record<string, unknown>
-      sdkByKey.set(entryKey(rec.name as string, rec.source), rec)
-    }
-    // Membership gaps are fixed-category unknowns: counts and booleans only,
-    // never command names or payload material (audit F-001).
-    const sdkCount = sdkByKey.size
-    const privCount = privEntries.length
-    for (const p of privEntries) {
-      const s = sdkByKey.get(entryKey(p.name, p.source))
-      if (!s) {
-        return {
-          divergence: "command-list-membership-unknown",
-          details: { ...base, membershipUnknown: true, privCount, sdkCount },
-        }
-      }
-      // Optional description: presence and value are both compared (audit
-      // F-004). Both absent is equal; single-sided presence or differing
-      // values is a fixed description-mismatch with no name echo.
-      const sdkHas = s.description !== undefined
-      const privHas = p.description !== undefined
-      if (sdkHas !== privHas || (sdkHas && privHas && s.description !== p.description)) {
-        return {
-          divergence: "command-list-description-mismatch",
-          details: { ...base, descriptionMismatch: true, field: "description", compared: privCount },
-        }
-      }
-    }
-    for (const key of sdkByKey.keys()) {
-      const found = privEntries.some((p) => entryKey(p.name, p.source) === key)
-      if (!found) {
-        return {
-          divergence: "command-list-membership-unknown",
-          details: { ...base, membershipUnknown: true, privCount, sdkCount },
-        }
-      }
-    }
-    return { divergence: null, details: { ...base, compared: privEntries.length } }
-  }
-  return { divergence: null, details: { ...base } }
-}

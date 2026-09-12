@@ -1,6 +1,7 @@
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { retry } from "../services/cli-backend/retry"
-import { observeCommandListParityDetached, type CommandListParityConnection } from "./command-list-parity"
+import type { CommandListContractRequest } from "../services/cli-backend/serve-private-command-list-contract"
+import { attemptCommandListPrivate, buildCommandListPrivateReq } from "./command-list-privatefirst"
 
 const promises = new Map<string, Promise<unknown>>()
 
@@ -8,63 +9,67 @@ export function clearCommandsCache(): void {
   promises.clear()
 }
 
-/**
- * Detached SDK-first `command/list` parity boundary. SDK stays the sole
- * authority; the observer is non-blocking, warn-only, and never mutates the
- * SDK return or the per-directory dedupe cache. Null detaches. Set by the
- * owner that holds the current `KiloConnectionService`.
- */
-let parityConn: CommandListParityConnection | null = null
-
-export function setCommandListParityConnection(c: CommandListParityConnection | null): void {
-  parityConn = c
-}
-
-function observeParity(sdk: { data?: unknown; error?: unknown; response?: unknown }, dir: string): void {
-  const conn = parityConn
-  if (!conn) return
-  if (typeof dir !== "string" || dir.length === 0) return
-  try {
-    observeCommandListParityDetached(conn, sdk, dir)
-  } catch {
-    console.warn("[Kilo CommandList] private parity observation failed (fail-closed):", {
-      op: "command/list",
-      observationFailed: true,
-    })
+type CommandListConnection = {
+  isPrivateAvailable(): boolean
+  privateCommandListOutcomeWithHandle(req: CommandListContractRequest): {
+    id: number
+    promise: Promise<unknown>
+    cancel?: (msg?: string) => boolean | "stale"
   }
 }
 
-export async function loadCommands(client: KiloClient, dir: string): Promise<unknown> {
+function mapEntries(items: Array<{ name: string; description?: string; source?: string; hints?: string[] }>): {
+  type: string
+  commands: Array<{ name: string; description?: string; source?: string; hints?: string[] }>
+} {
+  return {
+    type: "commandsLoaded",
+    commands: items.map((cmd) => ({
+      name: cmd.name,
+      description: cmd.description,
+      source: cmd.source,
+      hints: cmd.hints,
+    })),
+  }
+}
+
+function terminalError(code: string, message: string): Error {
+  const err = new Error(`private command/list failed: ${code}: ${message}`.slice(0, 300))
+  ;(err as unknown as Record<string, unknown>).code = code
+  return err
+}
+
+/**
+ * Private-first `command/list` read. A validated private
+ * `succeeded`+`accepted` returns the safe carrier projection with zero SDK;
+ * a validated `failed` with `retryable === false` rejects terminally with
+ * zero SDK. Retryable fence, unavailable, invalid, ambiguous, transport,
+ * closed, and timeout take exactly one SDK `client.command.list` fallback
+ * through the existing retry wrapper; no second private attempt runs.
+ */
+export async function loadCommands(client: KiloClient, dir: string, connection?: unknown): Promise<unknown> {
   const pending = promises.get(dir)
   if (pending) return pending
 
-  const promise = retry(() => client.command.list({ directory: dir }, { throwOnError: true })).then(
-    (result) => {
-      const sdk = {
-        data: (result as { data?: unknown }).data,
-        response: (result as { response?: unknown }).response,
+  const promise = (async () => {
+    const conn = connection as CommandListConnection | null | undefined
+    if (typeof dir === "string" && dir.length > 0 && conn) {
+      let req: CommandListContractRequest
+      try {
+        req = buildCommandListPrivateReq(dir)
+      } catch {
+        req = null as unknown as CommandListContractRequest
       }
-      observeParity(sdk, dir)
-      return {
-        type: "commandsLoaded",
-        commands: (sdk.data as Array<{ name: string; description?: string; source?: string; hints?: string[] }>).map(
-          (cmd) => ({
-            name: cmd.name,
-            description: cmd.description,
-            source: cmd.source,
-            hints: cmd.hints,
-          }),
-        ),
+      if (req) {
+        const attempt = await attemptCommandListPrivate(conn, req)
+        if (attempt.kind === "ok") return mapEntries(attempt.commands)
+        if (attempt.kind === "terminal") throw terminalError(attempt.code, attempt.message)
       }
-    },
-    (error: unknown) => {
-      observeParity(
-        { error, response: (error as { response?: unknown })?.response },
-        dir,
-      )
-      throw error
-    },
-  )
+    }
+    const result = await retry(() => client.command.list({ directory: dir }, { throwOnError: true }))
+    const data = (result as { data?: unknown }).data
+    return mapEntries(data as Array<{ name: string; description?: string; source?: string; hints?: string[] }>)
+  })()
 
   promises.set(dir, promise)
   try {

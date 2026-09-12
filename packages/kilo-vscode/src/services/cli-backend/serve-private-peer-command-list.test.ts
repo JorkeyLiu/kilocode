@@ -4,17 +4,11 @@ import { JsonRpcPeer } from "../../private-worker/peer"
 import { ServePrivatePeer } from "./serve-private-peer"
 import {
   canonicalCommandListOpId,
-  compareCommandListParity,
   normalizePrivateCommandListWire,
   validateCommandListContractRequest as validateCommandListRequest,
   validateCommandListResult,
 } from "./serve-private-command-list-contract"
-import {
-  buildCommandListIdentity,
-  observeCommandListParityDetached,
-  sdkCommandListHasTerminal,
-  type CommandListParityConnection,
-} from "../../kilo-provider/command-list-parity"
+import { buildCommandListPrivateIdentity } from "../../kilo-provider/command-list-privatefirst"
 import {
   COMMAND_LIST_TRANSPORT_FAILURE_MESSAGE,
   requestCommandListOutcome,
@@ -73,16 +67,12 @@ function makeFailed(req: ReturnType<typeof makeReq>, code: string) {
   }
 }
 
-function sdkSuccess(items: unknown[]) {
-  return { data: items, error: undefined, response: { status: 200 } }
-}
-
 describe("command-list private peer", () => {
   test("canonicalCommandListOpId binds a single colon-free token with idempotency equality", () => {
     expect(canonicalCommandListOpId("t1")).toBe("command-list:t1")
     expect(() => canonicalCommandListOpId("")).toThrow()
     expect(() => canonicalCommandListOpId("a:b")).toThrow()
-    const ident = buildCommandListIdentity()
+    const ident = buildCommandListPrivateIdentity()
     expect(ident.opId.startsWith("command-list:")).toBeTrue()
     expect(ident.idempotencyKey).toBe(ident.opId)
   })
@@ -136,36 +126,6 @@ describe("command-list private peer", () => {
       transportUnknown: true,
     }
     expect(() => validateCommandListResult(ambiguous, req)).not.toThrow()
-  })
-
-  test("compareCommandListParity uses name::source keys and stays order-free", () => {
-    const req = makeReq()
-    const priv = makeSuccess(req, [
-      { name: "init", description: "guided setup", source: "command", hints: [] },
-      { name: "review", source: "skill" },
-    ]) as unknown as Parameters<typeof compareCommandListParity>[0]
-    const sdk = sdkSuccess([
-      { name: "review", source: "skill" },
-      { name: "init", description: "guided setup", source: "command", hints: ["$ARGUMENTS"] },
-    ])
-    // Order-insensitive; hints never compared (shape-only).
-    expect(compareCommandListParity(priv, sdk as never).divergence).toBeNull()
-    // Legal same-name pair: both entries required on each side.
-    const pairPriv = makeSuccess(req, [
-      { name: "a", source: "command" },
-      { name: "a", source: "skill" },
-    ]) as unknown as Parameters<typeof compareCommandListParity>[0]
-    expect(compareCommandListParity(pairPriv, sdkSuccess([{ name: "a", source: "command" }]) as never).divergence?.startsWith("command-list-membership-unknown")).toBeTrue()
-    const desc = compareCommandListParity(priv, sdkSuccess([
-      { name: "review", source: "skill" },
-      { name: "init", description: "other", source: "command" },
-    ]) as never)
-    expect(desc.divergence).toBe("command-list-description-mismatch")
-    const missing = compareCommandListParity(priv, sdkSuccess([]) as never)
-    expect(missing.divergence?.startsWith("command-list-membership-unknown")).toBeTrue()
-    const sdk404 = { error: { status: 404 }, response: { status: 404 } } as unknown as Parameters<typeof compareCommandListParity>[1]
-    const privFailed = makeFailed(req, "internal") as unknown as Parameters<typeof compareCommandListParity>[0]
-    expect(compareCommandListParity(privFailed, sdk404).divergence).toBeNull()
   })
 
   test("peer capability gating requires command/list", () => {
@@ -264,17 +224,6 @@ describe("command-list private peer", () => {
     clientWriter.destroy()
   })
 
-  test("sdkCommandListHasTerminal gates success arrays and terminal failures only", () => {
-    expect(sdkCommandListHasTerminal({ data: [{ name: "init" }] } as never)).toBeTrue()
-    expect(sdkCommandListHasTerminal(sdkSuccess([]) as never)).toBeTrue()
-    expect(sdkCommandListHasTerminal({ data: {} } as never)).toBeFalse()
-    expect(sdkCommandListHasTerminal({ error: { status: 500 }, response: { status: 500 } } as never)).toBeTrue()
-    expect(sdkCommandListHasTerminal({ error: { message: "boom" } } as never)).toBeFalse()
-    expect(sdkCommandListHasTerminal({ error: { code: "ECONNRESET" } } as never)).toBeFalse()
-    expect(sdkCommandListHasTerminal({ data: undefined } as never)).toBeFalse()
-    expect(sdkCommandListHasTerminal({} as never)).toBeFalse()
-  })
-
   test("command-list transport failures are redacted to a fixed safe message", async () => {
     const req = makeReq()
     const rawErr = new Error("secret transport boom /tmp/cmd-abc template=hidden")
@@ -305,171 +254,4 @@ describe("command-list private peer", () => {
     expect(leaked.includes("template=hidden")).toBeFalse()
   })
 
-  test("observer is detached, warn-only, and never mutates SDK state", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const sdk = sdkSuccess([{ name: "init", source: "command" }])
-      const before = JSON.stringify(sdk)
-      const conn: CommandListParityConnection = {
-        isPrivateAvailable: () => true,
-        privateCommandListOutcomeWithHandle: (req) => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "command/list",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: { commands: [{ name: "init", source: "command" }] },
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      const ret = observeCommandListParityDetached(conn, sdk as never, "/tmp", undefined)
-      expect(ret).toBeUndefined()
-      expect(JSON.stringify(sdk)).toBe(before)
-      await new Promise((r) => setTimeout(r, 50))
-      expect(JSON.stringify(sdk)).toBe(before)
-      expect(warns.filter((w) => String(w[0]).includes("divergence"))).toHaveLength(0)
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("observer never launches private work for non-terminal SDK input", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const calls: string[] = []
-      const conn: CommandListParityConnection = {
-        isPrivateAvailable: () => true,
-        privateCommandListOutcomeWithHandle: (req) => {
-          calls.push(req.opId)
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: {} }) }
-        },
-        getPrivateEpoch: () => 1,
-      }
-      observeCommandListParityDetached(conn, { error: { message: "boom" } } as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 30))
-      expect(calls).toHaveLength(0)
-      expect(warns).toHaveLength(0)
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("F-001 membership/description logs and details never leak command names", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const sdk = sdkSuccess([{ name: "secret-cmd", source: "command" }])
-      const conn: CommandListParityConnection = {
-        isPrivateAvailable: () => true,
-        privateCommandListOutcomeWithHandle: (req) => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "command/list",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: { commands: [{ name: "other-cmd", source: "command" }] },
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      observeCommandListParityDetached(conn, sdk as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 50))
-      expect(warns.length).toBeGreaterThan(0)
-      const wire = JSON.stringify(warns)
-      expect(wire.includes("secret-cmd")).toBe(false)
-      expect(wire.includes("other-cmd")).toBe(false)
-      // Description presence mismatch is detected without name echo.
-      warns.length = 0
-      const sdk2 = sdkSuccess([{ name: "init", source: "command" }])
-      const conn2: CommandListParityConnection = {
-        isPrivateAvailable: () => true,
-        privateCommandListOutcomeWithHandle: (req) => ({
-          id: 2,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "command/list",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: { commands: [{ name: "init", description: "private-only", source: "command" }] },
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      observeCommandListParityDetached(conn2, sdk2 as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 50))
-      const flat = warns.flatMap((w) => w.map((p) => String(typeof p === "string" ? p : JSON.stringify(p))).join(" "))
-      expect(flat.some((s) => s.includes("command-list-description-mismatch"))).toBe(true)
-      expect(JSON.stringify(warns).includes("private-only")).toBe(false)
-      expect(JSON.stringify(warns).includes("init")).toBe(false)
-    } finally {
-      console.warn = origWarn
-    }
-  })
-
-  test("observer defers without work while the peer negotiates", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const calls: string[] = []
-      let deferred: (() => void) | null = null
-      const conn: CommandListParityConnection = {
-        isPrivateAvailable: () => false,
-        privateCommandListOutcomeWithHandle: (req) => {
-          calls.push(req.opId)
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: {} }) }
-        },
-        getPrivateEpoch: () => 3,
-        addDeferredCommandListObserver: (_d, _w, listener) => {
-          deferred = listener
-          return () => {
-            deferred = null
-          }
-        },
-      }
-      observeCommandListParityDetached(conn, sdkSuccess([]) as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(calls).toHaveLength(0)
-      expect(deferred).not.toBeNull()
-    } finally {
-      console.warn = origWarn
-    }
-  })
 })

@@ -1,6 +1,3 @@
-import * as crypto from "crypto"
-import { normalize } from "path"
-import { resolve } from "path"
 import {
   makeCommandListAmbiguous,
   normalizePrivateCommandListWire,
@@ -11,13 +8,11 @@ import type {
   CommandListWireOutcome,
 } from "./serve-private-command-list-contract"
 
-// `command/list` read-only parity mechanics (detached, warn-only).
-// Success data is `{commands: [{name, description?, source?, hints?}]}`;
-// `template` (lazy promise content), `agent`, `model`, and `subtask` are
-// excluded by projection and never compared. Diagnostics never expose names,
-// descriptions, sources, hints, directories, workspaces, op/request ids,
-// backend codes, or raw error strings: only fixed categories, counts,
-// booleans, and the constant op.
+// `command/list` private-first read mechanics. Success data is
+// `{commands: [{name, description?, source?, hints?}]}` preserving the
+// carrier's `Command.Service.list()` order; `template` (lazy promise
+// content), `agent`, `model`, and `subtask` are excluded by projection and
+// never cross the boundary.
 
 export const COMMAND_LIST_TRANSPORT_FAILURE_MESSAGE = "private command-list transport failed"
 
@@ -52,12 +47,12 @@ interface CommandListRequestHost {
 }
 
 /**
- * Peer-side normalized outcome handle core for the read-only command-list
- * parity observer. The caller validates the request and checks availability
- * and capability first. Transport/closed maps to ambiguous transportUnknown,
- * thrown errors map to failed results with a fixed message, and malformed
- * wire resolves as `{ kind: "invalid" }` before any comparator. No retries,
- * no replays.
+ * Peer-side normalized outcome handle core for the private-first
+ * command-list read. The caller validates the request and checks
+ * availability and capability first. Transport/closed maps to ambiguous
+ * transportUnknown, thrown errors map to failed results with a fixed
+ * message, and malformed wire resolves as `{ kind: "invalid" }` before any
+ * settler. No retries, no replays.
  */
 export function requestCommandListOutcome(
   raw: CommandListRawTransport,
@@ -93,7 +88,7 @@ interface CommandListOwner {
  * handle. Epoch drift or peer replacement maps to ambiguous transportUnknown;
  * exact cancel preserves the peer while current-epoch cancel miss/throw
  * fail-closed via owner invalidation. A stale captured handle cleans only its
- * captured peer and returns `"stale"` so the observer never invalidates the
+ * captured peer and returns `"stale"` so the private read never invalidates the
  * replacement peer.
  */
 export function wrapCommandListOutcomeForOwner(
@@ -109,12 +104,12 @@ export function wrapCommandListOutcomeForOwner(
     }
     return outcome
   })
-  const cancel = (msg = "private parity timeout"): boolean | "stale" => {
+  const cancel = (msg = "private read timeout"): boolean | "stale" => {
     if (!owner.isCurrent()) {
       try {
         staleCleanup()
       } catch {
-        console.warn("[Kilo CommandList] stale observer cleanup failed:", {
+        console.warn("[Kilo CommandList] stale private read cleanup failed:", {
           op: "command/list",
           stale: true,
           cleanupFailed: true,
@@ -126,14 +121,14 @@ export function wrapCommandListOutcomeForOwner(
     try {
       ok = tryCancel(handle.id, msg)
     } catch {
-      console.warn("[Kilo CommandList] observer timeout cancel failed:", {
+      console.warn("[Kilo CommandList] private read timeout cancel failed:", {
         op: "command/list",
         cancelFailed: true,
       })
       try {
-        owner.invalidate("command-list observer timeout cancel throw")
+        owner.invalidate("command-list private read timeout cancel throw")
       } catch {
-        console.warn("[Kilo CommandList] observer timeout invalidate failed:", {
+        console.warn("[Kilo CommandList] private read timeout invalidate failed:", {
           op: "command/list",
           invalidateFailed: true,
         })
@@ -142,9 +137,9 @@ export function wrapCommandListOutcomeForOwner(
     }
     if (!ok) {
       try {
-        owner.invalidate("command-list observer timeout exact cancel miss")
+        owner.invalidate("command-list private read timeout exact cancel miss")
       } catch {
-        console.warn("[Kilo CommandList] observer timeout invalidate failed:", {
+        console.warn("[Kilo CommandList] private read timeout invalidate failed:", {
           op: "command/list",
           invalidateFailed: true,
         })
@@ -156,86 +151,4 @@ export function wrapCommandListOutcomeForOwner(
   return { id: handle.id, promise, cancel }
 }
 
-/**
- * Keyed deferred command-list observers: at most one deferred private
- * command-list observation per backend epoch + canonical directory +
- * workspace identity. Every component is opaque and domain-separated
- * (`e-`/`d-`/`w-` SHA-256 digests with `command-list/epoch`,
- * `command-list/dir`, `command-list/workspace` domains): serialized keys
- * never carry raw directory/workspace material and `:` inside a raw value
- * cannot collide across tuples. Exact `dir`/`workspace` closure values stay
- * with the caller for request construction; only the digest key is stored
- * here. Owner-managed: wrappers live in the owner's one-shot listener set;
- * this store only provides the dedupe key. No timers, no polling, no
- * detached work, no new peer lifecycle.
- */
-export class DeferredCommandList {
-  private readonly keys = new Map<string, () => void>()
-  constructor(private readonly listeners: Set<() => void>) {}
 
-  key(epoch: number | null, dir: string, workspace: string | undefined): string {
-    let canonical = dir
-    try {
-      canonical = normalize(resolve(dir))
-    } catch {
-      canonical = dir
-    }
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`command-list/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const dirPart = `d-${crypto.createHash("sha256").update(`command-list/dir\x00${canonical}`, "utf8").digest("hex")}`
-    const wsPart =
-      workspace === undefined
-        ? "none"
-        : `w-${crypto.createHash("sha256").update(`command-list/workspace\x00${workspace}`, "utf8").digest("hex")}`
-    return `command-list:${epochPart}:${dirPart}:${wsPart}`
-  }
-
-  add(
-    epoch: number | null,
-    failedEpoch: number | null,
-    available: boolean,
-    dir: string,
-    workspace: string | undefined,
-    listener: () => void,
-  ): () => void {
-    if (epoch === null) return () => {}
-    if (failedEpoch !== null && epoch === failedEpoch) return () => {}
-    if (available) return () => {}
-    const key = this.key(epoch, dir, workspace)
-    if (this.keys.has(key)) return () => {}
-    let wrapper: () => void = () => {
-      this.remove(key, wrapper)
-      listener()
-    }
-    this.keys.set(key, wrapper)
-    this.listeners.add(wrapper)
-    return () => {
-      this.remove(key, wrapper)
-    }
-  }
-
-  clearForEpoch(epoch: number | null): void {
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`command-list/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const prefix = `command-list:${epochPart}:`
-    for (const [key, wrapper] of [...this.keys]) {
-      if (!key.startsWith(prefix)) continue
-      this.keys.delete(key)
-      this.listeners.delete(wrapper)
-    }
-  }
-
-  clearAll(): void {
-    for (const [, wrapper] of [...this.keys]) this.listeners.delete(wrapper)
-    this.keys.clear()
-  }
-
-  private remove(key: string, wrapper: () => void): void {
-    if (this.keys.get(key) === wrapper) this.keys.delete(key)
-    this.listeners.delete(wrapper)
-  }
-}

@@ -59,7 +59,7 @@ import type {
 import type { DeferredSessionListFilter } from "./serve-private-session-list"
 import { DeferredPath, wrapPathOutcomeForOwner } from "./serve-private-path"
 import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
-import { DeferredCommandList, wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
+import { wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
 import type { CommandListContractRequest, CommandListWireOutcome } from "./serve-private-command-list-contract"
 import { DeferredConfigWarnings, wrapConfigWarningsOutcomeForOwner } from "./serve-private-config-warnings"
 import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
@@ -225,7 +225,6 @@ export class KiloConnectionService {
   private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
   private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
   private readonly deferredPath: DeferredPath = new DeferredPath(this.privateAvailableListeners)
-  private readonly deferredCommandList: DeferredCommandList = new DeferredCommandList(this.privateAvailableListeners)
   private readonly deferredConfigWarnings: DeferredConfigWarnings = new DeferredConfigWarnings(
     this.privateAvailableListeners,
   )
@@ -802,7 +801,6 @@ export class KiloConnectionService {
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
-    this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
@@ -854,7 +852,6 @@ export class KiloConnectionService {
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
-    this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
@@ -1129,7 +1126,6 @@ export class KiloConnectionService {
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
-    this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
@@ -1350,12 +1346,6 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
-  /** One-shot deferred command-list observation; dedupe/lifecycle live in DeferredCommandList. */
-  addDeferredCommandListObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
-    const store = this.deferredCommandList
-    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
-  }
-
   /** One-shot deferred config-warnings observation; dedupe/lifecycle live in DeferredConfigWarnings. */
   addDeferredConfigWarningsObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
     const store = this.deferredConfigWarnings
@@ -1481,7 +1471,6 @@ export class KiloConnectionService {
       this.deferredChildren.clearForEpoch(staleEpoch)
       this.deferredRemoteStatus.clearForEpoch(staleEpoch)
       this.deferredPath.clearForEpoch(staleEpoch)
-      this.deferredCommandList.clearForEpoch(staleEpoch)
       this.deferredConfigWarnings.clearForEpoch(staleEpoch)
       this.deferredProjectCurrent.clearForEpoch(staleEpoch)
       this.deferredFindFiles.clearForEpoch(staleEpoch)
@@ -1509,7 +1498,6 @@ export class KiloConnectionService {
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.deferredPath.clearForEpoch(epochAtStart)
-    this.deferredCommandList.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.deferredFindFiles.clearForEpoch(epochAtStart)
@@ -1556,7 +1544,6 @@ export class KiloConnectionService {
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.deferredPath.clearForEpoch(epochAtStart)
-    this.deferredCommandList.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.deferredFindFiles.clearForEpoch(epochAtStart)
@@ -1606,7 +1593,6 @@ export class KiloConnectionService {
       this.deferredChildren.clearForEpoch(server.epoch)
       this.deferredRemoteStatus.clearForEpoch(server.epoch)
       this.deferredPath.clearForEpoch(server.epoch)
-      this.deferredCommandList.clearForEpoch(server.epoch)
       this.deferredConfigWarnings.clearForEpoch(server.epoch)
       this.deferredProjectCurrent.clearForEpoch(server.epoch)
       this.deferredFindFiles.clearForEpoch(server.epoch)
@@ -2846,7 +2832,7 @@ export class KiloConnectionService {
     )
   }
 
-  /** Epoch-aware pass-through for the read-only command-list parity observer. */
+  /** Epoch-aware pass-through for the private-first command-list read. */
   privateCommandListOutcomeWithHandle(req: CommandListContractRequest): {
     id: number
     promise: Promise<CommandListWireOutcome>
@@ -2867,7 +2853,7 @@ export class KiloConnectionService {
         invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
       },
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
-      () => peerAtCall.invalidateOnObserverTimeout("command-list stale observer timeout"),
+      () => peerAtCall.invalidateOnObserverTimeout("command-list stale private read timeout"),
       peerAtCall.privateCommandListOutcomeWithHandle(req),
       req,
     )

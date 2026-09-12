@@ -3800,7 +3800,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const dir = this.getWorkspaceDirectory()
-      const message = await loadCommands(this.client, dir)
+      const message = await loadCommands(this.client, dir, this.connectionService)
 
       this.cachedCommandsMessage = message
       this.postMessage(message)

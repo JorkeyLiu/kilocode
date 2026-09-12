@@ -61,9 +61,9 @@ export default [
     // measure 3180/3197 lines, so 3200 is the smallest cap with headroom.
     // Raised 3200 → 3240 for the `command/list` single-operation batch: the
     // new `command/list` capability/peer/owner surface (outcome handle,
-    // epoch/dispose coherence, deferred observer) must live alongside the
+    // epoch/dispose coherence, private-first read) must live alongside the
     // existing branches per the same convention. New logic lives in
-    // serve-private-command-list.ts and kilo-provider/command-list-parity.ts;
+    // serve-private-command-list.ts and kilo-provider/command-list-privatefirst.ts;
     // only the required insertion points remain inline. Both capped files
     // measure 3220/3236 lines, so 3240 is the smallest cap with headroom.
     // Raised 3240 → 3300 for the `config/warnings` single-operation batch:

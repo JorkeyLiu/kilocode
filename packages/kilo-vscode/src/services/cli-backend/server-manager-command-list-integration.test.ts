@@ -1,20 +1,20 @@
 /* eslint-disable complexity */
 // Command-list production evidence: ServerManager → real `kilo serve` child →
-// fd3/fd4 → same AppLayer `command/list` (parity-only, read-only).
-// SDK HTTP (`client.command.list`) remains the sole authority; the private
-// path is non-blocking parity diagnostics only (no state/event/error impact,
-// no mutation/durable operation, no list authority change). Darwin + Linux
-// run; other platforms skip per B4 convention. Windows/live Extension Host
-// evidence is not claimed. Process-global VS Code/env mutation is serialized
-// with the B5 tests via server-manager-b5-global-serialization (reuse only,
-// no B5 test edits). Limitations: command entries carry no stored directory
-// binding (unlike Session.Info.directory), so production `GET /command`
-// succeeds for any directory and there is no `scope_mismatch` semantic to
-// prove — cross-directory coverage asserts per-directory routing isolation
-// (workspace marker visible only under the workspace directory, each side
-// matching its own SDK read) instead of an invented mismatch error;
-// failure parity covers validation.failed redaction; invalid wire is a
-// helper-level exclusion (no live malformed fd3/fd4 claim); no
+// fd3/fd4 → same AppLayer `command/list` (private-first, read-only).
+// The private path is authoritative for the safe projection; the SDK HTTP
+// (`client.command.list`) remains the exactly-one fallback for
+// retryable/unavailable/invalid/ambiguous/transport/closed/timeout. Darwin +
+// Linux run; other platforms skip per B4 convention. Windows/live Extension
+// Host evidence is not claimed. Process-global VS Code/env mutation is
+// serialized with the B5 tests via server-manager-b5-global-serialization
+// (reuse only, no B5 test edits). Limitations: command entries carry no
+// stored directory binding (unlike Session.Info.directory), so production
+// `GET /command` succeeds for any directory and there is no `scope_mismatch`
+// semantic to prove — cross-directory coverage asserts per-directory routing
+// isolation (workspace marker visible only under the workspace directory,
+// each side matching its own SDK read) instead of an invented mismatch
+// error; failure coverage asserts validation.failed redaction; invalid wire
+// is a helper-level exclusion (no live malformed fd3/fd4 claim); no
 // replacement-epoch or live Extension Host proof.
 import { describe, expect, test } from "bun:test"
 import * as crypto from "crypto"
@@ -26,11 +26,9 @@ import { ServerManager } from "./server-manager"
 import { ServePrivatePeer } from "./serve-private-peer"
 import {
   canonicalCommandListOpId,
-  compareCommandListParity,
   normalizePrivateCommandListWire,
   validateCommandListResult,
 } from "./serve-private-command-list-contract"
-import { observeCommandListParityDetached } from "../../kilo-provider/command-list-parity"
 import { createKiloClient } from "@kilocode/sdk/v2/client"
 import { acquireB5GlobalLock } from "./server-manager-b5-global-serialization"
 
@@ -86,9 +84,9 @@ function listReq(dir: string, token: string, requestId: string) {
   }
 }
 
-describe("ServerManager → real kilo serve → fd3/fd4 → CommandList parity-only production", () => {
+describe("ServerManager → real kilo serve → fd3/fd4 → CommandList private-first production", () => {
   test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
-    "covers initialize command/list capability + same-directory projection vs SDK authoritative + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
+    "covers initialize command/list capability + same-directory projection vs SDK fallback shape + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")
       const binPath = path.join(extensionPath, "bin", process.platform === "win32" ? "kilo.exe" : "kilo")
@@ -230,31 +228,20 @@ describe("ServerManager → real kilo serve → fd3/fd4 → CommandList parity-o
           expect(() => validateCommandListResult(fullPriv as unknown, fullReq as unknown as never)).not.toThrow()
         }
 
-        // 6. Parity diagnostics only: same-input agreement, no authority change.
-        const fullParity = compareCommandListParity(fullPriv, sdkFull as unknown as never)
-        expect(fullParity.divergence).toBeNull()
-
-        // 7. SDK authority / non-blocking: SDK snapshot untouched by private
-        // reads; detached observer returns synchronously and leaves SDK data intact.
-        const beforeSdk = JSON.stringify(sdkFullItems)
-        const parityConn = {
-          isPrivateAvailable: () => peer!.isAvailable(),
-          privateCommandListOutcomeWithHandle: (r: unknown) => peer!.privateCommandListOutcomeWithHandle(r as never),
-          getPrivateEpoch: () => peer!.getEpoch(),
+        // 6. Private-first agreement: private projection matches the SDK
+        // fallback shape for the same directory (same multiset of safe
+        // entries, marker present on both sides).
+        if (fullPriv.status === "succeeded") {
+          const privNames = (fullPriv.data.commands as Array<Record<string, unknown>>)
+            .map((e) => `${String(e.name)}::${typeof e.source === "string" ? e.source : ""}`)
+            .sort()
+          const sdkNames = (sdkFullItems as Array<Record<string, unknown>>)
+            .map((e) => `${String(e.name)}::${typeof e.source === "string" ? e.source : ""}`)
+            .sort()
+          expect(privNames).toEqual(sdkNames)
         }
-        const ret = observeCommandListParityDetached(
-          parityConn as unknown as Parameters<typeof observeCommandListParityDetached>[0],
-          sdkFull as unknown as Parameters<typeof observeCommandListParityDetached>[1],
-          workspace,
-          undefined,
-          3000,
-        )
-        expect(ret).toBeUndefined()
-        expect(JSON.stringify((sdkFull as unknown as { data: unknown }).data)).toBe(beforeSdk)
-        await new Promise((r) => setTimeout(r, 300))
-        expect(JSON.stringify((sdkFull as unknown as { data: unknown }).data)).toBe(beforeSdk)
 
-        // 8. Invalid request fails closed client-side without touching the
+        // 7. Invalid request fails closed client-side without touching the
         // transport (fail-closed validation parity with the carrier, whose
         // server-side `validation.failed` redaction is proven over real
         // dispatch in `fd-carrier-command-list.test.ts`). Redacted failure
@@ -289,7 +276,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → CommandList parity-o
         expect(failedWire.includes("commands")).toBeFalse()
         expect(failedWire.includes("template")).toBeFalse()
 
-        // 9. Cross-directory routing isolation: the peer directory scopes to
+        // 8. Cross-directory routing isolation: the peer directory scopes to
         // its own instance inventory (no workspace marker); each side matches
         // its own SDK read. No scope_mismatch exists for command/list by
         // design (entries carry no stored directory binding), so isolation —
@@ -309,13 +296,11 @@ describe("ServerManager → real kilo serve → fd3/fd4 → CommandList parity-o
           expect(names.includes("prod-marker-cmdlist")).toBeFalse()
           expect(xOutcome.result.data.commands.length).toBe(sdkPeerItems.length)
           expect(() => validateCommandListResult(xOutcome.result as unknown, xReq as unknown as never)).not.toThrow()
-          const xParity = compareCommandListParity(xOutcome.result, sdkPeer as unknown as never)
-          expect(xParity.divergence).toBeNull()
         }
 
-        // 10. Direct-helper invalid-wire exclusion: normalizePrivateCommandListWire
-        // reports explicit invalid without entering comparator logic. This is a
-        // helper-level assertion, not live invalid wire over fd3/fd4.
+        // 9. Direct-helper invalid-wire exclusion: normalizePrivateCommandListWire
+        // reports explicit invalid before any settler. This is a helper-level
+        // assertion, not live invalid wire over fd3/fd4.
         const malformed = {
           v: 1,
           requestId: fullReq.requestId,
@@ -331,7 +316,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → CommandList parity-o
         expect(wire.kind).toBe("invalid")
         if (wire.kind !== "invalid") throw new Error("expected invalid wire outcome for template-bearing entry")
 
-        // 11. Private unavailable fallback while SDK stays authoritative.
+        // 10. Private unavailable fallback while SDK stays authoritative.
         peer.dispose()
         expect(peer.isAvailable()).toBeFalse()
         const afterPeerClose = await client.command.list({ directory: workspace })
