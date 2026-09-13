@@ -695,6 +695,10 @@ Agent asset writes are canonical-only. `mutateAgent` create/edit/import targets 
 
 The current `kilo serve` HTTP/SSE/SDK transport remains the active bridge. The extension legacy-migration importer and Roo import wiring are removed: no legacy-data migration or Roo import path is retained, and no dual-read compatibility surface is retained. Generic current-settings import/export is separate and retained. Provider settings render only provider records supplied by the existing provider state with no synthetic Kilo Gateway fallback, while generic custom-provider sorting, icons, notes, and add/configure/auth/delete flows are preserved. The CLI/backend transport remains separately scoped. VS Code settings (`kilo-code.new.*` extension UI, proxy, and integration settings) remain separate from the canonical config boundary.
 
+### Disposed lifecycle refresh
+
+Each `KiloProvider` owns one `LifecycleRefreshCoordinator` (`src/kilo-provider/lifecycle-refresh-coordinator.ts`) for disposed-lifecycle full refreshes. `global.disposed` refreshes unconditionally, `server.instance.disposed` refreshes only for the provider directory, and manual cross-directory reload calls the same entry point; no event is removed. Concurrent/reentrant calls share one in-flight gate with trailing-dirty coverage (at least one trailing round, strictly serial rounds, no debounce timer), so a global auth/config cold pass converges N `server.instance.disposed` plus one `global.disposed` into one in-flight plus one trailing round per provider. Each round clears requirements, publishes config first, then refreshes providers/agents/skills/commands in parallel with existing fail-soft semantics; the providers-internal coalescer is unchanged. Immediate login/logout/org/provider-OAuth ack refresh paths stay direct and are never routed through this gate, and there is no cross-provider shared coordination. Disposal closes the coordinator with no timers or background tasks.
+
 ## Bundled resources
 
 | Resource | Behavior |

@@ -106,6 +106,7 @@ import { retryable, backoff, MAX_RETRIES } from "./util/retry"
 import { canonicalDirectory } from "./private-worker/canonical-directory"
 import { decodeGlobalListCursor } from "./private-worker/session-cursor"
 import { hasGit } from "./kilo-provider/git-status"
+import { LifecycleRefreshCoordinator } from "./kilo-provider/lifecycle-refresh-coordinator"
 import {
   handleLogin,
   handleLogout,
@@ -420,6 +421,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private pendingKiloModel: { modelID?: string; agent?: string } | null = null
   private readyResolvers: (() => void)[] = []
   private reloadInFlight: Promise<void> | null = null
+  private readonly lifecycleRefresh: LifecycleRefreshCoordinator
   private promptRecoveryQueued = false
   private promptRecovery: Promise<void> | null = null
   private trackedSessionIds: Set<string> = new Set()
@@ -534,6 +536,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     TelemetryProxy.getInstance().setProvider(this)
 
+    this.lifecycleRefresh = new LifecycleRefreshCoordinator(() => this.runLifecycleRound())
     this.subscribeCanonical()
   }
 
@@ -5667,8 +5670,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     })
   }
 
-  /** Re-fetch all server-side state after an auth change. */
-  private async reloadAfterAuthChange(): Promise<void> {
+  /**
+   * One lifecycle full-refresh round: clear requirements, publish config
+   * first, then refresh providers/agents/skills/commands in parallel.
+   * Rounds run strictly serially through `lifecycleRefresh` so an earlier
+   * round never posts after a later round. Each fetch keeps its existing
+   * fail-soft behavior.
+   */
+  private async runLifecycleRound(): Promise<void> {
     this.requirements.clear()
     await this.fetchAndSendConfig()
     await Promise.all([
@@ -5677,6 +5686,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.fetchAndSendSkills(),
       this.fetchAndSendCommands(),
     ])
+  }
+
+  /**
+   * Re-fetch all server-side state after a lifecycle disposal event.
+   * Per-provider singleflight + trailing-dirty: concurrent/reentrant calls
+   * share one in-flight gate; arrivals during a round only mark dirty and
+   * trigger at least one trailing round. No timers, no cross-provider sharing.
+   */
+  private reloadAfterAuthChange(): Promise<void> {
+    return this.lifecycleRefresh.request()
   }
 
   /** Reload config, skills, agents, and commands from disk by rebooting the instance. */
@@ -6324,6 +6343,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    */
   dispose(): void {
     if (this.disposed) return
+    this.lifecycleRefresh.dispose()
     this.unsubscribeRemote?.()
     this.streams.focus(undefined)
     this.connectionService.unregisterVisible(this.instanceId)
