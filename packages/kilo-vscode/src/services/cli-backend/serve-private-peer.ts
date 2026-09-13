@@ -96,6 +96,17 @@ import type {
   ServePrivateAuthRemoveRequest,
   ServePrivateAuthRemoveResult,
 } from "./serve-private-auth-remove"
+import {
+  makeOrganizationSetCancel,
+  PrivateOrganizationSetValidationError,
+  requestOrganizationSetOutcome,
+  validateOrganizationSetRequest,
+} from "./serve-private-organization-set"
+import type {
+  PrivateOrganizationSetWireOutcome,
+  ServePrivateOrganizationSetRequest,
+  ServePrivateOrganizationSetResult,
+} from "./serve-private-organization-set"
 import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
 import { requestSessionListOutcome } from "./serve-private-session-list"
 import type {
@@ -463,6 +474,19 @@ export type {
   ServePrivateAuthRemoveRequest,
   ServePrivateAuthRemoveResult,
 } from "./serve-private-auth-remove"
+export {
+  makeOrganizationSetCancel,
+  PrivateOrganizationSetValidationError,
+  requestOrganizationSetOutcome,
+  validateOrganizationSetRequest,
+  validateOrganizationSetResult,
+  wrapOrganizationSetOutcomeForOwner,
+} from "./serve-private-organization-set"
+export type {
+  PrivateOrganizationSetWireOutcome,
+  ServePrivateOrganizationSetRequest,
+  ServePrivateOrganizationSetResult,
+} from "./serve-private-organization-set"
 export {
   canonicalPathOpId,
   comparePathParity,
@@ -3205,6 +3229,57 @@ export class ServePrivatePeer {
     const promise = (async (): Promise<ServePrivateAuthRemoveResult> => {
       const wire = await outcome.promise
       if (wire.kind === "invalid") throw new PrivateAuthRemoveValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
+  privateOrganizationSetOutcomeWithHandle(req: ServePrivateOrganizationSetRequest): {
+    id: number
+    promise: Promise<PrivateOrganizationSetWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateOrganizationSetRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(req.op)) throw new Error(`Private peer missing ${req.op} capability`)
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const op = req.op
+    return requestOrganizationSetOutcome(
+      peerAtCall as unknown as import("./serve-private-organization-set").OrganizationSetRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeOrganizationSetCancel(
+          id,
+          {
+            isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+            tryCancel: (msg) => this.tryCancelPending(id, msg),
+            invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+          },
+          op,
+        ),
+      req,
+    )
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid organization-set results; invalid wire rejects
+   * with PrivateOrganizationSetValidationError and never resolves as a normal result.
+   */
+  privateOrganizationSetWithHandle(req: ServePrivateOrganizationSetRequest): {
+    id: number
+    promise: Promise<ServePrivateOrganizationSetResult>
+    cancel: (msg?: string) => boolean
+  } {
+    const outcome = this.privateOrganizationSetOutcomeWithHandle(req)
+    const promise = (async (): Promise<ServePrivateOrganizationSetResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivateOrganizationSetValidationError(wire.detail)
       return wire.result
     })()
     return { id: outcome.id, promise, cancel: outcome.cancel }

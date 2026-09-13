@@ -100,6 +100,13 @@ import {
   removeAuthPrivate,
 } from "@/kilocode/auth-remove-private"
 import {
+  INTERNAL_MESSAGE as ORGANIZATION_SET_INTERNAL_MESSAGE,
+  OP as ORGANIZATION_SET_OP,
+  VERSION as ORGANIZATION_SET_VERSION,
+  fallbackOrganizationSetIds,
+  setOrganizationPrivate,
+} from "@/kilocode/organization-set-private"
+import {
   ADD_OP as MCP_ADD_OP,
   ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
@@ -5061,6 +5068,60 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: AUTH_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === ORGANIZATION_SET_OP || method === "kilo/organization/set") {
+        // Authoritative organization switch: the same global cold mutation
+        // as the HTTP `kilo.organization.set` route via the shared
+        // `organizationSetMutate` (fence-internal read, credential
+        // preservation, `clearModesCache` in mutate, no `cleanupDisabled`).
+        // Directory/workspace are routing identity only (canonical
+        // validation, never an auth scope): no drain-control/`InstanceRef`
+        // lane, no scope mismatch, no journal, no replay, no new fence. A
+        // repeated `organizationId` is a safe overwrite, so an ambiguous
+        // transport outcome may safely repeat via the same-tuple SDK
+        // `kilo.organization.set` fallback; the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* setOrganizationPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: ORGANIZATION_SET_VERSION,
+                  requestId: fallbackOrganizationSetIds(params).requestId,
+                  opId: fallbackOrganizationSetIds(params).opId,
+                  op: ORGANIZATION_SET_OP,
+                  idempotencyKey: fallbackOrganizationSetIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: ORGANIZATION_SET_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: ORGANIZATION_SET_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: ORGANIZATION_SET_VERSION,
+                  requestId: fallbackOrganizationSetIds(params).requestId,
+                  opId: fallbackOrganizationSetIds(params).opId,
+                  op: ORGANIZATION_SET_OP,
+                  idempotencyKey: fallbackOrganizationSetIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: ORGANIZATION_SET_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: ORGANIZATION_SET_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

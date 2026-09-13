@@ -111,9 +111,20 @@ export default [
      // serve-private-revert-connection.ts, and
      // kilo-provider/session-revert.ts; only the required insertion points
      // (peer methods plus thin owner delegations) remain inline.
-     // connection-service.ts measures 3735 lines, so 3740 is the smallest
-     // passing cap.
-    rules: { "max-lines": ["error", 3740] },
+      // connection-service.ts measures 3735 lines, so 3740 is the smallest
+      // passing cap.
+      // Raised 3740 → 3750 for the `kilo/organization/set` private-first
+      // switch: the new organization-set capability/peer/owner surface
+      // (strict `organization-set:<token>` binding, echo validation,
+      // epoch-guarded exact-cancel handle, single-SDK-fallback helper) must
+      // live alongside the existing branches per the same convention. New
+      // logic lives in serve-private-organization-set-contract.ts,
+      // serve-private-organization-set.ts, and
+      // kilo-provider/organization-set-privatefirst.ts; only the required
+      // insertion points (peer method plus thin owner delegation) remain
+      // inline. connection-service.ts measures 3748 lines, so 3750 is the
+      // smallest passing cap.
+    rules: { "max-lines": ["error", 3750] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

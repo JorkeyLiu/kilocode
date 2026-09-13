@@ -6,7 +6,6 @@ import {
 import {
   HEADER_FEATURE,
   KILO_API_BASE,
-  clearModesCache,
   fetchBalance,
   fetchKilocodeNotifications,
   fetchKiloPassState,
@@ -19,7 +18,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Log from "@opencode-ai/core/util/log"
 import { Auth } from "@/auth"
-import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle"
+import { organizationSetMutate } from "@/kilocode/organization-set-private"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
 import { AudioTranscriptionsBody } from "../groups/kilo-gateway"
 
@@ -118,29 +117,14 @@ export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo",
     })
 
     const organization = Effect.fn("KiloGatewayHttpApi.organization")(function* (ctx) {
-      // kilocode_change start - LOCK-002: read the current kilo auth record
-      // INSIDE the coordinator mutate, under the convergence fence and
-      // immediately before the set, so a concurrent newer credential can never
-      // be overwritten by a pre-fence snapshot. The unauthorized response
-      // behavior and the modes-cache clear are unchanged; the coordinator
-      // restores the exact auth artifact if the set fails.
-      yield* invalidateAfterProviderAuthChange(
-        "kilo",
-        Effect.gen(function* () {
-          const info = yield* auth.get("kilo").pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
-          if (!info || info.type !== "oauth") return yield* Effect.fail(new HttpApiError.Unauthorized({}))
-
-          yield* auth
-            .set("kilo", {
-              type: "oauth",
-              refresh: info.refresh,
-              access: info.access,
-              expires: info.expires,
-              ...(ctx.payload.organizationId && { accountId: ctx.payload.organizationId }),
-            })
-            .pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
-          yield* Effect.sync(() => clearModesCache())
-        }),
+      // kilocode_change start - LOCK-002: the organization mutation body lives
+      // in the shared `organizationSetMutate` (fence-internal `Auth.get`,
+      // credential preservation, `clearModesCache` in mutate) so the HTTP and
+      // private `kilo/organization/set` transports cannot drift. The
+      // unauthorized response behavior is unchanged; the coordinator restores
+      // the exact auth artifact if the set fails.
+      yield* organizationSetMutate(ctx.payload.organizationId).pipe(
+        Effect.mapError(() => new HttpApiError.Unauthorized({})),
       )
       // kilocode_change end
       return true

@@ -11,6 +11,10 @@ import {
   removeAuthPrivateFirst,
   type AuthRemovePrivateConnection,
 } from "../auth-remove-privatefirst"
+import {
+  setOrganizationPrivateFirst,
+  type OrganizationSetPrivateConnection,
+} from "../organization-set-privatefirst"
 
 export interface AuthContext {
   readonly client: KiloClient | null
@@ -18,8 +22,8 @@ export interface AuthContext {
   getWorkspaceDirectory(): string
   fetchAndSendProviders(): Promise<void>
   fetchAndSendAgents(): Promise<void>
-  /** Private-first `auth/remove` connection (owner: `KiloConnectionService`). Absent stays SDK-only. */
-  readonly connection?: AuthRemovePrivateConnection | null
+  /** Private-first connections (owner: `KiloConnectionService`). Absent stays SDK-only. */
+  readonly connection?: (AuthRemovePrivateConnection & OrganizationSetPrivateConnection) | null
 }
 
 /**
@@ -141,14 +145,35 @@ export async function handleSetOrganization(ctx: AuthContext, organizationId: st
   if (!ctx.client) return
 
   console.log("[Kilo New] KiloProvider: Switching organization:", organizationId ?? "personal")
-  try {
-    // LOCK-001: the backend organization set coordinates provider auth and
-    // the instance rebuild; its response IS the mutation acknowledgement.
-    // The extension must NOT call global.dispose — a double disposal would race
-    // the backend's own rebuild.
-    await ctx.client.kilo.organization.set({ organizationId }, { throwOnError: true })
-  } catch (error) {
-    console.error("[Kilo New] KiloProvider: Failed to switch organization:", error)
+  // LOCK-001: the backend organization set coordinates provider auth and
+  // the instance rebuild; its response IS the mutation acknowledgement.
+  // The extension must NOT call global.dispose — a double disposal would race
+  // the backend's own rebuild.
+  //
+  // Private-first `kilo/organization/set` over the fd carrier with exactly
+  // one same-identity SDK `client.kilo.organization.set` fallback (see
+  // `kilo-provider/organization-set-privatefirst.ts`; the SDK call lives
+  // only in that helper's fallback — never here). A validated terminal
+  // (`retryable === false`, including `unauthorized` for the backend's real
+  // auth-not-found semantics) closes with zero SDK and follows the same
+  // best-effort profile-reset path as an SDK failure. Repeating the same
+  // `organizationId` is a safe overwrite, so an ambiguous private outcome
+  // may safely repeat via the SDK fallback; neither path retries.
+  const outcome = await setOrganizationPrivateFirst({
+    connection: (ctx.connection ?? null) as never,
+    client: ctx.client as never,
+    organizationId,
+    directory: ctx.getWorkspaceDirectory(),
+  })
+  if (outcome.kind === "terminal" || outcome.kind === "unavailable") {
+    const cause =
+      outcome.kind === "terminal"
+        ? undefined
+        : (outcome as { cause?: unknown }).cause instanceof Error
+          ? ((outcome as { cause?: unknown }).cause as Error)
+          : undefined
+    if (cause) console.error("[Kilo New] KiloProvider: Failed to switch organization:", cause)
+    else console.error("[Kilo New] KiloProvider: Failed to switch organization:", outcome)
     // Re-fetch current profile to reset webview state — best-effort
     try {
       const result = await ctx.client.kilo.profile()

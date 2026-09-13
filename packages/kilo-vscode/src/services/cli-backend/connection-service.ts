@@ -82,6 +82,11 @@ import { wrapRemoteToggleOutcomeForOwner } from "./serve-private-remote-toggle"
 import type { PrivateRemoteToggleWireOutcome, ServePrivateRemoteToggleRequest } from "./serve-private-remote-toggle"
 import { wrapAuthRemoveOutcomeForOwner } from "./serve-private-auth-remove"
 import type { PrivateAuthRemoveWireOutcome, ServePrivateAuthRemoveRequest } from "./serve-private-auth-remove"
+import { wrapOrganizationSetOutcomeForOwner } from "./serve-private-organization-set"
+import type {
+  PrivateOrganizationSetWireOutcome,
+  ServePrivateOrganizationSetRequest,
+} from "./serve-private-organization-set"
 import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import { isSettledAbortResult, makeAbortAmbiguous } from "./serve-private-abort-contract"
@@ -3038,6 +3043,29 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout(`${req.op} stale observer timeout`),
       peerAtCall.privateAuthRemoveOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  privateOrganizationSetOutcomeWithHandle(req: ServePrivateOrganizationSetRequest): {
+    id: number
+    promise: Promise<PrivateOrganizationSetWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapOrganizationSetOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout(`${req.op} stale observer timeout`),
+      peerAtCall.privateOrganizationSetOutcomeWithHandle(req),
       req,
     )
   }

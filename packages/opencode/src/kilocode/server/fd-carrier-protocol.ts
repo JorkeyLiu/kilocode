@@ -50,6 +50,7 @@ export const FD_CAPABILITIES = [
   "skill/remove",
   "skill/list",
   "auth/remove",
+  "kilo/organization/set",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",
