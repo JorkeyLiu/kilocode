@@ -68,17 +68,17 @@ describe("fetchProviderData private-first failure isolation", () => {
 
   it("terminal rejects the whole fetch with zero SDK and keeps auth isolation", async () => {
     let sdk = 0
-    const client = clientWith(async () => { sdk += 1; return { data: catalog() } }, { auth: { openai: [{ type: "api" }] }, kilo: { authenticated: true, type: "oauth" } })
+    const client = clientWith(async () => { sdk += 1; return { data: catalog() } }, { auth: { openai: [{ type: "api", label: "API" }] }, kilo: { authenticated: true, type: "oauth" } })
     await expect(fetchProviderData(client, "/tmp", terminalPrivate() as never)).rejects.toThrow()
     expect(sdk).toBe(0)
   })
 
   it("fallback uses exactly one SDK catalog and keeps authMethods/kilo derivation", async () => {
     let sdk = 0
-    const client = clientWith(async () => { sdk += 1; return { data: catalog() } }, { auth: { openai: [{ type: "api" }] } })
+    const client = clientWith(async () => { sdk += 1; return { data: catalog() } }, { auth: { openai: [{ type: "api", label: "API" }] } })
     const out = await fetchProviderData(client, "/tmp", { isPrivateAvailable: () => false } as never)
     expect(sdk).toBe(1)
-    expect(out.authMethods).toEqual({ openai: [{ type: "api" }] })
+    expect(out.authMethods).toEqual({ openai: [{ type: "api", label: "API" }] })
     expect(out.authStates).toEqual({ openai: "api" })
   })
 

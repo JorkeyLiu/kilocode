@@ -128,6 +128,13 @@ import {
   providerCatalogPrivate,
 } from "@/kilocode/provider-catalog"
 import {
+  INTERNAL_MESSAGE as PROVIDER_AUTH_INTERNAL_MESSAGE,
+  OP as PROVIDER_AUTH_OP,
+  VERSION as PROVIDER_AUTH_VERSION,
+  fallbackProviderAuthIds,
+  providerAuthPrivate,
+} from "@/kilocode/provider-auth"
+import {
   ADD_OP as MCP_ADD_OP,
   ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
@@ -5295,6 +5302,57 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: PROVIDER_CATALOG_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === PROVIDER_AUTH_OP || method === "provider/auth") {
+        // Read-only `provider/auth` observation: the same owner as
+        // `GET /provider/auth` (`identifier: "provider.auth"`) via the
+        // shared `providerAuthPrivate` (existing drain-control + `InstanceRef`
+        // lane, same lane as `provider/catalog` — no new lifecycle lane, no
+        // manual `InstanceRef`, no new drain/read lease, no external network,
+        // no secret, no cache, no fence, no journal). `directory`/`workspace`
+        // are carrier routing identity only. The wire projection is the exact
+        // closed auth-methods map; unknown nested fields are rejected so
+        // malformed display text falls back. Read-only, safely repeatable: an
+        // ambiguous transport outcome may safely repeat via the same-directory
+        // SDK `client.provider.auth` fallback; the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* providerAuthPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: PROVIDER_AUTH_VERSION,
+                  requestId: fallbackProviderAuthIds(params).requestId,
+                  op: PROVIDER_AUTH_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: PROVIDER_AUTH_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: PROVIDER_AUTH_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: PROVIDER_AUTH_VERSION,
+                  requestId: fallbackProviderAuthIds(params).requestId,
+                  op: PROVIDER_AUTH_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: PROVIDER_AUTH_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: PROVIDER_AUTH_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

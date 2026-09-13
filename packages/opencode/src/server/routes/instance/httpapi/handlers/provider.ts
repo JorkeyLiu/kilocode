@@ -2,6 +2,7 @@ import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { fetchProviderCatalogData } from "@/kilocode/provider-catalog"
+import { fetchProviderAuthData } from "@/kilocode/provider-auth"
 import {
   ModelDiscoveryError,
   fetchModelsWithKey,
@@ -68,7 +69,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     })
 
     const auth = Effect.fn("ProviderHttpApi.auth")(function* () {
-      return yield* svc.methods()
+      return yield* fetchProviderAuthData()
     })
 
     const authorize = Effect.fn("ProviderHttpApi.authorize")(function* (ctx: {

@@ -51,6 +51,7 @@ export const FD_CAPABILITIES = [
   "skill/list",
   "agent/list",
   "provider/catalog",
+  "provider/auth",
   "auth/remove",
   "kilo/organization/set",
   "kilo/profile",

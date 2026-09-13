@@ -4,6 +4,7 @@
  */
 import type { KiloClient } from "@kilocode/sdk/v2"
 import type { KiloConnectionService } from "./services/cli-backend/connection-service"
+import { fetchProviderAuthPrivateFirst } from "./kilo-provider/provider-auth-privatefirst"
 import { fetchProviderCatalogPrivateFirst } from "./kilo-provider/provider-catalog-privatefirst"
 import { validateProviderID as validateProviderIDShared } from "./shared/custom-provider"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
@@ -20,21 +21,34 @@ export async function fetchProviderData(
   dir: string,
   connection?: KiloConnectionService | null,
 ) {
-  const authRequest =
-    typeof client.provider.auth === "function"
-      ? client.provider
-          .auth({ directory: dir }, { throwOnError: true })
-          .then((r) => r.data ?? {})
-          .catch(() => ({}))
-      : Promise.resolve({})
+  // Private-first auth branch only: catalog authority and `kilo.authStatus`
+  // stay parallel with their own semantics. Auth private success and validated
+  // terminal close with zero SDK; only unavailable/retryable/invalid/
+  // ambiguous/transport/closed/timeout takes exactly one same-directory
+  // `client.provider.auth` fallback inside the helper (no retry, no post,
+  // no cache, no journal/reconcile). Old SDK without the method degrades to
+  // `unavailable` without a call. Any auth outcome degrades to `{}` so the
+  // whole `fetchProviderData` never rejects on auth.
+  const authRequest = fetchProviderAuthPrivateFirst({
+    connection: (connection ?? null) as never,
+    client: client as never,
+    directory: dir,
+  })
+    .then((out) => {
+      if (out.kind === "ok") return out.data
+      throw out.kind === "terminal"
+        ? new Error(`provider auth terminal: ${out.code ?? "unknown"}`)
+        : ((out as { cause?: unknown }).cause ?? new Error("provider auth unavailable"))
+    })
+    .catch(() => ({}))
   const kiloRequest = client.kilo
     .authStatus({ directory: dir }, { throwOnError: true })
     .then((r) => (r.data?.authenticated ? (r.data.type ?? null) : null))
     .catch(() => null)
 
-  // Private-first catalog branch only: `provider.auth` and `kilo.authStatus`
-  // stay parallel with their own `catch`-to-`{}`/`null` failure isolation
-  // (never combined into a snapshot). Catalog private success and validated
+  // Private-first catalog branch only: `provider.auth` (private-first soft
+  // `catch`-to-`{}` above) and `kilo.authStatus` stay parallel with their own
+  // failure isolation (never combined into a snapshot). Catalog private success and validated
   // terminal close with zero SDK; only unavailable/retryable/invalid/
   // ambiguous/transport/closed/timeout takes exactly one same-directory
   // `client.provider.catalog` fallback inside the helper (no retry, no post,
