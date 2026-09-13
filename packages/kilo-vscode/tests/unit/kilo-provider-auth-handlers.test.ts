@@ -48,7 +48,14 @@ function createCtx(opts: MockOpts = {}) {
       profile: async () => {
         calls.profile += 1
         if (opts.failProfile) throw new Error("profile exploded")
-        return { data: { username: "kilo-user" } }
+        return {
+          data: {
+            profile: { email: "kilo-user@example.com" },
+            balance: null,
+            kiloPass: null,
+            currentOrgId: null,
+          },
+        }
       },
       organization: {
         set: async () => {
@@ -162,7 +169,12 @@ describe("handleLogin", () => {
     expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.callback).toBe(1)
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "deviceAuthStarted" }))
-    expect(calls.posts).toContainEqual(expect.objectContaining({ type: "profileData", data: { username: "kilo-user" } }))
+    expect(calls.posts).toContainEqual(
+      expect.objectContaining({
+        type: "profileData",
+        data: expect.objectContaining({ profile: expect.objectContaining({ email: "kilo-user@example.com" }) }),
+      }),
+    )
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "deviceAuthComplete" }))
     expect(calls.posts.some((m) => m.type === "deviceAuthFailed")).toBe(false)
   })

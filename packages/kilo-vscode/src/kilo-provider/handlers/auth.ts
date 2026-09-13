@@ -15,6 +15,10 @@ import {
   setOrganizationPrivateFirst,
   type OrganizationSetPrivateConnection,
 } from "../organization-set-privatefirst"
+import {
+  fetchKiloProfilePrivateFirst,
+  type KiloProfilePrivateConnection,
+} from "../kilo-profile-privatefirst"
 
 export interface AuthContext {
   readonly client: KiloClient | null
@@ -23,7 +27,7 @@ export interface AuthContext {
   fetchAndSendProviders(): Promise<void>
   fetchAndSendAgents(): Promise<void>
   /** Private-first connections (owner: `KiloConnectionService`). Absent stays SDK-only. */
-  readonly connection?: (AuthRemovePrivateConnection & OrganizationSetPrivateConnection) | null
+  readonly connection?: (AuthRemovePrivateConnection & OrganizationSetPrivateConnection & KiloProfilePrivateConnection) | null
 }
 
 /**
@@ -75,9 +79,20 @@ export async function handleLogin(ctx: AuthContext, attempt: number, getAttempt:
     // Step 3: Fetch profile and push to webview — best-effort after the
     // callback mutation. A profile read failure after a successful login must
     // never be reported as a login failure.
+    //
+    // Private-first `kilo/profile` observation over the fd carrier with
+    // exactly one same-directory SDK `client.kilo.profile` fallback (see
+    // `kilo-provider/kilo-profile-privatefirst.ts`; the SDK call lives only
+    // in that helper's fallback — never here). Warn-only on any non-ok
+    // outcome; the callback response stays the login acknowledgement.
     try {
-      const { data: profile } = await ctx.client.kilo.profile(undefined, { throwOnError: true })
-      ctx.postMessage({ type: "profileData", data: profile })
+      const out = await fetchKiloProfilePrivateFirst({
+        connection: (ctx.connection ?? null) as never,
+        client: ctx.client as never,
+        directory: ctx.getWorkspaceDirectory(),
+      })
+      if (out.kind === "ok") ctx.postMessage({ type: "profileData", data: out.data })
+      else console.warn("[Kilo New] KiloProvider: Login succeeded but profile fetch failed:", out)
     } catch (error) {
       console.warn("[Kilo New] KiloProvider: Login succeeded but profile fetch failed:", error)
     }
@@ -175,9 +190,15 @@ export async function handleSetOrganization(ctx: AuthContext, organizationId: st
     if (cause) console.error("[Kilo New] KiloProvider: Failed to switch organization:", cause)
     else console.error("[Kilo New] KiloProvider: Failed to switch organization:", outcome)
     // Re-fetch current profile to reset webview state — best-effort
+    // (private-first observation; the SDK call lives only in the helper
+    // fallback — never here).
     try {
-      const result = await ctx.client.kilo.profile()
-      ctx.postMessage({ type: "profileData", data: result.data ?? null })
+      const out = await fetchKiloProfilePrivateFirst({
+        connection: (ctx.connection ?? null) as never,
+        client: ctx.client as never,
+        directory: ctx.getWorkspaceDirectory(),
+      })
+      ctx.postMessage({ type: "profileData", data: out.kind === "ok" ? out.data : null })
     } catch (profileError) {
       console.error("[Kilo New] KiloProvider: Failed to refresh profile after org switch error:", profileError)
     }
@@ -186,8 +207,12 @@ export async function handleSetOrganization(ctx: AuthContext, organizationId: st
 
   // Org switch succeeded — refresh profile and providers independently (best-effort)
   try {
-    const result = await ctx.client.kilo.profile()
-    ctx.postMessage({ type: "profileData", data: result.data ?? null })
+    const out = await fetchKiloProfilePrivateFirst({
+      connection: (ctx.connection ?? null) as never,
+      client: ctx.client as never,
+      directory: ctx.getWorkspaceDirectory(),
+    })
+    ctx.postMessage({ type: "profileData", data: out.kind === "ok" ? out.data : null })
   } catch (error) {
     console.error("[Kilo New] KiloProvider: Failed to refresh profile after org switch:", error)
   }
@@ -208,6 +233,12 @@ export async function handleRefreshProfile(ctx: AuthContext): Promise<void> {
   if (!ctx.client) return
 
   console.log("[Kilo New] KiloProvider: 🔄 Refreshing profile...")
-  const result = await ctx.client.kilo.profile().catch(() => ({ data: null }))
-  ctx.postMessage({ type: "profileData", data: result.data ?? null })
+  // Private-first observation (the SDK call lives only in the helper
+  // fallback — never here). Manual refresh stays catch→null.
+  const out = await fetchKiloProfilePrivateFirst({
+    connection: (ctx.connection ?? null) as never,
+    client: ctx.client as never,
+    directory: ctx.getWorkspaceDirectory(),
+  }).catch(() => ({ kind: "unavailable" as const }))
+  ctx.postMessage({ type: "profileData", data: out.kind === "ok" ? out.data : null })
 }

@@ -6,11 +6,8 @@ import {
 import {
   HEADER_FEATURE,
   KILO_API_BASE,
-  fetchBalance,
   fetchKilocodeNotifications,
-  fetchKiloPassState,
   fetchOrganizationModes,
-  fetchProfile,
 } from "@kilocode/kilo-gateway"
 import { buildKiloHeaders } from "@kilocode/kilo-gateway"
 import { Effect } from "effect"
@@ -18,6 +15,10 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Log from "@opencode-ai/core/util/log"
 import { Auth } from "@/auth"
+import {
+  KiloProfileUnauthorized,
+  fetchKiloProfileData,
+} from "@/kilocode/kilo-profile"
 import { organizationSetMutate } from "@/kilocode/organization-set-private"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
 import { AudioTranscriptionsBody } from "../groups/kilo-gateway"
@@ -29,20 +30,19 @@ export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo",
     const auth = yield* Auth.Service
 
     const profile = Effect.fn("KiloGatewayHttpApi.profile")(function* () {
-      const info = yield* auth.get("kilo").pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      if (!info || info.type !== "oauth") return yield* Effect.fail(new HttpApiError.Unauthorized({}))
-
-      const currentOrgId = info.accountId ?? null
-      const [profile, balance, kiloPass] = yield* Effect.tryPromise({
-        try: () =>
-          Promise.all([
-            fetchProfile(info.access),
-            fetchBalance(info.access, currentOrgId ?? undefined),
-            fetchKiloPassState(info.access),
-          ]),
-        catch: () => new HttpApiError.BadRequest({}),
-      })
-      return { profile, balance, kiloPass, currentOrgId }
+      // kilocode_change: shared `fetchKiloProfileData` body (same Auth +
+      // gateway fetches as the private `kilo/profile` op). External
+      // behavior/error mapping is unchanged: only explicit local
+      // missing/non-oauth stays `Unauthorized`; auth-store failure, gateway
+      // shape failure, and every gateway fetch failure (including the
+      // gateway's own invalid-token 401/403) stay `BadRequest`.
+      const data = yield* fetchKiloProfileData().pipe(
+        Effect.mapError((e: unknown) =>
+          e instanceof KiloProfileUnauthorized ? new HttpApiError.Unauthorized({}) : new HttpApiError.BadRequest({}),
+        ),
+        Effect.catchDefect(() => new HttpApiError.BadRequest({})),
+      )
+      return data
     })
 
     const authStatus = Effect.fn("KiloGatewayHttpApi.authStatus")(function* () {

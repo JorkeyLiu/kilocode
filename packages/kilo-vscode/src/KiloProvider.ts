@@ -88,6 +88,7 @@ import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/fo
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
 import { loadSkills } from "./kilo-provider/skills"
 import { fetchConfigWarningsPrivateFirst } from "./kilo-provider/config-warnings-privatefirst"
+import { fetchKiloProfilePrivateFirst } from "./kilo-provider/kilo-profile-privatefirst"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
 import { childID } from "./kilo-provider/task-session"
 import { VisibleTaskStreams } from "./kilo-provider/visible-task-streams"
@@ -1572,10 +1573,25 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // Always attempt to fetch+push profile when connected.
     // Profile returns 401 when user isn't logged into Kilo Gateway — that's expected.
     // Use fire-and-forget (no throwOnError) to match old getProfile() which returned null on error.
+    // Private-first `kilo/profile` observation (the SDK call lives only in
+    // the helper fallback — never here); the transient retry wrapper is
+    // retained around the whole observation.
     if (this.connectionState === "connected" && this.client) {
       console.log("[Kilo New] KiloProvider: 👤 syncWebviewState fetching profile...")
-      const profileResult = await retry(() => this.client!.kilo.profile())
-      const profileData = profileResult.data ?? null
+      const out = await retry(() =>
+        fetchKiloProfilePrivateFirst({
+          connection: this.connectionService as never,
+          client: this.client as never,
+          directory: this.getWorkspaceDirectory(),
+        }).then((r) => {
+          if (r.kind === "ok") return r
+          // Preserve the transient retry surface: surface the underlying
+          // cause (e.g. network) so `retry` retries transient failures and
+          // fails fast on terminal/unauthorized.
+          throw (r as { cause?: unknown }).cause ?? r
+        }),
+      ).catch(() => ({ kind: "unavailable" as const }))
+      const profileData = out.kind === "ok" ? out.data : null
       console.log("[Kilo New] KiloProvider: 👤 syncWebviewState profile:", profileData ? "received" : "null")
       this.postMessage({
         type: "profileData",
@@ -2401,10 +2417,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           void this.checkConfigWarnings("state")
           try {
             // Profile fetch is best-effort — returns 401 when user isn't logged into gateway.
+            // Private-first `kilo/profile` observation (the SDK call lives
+            // only in the helper fallback — never here).
             const sdkClient = this.client
             if (sdkClient) {
-              const profileResult = await sdkClient.kilo.profile()
-              this.postMessage({ type: "profileData", data: profileResult.data ?? null })
+              const out = await fetchKiloProfilePrivateFirst({
+                connection: this.connectionService as never,
+                client: sdkClient as never,
+                directory: this.getWorkspaceDirectory(),
+              })
+              this.postMessage({ type: "profileData", data: out.kind === "ok" ? out.data : null })
             }
             await this.syncWebviewState("sse-connected")
             await this.flushPendingSessionRefresh("sse-connected")

@@ -26,7 +26,14 @@ function createCtx(opts: MockOpts = {}) {
       profile: async () => {
         calls.profile += 1
         if (opts.failProfile) throw new Error("profile exploded")
-        return { data: { username: "kilo-user" } }
+        return {
+          data: {
+            profile: { email: "kilo-user@example.com" },
+            balance: null,
+            kiloPass: null,
+            currentOrgId: null,
+          },
+        }
       },
       organization: {
         set: async (params?: unknown) => {

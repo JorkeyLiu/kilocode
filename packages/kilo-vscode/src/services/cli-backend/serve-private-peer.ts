@@ -291,6 +291,17 @@ import type {
   McpStatusWireOutcome,
 } from "./serve-private-mcp-status-contract"
 import {
+  isSettledKiloProfileResult,
+  makeKiloProfileAmbiguous,
+  normalizePrivateKiloProfileWire,
+  validateKiloProfileContractRequest,
+} from "./serve-private-kilo-profile-contract"
+import type {
+  KiloProfileContractRequest,
+  KiloProfileResult,
+  KiloProfileWireOutcome,
+} from "./serve-private-kilo-profile-contract"
+import {
   makeMcpAuthenticateAmbiguous,
   makeMcpConnectAmbiguous,
   makeMcpDisconnectAmbiguous,
@@ -4131,6 +4142,68 @@ export class ServePrivatePeer {
       return normalizePrivateMcpStatusWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedKiloProfile(req: KiloProfileContractRequest, code: string, msg: string): KiloProfileResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "kilo/profile",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  /**
+   * Internal normalized handle for the read-only `kilo/profile` private-first
+   * observation. Resolves the discriminated wire outcome so invalid wire is
+   * an explicit `{ kind: "invalid" }` value consumed before any SDK fallback,
+   * never a normal result. Observation identity is `requestId` only.
+   *
+   * Settle-first stale semantics (this op only; other ops keep the generic
+   * stale-first path): the raw result is normalized/validated first, then a
+   * validated settled outcome (success or `retryable === false` terminal) is
+   * preserved across post-response stale/epoch drift. Only unresolved wire
+   * (invalid, ambiguous, or retryable failure) maps drift to ambiguous
+   * `transportUnknown`.
+   */
+  privateKiloProfileOutcomeWithHandle(req: KiloProfileContractRequest): {
+    id: number
+    promise: Promise<KiloProfileWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateKiloProfileContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("kilo/profile")) {
+      throw new Error("Private peer missing kilo/profile capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("kilo/profile", req)
+    const promise = (async (): Promise<KiloProfileWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeKiloProfileAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedKiloProfile(req, code, msg) }
+      }
+      const wire = normalizePrivateKiloProfileWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledKiloProfileResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeKiloProfileAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }
   }
 
