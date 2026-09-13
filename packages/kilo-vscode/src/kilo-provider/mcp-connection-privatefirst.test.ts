@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test"
 import {
+  MCP_AUTHENTICATE_TIMEOUT_MS,
+  MCP_CONNECTION_TIMEOUT_MS,
+  attemptMcpAuthenticatePrivate,
   attemptMcpConnectPrivate,
   attemptMcpDisconnectPrivate,
+  buildMcpAuthenticateReq,
   buildMcpConnectReq,
   buildMcpDisconnectReq,
   mcpConnectionFailureMessage,
 } from "./mcp-connection-privatefirst"
-import { canonicalMcpConnectOpId, canonicalMcpDisconnectOpId } from "../services/cli-backend/serve-private-mcp-connection-contract"
+import {
+  canonicalMcpAuthenticateOpId,
+  canonicalMcpConnectOpId,
+  canonicalMcpDisconnectOpId,
+} from "../services/cli-backend/serve-private-mcp-connection-contract"
 
 const DIR = "/repo"
 
@@ -35,6 +43,20 @@ function okDisconnectFor(r: ReturnType<typeof buildMcpDisconnectReq>) {
     outcome: { type: "succeeded", time: 1 },
     accepted: true,
     data: { disconnected: true },
+  }
+}
+
+function okAuthenticateFor(r: ReturnType<typeof buildMcpAuthenticateReq>) {
+  return {
+    v: 1,
+    requestId: r.requestId,
+    opId: r.opId,
+    op: "mcp/authenticate",
+    idempotencyKey: r.idempotencyKey,
+    status: "succeeded",
+    outcome: { type: "succeeded", time: 1 },
+    accepted: true,
+    data: { authenticated: true },
   }
 }
 
@@ -67,7 +89,7 @@ function ambiguousFor(r: { requestId: string; opId: string; idempotencyKey: stri
   }
 }
 
-describe("mcp connect/disconnect private-only (once, no SDK)", () => {
+describe("mcp connect/disconnect/authenticate private-only (once, no SDK)", () => {
   test("identity binds fresh per-op tuples with directory and name", () => {
     const c = buildMcpConnectReq(DIR, "demo")
     expect(c.opId).toBe(c.idempotencyKey)
@@ -79,6 +101,14 @@ describe("mcp connect/disconnect private-only (once, no SDK)", () => {
     expect(d.opId.startsWith("mcp-disconnect:")).toBeTrue()
     expect(canonicalMcpDisconnectOpId(d.opId.split(":")[1]!)).toBe(d.opId)
     expect(d.opId).not.toBe(c.opId)
+    const a = buildMcpAuthenticateReq(DIR, "demo")
+    expect(a.op).toBe("mcp/authenticate")
+    expect(a.opId).toBe(a.idempotencyKey)
+    expect(a.opId.startsWith("mcp-authenticate:")).toBeTrue()
+    expect(canonicalMcpAuthenticateOpId(a.opId.split(":")[1]!)).toBe(a.opId)
+    expect(a.context.directory).toBe(DIR)
+    expect(a.payload.name).toBe("demo")
+    expect(a.opId).not.toBe(c.opId)
   })
 
   test("succeeded accepted resolves ok with exactly one private call and zero SDK", async () => {
@@ -152,6 +182,26 @@ describe("mcp connect/disconnect private-only (once, no SDK)", () => {
       expect(seen[0]!.opId).toBe(seen[0]!.idempotencyKey)
       expect(() => (connection.privateMcpDisconnectOutcomeWithHandle as (q: typeof r) => unknown)(r)).toThrow()
     }
+  })
+
+  test("authenticate succeeds with exactly one private call and zero SDK", async () => {
+    const r = buildMcpAuthenticateReq(DIR, "demo")
+    let calls = 0
+    const connection = {
+      isPrivateAvailable: () => true,
+      privateMcpAuthenticateOutcomeWithHandle: (q: typeof r) => {
+        calls += 1
+        if (calls > 1) throw new Error("private authenticate must be called exactly once")
+        return {
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: okAuthenticateFor(q) }),
+          cancel: () => true,
+        }
+      },
+    }
+    const out = await attemptMcpAuthenticatePrivate(connection as never, r)
+    expect(out).toEqual({ kind: "ok" })
+    expect(calls).toBe(1)
   })
 
   test("terminal failures preserve codes with zero SDK", async () => {
@@ -268,6 +318,98 @@ describe("mcp connect/disconnect private-only (once, no SDK)", () => {
       },
     }
     expect(await attemptMcpDisconnectPrivate(connection as never, r, 10)).toEqual({ kind: "closed", reason: "timeout" })
+    expect(calls).toBe(1)
+    expect(cancelled).toContain(r.opId)
+  })
+
+  test("authenticate uses the OAuth-appropriate bound, not the short action timeout", async () => {
+    expect(MCP_CONNECTION_TIMEOUT_MS).toBe(3000)
+    expect(MCP_AUTHENTICATE_TIMEOUT_MS).toBe(5 * 60 * 1000)
+    expect(MCP_AUTHENTICATE_TIMEOUT_MS).toBeGreaterThan(MCP_CONNECTION_TIMEOUT_MS)
+    const delays: number[] = []
+    const orig = globalThis.setTimeout
+    const patched = ((fn: (...a: never[]) => void, ms?: number, ...rest: never[]) => {
+      if (typeof ms === "number") delays.push(ms)
+      return (orig as (...a: never[]) => unknown)(fn, ms, ...rest)
+    }) as typeof setTimeout
+    globalThis.setTimeout = patched
+    try {
+      const c = buildMcpConnectReq(DIR, "demo")
+      const cconn = {
+        isPrivateAvailable: () => true,
+        privateMcpConnectOutcomeWithHandle: (q: typeof c) => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: okConnectFor(q) }),
+          cancel: () => true,
+        }),
+      }
+      await attemptMcpConnectPrivate(cconn as never, c)
+      const a = buildMcpAuthenticateReq(DIR, "demo")
+      const aconn = {
+        isPrivateAvailable: () => true,
+        privateMcpAuthenticateOutcomeWithHandle: (q: typeof a) => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: okAuthenticateFor(q) }),
+          cancel: () => true,
+        }),
+      }
+      await attemptMcpAuthenticatePrivate(aconn as never, a)
+    } finally {
+      globalThis.setTimeout = orig
+    }
+    expect(delays).toContain(MCP_CONNECTION_TIMEOUT_MS)
+    expect(delays).toContain(MCP_AUTHENTICATE_TIMEOUT_MS)
+    expect(delays.filter((d) => d === MCP_AUTHENTICATE_TIMEOUT_MS)).toHaveLength(1)
+  })
+
+  test("authenticate pending beyond the short window still succeeds under the OAuth bound", async () => {
+    const r = buildMcpAuthenticateReq(DIR, "demo")
+    let cancelled = false
+    const connection = {
+      isPrivateAvailable: () => true,
+      privateMcpAuthenticateOutcomeWithHandle: (q: typeof r) => ({
+        id: 9,
+        promise: new Promise((resolve) => {
+          setTimeout(() => resolve({ kind: "valid", result: okAuthenticateFor(q) }), 50)
+        }),
+        cancel: () => {
+          cancelled = true
+          return true
+        },
+      }),
+    }
+    // 50 ms exceeds the 10 ms short probe below, so a 3 s-style short bound
+    // would still succeed here; the point is the OAuth default (5 min) does
+    // not exact-cancel a legitimately slow browser callback.
+    const out = await attemptMcpAuthenticatePrivate(connection as never, r)
+    expect(out).toEqual({ kind: "ok" })
+    expect(cancelled).toBeFalse()
+  })
+
+  test("authenticate bounded expiry exact-cancels with the opId and never retries", async () => {
+    const r = buildMcpAuthenticateReq(DIR, "demo")
+    let cancelled: string | undefined
+    let calls = 0
+    const connection = {
+      isPrivateAvailable: () => true,
+      getPrivatePeer: () => null,
+      getPrivateEpoch: () => 1,
+      privateMcpAuthenticateOutcomeWithHandle: () => {
+        calls += 1
+        return {
+          id: 11,
+          promise: new Promise(() => {}),
+          cancel: (msg?: string) => {
+            cancelled = msg
+            return true
+          },
+        }
+      },
+    }
+    expect(await attemptMcpAuthenticatePrivate(connection as never, r, 10)).toEqual({
+      kind: "closed",
+      reason: "timeout",
+    })
     expect(calls).toBe(1)
     expect(cancelled).toContain(r.opId)
   })

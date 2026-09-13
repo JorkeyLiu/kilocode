@@ -2,6 +2,7 @@ import { describe, expect, test, spyOn, afterEach, mock } from "bun:test"
 import * as vscode from "vscode"
 import { KiloProvider } from "./KiloProvider"
 import { KiloConnectionService } from "./services/cli-backend/connection-service"
+import { MCP_AUTHENTICATE_TIMEOUT_MS } from "./kilo-provider/mcp-connection-privatefirst"
 
 // vscode mock is provided by the shared preload (tests/setup/vscode-mock.ts)
 afterEach(() => {
@@ -35,6 +36,20 @@ function disconnectSucceeded(req: Req) {
     outcome: { type: "succeeded", time: Date.now() },
     accepted: true,
     data: { disconnected: true },
+  }
+}
+
+function authenticateSucceeded(req: Req) {
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "mcp/authenticate",
+    idempotencyKey: req.idempotencyKey,
+    status: "succeeded",
+    outcome: { type: "succeeded", time: Date.now() },
+    accepted: true,
+    data: { authenticated: true },
   }
 }
 
@@ -72,12 +87,14 @@ describe("KiloProvider MCP connect/disconnect private-only actions", () => {
     privateAvailable: boolean
     connectImpl?: (req: Req) => unknown
     disconnectImpl?: (req: Req) => unknown
+    authenticateImpl?: (req: Req) => unknown
     statusImpl?: (req: Req) => unknown
     sdkStatusThrow?: boolean
     canonical?: boolean
   }) {
     const connectCalls: Req[] = []
     const disconnectCalls: Req[] = []
+    const authenticateCalls: Req[] = []
     const statusCalls: Req[] = []
     const sdkStatusCalls: Req[] = []
     const posted: Req[] = []
@@ -101,6 +118,7 @@ describe("KiloProvider MCP connect/disconnect private-only actions", () => {
       isPrivateAvailable: () => opts.privateAvailable,
       privateMcpConnectOutcomeWithHandle: handle(connectCalls, opts.connectImpl ?? connectSucceeded),
       privateMcpDisconnectOutcomeWithHandle: handle(disconnectCalls, opts.disconnectImpl ?? disconnectSucceeded),
+      privateMcpAuthenticateOutcomeWithHandle: handle(authenticateCalls, opts.authenticateImpl ?? authenticateSucceeded),
       privateMcpStatusOutcomeWithHandle: handle(statusCalls, opts.statusImpl ?? statusSucceeded),
       getClient: () => client as unknown as never,
       getConnectionError: () => null,
@@ -128,7 +146,17 @@ describe("KiloProvider MCP connect/disconnect private-only actions", () => {
       posted.push(msg as Req)
     })
     const errors = spyOn(vscode.window, "showErrorMessage").mockResolvedValue(undefined)
-    return { provider: anyProvider, connectCalls, disconnectCalls, statusCalls, sdkStatusCalls, posted, errors, post }
+    return {
+      provider: anyProvider,
+      connectCalls,
+      disconnectCalls,
+      authenticateCalls,
+      statusCalls,
+      sdkStatusCalls,
+      posted,
+      errors,
+      post,
+    }
   }
 
   function loaded(posted: Req[]) {
@@ -245,18 +273,96 @@ describe("KiloProvider MCP connect/disconnect private-only actions", () => {
     expect(done(ctx.posted).length).toBeGreaterThan(0)
   })
 
-  test("authenticate fails closed immediately with no private and no SDK call", () => {
+  test("authenticate runs one private mutation then status refresh with zero SDK mutation", async () => {
     const ctx = makeProvider({ privateAvailable: true })
-    ;(ctx.provider.handleMcpAuthenticate as (n: string) => void)("demo")
+    await (ctx.provider.handleMcpAuthenticate as (n: string) => Promise<void>)("demo")
+    expect(ctx.authenticateCalls).toHaveLength(1)
     expect(ctx.connectCalls).toHaveLength(0)
     expect(ctx.disconnectCalls).toHaveLength(0)
-    expect(ctx.statusCalls).toHaveLength(0)
+    expect(ctx.statusCalls).toHaveLength(1)
     expect(ctx.sdkStatusCalls).toHaveLength(0)
+    const req = ctx.authenticateCalls[0]!
+    expect(req.op).toBe("mcp/authenticate")
+    expect((req.context as Req).directory).toBe("/tmp")
+    expect((req.payload as Req).name).toBe("demo")
+    expect(req.opId).toBe(req.idempotencyKey)
+    expect(String(req.opId).startsWith("mcp-authenticate:")).toBeTrue()
+    expect(loaded(ctx.posted)).toHaveLength(1)
+    expect(done(ctx.posted)).toHaveLength(0)
+    expect(ctx.errors).toHaveBeenCalledTimes(0)
+  })
+
+  test("authenticate terminal failure shows an error yet still converges status", async () => {
+    const ctx = makeProvider({
+      privateAvailable: true,
+      authenticateImpl: (req) => failed(req, "mcp/authenticate", "mcp.not_found", false),
+    })
+    await (ctx.provider.handleMcpAuthenticate as (n: string) => Promise<void>)("ghost")
+    expect(ctx.authenticateCalls).toHaveLength(1)
+    expect(ctx.statusCalls).toHaveLength(1)
     expect(ctx.errors).toHaveBeenCalledTimes(1)
-    expect(String(ctx.errors.mock.calls[0]?.[0])).toContain("not available")
+    expect(String(ctx.errors.mock.calls[0]?.[0])).toContain("ghost")
+    expect(loaded(ctx.posted)).toHaveLength(1)
+  })
+
+  test("authenticate canonical readiness fails closed before any private call", async () => {
+    const ctx = makeProvider({ privateAvailable: true, canonical: true })
+    await (ctx.provider.handleMcpAuthenticate as (n: string) => Promise<void>)("demo")
+    expect(ctx.authenticateCalls).toHaveLength(0)
+    expect(ctx.errors).toHaveBeenCalledTimes(1)
+    expect(done(ctx.posted).length).toBeGreaterThan(0)
+  })
+
+  test("authenticate missing name clears loading without a private call", async () => {
+    const ctx = makeProvider({ privateAvailable: true })
+    await (ctx.provider.handleMcpAuthenticate as (n: string) => Promise<void>)("")
+    expect(ctx.authenticateCalls).toHaveLength(0)
+    expect(ctx.statusCalls).toHaveLength(0)
     const completions = done(ctx.posted)
     expect(completions).toHaveLength(1)
-    expect(completions[0]).toMatchObject({ name: "demo", ok: false })
+    expect(completions[0]).toMatchObject({ name: "", ok: false })
+  })
+
+  test("authenticate waits on the OAuth bound, not the short action timeout", async () => {
+    expect(MCP_AUTHENTICATE_TIMEOUT_MS).toBe(5 * 60 * 1000)
+    const ctx = makeProvider({ privateAvailable: true })
+    const delays: number[] = []
+    const orig = globalThis.setTimeout
+    const patched = ((fn: (...a: never[]) => void, ms?: number, ...rest: never[]) => {
+      if (typeof ms === "number") delays.push(ms)
+      return (orig as (...a: never[]) => unknown)(fn, ms, ...rest)
+    }) as typeof setTimeout
+    globalThis.setTimeout = patched
+    try {
+      await (ctx.provider.handleMcpAuthenticate as (n: string) => Promise<void>)("demo")
+    } finally {
+      globalThis.setTimeout = orig
+    }
+    expect(ctx.authenticateCalls).toHaveLength(1)
+    expect(delays).toContain(MCP_AUTHENTICATE_TIMEOUT_MS)
+  })
+
+  test("authenticate cancelled/ambiguous outcome still converges status without hanging", async () => {
+    const ctx = makeProvider({
+      privateAvailable: true,
+      authenticateImpl: (req) => ({
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "mcp/authenticate",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      }),
+    })
+    await (ctx.provider.handleMcpAuthenticate as (n: string) => Promise<void>)("demo")
+    expect(ctx.authenticateCalls).toHaveLength(1)
+    expect(ctx.statusCalls).toHaveLength(1)
+    expect(ctx.errors).toHaveBeenCalledTimes(1)
+    expect(loaded(ctx.posted)).toHaveLength(1)
+    expect(done(ctx.posted)).toHaveLength(0)
   })
 
   test("unknown Error with URL/token/path never reaches showErrorMessage", async () => {

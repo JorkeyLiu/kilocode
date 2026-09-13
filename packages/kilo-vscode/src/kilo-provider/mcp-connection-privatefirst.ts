@@ -1,16 +1,20 @@
 import * as crypto from "crypto"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import {
+  canonicalMcpAuthenticateOpId,
   canonicalMcpConnectOpId,
   canonicalMcpDisconnectOpId,
+  validateMcpAuthenticateContractRequest,
   validateMcpConnectContractRequest,
   validateMcpDisconnectContractRequest,
 } from "../services/cli-backend/serve-private-mcp-connection-contract"
 import type {
+  McpAuthenticateContractRequest,
   McpConnectContractRequest,
   McpDisconnectContractRequest,
 } from "../services/cli-backend/serve-private-mcp-connection-contract"
 import {
+  mcpAuthenticateOutcomeHandle,
   mcpConnectOutcomeHandle,
   mcpDisconnectOutcomeHandle,
 } from "../services/cli-backend/serve-private-mcp-connection"
@@ -43,6 +47,20 @@ export function buildMcpDisconnectReq(directory: string, name: string): McpDisco
   }
 }
 
+export function buildMcpAuthenticateReq(directory: string, name: string): McpAuthenticateContractRequest {
+  const token = crypto.randomUUID()
+  const opId = canonicalMcpAuthenticateOpId(token)
+  return {
+    v: 1 as const,
+    requestId: crypto.randomUUID(),
+    opId,
+    op: "mcp/authenticate" as const,
+    idempotencyKey: opId,
+    context: { directory },
+    payload: { name },
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -58,6 +76,18 @@ export type McpConnectionAttempt =
   | { kind: "ok" }
   | { kind: "failed"; code: string }
   | { kind: "closed"; reason: string }
+
+// Short local mutations (connect/disconnect) settle fast: 3 s exact-cancel.
+export const MCP_CONNECTION_TIMEOUT_MS = 3000
+// OAuth browser callback legitimately outlasts seconds: the backend waits up
+// to 5 min for the user to complete sign-in in the browser
+// (`CALLBACK_TIMEOUT_MS = 5 * 60 * 1000` in
+// `packages/opencode/src/mcp/oauth-callback.ts`, awaited by
+// `MCP.authenticate` in `packages/opencode/src/mcp/index.ts` after opening
+// the browser). The extension therefore bounds authenticate at the same 5 min
+// with the same once-only exact-cancel semantics: one private call, no SDK
+// fallback/retry, cancel exact id on expiry, then converge mcp/status.
+export const MCP_AUTHENTICATE_TIMEOUT_MS = 5 * 60 * 1000
 
 const ACTIONABLE_MCP_CONNECTION_FAILURE: Record<string, string> = {
   "mcp.not_found": "MCP server not found",
@@ -87,6 +117,7 @@ type Conn = Pick<KiloConnectionService, "isPrivateAvailable" | "getPrivatePeer" 
   invalidatePrivatePeerOnObserverTimeout?: (reason: string) => void
   privateMcpConnectOutcomeWithHandle?: (r: McpConnectContractRequest) => Handle
   privateMcpDisconnectOutcomeWithHandle?: (r: McpDisconnectContractRequest) => Handle
+  privateMcpAuthenticateOutcomeWithHandle?: (r: McpAuthenticateContractRequest) => Handle
 }
 
 function parseAttempt(result: unknown): McpConnectionAttempt {
@@ -104,7 +135,7 @@ function parseAttempt(result: unknown): McpConnectionAttempt {
 
 async function attemptOnce(
   connection: KiloConnectionService | Conn | null | undefined,
-  req: McpConnectContractRequest | McpDisconnectContractRequest,
+  req: McpConnectContractRequest | McpDisconnectContractRequest | McpAuthenticateContractRequest,
   ms: number,
 ): Promise<McpConnectionAttempt> {
   const conn = connection as Conn | null | undefined
@@ -116,8 +147,12 @@ async function attemptOnce(
   }
   let handle: Handle | null = null
   try {
-    const isConnect = req.op === "mcp/connect"
-    const direct = isConnect ? conn.privateMcpConnectOutcomeWithHandle?.bind(conn) : conn.privateMcpDisconnectOutcomeWithHandle?.bind(conn)
+    const direct =
+      req.op === "mcp/connect"
+        ? conn.privateMcpConnectOutcomeWithHandle?.bind(conn)
+        : req.op === "mcp/disconnect"
+          ? conn.privateMcpDisconnectOutcomeWithHandle?.bind(conn)
+          : conn.privateMcpAuthenticateOutcomeWithHandle?.bind(conn)
     if (direct) {
       handle = direct(req as never)
     } else {
@@ -128,9 +163,12 @@ async function attemptOnce(
         epoch: conn.getPrivateEpoch(),
         invalidate: (r: string) => conn.invalidatePrivatePeerOnObserverTimeout?.(r),
       }
-      handle = isConnect
-        ? mcpConnectOutcomeHandle(deps, req as McpConnectContractRequest)
-        : mcpDisconnectOutcomeHandle(deps, req as McpDisconnectContractRequest)
+      handle =
+        req.op === "mcp/connect"
+          ? mcpConnectOutcomeHandle(deps, req as McpConnectContractRequest)
+          : req.op === "mcp/disconnect"
+            ? mcpDisconnectOutcomeHandle(deps, req as McpDisconnectContractRequest)
+            : mcpAuthenticateOutcomeHandle(deps, req as McpAuthenticateContractRequest)
     }
     const outcome = (await withTimeout(handle.promise, ms)) as
       | { kind: "valid"; result: unknown }
@@ -156,7 +194,7 @@ async function attemptOnce(
 export async function attemptMcpConnectPrivate(
   connection: KiloConnectionService | Conn | null | undefined,
   req: McpConnectContractRequest,
-  ms = 3000,
+  ms = MCP_CONNECTION_TIMEOUT_MS,
 ): Promise<McpConnectionAttempt> {
   try {
     validateMcpConnectContractRequest(req)
@@ -170,10 +208,27 @@ export async function attemptMcpConnectPrivate(
 export async function attemptMcpDisconnectPrivate(
   connection: KiloConnectionService | Conn | null | undefined,
   req: McpDisconnectContractRequest,
-  ms = 3000,
+  ms = MCP_CONNECTION_TIMEOUT_MS,
 ): Promise<McpConnectionAttempt> {
   try {
     validateMcpDisconnectContractRequest(req)
+  } catch {
+    return { kind: "closed", reason: "invalid" }
+  }
+  return attemptOnce(connection, req, ms)
+}
+
+// Shared private-only MCP authenticate mutation: same once-only semantics
+// (one private call, zero SDK fallback/retry, exact-cancel on expiry), but
+// with the OAuth-appropriate 5 min bound above instead of the short 3 s
+// action timeout so the browser callback can complete.
+export async function attemptMcpAuthenticatePrivate(
+  connection: KiloConnectionService | Conn | null | undefined,
+  req: McpAuthenticateContractRequest,
+  ms = MCP_AUTHENTICATE_TIMEOUT_MS,
+): Promise<McpConnectionAttempt> {
+  try {
+    validateMcpAuthenticateContractRequest(req)
   } catch {
     return { kind: "closed", reason: "invalid" }
   }

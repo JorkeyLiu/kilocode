@@ -269,14 +269,19 @@ import type {
   McpStatusWireOutcome,
 } from "./serve-private-mcp-status-contract"
 import {
+  makeMcpAuthenticateAmbiguous,
   makeMcpConnectAmbiguous,
   makeMcpDisconnectAmbiguous,
+  normalizePrivateMcpAuthenticateWire,
   normalizePrivateMcpConnectWire,
   normalizePrivateMcpDisconnectWire,
+  validateMcpAuthenticateContractRequest,
   validateMcpConnectContractRequest,
   validateMcpDisconnectContractRequest,
 } from "./serve-private-mcp-connection-contract"
 import type {
+  McpAuthenticateContractRequest,
+  McpAuthenticateWireOutcome,
   McpConnectContractRequest,
   McpConnectWireOutcome,
   McpDisconnectContractRequest,
@@ -3960,6 +3965,43 @@ export class ServePrivatePeer {
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeMcpDisconnectAmbiguous(req, true) }
       return normalizePrivateMcpDisconnectWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the private-only mcp/authenticate mutation,
+   * same fail-closed semantics as mcp/connect above.
+   */
+  privateMcpAuthenticateOutcomeWithHandle(req: McpAuthenticateContractRequest): {
+    id: number
+    promise: Promise<McpAuthenticateWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMcpAuthenticateContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("mcp/authenticate")) {
+      throw new Error("Private peer missing mcp/authenticate capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("mcp/authenticate", req)
+    const promise = (async (): Promise<McpAuthenticateWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMcpAuthenticateAmbiguous(req, true) }
+        return { kind: "valid", result: makeMcpAuthenticateAmbiguous(req, true) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMcpAuthenticateAmbiguous(req, true) }
+      return normalizePrivateMcpAuthenticateWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }

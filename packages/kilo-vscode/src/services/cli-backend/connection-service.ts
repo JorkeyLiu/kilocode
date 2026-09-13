@@ -43,7 +43,11 @@ import {
 import type { PromptContractRequest, PromptResult } from "./serve-private-prompt-contract"
 import type { CommandContractRequest, CommandResult } from "./serve-private-command-contract"
 import { skillRemoveOutcomeForOwner } from "./serve-private-skill-remove-owner"
-import { mcpConnectOutcomeForOwner, mcpDisconnectOutcomeForOwner } from "./serve-private-mcp-connection-owner"
+import {
+  mcpAuthenticateOutcomeForOwner,
+  mcpConnectOutcomeForOwner,
+  mcpDisconnectOutcomeForOwner,
+} from "./serve-private-mcp-connection-owner"
 import type {
   ServePrivateRevertRequest,
   ServePrivateRevertResult,
@@ -2259,6 +2263,11 @@ export class KiloConnectionService {
   /** Private-only mcp/disconnect mutation: thin owner delegation with zero SDK fallback. */
   privateMcpDisconnectOutcomeWithHandle(req: Parameters<typeof mcpDisconnectOutcomeForOwner>[1]) {
     return mcpDisconnectOutcomeForOwner(this, req)
+  }
+
+  /** Private-only mcp/authenticate mutation: thin owner delegation with zero SDK fallback. */
+  privateMcpAuthenticateOutcomeWithHandle(req: Parameters<typeof mcpAuthenticateOutcomeForOwner>[1]) {
+    return mcpAuthenticateOutcomeForOwner(this, req)
   }
 
   async privateGet(req: ServePrivateGetRequest): Promise<ServePrivateGetResult> {

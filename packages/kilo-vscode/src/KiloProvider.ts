@@ -50,8 +50,10 @@ import {
 import { ErrorCode } from "./private-worker/json-rpc"
 import { fetchMcpStatusPrivateFirst } from "./kilo-provider/mcp-status-privatefirst"
 import {
+  attemptMcpAuthenticatePrivate,
   attemptMcpConnectPrivate,
   attemptMcpDisconnectPrivate,
+  buildMcpAuthenticateReq,
   buildMcpConnectReq,
   buildMcpDisconnectReq,
   mcpConnectionFailureMessage,
@@ -2104,7 +2106,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         }
         case "authenticateMcp": {
-          this.handleMcpAuthenticate(message.name)
+          this.handleMcpAuthenticate(message.name).catch((e) =>
+            console.error("[Kilo New] handleMcpAuthenticate failed:", e),
+          )
           break
         }
 
@@ -4389,21 +4393,45 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * MCP authenticate stays unmigrated: fail closed immediately so the click
-   * never leaves `mcpLoading` hanging. No HTTP/SDK auth is attempted here.
+   * Private-only MCP authenticate for the Settings sign-in: at most one
+   * private `mcp/authenticate` call per user action with zero SDK fallback
+   * and zero retry. The OAuth browser callback outlasts the short 3 s
+   * connect/disconnect bound, so this uses the OAuth-appropriate 5 min
+   * bound (`MCP_AUTHENTICATE_TIMEOUT_MS`, matching the backend 5 min
+   * OAuth callback wait) with the same exact-cancel. Every completion
+   * converges authoritative `mcp/status` so the webview single-slot
+   * `mcpLoading` never hangs.
    */
-  private handleMcpAuthenticate(name: unknown): void {
-    const label = typeof name === "string" && name.length > 0 ? name : ""
-    void vscode.window.showErrorMessage("MCP sign-in is not available in this version.")
-    this.postMessage({ type: "mcpActionDone", name: label, ok: false })
+  private async handleMcpAuthenticate(name: unknown): Promise<void> {
+    if (typeof name !== "string" || name.length === 0) {
+      console.error("[Kilo New] handleMcpAuthenticate rejected: missing server name")
+      this.postMessage({ type: "mcpActionDone", name: "", ok: false })
+      return
+    }
+    if (this.canonicalConfig && this.canonicalReady) {
+      console.error("[Kilo New] handleMcpAuthenticate rejected while canonical config is ready")
+      void vscode.window.showErrorMessage(`MCP sign-in "${name}" is disabled while canonical config is ready.`)
+      this.postMessage({ type: "mcpActionDone", name, ok: false })
+      await this.convergeMcpStatusAfterAction(name)
+      return
+    }
+    const dir = this.getWorkspaceDirectory()
+    const attempt = await attemptMcpAuthenticatePrivate(this.connectionService, buildMcpAuthenticateReq(dir, name))
+    if (attempt.kind === "failed")
+      void vscode.window.showErrorMessage(`MCP sign-in "${name}" failed: ${mcpConnectionFailureMessage(attempt.code)}.`)
+    else if (attempt.kind === "closed")
+      void vscode.window.showErrorMessage(
+        `MCP sign-in "${name}" did not complete (${mcpConnectionFailureMessage(attempt.reason)}). Status refreshed — retry if needed.`,
+      )
+    await this.convergeMcpStatusAfterAction(name)
   }
 
   /**
-   * Post-mutation mcp/status convergence shared by connect/disconnect. A
-   * successful re-observation pushes the existing `mcpStatusLoaded` (which
-   * clears the webview loading slot); any failure posts the minimal
-   * `mcpActionDone` completion for the same name without touching the real
-   * status cache.
+   * Post-mutation mcp/status convergence shared by connect/disconnect/
+   * authenticate. A successful re-observation pushes the existing
+   * `mcpStatusLoaded` (which clears the webview loading slot); any failure
+   * posts the minimal `mcpActionDone` completion for the same name without
+   * touching the real status cache.
    */
   private async convergeMcpStatusAfterAction(name: string): Promise<void> {
     try {

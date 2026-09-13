@@ -1,6 +1,12 @@
 import type { ServePrivatePeer } from "./serve-private-peer"
-import { makeMcpConnectAmbiguous, makeMcpDisconnectAmbiguous } from "./serve-private-mcp-connection-contract"
+import {
+  makeMcpAuthenticateAmbiguous,
+  makeMcpConnectAmbiguous,
+  makeMcpDisconnectAmbiguous,
+} from "./serve-private-mcp-connection-contract"
 import type {
+  McpAuthenticateContractRequest,
+  McpAuthenticateWireOutcome,
   McpConnectContractRequest,
   McpConnectWireOutcome,
   McpDisconnectContractRequest,
@@ -136,5 +142,23 @@ export function mcpDisconnectOutcomeForOwner(
   return wrapOutcome(ownerOf(svc, peerAtCall, epochAtCall, req.opId), handle, req, "mcp/disconnect", (r) => ({
     kind: "valid",
     result: makeMcpDisconnectAmbiguous(r, true),
+  }))
+}
+
+/**
+ * Thin owner delegation for the private-only mcp/authenticate mutation, same
+ * fail-closed semantics as mcp/connect above.
+ */
+export function mcpAuthenticateOutcomeForOwner(
+  svc: McpConnectionSvc,
+  req: McpAuthenticateContractRequest,
+): { id: number; promise: Promise<McpAuthenticateWireOutcome>; cancel: (msg?: string) => boolean } {
+  const peer = checkPeer(svc, "mcp/authenticate")
+  const epochAtCall = svc.getPrivateEpoch()
+  const peerAtCall = peer
+  const handle = peerAtCall.privateMcpAuthenticateOutcomeWithHandle(req)
+  return wrapOutcome(ownerOf(svc, peerAtCall, epochAtCall, req.opId), handle, req, "mcp/authenticate", (r) => ({
+    kind: "valid",
+    result: makeMcpAuthenticateAmbiguous(r, true),
   }))
 }

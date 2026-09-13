@@ -1,8 +1,10 @@
-// Private-only `mcp/connect` + `mcp/disconnect` mutation contracts (production).
+// Private-only `mcp/connect` + `mcp/disconnect` + `mcp/authenticate`
+// mutation contracts (production).
 // Each request is strictly `{v:1,requestId,opId,op,
 // idempotencyKey,context:{directory},payload:{name}}` with
-// `opId === mcp-connect:<token>` (resp. `mcp-disconnect:<token>`, token
-// non-empty, no colon, no path material) and `idempotencyKey === opId`.
+// `opId === mcp-connect:<token>` (resp. `mcp-disconnect:<token>`,
+// `mcp-authenticate:<token>`, token non-empty, no colon, no path material)
+// and `idempotencyKey === opId`.
 // The token is correlation/diagnostic identity only: there is no cross-request
 // replay semantic and the CLI keeps no durable journal or result snapshot.
 // Success data is `{connected:true}` (resp. `{disconnected:true}`); failures
@@ -15,9 +17,9 @@
 //   lifecycle owner; the private ops only route the call through the existing
 //   drain-control + `InstanceRef` lane.
 // - Private entry: `packages/opencode/src/kilocode/mcp-connection-private.ts`
-//   (`mcp/connect` + `mcp/disconnect` FD ops, strict validation,
-//   drain-control lane, `InstanceRef` scope, typed `mcp.not_found` terminal
-//   plus retryable rebuild fence).
+//   (`mcp/connect` + `mcp/disconnect` + `mcp/authenticate` FD ops, strict
+//   validation, drain-control lane, `InstanceRef` scope, typed `mcp.not_found`
+//   terminal plus retryable rebuild fence).
 // - Consumer: `packages/kilo-vscode/src/kilo-provider/mcp-connection-privatefirst.ts`
 //   is private-only: at most one private call per user action with zero SDK
 //   fallback and zero retry; every outcome re-observes `mcp/status`.
@@ -27,8 +29,8 @@
 //   nothing about payload freshness.
 // - `payload.name` names the configured server. No freshness, ordering, or
 //   lifecycle claim is made.
-// - Out of scope: `mcp/status` re-observation, OAuth authenticate, config or
-//   canonical writes, transport behavior, and any other operation.
+// - Out of scope: `mcp/status` re-observation, config or canonical writes,
+//   transport behavior, and any other operation.
 
 import { isAbsolute } from "path"
 
@@ -98,9 +100,36 @@ export interface McpDisconnectContractRequest {
   payload: { name: string }
 }
 
+export function canonicalMcpAuthenticateOpId(token: string): string {
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  if (token.includes(":")) throw new TypeError("token must not contain ':'")
+  if (!pathless(token)) throw new TypeError("token must not carry path material")
+  return `mcp-authenticate:${token}`
+}
+
+export function parseMcpAuthenticateOpId(opId: string): { token: string } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "mcp-authenticate" || segs[1]!.length === 0)
+    throw new TypeError("opId must be mcp-authenticate:<token> with nonempty colon-free token")
+  const token = segs[1]!
+  if (!pathless(token)) throw new TypeError("opId must be mcp-authenticate:<token> with nonempty colon-free token")
+  return { token }
+}
+
+export interface McpAuthenticateContractRequest {
+  v: 1
+  requestId: string
+  opId: string
+  op: "mcp/authenticate"
+  idempotencyKey: string
+  context: { directory: string }
+  payload: { name: string }
+}
+
 function validateIds(
   raw: Record<string, unknown>,
-  op: "mcp/connect" | "mcp/disconnect",
+  op: "mcp/connect" | "mcp/disconnect" | "mcp/authenticate",
   parse: (opId: string) => { token: string },
 ): void {
   if (raw.v !== 1) throw new Error("v must be 1")
@@ -152,6 +181,16 @@ export function validateMcpDisconnectContractRequest(raw: unknown): McpDisconnec
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
   for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
   return raw as unknown as McpDisconnectContractRequest
+}
+
+export function validateMcpAuthenticateContractRequest(raw: unknown): McpAuthenticateContractRequest {
+  if (!record(raw)) throw new Error("request must be object")
+  validateIds(raw, "mcp/authenticate", parseMcpAuthenticateOpId)
+  validateContext(raw.context)
+  validateNamePayload(raw.payload)
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  return raw as unknown as McpAuthenticateContractRequest
 }
 
 export interface McpConnectionFailure {
@@ -245,6 +284,59 @@ export function makeMcpConnectAmbiguous(req: McpConnectContractRequest, transpor
   return out
 }
 
+export type McpAuthenticateResult =
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "mcp/authenticate"
+      idempotencyKey: string
+      status: "succeeded"
+      outcome: { type: "succeeded"; time: number }
+      accepted: true
+      data: { authenticated: true }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "mcp/authenticate"
+      idempotencyKey: string
+      status: "failed"
+      outcome: { type: "failed"; time: number; failure: McpConnectionFailure }
+      accepted: false
+      failure: McpConnectionFailure
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "mcp/authenticate"
+      idempotencyKey: string
+      status: "ambiguous"
+      outcome: { type: "ambiguous"; time: number }
+      accepted: false
+      transportUnknown?: boolean
+    }
+
+export function makeMcpAuthenticateAmbiguous(
+  req: McpAuthenticateContractRequest,
+  transportUnknown = true,
+): McpAuthenticateResult {
+  const out: McpAuthenticateResult = {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "mcp/authenticate",
+    idempotencyKey: req.idempotencyKey,
+    status: "ambiguous",
+    outcome: { type: "ambiguous", time: Date.now() },
+    accepted: false,
+  }
+  if (transportUnknown) (out as { transportUnknown?: boolean }).transportUnknown = true
+  return out
+}
+
 export function makeMcpDisconnectAmbiguous(
   req: McpDisconnectContractRequest,
   transportUnknown = true,
@@ -305,6 +397,9 @@ export function validateMcpConnectionFailure(raw: unknown): McpConnectionFailure
 export type McpConnectWireOutcome = { kind: "valid"; result: McpConnectResult } | { kind: "invalid"; detail: string }
 export type McpDisconnectWireOutcome =
   | { kind: "valid"; result: McpDisconnectResult }
+  | { kind: "invalid"; detail: string }
+export type McpAuthenticateWireOutcome =
+  | { kind: "valid"; result: McpAuthenticateResult }
   | { kind: "invalid"; detail: string }
 
 export const MCP_CONNECTION_INVALID_DETAIL = "invalid private response shape"
@@ -439,12 +534,79 @@ export function normalizePrivateMcpConnectWire(raw: unknown, req: McpConnectCont
   }
 }
 
+// eslint-disable-next-line complexity
+export function validateMcpAuthenticateResult(
+  raw: unknown,
+  req: McpAuthenticateContractRequest,
+): McpAuthenticateResult {
+  if (!record(raw)) throw new Error("result must be object")
+  if (raw.v !== 1) throw new Error("result v must be 1")
+  if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+  if (raw.opId !== req.opId) throw new Error("opId mismatch")
+  if (raw.op !== "mcp/authenticate") throw new Error("op mismatch")
+  if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+  const status = raw.status
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
+  if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
+  const outcome = raw.outcome
+  if (!record(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
+  if (outcome.type !== status) throw new Error("outcome.type must match status")
+  if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
+  const rec = raw as Record<string, unknown>
+  const outRec = outcome as Record<string, unknown>
+  if (status === "succeeded") {
+    for (const k of Object.keys(rec)) if (!RESULT_SUCCEEDED.has(k)) throw new Error("unexpected result field")
+    for (const k of Object.keys(outRec)) if (!OUTCOME_PLAIN.has(k)) throw new Error("unexpected outcome field")
+    if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
+    const data = rec.data
+    if (!record(data)) throw new Error("succeeded data must be object")
+    for (const k of Object.keys(data)) if (k !== "authenticated") throw new Error("unexpected data field")
+    if (data.authenticated !== true) throw new Error("succeeded data.authenticated must be true")
+    if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
+    if (outRec.failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    return raw as unknown as McpAuthenticateResult
+  }
+  if (status === "failed") {
+    for (const k of Object.keys(rec)) if (!RESULT_FAILED.has(k)) throw new Error("unexpected result field")
+    for (const k of Object.keys(outRec)) if (!OUTCOME_FAILED.has(k)) throw new Error("unexpected outcome field")
+    const failure = validateMcpConnectionFailure(rec.failure)
+    const outFailure = validateMcpConnectionFailure(outRec.failure)
+    if (failure.code !== outFailure.code) throw new Error("failure code mismatch")
+    if (failure.message !== outFailure.message) throw new Error("failure message mismatch")
+    if (failure.retryable !== outFailure.retryable) throw new Error("failure retryable mismatch")
+    if (rec.data !== undefined) throw new Error("failed must not have data")
+    return raw as unknown as McpAuthenticateResult
+  }
+  for (const k of Object.keys(rec)) if (!RESULT_AMBIGUOUS.has(k)) throw new Error("unexpected result field")
+  for (const k of Object.keys(outRec)) if (!OUTCOME_PLAIN.has(k)) throw new Error("unexpected outcome field")
+  if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+  if (rec.transportUnknown !== undefined && typeof rec.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
+  if (rec.data !== undefined) throw new Error("ambiguous must not have data")
+  if (rec.failure !== undefined) throw new Error("ambiguous must not have failure")
+  if (outRec.failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  return raw as unknown as McpAuthenticateResult
+}
+
 export function normalizePrivateMcpDisconnectWire(
   raw: unknown,
   req: McpDisconnectContractRequest,
 ): McpDisconnectWireOutcome {
   try {
     return { kind: "valid", result: validateMcpDisconnectResult(raw, req) }
+  } catch {
+    return { kind: "invalid", detail: MCP_CONNECTION_INVALID_DETAIL }
+  }
+}
+
+export function normalizePrivateMcpAuthenticateWire(
+  raw: unknown,
+  req: McpAuthenticateContractRequest,
+): McpAuthenticateWireOutcome {
+  try {
+    return { kind: "valid", result: validateMcpAuthenticateResult(raw, req) }
   } catch {
     return { kind: "invalid", detail: MCP_CONNECTION_INVALID_DETAIL }
   }
@@ -468,6 +630,18 @@ export function isSettledMcpDisconnectResult(result: unknown, req: McpDisconnect
   if (kind !== "succeeded" && kind !== "failed" && kind !== "ambiguous") return false
   try {
     validateMcpDisconnectResult(result, req)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function isSettledMcpAuthenticateResult(result: unknown, req: McpAuthenticateContractRequest): boolean {
+  if (!record(result)) return false
+  const kind = (result as { status?: unknown }).status
+  if (kind !== "succeeded" && kind !== "failed" && kind !== "ambiguous") return false
+  try {
+    validateMcpAuthenticateResult(result, req)
     return true
   } catch {
     return false

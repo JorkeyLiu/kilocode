@@ -3,8 +3,10 @@ import { PassThrough } from "stream"
 import { JsonRpcPeer } from "../../private-worker/peer"
 import { ServePrivatePeer } from "./serve-private-peer"
 import {
+  canonicalMcpAuthenticateOpId,
   canonicalMcpConnectOpId,
   canonicalMcpDisconnectOpId,
+  validateMcpAuthenticateResult,
   validateMcpConnectResult,
   validateMcpDisconnectResult,
 } from "./serve-private-mcp-connection-contract"
@@ -76,6 +78,34 @@ function disconnectSuccess(req: ReturnType<typeof disconnectReq>) {
   }
 }
 
+function authenticateReq(over: Record<string, unknown> = {}) {
+  const opId = canonicalMcpAuthenticateOpId("tok1")
+  return {
+    v: 1 as const,
+    requestId: "r1",
+    opId,
+    op: "mcp/authenticate" as const,
+    idempotencyKey: opId,
+    context: { directory: "/tmp" },
+    payload: { name: "demo" },
+    ...over,
+  }
+}
+
+function authenticateSuccess(req: ReturnType<typeof authenticateReq>) {
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "mcp/authenticate",
+    idempotencyKey: req.idempotencyKey,
+    status: "succeeded",
+    outcome: { type: "succeeded", time: 1 },
+    accepted: true,
+    data: { authenticated: true },
+  }
+}
+
 function install(peer: ServePrivatePeer, caps: string[], reader: PassThrough, writer: PassThrough) {
   ;(peer as unknown as Record<string, unknown>).available = true
   ;(peer as unknown as Record<string, unknown>).peer = new JsonRpcPeer({ reader, writer })
@@ -87,7 +117,7 @@ function closeAll(peers: { dispose(): void }[], streams: PassThrough[]) {
   for (const s of streams) s.destroy()
 }
 
-describe("mcp-connect/mcp-disconnect private peer", () => {
+describe("mcp-connect/mcp-disconnect/mcp-authenticate private peer", () => {
   test("capability gating requires the exact per-op capability", () => {
     const { clientReader, clientWriter, backendPeer } = channel(() => ({ v: 1 }))
     const peer = new ServePrivatePeer({ reader: clientReader, writer: clientWriter, epoch: 1 })
@@ -97,6 +127,9 @@ describe("mcp-connect/mcp-disconnect private peer", () => {
     )
     expect(() => peer.privateMcpDisconnectOutcomeWithHandle(disconnectReq() as never)).toThrow(
       "Private peer missing mcp/disconnect capability",
+    )
+    expect(() => peer.privateMcpAuthenticateOutcomeWithHandle(authenticateReq() as never)).toThrow(
+      "Private peer missing mcp/authenticate capability",
     )
     closeAll([peer, backendPeer], [clientReader, clientWriter])
   })
@@ -137,6 +170,23 @@ describe("mcp-connect/mcp-disconnect private peer", () => {
       expect(() => validateMcpDisconnectResult(doutcome.result as unknown, dreq as never)).not.toThrow()
     }
     expect(seen).toEqual(["mcp/connect", "mcp/disconnect"])
+    closeAll([peer, backendPeer], [clientReader, clientWriter])
+  })
+
+  test("authenticate outcome handle resolves normalized wire over its own method exactly once", async () => {
+    const areq = authenticateReq()
+    const { clientReader, clientWriter, backendPeer } = channel((method) => {
+      expect(method).toBe("mcp/authenticate")
+      return authenticateSuccess(areq)
+    })
+    const peer = new ServePrivatePeer({ reader: clientReader, writer: clientWriter, epoch: 5 })
+    install(peer, ["mcp/authenticate"], clientReader, clientWriter)
+    const outcome = await peer.privateMcpAuthenticateOutcomeWithHandle(areq as never).promise
+    expect(outcome.kind).toBe("valid")
+    if (outcome.kind === "valid") {
+      expect(outcome.result.status).toBe("succeeded")
+      expect(() => validateMcpAuthenticateResult(outcome.result as unknown, areq as never)).not.toThrow()
+    }
     closeAll([peer, backendPeer], [clientReader, clientWriter])
   })
 

@@ -90,13 +90,17 @@ import {
   removeSkillPrivate,
 } from "@/kilocode/skill-remove-private"
 import {
+  AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
+  AUTHENTICATE_VERSION as MCP_AUTHENTICATE_VERSION,
   CONNECT_OP as MCP_CONNECT_OP,
   CONNECT_VERSION as MCP_CONNECT_VERSION,
   DISCONNECT_OP as MCP_DISCONNECT_OP,
   DISCONNECT_VERSION as MCP_DISCONNECT_VERSION,
   INTERNAL_MESSAGE as MCP_CONNECTION_INTERNAL_MESSAGE,
+  authenticateMcpPrivate,
   connectMcpPrivate,
   disconnectMcpPrivate,
+  fallbackMcpAuthenticateIds,
   fallbackMcpConnectIds,
   fallbackMcpDisconnectIds,
 } from "@/kilocode/mcp-connection-private"
@@ -5043,6 +5047,53 @@ export function createFdCarrier(
                   opId: fallbackMcpDisconnectIds(params).opId,
                   op: MCP_DISCONNECT_OP,
                   idempotencyKey: fallbackMcpDisconnectIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === MCP_AUTHENTICATE_OP || method === "mcp/authenticate") {
+        // Private-only MCP authenticate: same-directory MCP.Service.authenticate()
+        // via the existing drain-control + InstanceRef lane. Same ownership
+        // and no-replay semantics as mcp/connect above.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* authenticateMcpPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: MCP_AUTHENTICATE_VERSION,
+                  requestId: fallbackMcpAuthenticateIds(params).requestId,
+                  opId: fallbackMcpAuthenticateIds(params).opId,
+                  op: MCP_AUTHENTICATE_OP,
+                  idempotencyKey: fallbackMcpAuthenticateIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: MCP_AUTHENTICATE_VERSION,
+                  requestId: fallbackMcpAuthenticateIds(params).requestId,
+                  opId: fallbackMcpAuthenticateIds(params).opId,
+                  op: MCP_AUTHENTICATE_OP,
+                  idempotencyKey: fallbackMcpAuthenticateIds(params).idempotencyKey,
                   status: "failed" as const,
                   outcome: {
                     type: "failed" as const,

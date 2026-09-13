@@ -42,6 +42,7 @@ export const FD_CAPABILITIES = [
   "mcp/status",
   "mcp/connect",
   "mcp/disconnect",
+  "mcp/authenticate",
   "session/prompt",
   "session/command",
   "skill/remove",
