@@ -107,6 +107,13 @@ import {
   setOrganizationPrivate,
 } from "@/kilocode/organization-set-private"
 import {
+  INTERNAL_MESSAGE as INSTANCE_RELOAD_INTERNAL_MESSAGE,
+  OP as INSTANCE_RELOAD_OP,
+  VERSION as INSTANCE_RELOAD_VERSION,
+  fallbackInstanceReloadIds,
+  reloadInstancePrivate,
+} from "@/kilocode/instance-reload-private"
+import {
   INTERNAL_MESSAGE as KILO_PROFILE_INTERNAL_MESSAGE,
   OP as KILO_PROFILE_OP,
   VERSION as KILO_PROFILE_VERSION,
@@ -5171,6 +5178,59 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: ORGANIZATION_SET_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === INSTANCE_RELOAD_OP || method === "instance/reload") {
+        // Authoritative directory-scoped reboot: the same `hasActiveSession ->
+        // 409` guard plus the unique `InstanceStore.reload` path as the HTTP
+        // `instance.reload` route (lease sealing, config fence handshake,
+        // exactly-one `server.instance.disposed` per successful invocation).
+        // `directory`/`workspace` are canonical routing identity only; the
+        // payload is empty and there is no durable operation row. The op never
+        // retries: an ambiguous transport outcome repeats via the same-tuple
+        // SDK `client.instance.reload` fallback (at most two underlying
+        // reloads, merged by the existing coordinator).
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* reloadInstancePrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: INSTANCE_RELOAD_VERSION,
+                  requestId: fallbackInstanceReloadIds(params).requestId,
+                  opId: fallbackInstanceReloadIds(params).opId,
+                  op: INSTANCE_RELOAD_OP,
+                  idempotencyKey: fallbackInstanceReloadIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: INSTANCE_RELOAD_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: INSTANCE_RELOAD_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: INSTANCE_RELOAD_VERSION,
+                  requestId: fallbackInstanceReloadIds(params).requestId,
+                  opId: fallbackInstanceReloadIds(params).opId,
+                  op: INSTANCE_RELOAD_OP,
+                  idempotencyKey: fallbackInstanceReloadIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: INSTANCE_RELOAD_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: INSTANCE_RELOAD_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

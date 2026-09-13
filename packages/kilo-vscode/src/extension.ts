@@ -450,7 +450,7 @@ export function activate(context: vscode.ExtensionContext) {
           },
           fallback: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
         })
-        const outcome = await requestInstanceReload({ client, directory: dir })
+        const outcome = await requestInstanceReload({ connection: connectionService as never, client, directory: dir })
         if (outcome.kind === "conflict") {
           vscode.window.showWarningMessage(RELOAD_CONFLICT_WARNING)
         } else if (outcome.kind === "failed") {

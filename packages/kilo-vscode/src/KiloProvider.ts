@@ -5794,7 +5794,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return
     }
     const dir = this.getWorkspaceDirectory(this.currentSession?.id)
-    const outcome = await requestInstanceReload({ client: this.client, directory: dir })
+    const outcome = await requestInstanceReload({
+      connection: this.connectionService as never,
+      client: this.client,
+      directory: dir,
+    })
     if (outcome.kind === "conflict") {
       vscode.window.showWarningMessage(RELOAD_CONFLICT_WARNING)
       return

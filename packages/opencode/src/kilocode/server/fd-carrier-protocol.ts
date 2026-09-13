@@ -56,6 +56,7 @@ export const FD_CAPABILITIES = [
   "config/ui-defaults",
   "auth/remove",
   "kilo/organization/set",
+  "instance/reload",
   "kilo/profile",
   "kilo/auth-status",
   "config/convergence/acquire",
