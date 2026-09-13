@@ -7,6 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
+import { FormatTarget } from "./format-target" // kilocode_change - formatter single-target regular-readable guard
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -452,6 +453,7 @@ export const ApplyPatchTool = Tool.define(
             // Target first, then source — matches historic write order.
             yield* EncodedIO.write(afs, moveTarget, Bom.join(change.newContent, change.bom), change.encoding)
             if (yield* format.file(moveTarget)) {
+              yield* FormatTarget.check(afs, moveTarget) // kilocode_change - move validates formatter target only
               change.final = yield* EncodedIO.sync(afs, moveTarget, change.bom, change.encoding)
             }
             yield* events.publish(FileSystem.Event.Edited, { file: moveTarget })
@@ -552,6 +554,7 @@ export const ApplyPatchTool = Tool.define(
           // kilocode_change start - capture formatter-final disk truth per file
           if (edited) {
             if (yield* format.file(edited)) {
+              yield* FormatTarget.check(afs, edited) // kilocode_change - fail closed before sync/apply
               change.final = yield* EncodedIO.sync(afs, edited, change.bom, change.encoding)
             }
             yield* events.publish(FileSystem.Event.Edited, { file: edited })

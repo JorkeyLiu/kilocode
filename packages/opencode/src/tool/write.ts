@@ -11,6 +11,7 @@ import { Format } from "../format"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
+import { FormatTarget } from "./format-target" // kilocode_change - formatter single-target regular-readable guard
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import { Snapshot } from "@/snapshot" // kilocode_change - shared worktree exclusive with revert
 import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
@@ -126,6 +127,7 @@ export const WriteTool = Tool.define(
                 if (!fresh) yield* Effect.fail(WriteCas.error(filepath))
                 yield* EncodedIO.write(fs, filepath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces fs.writeWithDirs
                 if (yield* format.file(filepath)) {
+                  yield* FormatTarget.check(fs, filepath) // kilocode_change - fail closed before sync/apply
                   box.final = yield* EncodedIO.sync(fs, filepath, desiredBom, source.encoding)
                 }
                 // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes

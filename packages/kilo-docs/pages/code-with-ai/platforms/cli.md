@@ -383,7 +383,9 @@ Set `formatter` or `lsp` to `true` to use built-in defaults, or `false` to disab
 }
 ```
 
-Both keys also accept object configuration for specific tools or language servers. Custom LSP server entries must include an `extensions` array unless the entry disables a built-in server:
+Both keys also accept object configuration for specific tools or language servers. A custom formatter command runs against the target file path (`$FILE`) as a same-path writer: it may edit in place or atomically replace the file, but the target must remain a readable file afterwards. If the formatter deletes the target or replaces it with a non-file, the file tool fails closed without recording a journal fact and leaves the disk as-is. Files the formatter creates outside the target are left alone.
+
+Custom LSP server entries must include an `extensions` array unless the entry disables a built-in server:
 
 ```jsonc
 {

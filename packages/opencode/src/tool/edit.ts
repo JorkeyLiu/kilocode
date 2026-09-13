@@ -22,6 +22,7 @@ import { ConfigValidation } from "../kilocode/config-validation" // kilocode_cha
 import * as EncodedIO from "../kilocode/tool/encoded-io" // kilocode_change
 import * as Encoding from "../kilocode/encoding" // kilocode_change
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
+import { FormatTarget } from "./format-target" // kilocode_change - formatter single-target regular-readable guard
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
 import { WriteCas } from "./write-cas" // kilocode_change - write-anchored external drift guard
@@ -200,6 +201,7 @@ export const EditTool = Tool.define(
                         if (!fresh) yield* Effect.fail(WriteCas.error(filePath))
                         yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
                         if (yield* format.file(filePath)) {
+                          yield* FormatTarget.check(afs, filePath) // kilocode_change - fail closed before sync/apply
                           contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
                         }
                         // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
@@ -297,6 +299,7 @@ export const EditTool = Tool.define(
                       if (!fresh) yield* Effect.fail(WriteCas.error(filePath))
                       yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
                       if (yield* format.file(filePath)) {
+                        yield* FormatTarget.check(afs, filePath) // kilocode_change - fail closed before sync/apply
                         contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, source.encoding)
                       }
                       // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
