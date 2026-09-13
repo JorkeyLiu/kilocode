@@ -15,6 +15,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Log from "@opencode-ai/core/util/log"
 import { Auth } from "@/auth"
+import { fetchKiloAuthStatusData } from "@/kilocode/kilo-auth-status"
 import {
   KiloProfileUnauthorized,
   fetchKiloProfileData,
@@ -46,10 +47,16 @@ export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo",
     })
 
     const authStatus = Effect.fn("KiloGatewayHttpApi.authStatus")(function* () {
-      const info = yield* auth.get("kilo").pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      const type = getToken(info) && (info?.type === "api" || info?.type === "oauth") ? info.type : undefined
-      if (!type) return { authenticated: false }
-      return { authenticated: true, type }
+      // kilocode_change: shared `fetchKiloAuthStatusData` body (same
+      // `Auth.get("kilo")` + `getToken` projection as the private
+      // `kilo/auth-status` op). External behavior/error mapping is unchanged:
+      // auth-store failure stays `BadRequest`, unauthenticated stays
+      // `{authenticated:false}` with no `type`.
+      const data = yield* fetchKiloAuthStatusData().pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+        Effect.catchDefect(() => new HttpApiError.BadRequest({})),
+      )
+      return data
     })
 
     const proxyAuth = Effect.fn("KiloGatewayHttpApi.proxyAuth")(function* () {

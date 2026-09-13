@@ -302,6 +302,17 @@ import type {
   KiloProfileWireOutcome,
 } from "./serve-private-kilo-profile-contract"
 import {
+  isSettledKiloAuthStatusResult,
+  makeKiloAuthStatusAmbiguous,
+  normalizePrivateKiloAuthStatusWire,
+  validateKiloAuthStatusContractRequest,
+} from "./serve-private-kilo-auth-status-contract"
+import type {
+  KiloAuthStatusContractRequest,
+  KiloAuthStatusResult,
+  KiloAuthStatusWireOutcome,
+} from "./serve-private-kilo-auth-status-contract"
+import {
   AgentListValidationError,
   isSettledAgentListResult,
   makeAgentListAmbiguous,
@@ -4237,6 +4248,69 @@ export class ServePrivatePeer {
       if (isSettledKiloProfileResult(wire.result, req)) return wire
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeKiloProfileAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedKiloAuthStatus(req: KiloAuthStatusContractRequest, code: string, msg: string): KiloAuthStatusResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "kilo/auth-status",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  /**
+   * Internal normalized handle for the read-only `kilo/auth-status`
+   * private-first observation. Resolves the discriminated wire outcome so
+   * invalid wire is an explicit `{ kind: "invalid" }` value consumed before
+   * any SDK fallback, never a normal result. Observation identity is
+   * `requestId` only.
+   *
+   * Settle-first stale semantics (this op only; other ops keep the generic
+   * stale-first path): the raw result is normalized/validated first, then a
+   * validated settled outcome (success or `retryable === false` terminal) is
+   * preserved across post-response stale/epoch drift. Only unresolved wire
+   * (invalid, ambiguous, or retryable failure) maps drift to ambiguous
+   * `transportUnknown`.
+   */
+  privateKiloAuthStatusOutcomeWithHandle(req: KiloAuthStatusContractRequest): {
+    id: number
+    promise: Promise<KiloAuthStatusWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateKiloAuthStatusContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("kilo/auth-status")) {
+      throw new Error("Private peer missing kilo/auth-status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("kilo/auth-status", req)
+    const promise = (async (): Promise<KiloAuthStatusWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeKiloAuthStatusAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedKiloAuthStatus(req, code, msg) }
+      }
+      const wire = normalizePrivateKiloAuthStatusWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledKiloAuthStatusResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeKiloAuthStatusAmbiguous(req, true) }
       return wire
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)

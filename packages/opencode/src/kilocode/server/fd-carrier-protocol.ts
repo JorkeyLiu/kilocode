@@ -55,6 +55,7 @@ export const FD_CAPABILITIES = [
   "auth/remove",
   "kilo/organization/set",
   "kilo/profile",
+  "kilo/auth-status",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",

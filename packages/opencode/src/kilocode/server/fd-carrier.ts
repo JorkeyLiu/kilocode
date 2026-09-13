@@ -114,6 +114,13 @@ import {
   kiloProfilePrivate,
 } from "@/kilocode/kilo-profile"
 import {
+  INTERNAL_MESSAGE as KILO_AUTH_STATUS_INTERNAL_MESSAGE,
+  OP as KILO_AUTH_STATUS_OP,
+  VERSION as KILO_AUTH_STATUS_VERSION,
+  fallbackKiloAuthStatusIds,
+  kiloAuthStatusPrivate,
+} from "@/kilocode/kilo-auth-status"
+import {
   INTERNAL_MESSAGE as AGENT_LIST_INTERNAL_MESSAGE,
   OP as AGENT_LIST_OP,
   VERSION as AGENT_LIST_VERSION,
@@ -5198,6 +5205,56 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: KILO_PROFILE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === KILO_AUTH_STATUS_OP || method === "kilo/auth-status") {
+        // Read-only `kilo/auth-status` observation: the same
+        // `Auth.Service.get("kilo")` + `getToken` projection as
+        // `GET /kilo/auth-status` via the shared `kiloAuthStatusPrivate` (no
+        // `acquireDrainControl`, no `InstanceRef` lane — process-global `Auth`
+        // read-only like `kilo/profile` — no fence, no cache, no timeout, no
+        // `AbortSignal`, no network). `directory`/`workspace` are carrier
+        // routing identity only and never reach the auth store. Read-only,
+        // safely repeatable: an ambiguous transport outcome may safely repeat
+        // via the same-directory SDK `client.kilo.authStatus` fallback; the op
+        // never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* kiloAuthStatusPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: KILO_AUTH_STATUS_VERSION,
+                  requestId: fallbackKiloAuthStatusIds(params).requestId,
+                  op: KILO_AUTH_STATUS_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: KILO_AUTH_STATUS_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: KILO_AUTH_STATUS_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: KILO_AUTH_STATUS_VERSION,
+                  requestId: fallbackKiloAuthStatusIds(params).requestId,
+                  op: KILO_AUTH_STATUS_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: KILO_AUTH_STATUS_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: KILO_AUTH_STATUS_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )
