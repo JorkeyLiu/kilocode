@@ -108,6 +108,11 @@ import { decodeGlobalListCursor } from "./private-worker/session-cursor"
 import { hasGit } from "./kilo-provider/git-status"
 import { LifecycleRefreshCoordinator } from "./kilo-provider/lifecycle-refresh-coordinator"
 import {
+  RELOAD_CONFLICT_WARNING,
+  RELOAD_FAILED_ERROR,
+  requestInstanceReload,
+} from "./kilo-provider/instance-reload"
+import {
   handleLogin,
   handleLogout,
   handleSetOrganization,
@@ -5705,21 +5710,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return
     }
     const dir = this.getWorkspaceDirectory(this.currentSession?.id)
-    try {
-      await this.client.instance.reload({ directory: dir }, { throwOnError: true })
-    } catch (err) {
-      const status =
-        err && typeof err === "object" && "response" in err
-          ? (err as { response?: { status?: number } }).response?.status
-          : undefined
-      if (status === 409) {
-        vscode.window.showWarningMessage(
-          "Cannot reload while a session is running. Wait for it to finish or abort it first.",
-        )
-      } else {
-        console.error("[Kilo New] handleReload: reload endpoint failed:", err)
-        vscode.window.showErrorMessage("Reload failed. See extension logs for details.")
-      }
+    const outcome = await requestInstanceReload({ client: this.client, directory: dir })
+    if (outcome.kind === "conflict") {
+      vscode.window.showWarningMessage(RELOAD_CONFLICT_WARNING)
+      return
+    }
+    if (outcome.kind === "failed") {
+      console.error("[Kilo New] handleReload: reload endpoint failed:", outcome.cause)
+      vscode.window.showErrorMessage(RELOAD_FAILED_ERROR)
       return
     }
     this.clearCommandsCache()

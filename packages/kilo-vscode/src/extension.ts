@@ -22,6 +22,11 @@ import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
 import { resolveReloadDirectory } from "./reload-directory"
+import {
+  RELOAD_CONFLICT_WARNING,
+  RELOAD_FAILED_ERROR,
+  requestInstanceReload,
+} from "./kilo-provider/instance-reload"
 import { CanonicalConfigService } from "./config/service"
 import { PrivateConvergenceAdapter } from "./config/convergence"
 import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
@@ -445,20 +450,16 @@ export function activate(context: vscode.ExtensionContext) {
           },
           fallback: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
         })
-        await client.instance.reload({ directory: dir }, { throwOnError: true })
-      } catch (err) {
-        const status =
-          err && typeof err === "object" && "response" in err
-            ? (err as { response?: { status?: number } }).response?.status
-            : undefined
-        if (status === 409) {
-          vscode.window.showWarningMessage(
-            "Cannot reload while a session is running. Wait for it to finish or abort it first.",
-          )
-        } else {
-          console.error("[Kilo New] reload command failed:", err)
-          vscode.window.showErrorMessage("Reload failed. See extension logs for details.")
+        const outcome = await requestInstanceReload({ client, directory: dir })
+        if (outcome.kind === "conflict") {
+          vscode.window.showWarningMessage(RELOAD_CONFLICT_WARNING)
+        } else if (outcome.kind === "failed") {
+          console.error("[Kilo New] reload command failed:", outcome.cause)
+          vscode.window.showErrorMessage(RELOAD_FAILED_ERROR)
         }
+      } catch (err) {
+        console.error("[Kilo New] reload command failed:", err)
+        vscode.window.showErrorMessage(RELOAD_FAILED_ERROR)
       }
     }),
   )
