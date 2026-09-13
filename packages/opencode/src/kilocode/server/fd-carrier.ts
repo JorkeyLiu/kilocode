@@ -34,10 +34,13 @@ import {
   validateSuggestionDismissRequest,
 } from "@/kilocode/suggestion/suggestion-private"
 import {
+  OP_ALLOW_EVERYTHING as PERMISSION_ALLOW_EVERYTHING_OP,
   OP_REPLY as PERMISSION_REPLY_OP,
   OP_SAVE as PERMISSION_SAVE_OP,
+  allowEverythingPermissionPrivate,
   replyPermissionPrivate,
   savePermissionPrivate,
+  validatePermissionAllowEverythingRequest,
   validatePermissionReplyRequest,
   validatePermissionSaveRequest,
 } from "@/kilocode/permission/permission-private"
@@ -2961,6 +2964,45 @@ export function createFdCarrier(
             if (acquired.tag !== "ok") throw acquired.err
             const inner = Effect.gen(function* () {
               return yield* replyPermissionPrivate(params)
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner
+          }),
+        )
+        return result
+      }
+      if (method === PERMISSION_ALLOW_EVERYTHING_OP || method === "permission/allow-everything") {
+        try {
+          validatePermissionAllowEverythingRequest(params)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!msg.includes("op must be permission/")) {
+            const err = new Error(msg) as Error & { code: number }
+            err.code = ErrorCode.InvalidParams
+            throw err
+          }
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const dir = (() => {
+              try {
+                const p = params as Record<string, unknown>
+                const ctx = p.context as Record<string, unknown> | undefined
+                if (typeof ctx?.directory !== "string") throw new Error("context.directory must be non-empty string")
+                return canonicalDirectory(ctx.directory)
+              } catch (e) {
+                const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+                err.code = ErrorCode.InvalidParams
+                throw err
+              }
+            })()
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => Effect.succeed({ tag: "fail" as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
+            )
+            if (acquired.tag !== "ok") throw acquired.err
+            const inner = Effect.gen(function* () {
+              return yield* allowEverythingPermissionPrivate(params)
             }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner
           }),
