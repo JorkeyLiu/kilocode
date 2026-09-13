@@ -1225,6 +1225,63 @@ describe("Snapshot v2 durable mutation journal", () => {
     }),
   )
 
+  it.instance("move settle compensation blind fails prepared/failed/applied without extra get", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const id = ids("moveblind")
+      yield* ensureJournalSession(id.session)
+      const journal = yield* SnapshotJournal.Service
+      // No extra DB read in the exclusive settle-failure window: source
+      // compensation must be blind fail with ignore, same shape as target.
+      const src = yield* Effect.promise(() => fs.readFile("src/tool/apply_patch.ts", "utf-8"))
+      expect(src.includes("journal.get(srcID)")).toBe(false)
+      expect(src.includes("journal.fail({ id: srcID, error: message }).pipe(Effect.ignore)")).toBe(true)
+      const dir = test.directory
+      const prep = (item: number, sub: number, file: string, op: "update" | "delete", before: Buffer) =>
+        journal.prepare({
+          sessionID: id.session,
+          messageID: id.message,
+          callID: id.call,
+          tool: "apply_patch",
+          item,
+          sub,
+          directory: dir,
+          worktree: dir,
+          path: file,
+          op,
+          before,
+          encoding: "utf-8",
+          bom: false,
+        })
+      // Combo A: prepared/prepared -> failed/failed, then idempotent replay.
+      const tgtA = yield* prep(0, 0, path.join(dir, "destA.txt"), "update", Buffer.from("existing\n"))
+      const srcA = yield* prep(0, 1, path.join(dir, "srcA.txt"), "delete", Buffer.from("moving\n"))
+      expect(tgtA.row.status).toBe("prepared")
+      expect(srcA.row.status).toBe("prepared")
+      yield* journal.fail({ id: tgtA.row.id, error: "boom" }).pipe(Effect.ignore)
+      yield* journal.fail({ id: srcA.row.id, error: "boom" }).pipe(Effect.ignore)
+      expect((yield* journal.get(tgtA.row.id))!.status).toBe("failed")
+      expect((yield* journal.get(srcA.row.id))!.status).toBe("failed")
+      yield* journal.fail({ id: tgtA.row.id, error: "boom" }).pipe(Effect.ignore)
+      yield* journal.fail({ id: srcA.row.id, error: "boom" }).pipe(Effect.ignore)
+      expect((yield* journal.get(tgtA.row.id))!.status).toBe("failed")
+      expect((yield* journal.get(srcA.row.id))!.status).toBe("failed")
+      // Combo B: applied/prepared -> applied/failed; applied Conflict is ignored.
+      const tgtB = yield* prep(1, 0, path.join(dir, "destB.txt"), "update", Buffer.from("existing\n"))
+      const srcB = yield* prep(1, 1, path.join(dir, "srcB.txt"), "delete", Buffer.from("moving\n"))
+      yield* journal.apply({ id: tgtB.row.id, after: Buffer.from("moved\n"), encoding: "utf-8", bom: false })
+      expect((yield* journal.get(tgtB.row.id))!.status).toBe("applied")
+      const conflict = yield* journal.fail({ id: tgtB.row.id, error: "boom" }).pipe(Effect.exit)
+      expect(Exit.isFailure(conflict)).toBe(true)
+      if (Exit.isFailure(conflict)) expect(tagOf(Cause.squash(conflict.cause))).toBe("SnapshotJournalConflict")
+      // Blind compensation with ignore keeps the applied fact honest.
+      yield* journal.fail({ id: tgtB.row.id, error: "boom" }).pipe(Effect.ignore)
+      yield* journal.fail({ id: srcB.row.id, error: "boom" }).pipe(Effect.ignore)
+      expect((yield* journal.get(tgtB.row.id))!.status).toBe("applied")
+      expect((yield* journal.get(srcB.row.id))!.status).toBe("failed")
+    }),
+  )
+
   it.live("move list order stable target-first across concurrent and restart", () =>
     Effect.gen(function* () {
       const dir = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "journal-moveorder-")))

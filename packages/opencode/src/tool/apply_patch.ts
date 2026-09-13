@@ -460,16 +460,12 @@ export const ApplyPatchTool = Tool.define(
           }).pipe(Effect.exit)
           if (settleExit._tag === "Failure") {
             const message = Cause.pretty(settleExit.cause as never)
-            // Target may already be applied while source failed: fail only the
-            // still-prepared rows, keep the applied fact honest, and include the
-            // move file entry when the target write landed.
+            // Blind bilateral fail: prepared atomically fails, failed is
+            // idempotent, applied surfaces Conflict which is ignored here to
+            // keep the applied fact honest. No extra get inside the window.
             const targetLanded = updates.some((u) => u.file === moveTarget)
-            // Best-effort: failing an already-applied row is a no-op Conflict inside fail().
             if (!targetLanded && tgtID) yield* journal.fail({ id: tgtID, error: message }).pipe(Effect.ignore)
-              if (srcID) {
-                const srcRow = yield* journal.get(srcID).pipe(Effect.catch(() => Effect.succeed(undefined)), Effect.catchDefect(() => Effect.succeed(undefined)))
-                if (!srcRow || srcRow.status === "prepared") yield* journal.fail({ id: srcID, error: message }).pipe(Effect.ignore)
-              }
+            if (srcID) yield* journal.fail({ id: srcID, error: message }).pipe(Effect.ignore)
             return yield* emitBatchFailure(settleExit.cause, done, targetLanded)
           }
           done += 1
