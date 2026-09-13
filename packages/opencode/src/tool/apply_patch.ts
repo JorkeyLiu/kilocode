@@ -98,9 +98,19 @@ export const ApplyPatchTool = Tool.define(
             const next = Bom.split(newContent)
             const ask = build(filePath, oldContent, next.text) // kilocode_change - unified counts
             // kilocode_change start - Snapshot v2 journal before image (existing bytes when overwriting)
-            const prior = (yield* afs.existsSafe(filePath))
-              ? ((yield* EncodedIO.read(afs, filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))))?.bytes ?? null
-              : null
+            // Add-overwrite preserves the existing file encoding: decode prior
+            // via EncodedIO.read and reuse its encoding for write/sync/journal
+            // so legacy bytes are never re-encoded as UTF-8 (mojibake).
+            const priorRead = (yield* afs.existsSafe(filePath))
+              ? ((yield* EncodedIO.read(afs, filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))))
+              : undefined
+            const prior = priorRead?.bytes ?? null
+            const priorEncoding = priorRead?.encoding
+            // Align with write/edit desiredBom: a utf-8-bom prior keeps its
+            // BOM even when the patch carries none; otherwise the patch
+            // content (next.bom) decides. New files have no prior, so this
+            // reduces to next.bom and their behavior is unchanged.
+            const bom = priorEncoding === "utf-8-bom" || next.bom
             // kilocode_change end
 
             fileChanges.push({
@@ -112,8 +122,8 @@ export const ApplyPatchTool = Tool.define(
               diff: ask.diff,
               additions: ask.filediff.additions,
               deletions: ask.filediff.deletions,
-              bom: next.bom,
-              encoding: "utf-8", // kilocode_change - new files default to utf-8
+              bom, // kilocode_change - utf-8-bom prior preserved, else patch BOM; new files use patch BOM
+              encoding: priorEncoding ?? "utf-8", // kilocode_change - new files default to utf-8, overwrites keep prior encoding
               beforeBytes: prior, // kilocode_change
             })
 

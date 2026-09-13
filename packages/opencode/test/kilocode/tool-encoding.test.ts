@@ -25,6 +25,9 @@ import * as Tool from "../../src/tool/tool"
 import { Truncate } from "../../src/tool/truncate"
 import { WriteTool } from "../../src/tool/write"
 import * as EncodedIO from "../../src/kilocode/tool/encoded-io"
+import { Hash } from "@opencode-ai/core/util/hash"
+import { SnapshotJournal } from "../../src/snapshot/journal"
+import { SnapshotJournalCas } from "../../src/snapshot/journal-cas"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
@@ -495,9 +498,187 @@ describe("tool encoding preservation", () => {
       provideTmpdirInstance((dir) =>
         Effect.gen(function* () {
           const patch = ["*** Begin Patch", "*** Add File: new.txt", "+hello world", "*** End Patch"].join("\n")
-          yield* runPatch({ patchText: patch })
+          const result = (yield* runPatch({ patchText: patch })) as {
+            metadata: { journal: { coverage: string; ids: string[] } }
+          }
           const bytes = yield* loadBytes(path.join(dir, "new.txt"))
           expect(bytes.equals(Buffer.from("hello world\n", "utf-8"))).toBe(true)
+          // New-file journal fact stays UTF-8 with no before image.
+          const journal = yield* SnapshotJournal.Service
+          const row = yield* journal.get(result.metadata.journal.ids[0]!).pipe(Effect.orDie)
+          expect(row).toBeDefined()
+          expect(row!.op).toBe("add")
+          expect(row!.encoding).toBe("utf-8")
+          expect(row!.before_blob).toBeNull()
+          expect(row!.after_hash).toBe(Hash.sha256(bytes))
+          expect(Buffer.from((yield* journal.readBlob(row!.after_hash!).pipe(Effect.orDie))!).equals(bytes)).toBe(true)
+        }),
+      ),
+    )
+
+    // Add-overwrite must preserve the existing file encoding instead of
+    // hard-coding UTF-8: the parser allows Add to replace an existing file,
+    // and the tool already captures the prior bytes for the journal/CAS
+    // baseline. A UTF-8 re-encode would corrupt legacy bytes (mojibake) and
+    // record a false journal encoding fact.
+    it.live("preserves latin1 encoding when Add overwrites an existing file", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const filepath = path.join(dir, "legacy.txt")
+          const priorText = "café legacy ñandú\n"
+          const nextText = "café updated águila\n"
+          yield* putEncoded(filepath, priorText, "iso-8859-1")
+          const priorBytes = yield* loadBytes(filepath)
+
+          const patch = ["*** Begin Patch", "*** Add File: legacy.txt", `+${nextText.trimEnd()}`, "*** End Patch"].join(
+            "\n",
+          )
+          const result = (yield* runPatch({ patchText: patch })) as {
+            metadata: { journal: { coverage: string; ids: string[] } }
+          }
+
+          const bytes = yield* loadBytes(filepath)
+          const decoded = iconv.decode(bytes, "iso-8859-1")
+          expect(decoded).toBe(nextText)
+          // Byte-exact legacy encoding, not silently promoted to UTF-8.
+          expect(bytes.equals(iconv.encode(nextText, "iso-8859-1"))).toBe(true)
+          expect(bytes.equals(Buffer.from(nextText, "utf-8"))).toBe(false)
+          // No UTF-8 mojibake: single-byte é stays 0xE9, never C3 A9, and no
+          // replacement characters or latin1-misread UTF-8 pairs surface.
+          expect(decoded).toContain("café")
+          expect(decoded).not.toContain("\uFFFD")
+          expect(decoded).not.toContain("Ã©")
+          expect(bytes.includes(Buffer.from([0xc3, 0xa9]))).toBe(false)
+
+          // Journal fact uses the real prior encoding for prepare and apply.
+          const journal = yield* SnapshotJournal.Service
+          expect(result.metadata.journal.coverage).toBe("full")
+          expect(result.metadata.journal.ids).toHaveLength(1)
+          const row = yield* journal.get(result.metadata.journal.ids[0]!).pipe(Effect.orDie)
+          expect(row).toBeDefined()
+          expect(row!.op).toBe("add")
+          expect(row!.status).toBe("applied")
+          expect(row!.encoding).not.toBe("utf-8")
+          expect(row!.encoding).not.toBe("utf-8-bom")
+          expect(iconv.encodingExists(row!.encoding!)).toBe(true)
+          expect(iconv.decode(bytes, row!.encoding!)).toBe(nextText)
+          expect(row!.bom).toBe(0)
+          expect(row!.before_hash).toBe(Hash.sha256(priorBytes))
+          expect(row!.after_hash).toBe(Hash.sha256(bytes))
+          expect(Buffer.from((yield* journal.readBlob(row!.before_hash!).pipe(Effect.orDie))!).equals(priorBytes)).toBe(
+            true,
+          )
+          expect(Buffer.from((yield* journal.readBlob(row!.after_hash!).pipe(Effect.orDie))!).equals(bytes)).toBe(true)
+
+          // Undo/redo round-trips raw bytes through the journal CAS executor.
+          // Scope to the row's own session/worktree (tmpdir symlinks resolve
+          // differently from the instance worktree string).
+          yield* SnapshotJournalCas.run({
+            sessionID: row!.session_id,
+            worktree: row!.worktree,
+            segments: [{ applyOrder: [row!.id], direction: "undo" }],
+          })
+          expect((yield* loadBytes(filepath)).equals(priorBytes)).toBe(true)
+          yield* SnapshotJournalCas.run({
+            sessionID: row!.session_id,
+            worktree: row!.worktree,
+            segments: [{ applyOrder: [row!.id], direction: "redo" }],
+          })
+          expect((yield* loadBytes(filepath)).equals(bytes)).toBe(true)
+        }),
+      ),
+    )
+
+    // utf-8-bom overwrite without a patch BOM must keep the BOM (write/edit
+    // desiredBom rule): stripping it would corrupt the file signature while
+    // the journal still claims utf-8-bom.
+    it.live("preserves utf-8-bom when Add overwrites without a patch BOM", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const filepath = path.join(dir, "bom.txt")
+          const priorText = "café legacy\n"
+          const nextText = "café updated\n"
+          yield* putEncoded(filepath, priorText, UTF8_BOM)
+          const priorBytes = yield* loadBytes(filepath)
+          expect(priorBytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))).toBe(true)
+
+          const patch = ["*** Begin Patch", "*** Add File: bom.txt", `+${nextText.trimEnd()}`, "*** End Patch"].join(
+            "\n",
+          )
+          const result = (yield* runPatch({ patchText: patch })) as {
+            metadata: { journal: { coverage: string; ids: string[] } }
+          }
+
+          const bytes = yield* loadBytes(filepath)
+          expect(bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))).toBe(true)
+          expect(bytes.equals(encodeBytes(nextText, UTF8_BOM))).toBe(true)
+          expect(yield* loadDecoded(filepath, UTF8_BOM)).toBe(nextText)
+
+          const journal = yield* SnapshotJournal.Service
+          expect(result.metadata.journal.coverage).toBe("full")
+          expect(result.metadata.journal.ids).toHaveLength(1)
+          const row = yield* journal.get(result.metadata.journal.ids[0]!).pipe(Effect.orDie)
+          expect(row).toBeDefined()
+          expect(row!.op).toBe("add")
+          expect(row!.status).toBe("applied")
+          expect(row!.encoding).toBe(UTF8_BOM)
+          expect(row!.bom).toBe(1)
+          expect(row!.before_hash).toBe(Hash.sha256(priorBytes))
+          expect(row!.after_hash).toBe(Hash.sha256(bytes))
+          expect(Buffer.from((yield* journal.readBlob(row!.before_hash!).pipe(Effect.orDie))!).equals(priorBytes)).toBe(
+            true,
+          )
+          expect(Buffer.from((yield* journal.readBlob(row!.after_hash!).pipe(Effect.orDie))!).equals(bytes)).toBe(true)
+
+          yield* SnapshotJournalCas.run({
+            sessionID: row!.session_id,
+            worktree: row!.worktree,
+            segments: [{ applyOrder: [row!.id], direction: "undo" }],
+          })
+          expect((yield* loadBytes(filepath)).equals(priorBytes)).toBe(true)
+          yield* SnapshotJournalCas.run({
+            sessionID: row!.session_id,
+            worktree: row!.worktree,
+            segments: [{ applyOrder: [row!.id], direction: "redo" }],
+          })
+          expect((yield* loadBytes(filepath)).equals(bytes)).toBe(true)
+        }),
+      ),
+    )
+
+    // Plain UTF-8 overwrite with an explicit patch BOM keeps next.bom
+    // semantics (same as new files and the pre-fix utf-8 path): the BOM is
+    // added and the journal records encoding utf-8 with bom set.
+    it.live("adds a patch BOM when Add overwrites a plain utf-8 file", () =>
+      provideTmpdirInstance((dir) =>
+        Effect.gen(function* () {
+          const filepath = path.join(dir, "plain.txt")
+          const priorText = "hello legacy\n"
+          const nextText = "hello updated\n"
+          yield* putEncoded(filepath, priorText, "utf-8")
+          const priorBytes = yield* loadBytes(filepath)
+          expect(priorBytes[0]).not.toBe(0xef)
+
+          const patch = ["*** Begin Patch", "*** Add File: plain.txt", `+\uFEFF${nextText.trimEnd()}`, "*** End Patch"].join(
+            "\n",
+          )
+          const result = (yield* runPatch({ patchText: patch })) as {
+            metadata: { journal: { coverage: string; ids: string[] } }
+          }
+
+          const bytes = yield* loadBytes(filepath)
+          expect(bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))).toBe(true)
+          expect(bytes.equals(encodeBytes(nextText, UTF8_BOM))).toBe(true)
+          expect(yield* loadDecoded(filepath, UTF8_BOM)).toBe(nextText)
+
+          const journal = yield* SnapshotJournal.Service
+          const row = yield* journal.get(result.metadata.journal.ids[0]!).pipe(Effect.orDie)
+          expect(row).toBeDefined()
+          expect(row!.op).toBe("add")
+          expect(row!.encoding).toBe("utf-8")
+          expect(row!.bom).toBe(1)
+          expect(row!.before_hash).toBe(Hash.sha256(priorBytes))
+          expect(row!.after_hash).toBe(Hash.sha256(bytes))
         }),
       ),
     )
