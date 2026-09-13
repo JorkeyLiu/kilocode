@@ -249,6 +249,8 @@ import type {
   Prompt,
   ProviderAuthErrors,
   ProviderAuthResponses,
+  ProviderCatalogErrors,
+  ProviderCatalogResponses,
   ProviderListErrors,
   ProviderListResponses,
   ProviderModelsDiscoverErrors,
@@ -3775,6 +3777,36 @@ export class Provider extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ProviderListResponses, ProviderListErrors, ThrowOnError>({
       url: "/provider",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get redacted provider catalog
+   *
+   * Authenticated redacted provider catalog for regular reads; omits key/options/headers. Legacy explicit credential reveal keeps provider.list.
+   */
+  public catalog<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProviderCatalogResponses, ProviderCatalogErrors, ThrowOnError>({
+      url: "/provider/catalog",
       ...options,
       ...params,
     })

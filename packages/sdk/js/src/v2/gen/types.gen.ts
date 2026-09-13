@@ -2075,6 +2075,131 @@ export type PermissionNotFoundError = {
   message: string
 }
 
+export type ProviderCatalogVariant = {
+  enable_thinking?: boolean
+  reasoningEffort?: string
+  effort?: string
+  thinking?: {
+    type: "enabled" | "disabled" | "adaptive"
+  }
+  reasoning_split?: boolean
+  chat_template_args?: {
+    enable_thinking: boolean
+  }
+}
+
+export type ProviderCatalogModel = {
+  id: string
+  providerID: string
+  api: {
+    id: string
+    url: string
+    npm: string
+  }
+  name: string
+  family?: string
+  capabilities: {
+    temperature: boolean
+    reasoning: boolean
+    attachment: boolean
+    toolcall: boolean
+    input: {
+      text: boolean
+      audio: boolean
+      image: boolean
+      video: boolean
+      pdf: boolean
+    }
+    output: {
+      text: boolean
+      audio: boolean
+      image: boolean
+      video: boolean
+      pdf: boolean
+    }
+    interleaved:
+      | boolean
+      | {
+          field: "reasoning_content" | "reasoning_details"
+        }
+  }
+  cost: {
+    input: number
+    output: number
+    cache: {
+      read: number
+      write: number
+    }
+    tiers?: Array<{
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+      tier: {
+        type: "context"
+        size: number
+      }
+    }>
+    experimentalOver200K?: {
+      input: number
+      output: number
+      cache: {
+        read: number
+        write: number
+      }
+    }
+  }
+  limit: {
+    context: number
+    input?: number
+    output: number
+  }
+  status: "alpha" | "beta" | "deprecated" | "active"
+  release_date: string
+  variants?: {
+    [key: string]: ProviderCatalogVariant
+  }
+  recommendedIndex?: number
+  isFree?: boolean
+  mayTrainOnYourPrompts?: boolean
+  hasUserByokAvailable?: boolean
+  terminalBench?: {
+    overallScore: number
+    avgAttemptCostUsd: number
+  }
+  autoRouting?: {
+    models: Array<string>
+  }
+}
+
+export type ProviderCatalogProvider = {
+  id: string
+  name: string
+  description?: string
+  source: "env" | "config" | "custom" | "api"
+  env: Array<string>
+  metadata?: {
+    noteKey?: string
+    icon?: string
+    priority?: number
+  }
+  hasCredential: boolean
+  models: {
+    [key: string]: ProviderCatalogModel
+  }
+}
+
+export type ProviderCatalogResult = {
+  all: Array<ProviderCatalogProvider>
+  default: {
+    [key: string]: string
+  }
+  connected: Array<string>
+  failed: Array<string>
+}
+
 export type ProviderAuthMethod = {
   type: "oauth" | "api"
   label: string
@@ -8001,6 +8126,34 @@ export type ProviderListResponses = {
 }
 
 export type ProviderListResponse = ProviderListResponses[keyof ProviderListResponses]
+
+export type ProviderCatalogData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/catalog"
+}
+
+export type ProviderCatalogErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProviderCatalogError = ProviderCatalogErrors[keyof ProviderCatalogErrors]
+
+export type ProviderCatalogResponses = {
+  /**
+   * Redacted provider catalog
+   */
+  200: ProviderCatalogResult
+}
+
+export type ProviderCatalogResponse = ProviderCatalogResponses[keyof ProviderCatalogResponses]
 
 export type ProviderAuthData = {
   body?: never

@@ -1374,9 +1374,9 @@ export class AgentManagerProvider implements Disposable {
       .then((r) => r.data ?? [])
       .catch(() => empty("app.agents"))
     const connected = await client.provider
-      .list({ directory: root })
+      .catalog({ directory: root })
       .then((r) => r.data?.connected ?? [])
-      .catch(() => empty("provider.list"))
+      .catch(() => empty("provider.catalog"))
     const messages: Record<string, ReturnType<typeof summarizeMessage>[]> = {}
     const children: Record<string, string[]> = {}
     const unreadableMessages: Record<string, boolean> = {}

@@ -1,6 +1,7 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
+import { ProviderCatalog } from "@/provider/catalog"
 import {
   ModelDiscoveryError,
   fetchModelsWithKey,
@@ -60,6 +61,20 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         connected: Object.keys(connected),
         failed,
       }
+    })
+
+    const catalog = Effect.fn("ProviderHttpApi.catalog")(function* () {
+      const config = yield* cfg.get()
+      const connected = yield* provider.list()
+      const providers = filterPromptTrainingModels(connected, config.hide_prompt_training_models === true)
+      const failed: string[] = []
+      const valid = pickBy(providers, (item, id) => Object.keys(item.models).length > 0 || id in connected)
+      return ProviderCatalog.toCatalogResult({
+        providers: valid,
+        def: Provider.defaultModelIDs(pickBy(valid, (item) => Object.keys(item.models).length > 0)),
+        connected: Object.keys(connected),
+        failed,
+      })
     })
 
     const auth = Effect.fn("ProviderHttpApi.auth")(function* () {
@@ -168,6 +183,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
 
     return handlers
       .handle("list", list)
+      .handle("catalog", catalog)
       .handle("auth", auth)
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)

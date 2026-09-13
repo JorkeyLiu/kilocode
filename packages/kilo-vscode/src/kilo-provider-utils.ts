@@ -1,4 +1,4 @@
-import type { Session, Agent, Event, ProviderListResponse } from "@kilocode/sdk/v2/client"
+import type { Session, Agent, Event, ProviderCatalogResponse } from "@kilocode/sdk/v2/client"
 import type { SyncPayload } from "./services/cli-backend/sdk-sse-adapter"
 import { prettifyError } from "zod/v4"
 import type { PartBatch, PartUpdate } from "./kilo-provider/session-stream-scheduler"
@@ -21,8 +21,8 @@ type SyncEventSessionCreated = Extract<SyncPayload, { name: "session.created.1" 
 type SyncEventSessionUpdated = Extract<SyncPayload, { name: "session.updated.1" }>
 type SyncEventSessionDeleted = Extract<SyncPayload, { name: "session.deleted.1" }>
 
-/** A single provider entry as returned by the /provider list endpoint. */
-export type ProviderInfo = ProviderListResponse["all"][number]
+/** A single redacted provider entry as returned by the /provider/catalog endpoint. */
+export type ProviderInfo = ProviderCatalogResponse["all"][number]
 
 /**
  * Extract a human-readable error message from an unknown error value.

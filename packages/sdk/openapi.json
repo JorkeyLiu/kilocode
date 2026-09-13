@@ -5393,6 +5393,62 @@
         ]
       }
     },
+    "/provider/catalog": {
+      "get": {
+        "tags": [
+          "provider"
+        ],
+        "operationId": "provider.catalog",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redacted provider catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCatalogResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Authenticated redacted provider catalog for regular reads; omits key/options/headers. Legacy explicit credential reveal keeps provider.list.",
+        "summary": "Get redacted provider catalog",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.provider.catalog({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/provider/auth": {
       "get": {
         "tags": [
@@ -27036,6 +27092,508 @@
           "_tag",
           "requestID",
           "message"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderCatalogVariant": {
+        "type": "object",
+        "properties": {
+          "enable_thinking": {
+            "type": "boolean"
+          },
+          "reasoningEffort": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "thinking": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "enabled",
+                  "disabled",
+                  "adaptive"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          "reasoning_split": {
+            "type": "boolean"
+          },
+          "chat_template_args": {
+            "type": "object",
+            "properties": {
+              "enable_thinking": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "enable_thinking"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProviderCatalogModel": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "providerID": {
+            "type": "string"
+          },
+          "api": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "npm": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "url",
+              "npm"
+            ],
+            "additionalProperties": false
+          },
+          "name": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "temperature": {
+                "type": "boolean"
+              },
+              "reasoning": {
+                "type": "boolean"
+              },
+              "attachment": {
+                "type": "boolean"
+              },
+              "toolcall": {
+                "type": "boolean"
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "boolean"
+                  },
+                  "audio": {
+                    "type": "boolean"
+                  },
+                  "image": {
+                    "type": "boolean"
+                  },
+                  "video": {
+                    "type": "boolean"
+                  },
+                  "pdf": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "text",
+                  "audio",
+                  "image",
+                  "video",
+                  "pdf"
+                ],
+                "additionalProperties": false
+              },
+              "output": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "boolean"
+                  },
+                  "audio": {
+                    "type": "boolean"
+                  },
+                  "image": {
+                    "type": "boolean"
+                  },
+                  "video": {
+                    "type": "boolean"
+                  },
+                  "pdf": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "text",
+                  "audio",
+                  "image",
+                  "video",
+                  "pdf"
+                ],
+                "additionalProperties": false
+              },
+              "interleaved": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "field": {
+                        "type": "string",
+                        "enum": [
+                          "reasoning_content",
+                          "reasoning_details"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "field"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "temperature",
+              "reasoning",
+              "attachment",
+              "toolcall",
+              "input",
+              "output",
+              "interleaved"
+            ],
+            "additionalProperties": false
+          },
+          "cost": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              },
+              "cache": {
+                "type": "object",
+                "properties": {
+                  "read": {
+                    "type": "number"
+                  },
+                  "write": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "read",
+                  "write"
+                ],
+                "additionalProperties": false
+              },
+              "tiers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "input": {
+                      "type": "number"
+                    },
+                    "output": {
+                      "type": "number"
+                    },
+                    "cache": {
+                      "type": "object",
+                      "properties": {
+                        "read": {
+                          "type": "number"
+                        },
+                        "write": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "read",
+                        "write"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "tier": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "context"
+                          ]
+                        },
+                        "size": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "size"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "output",
+                    "cache",
+                    "tier"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "experimentalOver200K": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "type": "number"
+                  },
+                  "output": {
+                    "type": "number"
+                  },
+                  "cache": {
+                    "type": "object",
+                    "properties": {
+                      "read": {
+                        "type": "number"
+                      },
+                      "write": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "read",
+                      "write"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "input",
+                  "output",
+                  "cache"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "input",
+              "output",
+              "cache"
+            ],
+            "additionalProperties": false
+          },
+          "limit": {
+            "type": "object",
+            "properties": {
+              "context": {
+                "type": "number"
+              },
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "context",
+              "output"
+            ],
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "alpha",
+              "beta",
+              "deprecated",
+              "active"
+            ]
+          },
+          "release_date": {
+            "type": "string"
+          },
+          "variants": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ProviderCatalogVariant"
+            }
+          },
+          "recommendedIndex": {
+            "type": "number"
+          },
+          "isFree": {
+            "type": "boolean"
+          },
+          "mayTrainOnYourPrompts": {
+            "type": "boolean"
+          },
+          "hasUserByokAvailable": {
+            "type": "boolean"
+          },
+          "terminalBench": {
+            "type": "object",
+            "properties": {
+              "overallScore": {
+                "type": "number"
+              },
+              "avgAttemptCostUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "overallScore",
+              "avgAttemptCostUsd"
+            ],
+            "additionalProperties": false
+          },
+          "autoRouting": {
+            "type": "object",
+            "properties": {
+              "models": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "models"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "providerID",
+          "api",
+          "name",
+          "capabilities",
+          "cost",
+          "limit",
+          "status",
+          "release_date"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderCatalogProvider": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "env",
+              "config",
+              "custom",
+              "api"
+            ]
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "noteKey": {
+                "type": "string"
+              },
+              "icon": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "hasCredential": {
+            "type": "boolean"
+          },
+          "models": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ProviderCatalogModel"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "source",
+          "env",
+          "hasCredential",
+          "models"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderCatalogResult": {
+        "type": "object",
+        "properties": {
+          "all": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCatalogProvider"
+            }
+          },
+          "default": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "connected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "all",
+          "default",
+          "connected",
+          "failed"
         ],
         "additionalProperties": false
       },

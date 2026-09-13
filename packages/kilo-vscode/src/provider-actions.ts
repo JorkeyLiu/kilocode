@@ -12,7 +12,7 @@ import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider
  */
 type AuthState = "api" | "oauth" | "wellknown"
 
-/** Fetch provider availability and authentication state without exposing stored credentials. */
+/** Fetch redacted provider catalog and derive authentication state without credential exposure. */
 export async function fetchProviderData(client: KiloClient, dir: string) {
   const authRequest =
     typeof client.provider.auth === "function"
@@ -27,24 +27,19 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
     .catch(() => null)
 
   const [{ data: response }, authMethods, kiloAuth] = await Promise.all([
-    client.provider.list({ directory: dir }, { throwOnError: true }),
+    client.provider.catalog({ directory: dir }, { throwOnError: true }),
     authRequest,
     kiloRequest,
   ])
   const authStates: Record<string, AuthState> = {}
-  const all = response.all.map((item) => {
-    const raw = item as Record<string, unknown>
-    if (typeof raw.id === "string" && typeof raw.key === "string" && raw.key) {
-      authStates[raw.id] = "api"
+  for (const item of response.all) {
+    if (typeof item.id === "string" && item.hasCredential === true) {
+      authStates[item.id] = "api"
     }
-    if (!("key" in raw)) return item
-    const next = { ...raw }
-    delete next.key
-    return next as (typeof response.all)[number]
-  })
+  }
   delete authStates[KILO_PROVIDER_ID]
   if (kiloAuth) authStates[KILO_PROVIDER_ID] = kiloAuth
-  return { response: { ...response, all }, authMethods, authStates }
+  return { response, authMethods, authStates }
 }
 
 export function buildActionContext(

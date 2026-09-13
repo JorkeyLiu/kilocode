@@ -33,13 +33,18 @@ this note; when they disagree, the code is right.
   back to the SDK bridge. The legacy SDK mutation callers are removed.
   OAuth `authorize`/`complete` keeps its legacy path with canonical
   `unsupported`; explicit credential reveal keeps its legacy one-shot
-  read path. Stored model-discovery credentials no longer cross the
-  broad provider-list refresh (no extension-side key cache): editing an
-  existing legacy provider without retyping the key discovers models
-  through the runtime narrow endpoint `POST /provider/:providerID/models`
-  (exact provider plus exact stored `baseURL`, backend-held Bearer key);
-  freshly typed keys, custom headers, and canonical `SecretStorage`
-  discovery keep their existing paths.
+  read path (`client.provider.list` + `authorizeCredentialRead`, sole
+  allowed `provider.list` caller, unreachable in production canonical
+  mode). Regular provider reads are redacted via authenticated
+  `GET /provider/catalog` (`provider.catalog`, closed redacted
+  `all,default,connected,failed` with no `key`/`options`/`headers` and
+  `hasCredential` derived from non-empty runtime key). Stored
+  model-discovery credentials no longer cross the regular refresh (no
+  extension-side key cache): editing an existing legacy provider without
+  retyping the key discovers models through the runtime narrow endpoint
+  `POST /provider/:providerID/models` (exact provider plus exact stored
+  `baseURL`, backend-held Bearer key); freshly typed keys, custom headers,
+  and canonical `SecretStorage` discovery keep their existing paths.
 - Authored canonical custom-provider protocol is converged: `CanonicalProviderPayload`
   persists only `{name, endpoint, protocol, models}` plus the extension-host
   credential reference, with protocol exactly `openai/completions`,

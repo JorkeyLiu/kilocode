@@ -39,7 +39,7 @@ function createCtx(existing: ExistingGlobal = { disabled_providers: [] }, merged
         },
       },
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
@@ -47,11 +47,13 @@ function createCtx(existing: ExistingGlobal = { disabled_providers: [] }, merged
                 name: "OpenAI",
                 source: "custom",
                 env: [],
+                hasCredential: false,
                 models: {},
               },
             ],
             connected: ["openai"],
             default: {},
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -210,23 +212,24 @@ describe("completeProviderOAuth", () => {
 })
 
 describe("fetchProviderData", () => {
-  it("derives api auth state and strips keys from provider payloads", async () => {
+  it("derives api auth state from catalog hasCredential without keys", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
                 id: "groq-test",
                 name: "Groq Test",
                 source: "config",
-                key: "sk-test",
                 env: [],
+                hasCredential: true,
                 models: {},
               },
             ],
             connected: ["groq-test"],
             default: { "groq-test": "llama-3.1-8b-instant" },
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -241,16 +244,27 @@ describe("fetchProviderData", () => {
 
     expect(result.authStates).toEqual({ "groq-test": "api" })
     expect("key" in item).toBe(false)
+    expect("options" in item).toBe(false)
   })
 
   it("uses local Kilo auth status instead of profile availability", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
-            all: [{ id: "kilo", name: "Kilo Gateway", source: "custom", env: [], models: {} }],
+            all: [
+              {
+                id: "kilo",
+                name: "Kilo Gateway",
+                source: "custom",
+                env: [],
+                hasCredential: false,
+                models: {},
+              },
+            ],
             connected: ["kilo"],
             default: { kilo: "kilo-auto/frontier" },
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -268,11 +282,21 @@ describe("fetchProviderData", () => {
   it("does not infer Kilo speech access without stored Gateway auth", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
-            all: [{ id: "kilo", name: "Kilo Gateway", source: "config", key: "configured", env: [], models: {} }],
+            all: [
+              {
+                id: "kilo",
+                name: "Kilo Gateway",
+                source: "config",
+                env: [],
+                hasCredential: true,
+                models: {},
+              },
+            ],
             connected: ["kilo"],
             default: { kilo: "kilo-auto/frontier" },
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -287,32 +311,32 @@ describe("fetchProviderData", () => {
     expect(result.authStates).toEqual({})
   })
 
-  it("strips keys without retaining them extension-side", async () => {
+  it("derives authStates without retaining credentials extension-side", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
                 id: "myprovider",
                 name: "My Provider",
                 source: "config",
-                key: "sk-stored",
                 env: [],
-                options: { baseURL: "https://example.com/v1" },
+                hasCredential: true,
                 models: {},
               },
               {
                 id: "no-url",
                 name: "No URL",
                 source: "config",
-                key: "sk-other",
                 env: [],
+                hasCredential: true,
                 models: {},
               },
             ],
             connected: [],
             default: {},
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -327,6 +351,7 @@ describe("fetchProviderData", () => {
     expect("storedKeys" in result).toBe(false)
     expect(result.authStates).toEqual({ myprovider: "api", "no-url": "api" })
     expect(result.response.all.every((item) => !("key" in (item as Record<string, unknown>)))).toBe(true)
+    expect(result.response.all.every((item) => !("options" in (item as Record<string, unknown>)))).toBe(true)
   })
 })
 
@@ -349,24 +374,25 @@ describe("isProviderModelsAuthError", () => {
   })
 })
 
-describe("fetchProviderData — credential read authorization predicates", () => {
-  it("marks source='api' providers with non-empty key as api auth", async () => {
+describe("fetchProviderData — catalog hasCredential predicates", () => {
+  it("marks source='api' providers with hasCredential as api auth", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
                 id: "openai",
                 name: "OpenAI",
                 source: "api",
-                key: "sk-test-key",
                 env: [],
+                hasCredential: true,
                 models: {},
               },
             ],
             connected: ["openai"],
             default: {},
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -378,28 +404,30 @@ describe("fetchProviderData — credential read authorization predicates", () =>
 
     const result = await fetchProviderData(client, "/tmp")
     expect(result.authStates).toEqual({ openai: "api" })
-    // Key is stripped from the response sent to webview
+    // Redacted catalog never carries keys/options to the webview
     const item = result.response.all[0] as Record<string, unknown>
     expect("key" in item).toBe(false)
+    expect("options" in item).toBe(false)
   })
 
-  it("marks source='env' providers with non-empty key as api auth (source filtering is handler-level)", async () => {
+  it("marks source='env' providers with hasCredential as api auth (source filtering is handler-level)", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
                 id: "envprovider",
                 name: "Env Provider",
                 source: "env",
-                key: "env-key-value",
                 env: ["ENV_KEY"],
+                hasCredential: true,
                 models: {},
               },
             ],
             connected: [],
             default: {},
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -410,7 +438,7 @@ describe("fetchProviderData — credential read authorization predicates", () =>
     } as unknown as Parameters<typeof fetchProviderData>[0]
 
     const result = await fetchProviderData(client, "/tmp")
-    // fetchProviderData marks any provider with non-empty key as api auth;
+    // fetchProviderData marks any provider with hasCredential as api auth;
     // source filtering (source === "api") is done in handleGetProviderCredential
     expect(result.authStates).toEqual({ envprovider: "api" })
   })
@@ -418,20 +446,21 @@ describe("fetchProviderData — credential read authorization predicates", () =>
   it("rejects kilo provider from authStates", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
                 id: "kilo",
                 name: "Kilo Gateway",
                 source: "config",
-                key: "configured",
                 env: [],
+                hasCredential: true,
                 models: {},
               },
             ],
             connected: ["kilo"],
             default: { kilo: "kilo-auto/frontier" },
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),
@@ -446,23 +475,24 @@ describe("fetchProviderData — credential read authorization predicates", () =>
     expect(result.authStates).toEqual({})
   })
 
-  it("rejects providers with empty key from authStates", async () => {
+  it("rejects providers without credential from authStates", async () => {
     const client = {
       provider: {
-        list: async () => ({
+        catalog: async () => ({
           data: {
             all: [
               {
                 id: "empty-key",
                 name: "Empty Key",
                 source: "api",
-                key: "",
                 env: [],
+                hasCredential: false,
                 models: {},
               },
             ],
             connected: [],
             default: {},
+            failed: [],
           },
         }),
         auth: async () => ({ data: {} }),

@@ -66,7 +66,7 @@ async function provisionVariantModelFixture(
   let selections: Record<string, { providerID: string; modelID: string }> = {}
   try {
     const client = await connectionService.getClientAsync(root)
-    const { data } = await client.provider.list({ directory: root }, { throwOnError: true })
+    const { data } = await client.provider.catalog({ directory: root }, { throwOnError: true })
     connected = data?.connected ?? []
     defaults = data?.default ?? {}
     for (const item of data?.all ?? []) {

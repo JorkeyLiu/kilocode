@@ -182,8 +182,8 @@ describe("KiloProvider canonical GUI authority", () => {
         },
       },
       provider: {
-        list: async () => {
-          calls.push("provider.list")
+        catalog: async () => {
+          calls.push("provider.catalog")
           throw new Error("backend provider read")
         },
       },

@@ -1,5 +1,6 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Provider } from "@/provider/provider"
+import { ProviderCatalog } from "@/provider/catalog"
 
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
@@ -71,6 +72,17 @@ export const ProviderApi = HttpApi.make("provider")
             identifier: "provider.list",
             summary: "List providers",
             description: "Get a list of all available AI providers, including both available and connected ones.",
+          }),
+        ),
+        HttpApiEndpoint.get("catalog", `${root}/catalog`, {
+          query: WorkspaceRoutingQuery,
+          success: described(ProviderCatalog.CatalogResult, "Redacted provider catalog"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "provider.catalog",
+            summary: "Get redacted provider catalog",
+            description:
+              "Authenticated redacted provider catalog for regular reads; omits key/options/headers. Legacy explicit credential reveal keeps provider.list.",
           }),
         ),
         HttpApiEndpoint.get("auth", `${root}/auth`, {
