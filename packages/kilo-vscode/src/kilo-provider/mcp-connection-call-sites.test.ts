@@ -3,10 +3,10 @@ import { readFile } from "fs/promises"
 import { join } from "path"
 
 // Structural lock for the Settings MCP switch: the Settings host
-// (`KiloProvider`) performs connect/disconnect only through the private-only
-// helper with zero direct SDK mutation calls. The two pre-existing direct
-// `.mcp.disconnect(` sites stay untouched: the BrowserAutomation lifecycle
-// owner and the env-gated E2E fixture bridge (`mcpDisconnectForFixture`).
+// (`KiloProvider`) and BrowserAutomation perform connect/disconnect only
+// through the private-only helper with zero direct SDK mutation calls. The
+// single remaining direct `.mcp.disconnect(` site stays untouched: the
+// env-gated E2E fixture bridge (`mcpDisconnectForFixture`).
 // Behavioral proof lives in `src/kilo-provider-mcp-connection.test.ts`; this
 // file only locks the call sites against future SDK fallback/retry.
 const ROOT = join(import.meta.dir, "..", "..")
@@ -29,7 +29,7 @@ describe("mcp-connection Settings call sites", () => {
     expect(text.match(/attemptMcpDisconnectPrivate/g)?.length ?? 0).toBeGreaterThan(0)
   })
 
-  test("only the fixture bridge and browser automation keep direct disconnect calls", async () => {
+  test("only the fixture bridge keeps direct disconnect calls", async () => {
     const agent = await src("src/agent-manager/AgentManagerProvider.ts")
     const start = agent.indexOf("mcpDisconnectForFixture")
     expect(start).toBeGreaterThan(0)
@@ -37,7 +37,10 @@ describe("mcp-connection Settings call sites", () => {
     expect(calls(outside, "disconnect")).toBe(0)
     expect(calls(outside, "connect")).toBe(0)
     const auto = await src("src/services/browser-automation/browser-automation-service.ts")
+    expect(calls(auto, "disconnect")).toBe(0)
     expect(calls(auto, "connect")).toBe(0)
     expect(calls(auto, "authenticate")).toBe(0)
+    expect(auto.match(/attemptMcpDisconnectPrivate/g)?.length ?? 0).toBeGreaterThan(0)
+    expect(auto.match(/buildMcpDisconnectReq/g)?.length ?? 0).toBeGreaterThan(0)
   })
 })

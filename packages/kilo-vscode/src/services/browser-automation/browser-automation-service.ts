@@ -1,6 +1,7 @@
 import * as vscode from "vscode"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../cli-backend"
+import { attemptMcpDisconnectPrivate, buildMcpDisconnectReq } from "../../kilo-provider/mcp-connection-privatefirst"
 
 type BrowserAutomationState = "disabled" | "registering" | "connected" | "failed" | "disconnected"
 
@@ -117,17 +118,18 @@ export class BrowserAutomationService implements vscode.Disposable {
       return
     }
 
-    const client = this.getClient()
-    if (client) {
-      try {
-        const directory = this.getWorkspaceDirectory()
-        await client.mcp.disconnect(
-          { name: BrowserAutomationService.MCP_SERVER_NAME, directory },
-          { throwOnError: true },
+    try {
+      const directory = this.getWorkspaceDirectory()
+      const req = buildMcpDisconnectReq(directory, BrowserAutomationService.MCP_SERVER_NAME)
+      const outcome = await attemptMcpDisconnectPrivate(this.connectionService, req)
+      if (outcome.kind !== "ok") {
+        const detail = outcome.kind === "failed" ? outcome.code : outcome.reason
+        console.error(
+          `[Kilo New] BrowserAutomationService: Failed to disconnect MCP server "${BrowserAutomationService.MCP_SERVER_NAME}": ${detail}`,
         )
-      } catch (error) {
-        console.error("[Kilo New] BrowserAutomationService: Failed to disconnect MCP server:", error)
       }
+    } catch (error) {
+      console.error("[Kilo New] BrowserAutomationService: Failed to disconnect MCP server:", error)
     }
 
     this.setState("disabled")
