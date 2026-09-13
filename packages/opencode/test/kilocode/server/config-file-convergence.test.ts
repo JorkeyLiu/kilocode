@@ -25,6 +25,22 @@ describe("config-file-convergence descriptors", () => {
     expect(files[1]!.endsWith("agent/helper.md")).toBe(true)
   })
 
+  test("skill descriptor resolves to singular+plural SKILL.md candidates, never flat", () => {
+    const project = validateDescriptors([
+      { kind: "asset", asset: "skill", scope: "project", directory: "/tmp/proj", id: "helper" },
+    ])
+    const files = resolveDescriptorPaths(project)
+    expect(files.length).toBe(2)
+    expect(files[0]!.endsWith(".kilo/skill/helper/SKILL.md")).toBe(true)
+    expect(files[1]!.endsWith(".kilo/skills/helper/SKILL.md")).toBe(true)
+    expect(files.some((f) => f.endsWith("skill/helper.md"))).toBe(false)
+    const global = validateDescriptors([{ kind: "asset", asset: "skill", scope: "global", id: "helper" }])
+    const gfiles = resolveDescriptorPaths(global)
+    expect(gfiles.length).toBe(2)
+    expect(gfiles[0]!.endsWith("skill/helper/SKILL.md")).toBe(true)
+    expect(gfiles[1]!.endsWith("skills/helper/SKILL.md")).toBe(true)
+  })
+
   test("global descriptor strengthens to global fence", () => {
     const descriptors = validateDescriptors([
       { kind: "config", scope: "global" },

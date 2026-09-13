@@ -84,14 +84,19 @@ export function parseScopeDocument(raw: FileReadResult | undefined): Record<stri
 
 /**
  * Validate that an asset ID is a safe filename segment (Blocker 11).
- * No separators, traversal, or absolute path.
+ * Closed set aligned with the CLI `validateAssetId` rule: length 1..128,
+ * `^[A-Za-z0-9][A-Za-z0-9._-]*$` (so spaces, leading dots/dashes, and
+ * overlong ids fail while `a..b` passes). `/`, `\`, NUL, `.`, `..` stay
+ * rejected. Single rule for GUI IDs and watcher classification alike.
  */
+const ASSET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
 export function isValidAssetId(id: string): boolean {
-  if (!id || id.length === 0) return false
-  if (id.includes("/") || id.includes("\\") || id.includes("..")) return false
+  if (!id || id.length === 0 || id.length > 128) return false
+  if (id.includes("\0") || id.includes("/") || id.includes("\\") || id === "." || id === "..") return false
   if (path.isAbsolute(id)) return false
   if (id !== path.basename(id)) return false
-  return true
+  return ASSET_ID_PATTERN.test(id)
 }
 
 /**

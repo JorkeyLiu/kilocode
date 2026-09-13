@@ -5161,7 +5161,7 @@ export function createFdCarrier(
           const message = e instanceof Error ? e.message : String(e)
           const err = new Error(message) as Error & { code: number }
           err.code =
-            /observe rejects asset|not authorized|not loadable|observeId invalid|observeId too long|must be|must bind|must not carry|rejected|unexpected|empty|closed set|context/i.test(
+            /not authorized|not loadable|observeId invalid|observeId too long|must be|must bind|must match|must not carry|rejected|unexpected|empty|closed set|context/i.test(
               message,
             )
               ? ErrorCode.InvalidParams

@@ -18,7 +18,8 @@
  *
  * Private fd methods: `config/convergence/acquire` + `config/convergence/resolve`
  * plus fail-safe cold `config/convergence/observe` (descriptor-only,
- * always cold, no baseline, no hot/noop).
+ * always cold for config and every asset descriptor, no baseline, no
+ * hot/noop).
  * Descriptors are a closed set; runtime derives paths, never accepts arbitrary
  * absolute paths. Any global descriptor => global fence; otherwise a single
  * project directory (multi-dir in one lease is rejected). Project directories
@@ -313,10 +314,30 @@ function projectConfigFile(directory: string): string {
 
 export function resolveDescriptorFiles(descriptors: readonly ConvergenceDescriptor[]): readonly FileEntry[] {
   const files: FileEntry[] = []
+  // Skill descriptors resolve to both canonical candidates
+  // `<root>/skill/<id>/SKILL.md` and `<root>/skills/<id>/SKILL.md`
+  // (global/project alike). No flat `<root>/skill/<id>.md` is authoritative.
+  // Every candidate is guarded per file below; cold rebuild scans both.
+  const skillCandidates = (root: string, id: string, dir: string | undefined): FileEntry[] => {
+    const out: FileEntry[] = []
+    for (const base of ["skill", "skills"] as const) {
+      const target = path.join(root, base, id, "SKILL.md")
+      out.push(dir === undefined ? { path: target } : { path: target, dir })
+    }
+    return out
+  }
   for (const d of descriptors) {
     if (d.kind === "config") {
       if (d.scope === "global") files.push({ path: globalConfigFile() })
       else files.push({ path: projectConfigFile(d.directory), dir: canonicalDirectory(d.directory) })
+      continue
+    }
+    if (d.asset === "skill") {
+      if (d.scope === "global") files.push(...skillCandidates(Global.Path.config, d.id, undefined))
+      else {
+        const kilo = path.join(d.directory!, ".kilo")
+        files.push(...skillCandidates(kilo, d.id, canonicalDirectory(d.directory!)))
+      }
       continue
     }
     if (d.scope === "global") files.push({ path: path.join(Global.Path.config, d.asset, `${d.id}.md`) })
@@ -1227,25 +1248,26 @@ export const layer = Layer.effect(
 
       /**
        * External observe: descriptor-only fail-safe cold hint for canonical
-       * config edits that bypassed the acquire fence (e.g. VS Code watcher
-       * external edits). Authorizes project directories with the existing
-       * convergence guards, resolves canonical paths, raises the existing
-       * ConfigConvergence generation admission fence via begin, registers a
-       * cold obligation via commit, and acknowledges at the existing
-       * non-blocking commit point (never awaiting drain). The worker boots
-       * from latest disk; active generations keep old pins; new admissions
-       * wait. Missing/unreadable/malformed disk still cold-converges — the
-       * boot surfaces normal loader diagnostics, never a false noop. Never
-       * trusts client bytes/hash/outcome; asset descriptors are rejected by
-       * validation before this runs. Duplicate hints coalesce through the
-       * existing ConfigConvergence seq/pending behavior. No baseline, no
-       * adoption callbacks/listeners, no hot/noop classification.
+       * config/asset edits that bypassed the acquire fence (e.g. VS Code
+       * watcher external edits). Every asset descriptor is always cold (no
+       * baseline, no hot/noop). Authorizes project directories with the
+       * existing convergence guards, resolves canonical paths, raises the
+       * existing ConfigConvergence generation admission fence via begin,
+       * registers a cold obligation via commit, and acknowledges at the
+       * existing non-blocking commit point (never awaiting drain). The
+       * worker boots the same directory runtime from latest disk so
+       * canonical agent/command/skill/tool/plugin/rules adds/edits/deletes
+       * are visible to later runtime reads/generations; active generations
+       * keep old pins; new admissions wait. Missing/unreadable/malformed
+       * disk still cold-converges — the boot surfaces normal loader
+       * diagnostics, never a false noop. Never trusts client
+       * bytes/hash/outcome. Duplicate hints coalesce through the existing
+       * ConfigConvergence seq/pending behavior. No baseline, no adoption
+       * callbacks/listeners, no hot/noop classification.
        */
       const observeInner = (observeId: string, descriptors: readonly ConvergenceDescriptor[]): Effect.Effect<ObserveTerminal> =>
         Effect.gen(function* () {
           if (!isNonEmpty(observeId) || observeId.length > 128) return yield* Effect.die(new Error("observeId invalid"))
-          if (descriptors.some((d) => d.kind !== "config"))
-            return yield* Effect.die(new Error("observe rejects asset descriptors"))
           if (shuttingDown) return yield* Effect.die(new Error("convergence shutting down"))
           const auth = yield* authorizeDescriptors(descriptors)
           // Resolve canonical paths + re-verify directory identity and
@@ -1440,6 +1462,5 @@ export function validateObserveRequest(raw: unknown): {
     }
   }
   const descriptors = validateDescriptors(raw.descriptors)
-  if (descriptors.some((d) => d.kind !== "config")) throw new Error("observe rejects asset descriptors")
   return { observeId: raw.observeId as string, descriptors }
 }

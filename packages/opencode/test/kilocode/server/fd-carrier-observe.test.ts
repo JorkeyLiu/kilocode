@@ -272,27 +272,25 @@ describe("fd-carrier config observe (external canonical edits)", () => {
     }),
   )
 
-  it.live("strict observe rejects asset descriptors and client bytes/hash/outcome", () =>
+  it.live("strict observe accepts asset descriptors but rejects client bytes/hash/outcome/content", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
       const dir = tmp.path
       yield* Effect.promise(() => seedProject(dir, { permission: { bash: "allow" } }))
+      const store = yield* InstanceStore.Service
+      yield* store.load({ directory: dir })
       const pair = linked()
       try {
         yield* Effect.promise(() => init(pair.ext))
-        const assetErr = yield* Effect.promise(() =>
-          pair.ext
-            .request(
-              "config/convergence/observe",
-              observeReq(`a-${Date.now()}`, [{ kind: "asset", asset: "agent", scope: "project", directory: dir, id: "x" }]),
-            )
-            .then(
-              () => "ok",
-              (e: unknown) => String((e as { code?: unknown }).code ?? e),
-            ),
+        const assetOk: unknown = yield* Effect.promise(() =>
+          pair.ext.request(
+            "config/convergence/observe",
+            observeReq(`a-${Date.now()}`, [{ kind: "asset", asset: "agent", scope: "project", directory: dir, id: "x" }]),
+          ),
         )
-        expect(assetErr).toBe("-32602")
-        for (const forbidden of ["bytes", "hash", "outcome"]) {
+        expect((assetOk as { outcome: string }).outcome).toBe("cold")
+        yield* awaitWithTimeout(awaitRebuilds(), "asset observe rebuild never settled")
+        for (const forbidden of ["bytes", "hash", "outcome", "content", "text", "body", "data"]) {
           const err = yield* Effect.promise(() =>
             pair.ext
               .request(

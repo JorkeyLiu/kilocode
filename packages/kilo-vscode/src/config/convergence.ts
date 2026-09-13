@@ -16,12 +16,15 @@
  * watcher edits (external canonical edits converge instead via the
  * descriptor-only observe hint below).
  *
- * External canonical config edits (VS Code watcher, not own writes) are
- * observed via a descriptor-only private hint (`config/convergence/observe`)
- * after successful local materialization. The hint always requests fail-safe
- * cold convergence (no hot/noop, no baseline); hint failure leaves local
- * state intact with a pending diagnostic and never rewrites disk. Asset
- * watcher events never send observe hints.
+ * External canonical config/asset edits (VS Code watcher, not own writes)
+ * are observed via a descriptor-only private hint
+ * (`config/convergence/observe`) after successful local
+ * scan/materialization. The hint always requests fail-safe cold convergence
+ * (no hot/noop, no baseline, also cold for every asset descriptor); hint
+ * failure leaves local state intact with a pending diagnostic and never
+ * rewrites disk. Own-write hash hits send no observe (they already
+ * acquire/resolve); non-`.md`, invalid/unmaterializable, and nested-subdir
+ * events keep fail-soft semantics with diagnostics and no error descriptor.
  */
 
 export type ConvergenceDescriptor =
@@ -306,17 +309,16 @@ export class PrivateConvergenceAdapter implements ConfigConvergenceAdapter {
   }
 
   /**
-   * External observe hint: descriptor-only, no SDK fallback. Config
-   * descriptors only; asset descriptors are rejected locally without a
-   * transport call. Every call sends one hint — burst bounding lives in the
-   * per-scope trailing-edge coalescer (`external-observe.ts`), so the latest
-   * edit is never dropped here. Failure/unavailable returns pending with
-   * local materialization intact and no rewrite.
+   * External observe hint: descriptor-only, no SDK fallback. Config and
+   * canonical asset descriptors share one hint; unsafe client
+   * bytes/hash/content/outcome fields are never sent (the wire validator
+   * still rejects them). Every call sends one hint — burst bounding and
+   * batching live in the bounded per-scope descriptor accumulator
+   * (`external-observe.ts`), so distinct asset ids are never dropped here.
+   * Failure/unavailable returns pending with local materialization intact
+   * and no rewrite.
    */
   async observe(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
-    for (const d of descriptors) {
-      if (d.kind !== "config") return { status: "pending", message: "asset observe not supported; local state intact" }
-    }
     if (descriptors.length === 0) return { status: "pending", message: "observe requires descriptors; local state intact" }
     return this.observeOnce(descriptors)
   }

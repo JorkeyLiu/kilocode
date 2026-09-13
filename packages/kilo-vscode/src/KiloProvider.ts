@@ -569,6 +569,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.sendCanonicalConfig(event.source === "gui" ? "configUpdated" : "configLoaded", event)
     void this.sendCanonicalProviders(event)
     void this.sendCanonicalAgents(event)
+    // External canonical asset edits converge locally via the agent snapshot
+    // above; skills/commands have no canonical snapshot and would stay stale,
+    // so a successful external materialization refreshes their existing
+    // private-first lists. Failures only log; tool/plugin/rules have no UI
+    // refresh and add none.
+    if (event.source === "external" && !event.hasErrors) {
+      this.fetchAndSendSkills().catch((e) => console.error("[Kilo New] fetchAndSendSkills failed:", e))
+      this.fetchAndSendCommands().catch((e) => console.error("[Kilo New] fetchAndSendCommands failed:", e))
+    }
   }
 
   private onCanonicalError(error: CanonicalConfigError): void {

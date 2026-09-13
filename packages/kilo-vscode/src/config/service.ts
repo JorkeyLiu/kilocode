@@ -70,6 +70,7 @@ import {
 } from "./credential-rollback"
 import { type ConfigSnapshot, snapshot as makeSnapshot } from "./snapshot"
 import { ExternalObserveCoalescer } from "./external-observe"
+import { handleAssetChanged, handleSkillChanged, listSkillFiles, skillRootsFor, type SkillMeta } from "./asset-observe"
 import {
   type ProviderIndex,
   type AgentIndex,
@@ -291,6 +292,9 @@ export class CanonicalConfigService implements Disposable {
 
   /** Last materialized asset scan (for dedup and stale detection). */
   private lastAssetScan: AssetScanResult | null = null
+
+  /** Last skill file scan (physical SKILL.md path -> hash/validity, both singular/plural roots). */
+  private lastSkillFiles = new Map<string, SkillMeta>()
 
   /**
    * Rehydrated indexes for immediate UI presentation (Blocker 3).
@@ -569,6 +573,7 @@ export class CanonicalConfigService implements Disposable {
     // Scan all six asset directories in both scopes (before materialization
     // so persistIndexes() has scan data for agent index rebuild)
     this.lastAssetScan = this.scanAssets()
+    this.lastSkillFiles = this.scanSkillFiles()
 
     // Initial materialization from disk (through convergence scheduler).
     // persistIndexes() rebuilds agent index from this.lastAssetScan (Finding 4).
@@ -1995,6 +2000,17 @@ export class CanonicalConfigService implements Disposable {
     return { entries, errors, duplicateIds }
   }
 
+  private scanSkillFiles(): Map<string, SkillMeta> {
+    const out = new Map<string, SkillMeta>()
+    const roots = [...skillRootsFor(this.paths, "global"), ...(this.hasProject ? skillRootsFor(this.paths, "project") : [])]
+    for (const file of listSkillFiles(roots)) {
+      const raw = readFile(file)
+      if (raw.type !== "present") continue
+      out.set(file, { hash: raw.hash, valid: validateMarkdownAsset(raw.bytes, "skill", file).valid })
+    }
+    return out
+  }
+
   /**
    * Gap 5: Pending materialization promises tracked for settle-on-dispose.
    * Each entry is { resolve, reject, rev } — dispose settles them with
@@ -2579,8 +2595,15 @@ export class CanonicalConfigService implements Disposable {
       this.watchFile(this.paths.projectConfigFile, () => this.onFileChanged("project"))
     }
 
-    // Watch asset directories
+    // Watch asset directories (skill uses singular+plural roots, one logical asset)
     for (const dir of ASSET_DIRECTORIES) {
+      if (dir === "skill") {
+        for (const root of skillRootsFor(this.paths, "global")) this.watchDir(root, (changedPath) => this.onSkillChanged("global", changedPath))
+        if (this.paths.projectAssetDirs) {
+          for (const root of skillRootsFor(this.paths, "project")) this.watchDir(root, (changedPath) => this.onSkillChanged("project", changedPath))
+        }
+        continue
+      }
       this.watchDir(this.paths.globalAssetDirs[dir], (changedPath) => this.onAssetChanged("global", dir, changedPath))
       if (this.paths.projectAssetDirs) {
         this.watchDir(this.paths.projectAssetDirs[dir], (changedPath) =>
@@ -2757,15 +2780,23 @@ export class CanonicalConfigService implements Disposable {
     void this.enqueueAndRunMaterialization("external")
       .then(() => {
         if (this.disposed) return
-        this.observeCoalescer.notify(scope, {
-          isDisposed: () => this.disposed,
-          hasProject: this.hasProject,
-          projectRoot: this.paths.projectRoot,
-          observe: this.convergence?.observe?.bind(this.convergence),
-          onPending: (message) => {
-            this.onErrorEmitter.fire({ kind: "watcher-error", message })
+        const descriptor =
+          scope === "global"
+            ? ({ kind: "config", scope: "global" } as const)
+            : ({ kind: "config", scope: "project", directory: this.paths.projectRoot! } as const)
+        this.observeCoalescer.notify(
+          scope,
+          {
+            isDisposed: () => this.disposed,
+            hasProject: this.hasProject,
+            projectRoot: this.paths.projectRoot,
+            observe: this.convergence?.observe?.bind(this.convergence),
+            onPending: (message) => {
+              this.onErrorEmitter.fire({ kind: "watcher-error", message })
+            },
           },
-        })
+          [descriptor] as never,
+        )
       })
       .catch((err) => {
         if (!this.disposed) {
@@ -2777,61 +2808,89 @@ export class CanonicalConfigService implements Disposable {
       })
   }
 
-  /**
-   * Handle an asset directory change from the watcher.
-   * Correction 10: receives exact changed path, coalesces only that file's hash
-   * against that file's own-write marker. Unrelated sibling files do not influence it.
-   * Rescans assets and re-materializes through convergence scheduler (Finding 6).
-   */
   private onAssetChanged(_scope: "global" | "project", _dir: AssetDirectory, changedPath?: string): void {
+    if (_dir === "skill") {
+      this.onSkillChanged(_scope, changedPath)
+      return
+    }
+    if (this.disposed || (_scope === "project" && !this.hasProject)) return
+    const expectedDir = _scope === "global" ? this.paths.globalAssetDirs[_dir] : this.paths.projectAssetDirs![_dir]
+    handleAssetChanged(this.assetHost(_scope, expectedDir), _scope, _dir, changedPath)
+  }
+
+  private onSkillChanged(_scope: "global" | "project", changedPath?: string): void {
+    if (this.disposed || (_scope === "project" && !this.hasProject)) return
+    handleSkillChanged(this.skillHost(_scope), _scope, changedPath)
+  }
+
+  private skillHost(_scope: "global" | "project") {
+    const roots = skillRootsFor(this.paths, _scope)
+    const readValid = (filePath: string): "present-valid" | "present-invalid" | "absent" | "other" => {
+      const r = readFile(filePath)
+      if (r.type === "present") return validateMarkdownAsset(r.bytes, "skill", filePath).valid ? "present-valid" : "present-invalid"
+      return r.type === "absent" ? "absent" : "other"
+    }
+    return {
+      isDisposed: () => this.disposed, hasProject: this.hasProject, projectRoot: this.paths.projectRoot, roots,
+      prior: () => new Map([...this.lastSkillFiles].filter(([f]) => roots.some((r) => f === r || f.startsWith(r + path.sep)))),
+      scanCurrent: () => {
+        const out = new Map<string, { hash: string; valid: boolean }>()
+        for (const file of listSkillFiles(roots)) {
+          const r = readFile(file)
+          if (r.type !== "present") continue
+          out.set(file, { hash: r.hash, valid: validateMarkdownAsset(r.bytes, "skill", file).valid })
+        }
+        return out
+      },
+      readValid,
+      runExternal: (prepare: () => boolean) => this.enqueueAndRunMaterialization("external", prepare),
+      commit: (current: ReadonlyMap<string, { hash: string; valid: boolean }>) => {
+        for (const [f] of [...this.lastSkillFiles].filter(([f]) => roots.some((r) => f === r || f.startsWith(r + path.sep)))) this.lastSkillFiles.delete(f)
+        for (const [f, m] of current) this.lastSkillFiles.set(f, { hash: m.hash, valid: m.valid })
+      },
+      notify: (descs: readonly import("./asset-observe").AssetDescriptorLike[]) => this.notifyAssetDescs(_scope, descs as never),
+      error: (message: string) => this.fireWatcherError(message),
+    }
+  }
+
+  private assetHost(_scope: "global" | "project", expectedDir: string) {
+    const read = (filePath: string) => {
+      const r = readFile(filePath)
+      return r.type === "present" ? { type: "present" as const, hash: r.hash } : r.type === "absent" ? { type: "absent" as const } : { type: "other" as const }
+    }
+    return {
+      isDisposed: () => this.disposed, hasProject: this.hasProject, projectRoot: this.paths.projectRoot, expectedDir,
+      lastScan: () => this.lastAssetScan, read,
+      listDirFiles: () => fs.readdirSync(expectedDir).filter((f) => f.endsWith(".md")).map((f) => path.join(expectedDir, f)),
+      markerOf: (filePath: string) => this.ownWriteHashes.get(filePath),
+      dropMarker: (filePath: string) => this.ownWriteHashes.delete(filePath),
+      coalesce: (filePath: string, hash: string) => this.shouldCoalesce(filePath, hash),
+      rescan: () => { this.lastAssetScan = this.scanAssets() },
+      runExternal: (prepare: () => boolean) => this.enqueueAndRunMaterialization("external", prepare),
+      hasScanError: (filePath: string) => this.lastAssetScan?.errors.some((e) => e.file === filePath) ?? false,
+      notify: (descs: readonly import("./asset-observe").AssetDescriptorLike[]) => this.notifyAssetDescs(_scope, descs as never),
+      error: (message: string) => this.fireWatcherError(message),
+    }
+  }
+
+  private notifyAssetDescs(_scope: "global" | "project", descs: readonly import("./asset-observe").AssetDescriptorLike[]): void {
     if (this.disposed) return
-    if (_scope === "project" && !this.hasProject) return
+    this.observeCoalescer.notify(
+      _scope,
+      {
+        isDisposed: () => this.disposed,
+        hasProject: this.hasProject,
+        projectRoot: this.paths.projectRoot,
+        observe: this.convergence?.observe?.bind(this.convergence),
+        onPending: (message) => this.fireWatcherError(message),
+      },
+      descs as never,
+    )
+  }
 
-    void this.enqueueAndRunMaterialization("external", () => {
-      if (this.disposed) return false
-      // Correction 10: if the changed path is known, only check that file's
-      // own-write hash. Sibling files do not influence the coalescing decision.
-      let hasExternalChange = false
-      if (changedPath) {
-        const raw = readFile(changedPath)
-        if (raw.type !== "present" || !this.shouldCoalesce(changedPath, raw.hash)) {
-          hasExternalChange = true
-        }
-      } else {
-        // Fallback: no path provided, scan full directory (backward compat)
-        const dir = _scope === "global" ? this.paths.globalAssetDirs[_dir] : this.paths.projectAssetDirs![_dir]
-        try {
-          const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"))
-          if (files.length === 0) {
-            const priorEntries = this.lastAssetScan
-              ? this.lastAssetScan.entries.filter((e) => e.scope === _scope && e.filePath.startsWith(dir))
-              : []
-            if (priorEntries.length > 0) hasExternalChange = true
-          } else {
-            for (const file of files) {
-              const filePath = path.join(dir, file)
-              const raw = readFile(filePath)
-              if (raw.type !== "present" || !this.shouldCoalesce(filePath, raw.hash)) {
-                hasExternalChange = true
-                break
-              }
-            }
-          }
-        } catch (err) {
-          console.error(`[Kilo Config] Asset watcher scan failed: ${String(err)}`)
-          hasExternalChange = true
-        }
-      }
-
-      if (!hasExternalChange) return false
-
-      this.lastAssetScan = this.scanAssets()
-      return true
-    }).catch((err) => {
-      if (!this.disposed) {
-        this.onErrorEmitter.fire({ kind: "watcher-error", message: `Asset watcher convergence failed: ${String(err)}` })
-      }
-    })
+  private fireWatcherError(message: string): void {
+    if (this.disposed) return
+    this.onErrorEmitter.fire({ kind: "watcher-error", message })
   }
 
   private restoreCredentialState(ref: string, priorValue: string | undefined): Promise<void> {
