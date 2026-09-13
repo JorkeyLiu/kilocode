@@ -142,6 +142,13 @@ import {
   providerAuthPrivate,
 } from "@/kilocode/provider-auth"
 import {
+  INTERNAL_MESSAGE as PROVIDER_MODELS_DISCOVER_INTERNAL_MESSAGE,
+  OP as PROVIDER_MODELS_DISCOVER_OP,
+  VERSION as PROVIDER_MODELS_DISCOVER_VERSION,
+  fallbackProviderModelsDiscoverIds,
+  providerModelsDiscoverPrivate,
+} from "@/kilocode/provider-models-discover"
+import {
   INTERNAL_MESSAGE as CONFIG_UI_DEFAULTS_INTERNAL_MESSAGE,
   OP as CONFIG_UI_DEFAULTS_OP,
   VERSION as CONFIG_UI_DEFAULTS_VERSION,
@@ -5417,6 +5424,63 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: PROVIDER_AUTH_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === PROVIDER_MODELS_DISCOVER_OP || method === "provider/models-discover") {
+        // Read-only `provider/models-discover` observation: the same stored
+        // backend credential owner as `POST /provider/:providerID/models`
+        // (`identifier: "provider.models.discover"`) via the shared
+        // `providerModelsDiscoverPrivate` (existing drain-control +
+        // `InstanceRef` lane, same lane as `provider/auth` — no new lifecycle
+        // lane, no manual `InstanceRef`, no new drain/read lease, no cache).
+        // `directory`/`workspace` are carrier routing identity only; the
+        // `{providerID, baseURL}` payload selects the exact stored credential
+        // and is validated strict (unknown fields, non-strict URLs, and
+        // credential-aiming mismatches fail closed). The wire projection is
+        // the exact `{models: [{id, name}]}` shape; unknown entry fields are
+        // rejected so secrets can never cross. The outbound upstream fetch is
+        // bounded by `MODEL_DISCOVERY_TIMEOUT_MS`; a slow upstream surfaces
+        // as the observer timeout and takes the same-directory SDK fallback.
+        // Read-only, safely repeatable: an ambiguous transport outcome may
+        // safely repeat via the same-directory SDK
+        // `client.provider.models.discover` fallback; the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* providerModelsDiscoverPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: PROVIDER_MODELS_DISCOVER_VERSION,
+                  requestId: fallbackProviderModelsDiscoverIds(params).requestId,
+                  op: PROVIDER_MODELS_DISCOVER_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: PROVIDER_MODELS_DISCOVER_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: PROVIDER_MODELS_DISCOVER_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: PROVIDER_MODELS_DISCOVER_VERSION,
+                  requestId: fallbackProviderModelsDiscoverIds(params).requestId,
+                  op: PROVIDER_MODELS_DISCOVER_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: PROVIDER_MODELS_DISCOVER_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: PROVIDER_MODELS_DISCOVER_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

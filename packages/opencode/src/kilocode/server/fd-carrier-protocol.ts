@@ -52,6 +52,7 @@ export const FD_CAPABILITIES = [
   "agent/list",
   "provider/catalog",
   "provider/auth",
+  "provider/models-discover",
   "config/ui-defaults",
   "auth/remove",
   "kilo/organization/set",

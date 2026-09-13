@@ -349,6 +349,18 @@ import type {
   ProviderAuthWireOutcome,
 } from "./serve-private-provider-auth-contract"
 import {
+  isSettledProviderModelsDiscoverResult,
+  makeProviderModelsDiscoverAmbiguous,
+  normalizePrivateProviderModelsDiscoverWire,
+  ProviderModelsDiscoverValidationError,
+  validateProviderModelsDiscoverContractRequest,
+} from "./serve-private-provider-models-discover-contract"
+import type {
+  ProviderModelsDiscoverContractRequest,
+  ProviderModelsDiscoverResult,
+  ProviderModelsDiscoverWireOutcome,
+} from "./serve-private-provider-models-discover-contract"
+import {
   isSettledConfigUiDefaultsResult,
   makeConfigUiDefaultsAmbiguous,
   normalizePrivateConfigUiDefaultsWire,
@@ -4532,6 +4544,80 @@ export class ServePrivatePeer {
       if (isSettledProviderAuthResult(wire.result, req)) return wire
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeProviderAuthAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedProviderModelsDiscover(
+    req: ProviderModelsDiscoverContractRequest,
+    code: string,
+    msg: string,
+  ): ProviderModelsDiscoverResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "provider/models-discover",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  async privateProviderModelsDiscover(req: ProviderModelsDiscoverContractRequest): Promise<ProviderModelsDiscoverResult> {
+    const handle = this.privateProviderModelsDiscoverOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new ProviderModelsDiscoverValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /**
+   * Internal normalized handle for the read-only `provider/models-discover`
+   * private-first observation. Resolves the discriminated wire outcome so
+   * invalid wire is an explicit `{ kind: "invalid" }` value consumed before
+   * any SDK fallback, never a normal result. Observation identity is
+   * `requestId` only.
+   *
+   * Settle-first stale semantics (this op only; other ops keep the generic
+   * stale-first path): the raw result is normalized/validated first, then a
+   * validated settled outcome (success or `retryable === false` terminal) is
+   * preserved across post-response stale/epoch drift. Only unresolved wire
+   * (invalid, ambiguous, or retryable failure) maps drift to ambiguous
+   * `transportUnknown`.
+   */
+  privateProviderModelsDiscoverOutcomeWithHandle(req: ProviderModelsDiscoverContractRequest): {
+    id: number
+    promise: Promise<ProviderModelsDiscoverWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateProviderModelsDiscoverContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("provider/models-discover")) {
+      throw new Error("Private peer missing provider/models-discover capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("provider/models-discover", req)
+    const promise = (async (): Promise<ProviderModelsDiscoverWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeProviderModelsDiscoverAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedProviderModelsDiscover(req, code, msg) }
+      }
+      const wire = normalizePrivateProviderModelsDiscoverWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledProviderModelsDiscoverResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeProviderModelsDiscoverAmbiguous(req, true) }
       return wire
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)

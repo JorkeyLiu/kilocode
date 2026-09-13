@@ -88,6 +88,7 @@ import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/fo
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
 import { loadSkills } from "./kilo-provider/skills"
 import { fetchAgentsPrivateFirst } from "./kilo-provider/agent-list-privatefirst"
+import { discoverModelsPrivateFirst } from "./kilo-provider/models-discover-privatefirst"
 import { fetchConfigWarningsPrivateFirst } from "./kilo-provider/config-warnings-privatefirst"
 import { fetchKiloProfilePrivateFirst } from "./kilo-provider/kilo-profile-privatefirst"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
@@ -3785,19 +3786,37 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: "Not connected to CLI backend" })
       return
     }
-    try {
-      const { data } = await this.client.provider.models.discover(
-        { providerID: pid, baseURL: url, directory: this.getWorkspaceDirectory() },
-        { throwOnError: true },
-      )
-      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models: data?.models ?? [] })
-    } catch (err: unknown) {
-      const message = getErrorMessage(err) || "Failed to fetch models"
+    // Stored-backend-credential branch is private-first via the shared
+    // `fetchProviderModelsDiscoverData` owner: valid private
+    // `succeeded`+`accepted` and validated terminal `failed`
+    // (`retryable === false`, including `unauthorized`) close with zero SDK;
+    // only retryable fence plus unavailable/invalid/ambiguous/transport/
+    // closed/timeout takes exactly one same-directory SDK
+    // `client.provider.models.discover` fallback inside the helper (no retry).
+    // Freshly typed keys, custom headers, and missing providerID keep their
+    // existing extension-host direct paths above untouched.
+    const out = await discoverModelsPrivateFirst({
+      connection: this.connectionService as never,
+      client: this.client as never,
+      directory: this.getWorkspaceDirectory(),
+      providerID: pid,
+      baseURL: url,
+    })
+    if (out.kind === "ok") {
+      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models: out.models })
+      return
+    }
+    if (out.kind === "terminal") {
+      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: out.message, auth: out.auth })
+      return
+    }
+    {
+      const message = getErrorMessage(out.cause) || "Failed to fetch models"
       this.postMessage({
         type: "customProviderModelsFetched",
         requestId: rid,
         error: message,
-        auth: isProviderModelsAuthError(err),
+        auth: isProviderModelsAuthError(out.cause),
       })
     }
   }
