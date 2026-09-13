@@ -220,6 +220,8 @@ SQLite is default structured store.
 - Move: two facts sharing item, target add/update sub 0 first, source delete sub 1 second.
 - List: stable by created/item/sub; ids metadata order matches list.
 - Prepare: runs after permission ask and before any file write, so DB failure means zero writes.
+- Ask preview is pre-format intent (decided contract, not a gap): permission `ask` carries the expected diff built from the agent-requested edit before any write or formatter run, for human preview and audit only. It is not an evaluator input (`buildCanonicalTargets` and `effectiveProtectedTargets` read only patterns plus `filepath` / `files[].filePath` / `movePath`, never `diff` / `patch` / `filediff` display bytes), not a CAS expected value, and not a journal/revert source.
+- Completion is formatter-final disk truth: after the write, `format.file` plus an `EncodedIO.sync` re-read fixes the final bytes, and completed tool metadata plus journal `apply` rows are rebuilt from those bytes. Ask must precede every write and formatter run; running the formatter or staging a temp working copy before authorization to chase display consistency is forbidden without a new explicit product decision.
 - Replay: only on exact before match (existence/hash/size/encoding/BOM), else typed Conflict.
 - Apply: records formatter-final raw bytes with CAS rollback on DB failure.
 - Rollback: add-without-before may delete; update/delete without persisted before never deletes.

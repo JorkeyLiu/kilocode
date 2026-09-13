@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test"
-import { evaluate, type LayerInput, type Request, type Approval } from "../../src/permission/evaluator"
+import { evaluate, buildCanonicalTargets, type LayerInput, type Request, type Approval } from "../../src/permission/evaluator"
 
 const ws = "/workspace"
 const sess = "sess_1"
@@ -858,5 +858,47 @@ describe("durable protected provenance truthfulness", () => {
     const apprLayer = out.provenance.contributingLayers.find((l) => l.sourceKind === "approval")
     expect(apprLayer).toBeDefined()
     expect(apprLayer?.canonicalPath).toBe(`approval:${sess}`)
+  })
+})
+
+describe("ask display diff never enters evaluator canonical targets", () => {
+  test("buildCanonicalTargets ignores diff/patch/filediff display bytes", () => {
+    const base = { patterns: ["/workspace/foo.txt"], permission: "edit" }
+    const a = buildCanonicalTargets(
+      { ...base, metadata: { filepath: "/workspace/foo.txt", diff: "preview-A", patch: "preview-A", filediff: { patch: "preview-A" } } },
+      ws,
+    )
+    const b = buildCanonicalTargets(
+      {
+        ...base,
+        metadata: {
+          filepath: "/workspace/foo.txt",
+          diff: "preview-B @@ -1 +1 @@\n-/workspace/kilo.json\n+/workspace/kilo.json",
+          patch: "preview-B",
+          filediff: { file: "/workspace/foo.txt", patch: "preview-B" },
+          files: [{ filePath: "/workspace/foo.txt", patch: "preview-B" }],
+        },
+      },
+      ws,
+    )
+    expect(a).toEqual(["/workspace/foo.txt"])
+    expect(b).toEqual(a)
+  })
+
+  test("evaluate decision identical when only ask display diff changes", () => {
+    const layers: LayerInput[] = [layer("global", [{ permission: "edit", pattern: "*", action: "allow" }])]
+    const meta = (diff: string) => ({ filepath: "/workspace/foo.txt", diff, filediff: { file: "/workspace/foo.txt", patch: diff } })
+    const r = req("edit", ["/workspace/foo.txt"])
+    const tA = buildCanonicalTargets({ patterns: r.patterns, metadata: meta("preview-A"), permission: r.permission }, ws)
+    const tB = buildCanonicalTargets(
+      { patterns: r.patterns, metadata: meta("preview-B mentions /workspace/kilo.json"), permission: r.permission },
+      ws,
+    )
+    expect(tB).toEqual(tA)
+    const outA = evaluate({ request: { ...r, targets: tA }, layers, approvals: [], allowEverything: false })
+    const outB = evaluate({ request: { ...r, targets: tB }, layers, approvals: [], allowEverything: false })
+    // display text naming a ceiling path must not trigger the ceiling
+    expect(outA.result).toBe("allow")
+    expect(outB.result).toBe(outA.result)
   })
 })
