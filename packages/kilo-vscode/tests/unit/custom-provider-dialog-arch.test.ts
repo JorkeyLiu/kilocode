@@ -6,7 +6,7 @@
  * - Responsive grid for basic fields with container query collapse
  * - Sections (Models, Headers) with visual dividers
  * - Sticky footer for submit action
- * - Credential reveal: loading/error states, eye toggle, originalKey semantics
+ * - Secure credential handling: no reveal, masked placeholder, apiTouched replace/preserve
  * - save semantics: apiTouched controls apiKey passthrough
  * - onMount triggers credential load for API-backed existing providers
  *
@@ -131,103 +131,42 @@ describe("CustomProviderDialog — layout sizing (LOCK-001/LOCK-002)", () => {
   })
 })
 
-describe("CustomProviderDialog — credential reveal (LOCK-003/005)", () => {
-  it("imports TextFieldRoot for Kobalte composition", () => {
-    expect(DIALOG_SRC).toContain("TextFieldRoot")
+describe("CustomProviderDialog — secure credential handling (no reveal)", () => {
+  it("never requests the stored credential from the host", () => {
+    expect(DIALOG_SRC).not.toContain("getProviderCredential")
+    expect(DIALOG_SRC).not.toContain("requestCredential")
+    expect(DIALOG_SRC).not.toContain("providerCredentialLoaded")
+    expect(DIALOG_SRC).not.toContain("onCredentialLoaded")
+    expect(DIALOG_SRC).not.toContain("onCredentialError")
   })
 
-  it("imports Tooltip for eye toggle", () => {
-    expect(DIALOG_SRC).toContain("Tooltip")
+  it("never holds plaintext credential state", () => {
+    expect(DIALOG_SRC).not.toContain("originalKey")
+    expect(DIALOG_SRC).not.toContain("pendingCredentialID")
+    expect(DIALOG_SRC).not.toContain("credentialLoading")
+    expect(DIALOG_SRC).not.toContain("credentialError")
+    expect(DIALOG_SRC).not.toContain("showKey")
   })
 
-  it("imports onMount for credential load trigger", () => {
-    expect(DIALOG_SRC).toContain("onMount")
+  it("canonical mode collects credentials only through the secure host notice", () => {
+    expect(DIALOG_SRC).toContain("Credential input is collected securely by the extension host")
   })
 
-  it("has credential loading state", () => {
-    expect(DIALOG_SRC).toContain("credentialLoading")
-    expect(DIALOG_SRC).toContain("provider.apiKey.manage.loading")
+  it("editing seeds a masked placeholder without echoing the stored key", () => {
+    expect(DIALOG_SRC).toContain("MASKED_CUSTOM_PROVIDER_KEY")
+    expect(DIALOG_SRC).toContain("resolveCustomProviderKey(auth)")
   })
 
-  it("has credential error state with generic message", () => {
-    expect(DIALOG_SRC).toContain("credentialError")
-    expect(DIALOG_SRC).toContain("provider.apiKey.manage.error")
-  })
-
-  it("has originalKey signal for touched tracking", () => {
-    expect(DIALOG_SRC).toContain("originalKey")
-  })
-
-  it("has showKey signal for password toggle", () => {
-    expect(DIALOG_SRC).toContain("showKey")
-  })
-
-  it("has eye toggle button with aria-label", () => {
-    expect(DIALOG_SRC).toContain("provider-apikey-eye-toggle")
-    expect(DIALOG_SRC).toContain("aria-label")
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.show")
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.hide")
-  })
-
-  it("has tooltip for eye toggle", () => {
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.show")
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.hide")
-  })
-
-  it("eye toggle is inside input-wrapper as flex sibling", () => {
-    const inputWrapperMatch = DIALOG_SRC.match(/data-slot="input-wrapper"[\s\S]*?provider-apikey-eye-toggle/)
-    expect(inputWrapperMatch).not.toBeNull()
-  })
-
-  it("sends getProviderCredential on mount for API-backed providers", () => {
-    expect(DIALOG_SRC).toContain("getProviderCredential")
-    expect(DIALOG_SRC).toContain("requestCredential()")
-  })
-
-  it("onMount triggers credential load only when editing and auth is api", () => {
-    const onMountMatch = DIALOG_SRC.match(/onMount\(\(\)\s*=>\s*\{([\s\S]*?)\}\)/)
-    expect(onMountMatch).not.toBeNull()
-    const body = onMountMatch![1]
-    expect(body).toContain("editing()")
-    expect(body).toContain('auth === "api"')
-    expect(body).toContain("requestCredential()")
-  })
-
-  it("clears pending credential request on cleanup", () => {
-    expect(DIALOG_SRC).toContain("pendingCredentialID = undefined")
-    expect(DIALOG_SRC).toContain("setOriginalKey(null)")
-  })
-
-  it("seeds form field with loaded key without marking touched", () => {
-    // The onCredentialLoaded handler should call setForm("apiKey", ...) but NOT setApiTouched(true).
-    // On the canonical path it returns early without seeding the form.
-    const loadedMatch = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?setCredentialLoading\(false\)\s*\}/)
-    expect(loadedMatch).not.toBeNull()
-    expect(loadedMatch![0]).toContain('setForm("apiKey", message.apiKey)')
-    expect(loadedMatch![0]).not.toContain("setApiTouched(true)")
-  })
-
-  it("guards credential load from overwriting a user edit (apiTouched check)", () => {
-    // The onCredentialLoaded handler must check apiTouched() before seeding the form field.
-    // On the canonical path it returns early without touching the form at all.
-    const loadedMatch = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?setCredentialLoading\(false\)\s*\}/)
-    expect(loadedMatch).not.toBeNull()
-    expect(loadedMatch![0]).toContain("if (!apiTouched())")
-  })
-
-  it("uses Description (always visible) instead of ErrorMessage (error-only) for API key description", () => {
-    expect(DIALOG_SRC).toContain("TextFieldRoot.Description")
-    expect(DIALOG_SRC).toContain('data-slot="input-description"')
-    expect(DIALOG_SRC).not.toContain("TextFieldRoot.ErrorMessage")
-    expect(DIALOG_SRC).not.toMatch(/data-slot="input-error"[^>]*>[\s\S]*?provider\.custom\.field\.apiKey\.description/)
+  it("keeps masked placeholder semantics without an eye toggle", () => {
+    expect(DIALOG_SRC).not.toContain("provider-apikey-eye-toggle")
+    expect(DIALOG_SRC).not.toContain("TextFieldRoot")
+    expect(DIALOG_SRC).not.toContain("provider.connect.apiKey.show")
+    expect(DIALOG_SRC).not.toContain("provider.connect.apiKey.hide")
   })
 
   it("does not echo key in failure/error UI", () => {
-    // The credential error handler shows a generic i18n message, not the actual key.
-    // Verify the onCredentialError handler stores the generic message string.
-    const onErrorMatch = DIALOG_SRC.match(/onCredentialError[\s\S]*?setCredentialError\([^)]*\)/)
-    expect(onErrorMatch).not.toBeNull()
-    expect(onErrorMatch![0]).toContain("provider.apiKey.manage.error")
+    expect(DIALOG_SRC).not.toContain("provider.apiKey.manage.loading")
+    expect(DIALOG_SRC).not.toContain("provider.apiKey.manage.error")
   })
 })
 
@@ -241,15 +180,15 @@ describe("CustomProviderDialog — save semantics (LOCK-004)", () => {
     expect(DIALOG_SRC).toContain("Provider mutations are canonical-only")
   })
 
-  it("apiTouched is set to true only on user input, not on credential load", () => {
-    // Find all setApiTouched(true) calls
+  it("apiTouched is set to true only on user input", () => {
     const touchedCalls = DIALOG_SRC.match(/setApiTouched\(true\)/g) ?? []
-    // Each setApiTouched(true) should be inside an onChange handler, not in onCredentialLoaded
-    for (const _call of touchedCalls) {
-      // Verify setApiTouched is NOT inside the onCredentialLoaded block
-      const loadedBlock = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?onCredentialError/)
-      expect(loadedBlock).not.toBeNull()
-      expect(loadedBlock![0]).not.toContain("setApiTouched(true)")
-    }
+    expect(touchedCalls.length).toBeGreaterThan(0)
+    expect(DIALOG_SRC).toContain("onChange")
+    expect(DIALOG_SRC).not.toContain("onCredentialLoaded")
+  })
+
+  it("untouched masked value preserves the stored credential", () => {
+    expect(DIALOG_SRC).toContain("credentialRequested: apiTouched()")
+    expect(DIALOG_SRC).toContain("!apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY")
   })
 })

@@ -5,10 +5,9 @@ import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { ProviderIcon } from "@kilocode/kilo-ui/provider-icon"
 import { Select } from "@kilocode/kilo-ui/select"
 import { Spinner } from "@kilocode/kilo-ui/spinner"
-import { TextField, TextFieldRoot } from "@kilocode/kilo-ui/text-field"
-import { Tooltip } from "@kilocode/kilo-ui/tooltip"
+import { TextField } from "@kilocode/kilo-ui/text-field"
 import { showToast } from "@kilocode/kilo-ui/toast"
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
@@ -188,58 +187,6 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
     headers: form.headers.map(() => ({})),
   })
   const [apiTouched, setApiTouched] = createSignal(false)
-
-  // ── Credential reveal (LOCK-003/005) ─────────────────────────────────
-  const [originalKey, setOriginalKey] = createSignal<string | null>(null)
-  const [credentialLoading, setCredentialLoading] = createSignal(false)
-  const [credentialError, setCredentialError] = createSignal<string>()
-  const [showKey, setShowKey] = createSignal(false)
-  let pendingCredentialID: string | undefined
-
-  /** Request the saved credential on demand for an existing API-backed custom provider. */
-  function requestCredential() {
-    if (!props.existing) return
-    if (provider.providers()[props.existing.providerID]?.hasCredential !== undefined) {
-      setCredentialLoading(false)
-      return
-    }
-    setCredentialLoading(true)
-    setCredentialError(undefined)
-    pendingCredentialID = action.send(
-      { type: "getProviderCredential", providerID: props.existing.providerID },
-      {
-        onCredentialLoaded: (message) => {
-          if (pendingCredentialID === undefined) return
-          pendingCredentialID = undefined
-          if (message.canonical || !message.apiKey) {
-            setCredentialLoading(false)
-            return
-          }
-          setOriginalKey(message.apiKey)
-          if (!apiTouched()) setForm("apiKey", message.apiKey)
-          setCredentialLoading(false)
-        },
-        onCredentialError: (message) => {
-          if (pendingCredentialID === undefined) return
-          pendingCredentialID = undefined
-          setCredentialLoading(false)
-          setCredentialError(message.error || language.t("provider.apiKey.manage.error"))
-        },
-      },
-    )
-  }
-
-  onMount(() => {
-    // Load saved credential for existing API-backed custom providers (no env config)
-    if (editing() && auth === "api") {
-      requestCredential()
-    }
-  })
-
-  onCleanup(() => {
-    pendingCredentialID = undefined
-    setOriginalKey(null)
-  })
 
   // ── Fetch models state ──────────────────────────────────────────────
 
@@ -728,94 +675,21 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
             </div>
           </Show>
           <Show when={!isCanonical()}>
-            {/* API key: full-width row spanning both columns */}
+            {/* API key: full-width row spanning both columns. Existing credentials stay masked; typing replaces, untouched preserves. */}
             <div class="cpd-api-key-row">
-              <Show when={credentialLoading()}>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "8px",
-                    "align-items": "center",
-                    "font-size": "var(--kilo-font-size-13)",
-                  }}
-                >
-                  <Spinner />
-                  <span>{language.t("provider.apiKey.manage.loading")}</span>
-                </div>
-              </Show>
-              <Show when={credentialError()}>
-                <div style={{ color: "var(--vscode-errorForeground)", "font-size": "var(--kilo-font-size-13)" }}>
-                  {credentialError()}
-                </div>
-              </Show>
-              <Show
-                when={originalKey() !== null}
-                fallback={
-                  <TextField
-                    type="password"
-                    label={language.t("provider.custom.field.apiKey.label")}
-                    placeholder={language.t("provider.custom.field.apiKey.placeholder")}
-                    description={language.t("provider.custom.field.apiKey.description")}
-                    value={form.apiKey}
-                    onChange={(v) => {
-                      const key =
-                        !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
-                      setApiTouched(true)
-                      setForm("apiKey", key)
-                      setFetchKey(key)
-                    }}
-                  />
-                }
-              >
-                <TextFieldRoot
-                  data-component="input"
-                  data-variant="normal"
-                  value={form.apiKey}
-                  onChange={(v) => {
-                    const key = !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
-                    setApiTouched(true)
-                    setForm("apiKey", key)
-                    setFetchKey(key)
-                  }}
-                >
-                  <TextFieldRoot.Label data-slot="input-label">
-                    {language.t("provider.custom.field.apiKey.label")}
-                  </TextFieldRoot.Label>
-                  <div data-slot="input-wrapper" class="provider-apikey-input-row">
-                    <TextFieldRoot.Input
-                      data-slot="input-input"
-                      type={showKey() ? "text" : "password"}
-                      placeholder={language.t("provider.custom.field.apiKey.placeholder")}
-                    />
-                    <Tooltip
-                      value={
-                        showKey()
-                          ? language.t("provider.connect.apiKey.hide")
-                          : language.t("provider.connect.apiKey.show")
-                      }
-                      placement="top"
-                      gutter={4}
-                    >
-                      <IconButton
-                        type="button"
-                        icon="eye"
-                        variant="ghost"
-                        size="small"
-                        onClick={() => setShowKey(!showKey())}
-                        class="provider-apikey-eye-toggle"
-                        aria-label={
-                          showKey()
-                            ? language.t("provider.connect.apiKey.hide")
-                            : language.t("provider.connect.apiKey.show")
-                        }
-                      />
-                    </Tooltip>
-                  </div>
-                  <TextFieldRoot.Description data-slot="input-description">
-                    {language.t("provider.custom.field.apiKey.description")}
-                  </TextFieldRoot.Description>
-                </TextFieldRoot>
-              </Show>
+              <TextField
+                type="password"
+                label={language.t("provider.custom.field.apiKey.label")}
+                placeholder={language.t("provider.custom.field.apiKey.placeholder")}
+                description={language.t("provider.custom.field.apiKey.description")}
+                value={form.apiKey}
+                onChange={(v) => {
+                  const key = !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
+                  setApiTouched(true)
+                  setForm("apiKey", key)
+                  setFetchKey(key)
+                }}
+              />
             </div>
           </Show>
         </div>

@@ -68,7 +68,6 @@ type ProviderInternals = {
   retryCanonicalMcpCleanup: (msg: Record<string, unknown>) => Promise<void>
   handleCanonicalProviderAction: (msg: Record<string, unknown>) => Promise<void>
   handleRemoveMcp: (name: string, msg?: Record<string, unknown>) => Promise<void>
-  handleGetProviderCredential: (msg: Record<string, unknown>) => Promise<void>
   handleFetchCustomProviderModels: (msg: Record<string, unknown>) => Promise<void>
   handleUpdateConfigMessage: (msg: Record<string, unknown>) => Promise<void>
   fetchAndSendConfig: () => Promise<void>
@@ -1116,56 +1115,15 @@ describe("P4.1 credential ref reads reject derived keys", () => {
     return { canonical, secrets, provider, messages }
   }
 
-  it("handleGetProviderCredential rejects when provider has no credential ref", async () => {
+  it("provider credentials are never revealed to the webview (reveal seam removed)", async () => {
     const { canonical, provider, messages } = await setupWithProvider()
-    await provider.handleGetProviderCredential({ requestID: "r1", providerID: "openai" })
-    const err = messages.find((m) => (m as Record<string, unknown>).type === "providerCredentialError") as Record<string, unknown> | undefined
-    expect(err).toBeDefined()
-    expect(err!.error).toContain("no valid credential reference")
-    provider.cleanupRetries.clear()
-    canonical.dispose()
-  })
-
-  it("handleGetProviderCredential rejects when credential ref is cross-kind (mcp ref for provider)", async () => {
-    const crossKindRef = "secret:kilo.credentials.global.mcp.openai"
-    const { canonical, provider, messages } = await setupWithProvider(crossKindRef)
-    // A cross-kind credential ref in the on-disk config causes materialization
-    // to fail validation → canonicalReady stays false → "not ready" error.
-    // This is correct: an invalid credential ref prevents the canonical authority
-    // from becoming ready, so credential reads are blocked.
-    await provider.handleGetProviderCredential({ requestID: "r1", providerID: "openai" })
-    const err = messages.find((m) => (m as Record<string, unknown>).type === "providerCredentialError") as Record<string, unknown> | undefined
-    expect(err).toBeDefined()
-    expect(err!.error).toContain("not ready")
-    provider.cleanupRetries.clear()
-    canonical.dispose()
-  })
-
-  it("handleGetProviderCredential rejects when credential ref is cross-scope (project ref for global provider)", async () => {
-    const crossScopeRef = "secret:kilo.credentials.project.provider.openai"
-    const { canonical, provider, messages } = await setupWithProvider(crossScopeRef)
-    // A cross-scope credential ref in the on-disk config may cause materialization
-    // issues → canonicalReady may stay false → "not ready" error.
-    // If the ref is otherwise valid (correct kind), the config may materialize
-    // but the secret won't exist under the project-scope key → "not available".
-    await provider.handleGetProviderCredential({ requestID: "r1", providerID: "openai" })
-    const err = messages.find((m) => (m as Record<string, unknown>).type === "providerCredentialError") as Record<string, unknown> | undefined
-    expect(err).toBeDefined()
-    // Either "not ready" (materialization failed) or "not available" (secret missing)
-    expect(err!.error === "Canonical credential authority is not ready" || (err!.error as string).includes("not available") || (err!.error as string).includes("no valid credential reference")).toBe(true)
-    provider.cleanupRetries.clear()
-    canonical.dispose()
-  })
-
-  it("handleGetProviderCredential succeeds when valid owned ref exists in SecretStorage", async () => {
-    const ref = "secret:kilo.credentials.global.provider.openai"
-    const { canonical, secrets, provider, messages } = await setupWithProvider(ref)
-    await secrets.store("kilo.credentials.global.provider.openai", "sk-test")
-    await provider.handleGetProviderCredential({ requestID: "r1", providerID: "openai" })
-    const loaded = messages.find((m) => (m as Record<string, unknown>).type === "providerCredentialLoaded") as Record<string, unknown> | undefined
-    expect(loaded).toBeDefined()
-    expect(loaded!.hasCredential).toBe(true)
-    expect(loaded!.canonical).toBe(true)
+    expect(typeof (provider as unknown as Record<string, unknown>).handleGetProviderCredential).toBe("undefined")
+    const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
+    expect(source).not.toContain("handleGetProviderCredential")
+    expect(source).not.toContain("getProviderCredential")
+    expect(source).not.toContain("providerCredentialLoaded")
+    expect(source).not.toContain("providerCredentialError")
+    expect(messages).toEqual([])
     provider.cleanupRetries.clear()
     canonical.dispose()
   })

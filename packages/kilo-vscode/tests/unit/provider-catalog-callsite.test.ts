@@ -7,18 +7,21 @@ async function src(rel: string) {
 }
 
 describe("provider catalog call-site lock", () => {
-  it("regular reads use catalog; only explicit reveal uses provider.list", async () => {
+  it("regular reads use catalog; no production caller uses provider.list", async () => {
     const actions = await src("../../src/provider-actions.ts")
     expect(actions).toContain("client.provider.catalog")
     expect(actions).not.toContain("client.provider.list")
     expect(actions).not.toContain("raw.key")
+    expect(actions).not.toContain("authorizeCredentialRead")
     expect(actions).toContain("hasCredential")
 
     const kilo = await src("../../src/KiloProvider.ts")
-    const listHits = kilo.match(/\.provider\.list\(/g) ?? []
-    expect(listHits).toHaveLength(1)
-    expect(kilo).toContain("handleGetProviderCredential")
-    expect(kilo).toContain("authorizeCredentialRead")
+    expect(kilo).not.toMatch(/\.provider\.list\(/)
+    expect(kilo).not.toContain("handleGetProviderCredential")
+    expect(kilo).not.toContain("authorizeCredentialRead")
+    expect(kilo).not.toContain("providerCredentialLoaded")
+    expect(kilo).not.toContain("providerCredentialError")
+    expect(kilo).not.toContain("getProviderCredential")
     expect(kilo).toContain("fetchProviderData")
 
     const ext = await src("../../src/extension.ts")

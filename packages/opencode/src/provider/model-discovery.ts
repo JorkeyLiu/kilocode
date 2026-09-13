@@ -59,8 +59,7 @@ export function isStrictBaseURL(value: string): boolean {
 }
 
 /**
- * Credential gate mirroring the extension `authorizeCredentialRead` source
- * semantics, narrowed for runtime discovery: exact provider only, kilo
+ * Runtime credential gate for model discovery: exact provider only, kilo
  * rejected, `api`/`custom` with non-empty key allowed, `config` only with
  * non-empty key and empty env (explicitly stored, not env-derived).
  */

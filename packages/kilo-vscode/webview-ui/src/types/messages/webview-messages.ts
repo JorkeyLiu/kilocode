@@ -775,12 +775,6 @@ export interface CanonicalDeleteCustomProviderMessage {
 
 export type DeleteCustomProviderMessage = CanonicalDeleteCustomProviderMessage
 
-export interface GetProviderCredentialMessage {
-  type: "getProviderCredential"
-  requestID: string
-  providerID: string
-}
-
 export interface FetchCustomProviderModelsMessage {
   type: "fetchCustomProviderModels"
   requestId: string
@@ -983,7 +977,6 @@ export type WebviewMessage =
   | AnacondaDesktopWebviewMessage
   | SaveCustomProviderMessage
   | DeleteCustomProviderMessage
-  | GetProviderCredentialMessage
   | FetchCustomProviderModelsMessage
   | CanonicalFetchCustomProviderModelsMessage
   | PersistRecentsRequest

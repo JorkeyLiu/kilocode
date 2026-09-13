@@ -134,7 +134,6 @@ import { nativeTitle } from "./kilo-provider/native-tab-title"
 import { parseReview, reviewMetadata, type ReviewMessageData } from "./shared/review-comments"
 
 import {
-  authorizeCredentialRead,
   buildActionContext,
   computeDefaultSelection,
   fetchProviderData,
@@ -2003,11 +2002,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             error: getErrorMessage,
           })
           break
-        case "getProviderCredential":
-          this.handleGetProviderCredential(message).catch((e) =>
-            console.error("[Kilo New] getProviderCredential failed:", e),
-          )
-          break
         case "fetchCustomProviderModels":
           this.handleFetchCustomProviderModels(message).catch((e) =>
             console.error("[Kilo New] fetchCustomProviderModels failed:", e),
@@ -3665,57 +3659,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const code = typeof msg.code === "string" ? msg.code : undefined
     if (msg.type === "authorizeProviderOAuth") return authorizeOAuthAction(ctx, rid, pid, method)
     if (msg.type === "completeProviderOAuth") return completeOAuthAction(ctx, rid, pid, method, code)
-  }
-
-  private async handleGetProviderCredential(msg: Record<string, unknown>): Promise<void> {
-    const rid = typeof msg.requestID === "string" ? msg.requestID : ""
-    const pid = typeof msg.providerID === "string" ? msg.providerID : ""
-    if (!rid || !pid) return
-    const errReply = (error: string) => {
-      this.postMessage({ type: "providerCredentialError", requestID: rid, providerID: pid, error })
-    }
-    if (this.canonicalConfig) {
-      // Credential reads are gated by canonical readiness: before the first
-      // successful materialization no canonical credential may be exposed.
-      if (!this.canonicalReady) return errReply("Canonical credential authority is not ready")
-      const scope = this.providerScope(pid)
-      const provider = this.canonicalConfig.getScopeConfig(scope).provider
-      const parsed = parseCanonicalProviderRecord(provider)
-      const record = parsed?.[pid]
-      const ref = record && typeof record.credential === "string" ? record.credential : undefined
-      // Exact owned ref only — never reconstruct a derived key as fallback.
-      if (!ref) return errReply("Provider has no valid credential reference")
-      const value = await this.canonicalConfig.hasSecret(ref)
-      if (!value) return errReply("Credential is not available in SecretStorage")
-      return this.postMessage({
-        type: "providerCredentialLoaded",
-        requestID: rid,
-        providerID: pid,
-        hasCredential: true,
-        canonical: true,
-        stamp: { ...this.canonicalConfig.stamp, assetHash: null },
-      })
-    }
-    if (!this.client) return errReply("Unable to load API key")
-    try {
-      const { data: response } = await this.client.provider.list(
-        { directory: this.getWorkspaceDirectory() },
-        { throwOnError: true },
-      )
-      const auth = authorizeCredentialRead(pid, response.all as Array<Record<string, unknown>>)
-      if (!auth.authorized) return errReply(auth.error)
-      // LOCK-004: one-shot response — the key is never cached or broadcast
-      this.postMessage({
-        type: "providerCredentialLoaded",
-        requestID: rid,
-        providerID: pid,
-        apiKey: auth.key,
-        hasCredential: true,
-      })
-    } catch (err) {
-      console.warn("[KiloProvider] load api key failed:", err instanceof Error ? err.message : String(err))
-      return errReply("Unable to load API key")
-    }
   }
 
   private async handleFetchCustomProviderModels(msg: Record<string, unknown>): Promise<void> {

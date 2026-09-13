@@ -281,103 +281,52 @@ describe("No native autofocus (LOCK-082)", () => {
   })
 })
 
-describe("Credential reveal — manage mode (LOCK-003/004/005/006/007)", () => {
-  it("sends getProviderCredential on mount in manage mode", () => {
-    expect(DIALOG_SRC).toContain("getProviderCredential")
-    expect(DIALOG_SRC).toContain("requestCredential()")
+describe("ProviderConnectDialog — secure replace (no credential reveal)", () => {
+  it("never requests the stored credential from the host", () => {
+    expect(DIALOG_SRC).not.toContain("getProviderCredential")
+    expect(DIALOG_SRC).not.toContain("requestCredential")
+    expect(DIALOG_SRC).not.toContain("providerCredentialLoaded")
+    expect(DIALOG_SRC).not.toContain("onCredentialLoaded")
+    expect(DIALOG_SRC).not.toContain("onCredentialError")
   })
 
-  it("has credential loading state", () => {
-    expect(DIALOG_SRC).toContain("credentialLoading")
-    expect(DIALOG_SRC).toContain("provider.apiKey.manage.loading")
+  it("never holds plaintext credential state", () => {
+    expect(DIALOG_SRC).not.toContain("originalKey")
+    expect(DIALOG_SRC).not.toContain("pendingCredentialID")
+    expect(DIALOG_SRC).not.toContain("setApiKeyValue")
+    expect(DIALOG_SRC).not.toContain("credentialLoading")
+    expect(DIALOG_SRC).not.toContain("credentialError")
+    expect(DIALOG_SRC).not.toContain("showKey")
   })
 
-  it("has credential error state with generic message", () => {
-    expect(DIALOG_SRC).toContain("credentialError")
-    expect(DIALOG_SRC).toContain("provider.apiKey.manage.error")
+  it("manage mode shows masked secure-collected notice without echoing the key", () => {
+    expect(DIALOG_SRC).toContain("Stored credential is securely collected")
+    expect(DIALOG_SRC).toContain("It is never displayed")
+    expect(DIALOG_SRC).toContain("hasStored()")
   })
 
-  it("default input type is password", () => {
-    // In manage mode the field defaults to password, toggled by showKey
-    expect(DIALOG_SRC).toContain('type={state.showKey ? "text" : "password"}')
+  it("always collects replacement credentials through the secure host prompt", () => {
+    expect(DIALOG_SRC).toContain("Credential input is collected securely by the extension host.")
+    expect(DIALOG_SRC).toContain("credentialRequested: true")
   })
 
-  it("has eye toggle button with aria-label", () => {
-    expect(DIALOG_SRC).toContain("provider-apikey-eye-toggle")
-    expect(DIALOG_SRC).toContain("aria-label")
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.show")
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.hide")
+  it("Update button stays enabled for replace (only connecting disables submit)", () => {
+    expect(DIALOG_SRC).toContain('disabled={state.phase === "connecting"}')
+    expect(DIALOG_SRC).not.toContain("unchanged()")
+    expect(DIALOG_SRC).not.toContain("emptyEdited()")
   })
 
-  it("has tooltip for eye toggle", () => {
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.show")
-    expect(DIALOG_SRC).toContain("provider.connect.apiKey.hide")
+  it("remove path stays independent via disconnect", () => {
+    expect(DIALOG_SRC).toContain("removeApiKey")
+    expect(DIALOG_SRC).toContain("executeRemove")
+    expect(DIALOG_SRC).toContain("disconnectProvider")
+    expect(DIALOG_SRC).toContain("confirmingRemove")
   })
 
-  it("Update button is disabled when credential is loading", () => {
-    expect(DIALOG_SRC).toContain("state.credentialLoading")
-  })
-
-  it("Update button is disabled when value is unchanged", () => {
-    expect(DIALOG_SRC).toContain("unchanged()")
-  })
-
-  it("empty edited value shows required validation", () => {
-    expect(DIALOG_SRC).toContain("emptyEdited()")
-  })
-
-  it("clears plaintext signal and pending request on cleanup", () => {
-    expect(DIALOG_SRC).toContain("pendingCredentialID = undefined")
-    expect(DIALOG_SRC).toContain("setOriginalKey(null)")
-  })
-
-  it("resets credential state on dialog reset", () => {
-    const resetMatch = DIALOG_SRC.match(/function reset\(\)\s*\{([\s\S]*?)\n  \}/)
-    expect(resetMatch).not.toBeNull()
-    const body = resetMatch![1]
-    expect(body).toContain("pendingCredentialID = undefined")
-    expect(body).toContain("setOriginalKey(null)")
-    expect(body).toContain("credentialLoading: undefined")
-    expect(body).toContain("credentialError: undefined")
-    expect(body).toContain("showKey: undefined")
-  })
-
-  it("does not echo key in failure/error UI", () => {
-    // The credential error handler shows a generic i18n message, not the actual key.
-    // Verify the error callback stores the generic message string, not the apiKey value.
-    const onErrorMatch = DIALOG_SRC.match(/onCredentialError[\s\S]*?credentialError:[^}]*/)
-    expect(onErrorMatch).not.toBeNull()
-    // Should use the i18n error message, not the actual key
-    expect(onErrorMatch![0]).toContain("provider.apiKey.manage.error")
-  })
-
-  it("has provider-apikey-input-row for flex-based eye toggle layout", () => {
-    expect(DIALOG_SRC).toContain("provider-apikey-input-row")
-  })
-
-  it("uses Kobalte TextField primitive for manage mode (local composition)", () => {
-    expect(DIALOG_SRC).toContain("TextFieldRoot")
-    expect(DIALOG_SRC).toContain('data-component="input"')
-    expect(DIALOG_SRC).toContain('data-variant="normal"')
-  })
-
-  it("eye toggle is inside input-wrapper as flex sibling", () => {
-    // The eye toggle should be inside data-slot="input-wrapper", not as a sibling of TextField
-    const inputWrapperMatch = DIALOG_SRC.match(/data-slot="input-wrapper"[\s\S]*?provider-apikey-eye-toggle/)
-    expect(inputWrapperMatch).not.toBeNull()
-  })
-
-  it("uses direct callback assignment instead of side-effect createMemo for value seeding", () => {
-    // setApiKeyValue callback ref should exist
-    expect(DIALOG_SRC).toContain("setApiKeyValue")
-    // onCredentialLoaded should call setApiKeyValue directly
-    expect(DIALOG_SRC).toMatch(/setOriginalKey\(message\.apiKey\)[\s\S]*?setApiKeyValue\?\.\(message\.apiKey\)/)
-    // No unconsumed createMemo that only calls setValue as a side-effect
-    const apiViewMatch = DIALOG_SRC.match(/const ApiView[\s\S]*?const OAuthCodeView/)
-    expect(apiViewMatch).not.toBeNull()
-    // Should NOT have a createMemo that only calls setValue
-    const sideEffectMemo = apiViewMatch![0]?.match(/createMemo\(\(\)\s*=>\s*\{[\s\S]*?setValue/)
-    expect(sideEffectMemo).toBeNull()
+  it("cancel/go-back still closes without touching credentials", () => {
+    expect(DIALOG_SRC).toContain("cancelRemove")
+    expect(DIALOG_SRC).toContain("function back()")
+    expect(DIALOG_SRC).toContain("dialog.close()")
   })
 })
 

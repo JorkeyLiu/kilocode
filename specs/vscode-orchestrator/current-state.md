@@ -32,13 +32,18 @@ this note; when they disagree, the code is right.
   payloads fail fast with a structured `providerActionError` and never fall
   back to the SDK bridge. The legacy SDK mutation callers are removed.
   OAuth `authorize`/`complete` keeps its legacy path with canonical
-  `unsupported`; explicit credential reveal keeps its legacy one-shot
-  read path (`client.provider.list` + `authorizeCredentialRead`, sole
-  allowed `provider.list` caller, unreachable in production canonical
-  mode). Regular provider reads are redacted via authenticated
+  `unsupported`; the explicit credential-reveal compatibility seam is
+  removed (no `getProviderCredential` / `providerCredentialLoaded` /
+  `providerCredentialError` messages, no `handleGetProviderCredential`,
+  no `authorizeCredentialRead`, no production `client.provider.list`
+  caller — the CLI `GET /provider` endpoint itself is unchanged).
+  Stored credentials never enter the webview: every regular provider
+  read is redacted via authenticated
   `GET /provider/catalog` (`provider.catalog`, closed redacted
   `all,default,connected,failed` with no `key`/`options`/`headers` and
-  `hasCredential` derived from non-empty runtime key). Stored
+  `hasCredential` derived from non-empty runtime key, and credential
+  set/resolve happens only in the extension-host `SecretStorage` owner
+  (replacements via the host prompt, never an echoed key). Stored
   model-discovery credentials no longer cross the regular refresh (no
   extension-side key cache): editing an existing legacy provider without
   retyping the key discovers models through the runtime narrow endpoint

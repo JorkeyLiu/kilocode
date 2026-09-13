@@ -122,7 +122,7 @@ export function buildAddList(allProviders: Record<string, Provider>, configuredI
  * Visible when:
  *  - authStates[id] === "api"  (the provider uses an API key credential)
  *  - source is NOT "env"       (env keys come from the shell, not the user)
- *  - source is NOT "config"    (config keys cannot be safely revealed via provider.list)
+ *  - source is NOT "config"    (config keys are host-managed and never revealed to the webview)
  *
  * Kilo OAuth rows never show an API Key button. If a hypothetical Kilo auth
  * api occurs, the button is shown but Kilo fallback is not treated as custom.

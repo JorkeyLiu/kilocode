@@ -909,31 +909,6 @@ export interface CanonicalProviderActionErrorMessage extends Omit<ProviderAction
   }
 }
 
-export interface ProviderCredentialLoadedMessage {
-  type: "providerCredentialLoaded"
-  requestID: string
-  providerID: string
-  hasCredential?: boolean
-  canonical?: false
-  apiKey?: string
-}
-
-export interface CanonicalProviderCredentialLoadedMessage {
-  type: "providerCredentialLoaded"
-  requestID: string
-  providerID: string
-  hasCredential: boolean
-  canonical: true
-  stamp: CanonicalStamp
-}
-
-export interface ProviderCredentialErrorMessage {
-  type: "providerCredentialError"
-  requestID: string
-  providerID: string
-  error: string
-}
-
 export interface CanonicalConfigErrorMessage {
   type: "canonicalConfigError"
   kind: string
@@ -1116,9 +1091,6 @@ export type ExtensionMessage =
   | CanonicalProviderDeletedMessage
   | ProviderActionErrorMessage
   | CanonicalProviderActionErrorMessage
-  | ProviderCredentialLoadedMessage
-  | CanonicalProviderCredentialLoadedMessage
-  | ProviderCredentialErrorMessage
   | CanonicalConfigErrorMessage
   | AnacondaDesktopExtensionMessage
   | CustomProviderModelsFetchedMessage

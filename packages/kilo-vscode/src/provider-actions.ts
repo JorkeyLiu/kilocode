@@ -205,56 +205,8 @@ export async function completeProviderOAuth(
 }
 
 // ---------------------------------------------------------------------------
-// LOCK-003/004: Credential read authorization — pure, testable seam
+// Model discovery auth-error mapping (pure, testable seam)
 // ---------------------------------------------------------------------------
-
-/** Result of a credential read authorization check. */
-export type CredentialAuthResult = { authorized: false; error: string } | { authorized: true; key: string }
-
-/**
- * Authorize a credential read against a fresh provider list response.
- *
- * LOCK-003 constraints enforced:
- * - `providerID` must be non-empty and not "kilo"
- * - Target provider must exist in the fresh list
- * - Authorized sources: "api" (built-in stored key), "custom" (custom provider),
- *   or "config" with non-empty key AND empty env array (proving key was explicitly
- *   stored via auth, not derived from env/config)
- * - `key` must be a non-empty string
- *
- * On failure the returned error is a generic message; the key is never
- * included in the error path.
- */
-export function authorizeCredentialRead(
-  providerID: string,
-  providerList: Array<Record<string, unknown>>,
-): CredentialAuthResult {
-  if (!providerID) return { authorized: false, error: "Unable to load API key" }
-  if (providerID === "kilo") return { authorized: false, error: "Unable to load API key" }
-
-  const target = providerList.find((item) => item.id === providerID)
-  if (!target) return { authorized: false, error: "Unable to load API key" }
-
-  const source = target.source
-  const key = target.key
-  const hasKey = typeof key === "string" && key.length > 0
-
-  // source="api": built-in provider with explicitly stored key
-  if (source === "api" && hasKey) return { authorized: true, key }
-
-  // source="custom": custom provider with stored key (pre-backend-init shape)
-  if (source === "custom" && hasKey) return { authorized: true, key }
-
-  // source="config": backend overwrites source to "config" after init.
-  // Only authorize when env is empty (proving key was explicitly stored via auth,
-  // not derived from an environment variable).
-  const env = target.env
-  if (source === "config" && hasKey && Array.isArray(env) && env.length === 0) {
-    return { authorized: true, key }
-  }
-
-  return { authorized: false, error: "Unable to load API key" }
-}
 
 /**
  * Map a runtime model-discovery failure to the existing
@@ -276,7 +228,5 @@ export function isProviderModelsAuthError(error: unknown): boolean {
   }
   const cause = (record as { cause?: unknown }).cause
   if (cause !== undefined) candidates.push(cause)
-  return candidates.some(
-    (item) => typeof item === "string" && /401|403|unauthor|authentication/i.test(item),
-  )
+  return candidates.some((item) => typeof item === "string" && /401|403|unauthor|authentication/i.test(item))
 }

@@ -1,11 +1,9 @@
 import { Button } from "@kilocode/kilo-ui/button"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { Dialog } from "@kilocode/kilo-ui/dialog"
-import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { Select } from "@kilocode/kilo-ui/select"
 import { Spinner } from "@kilocode/kilo-ui/spinner"
-import { TextField, TextFieldRoot } from "@kilocode/kilo-ui/text-field"
-import { Tooltip } from "@kilocode/kilo-ui/tooltip"
+import { TextField } from "@kilocode/kilo-ui/text-field"
 import { showToast } from "@kilocode/kilo-ui/toast"
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@kilocode/sdk/v2/client"
 import { Component, For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
@@ -36,12 +34,6 @@ interface ViewState {
   failed?: string
   /** LOCK-072: inline confirmation view within the same dialog instance */
   confirmingRemove?: boolean
-  /** Credential reveal: loading state for on-demand key fetch */
-  credentialLoading?: boolean
-  /** Credential reveal: error state (generic sanitized message) */
-  credentialError?: string
-  /** Credential reveal: whether the password field shows plaintext */
-  showKey?: boolean
 }
 
 type Prompt = NonNullable<ProviderAuthMethod["prompts"]>[number]
@@ -77,12 +69,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   const action = createProviderAction(vscode)
 
   const [state, setState] = createStore<ViewState>({})
-
-  // LOCK-005: Credential reveal — local signal for the loaded plaintext key
-  const [originalKey, setOriginalKey] = createSignal<string | null>(null)
-  let pendingCredentialID: string | undefined
-  // Direct callback ref for seeding ApiView's value without a side-effect memo
-  let setApiKeyValue: ((v: string) => void) | undefined
 
   const item = createMemo(() => provider.providers()[props.providerID])
   const name = () => item()?.name ?? props.providerID
@@ -150,47 +136,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     return hint ? `${label} (${hint})` : label
   }
 
-  /** LOCK-003/004: Request the saved credential on-demand via provider action utility. */
-  function requestCredential() {
-    if (canonical()) {
-      setOriginalKey("********")
-      setState({ ...state, credentialLoading: false, credentialError: undefined })
-      return
-    }
-    setState({ ...state, credentialLoading: true, credentialError: undefined })
-    pendingCredentialID = action.send(
-      { type: "getProviderCredential", providerID: props.providerID },
-      {
-        onCredentialLoaded: (message) => {
-          // LOCK-004: stale response guard — only apply if request is still pending
-          if (pendingCredentialID === undefined) return
-          pendingCredentialID = undefined
-           if (message.canonical || !message.apiKey) {
-             setState({ ...state, credentialLoading: false, credentialError: language.t("provider.apiKey.manage.error") })
-             return
-           }
-           setOriginalKey(message.apiKey)
-          // Direct assignment: seed the editable value synchronously
-          setApiKeyValue?.(message.apiKey)
-          setState({ ...state, credentialLoading: false, credentialError: undefined })
-        },
-        onCredentialError: (message) => {
-          if (pendingCredentialID === undefined) return
-          pendingCredentialID = undefined
-          setState({
-            ...state,
-            credentialLoading: false,
-            credentialError: message.error || language.t("provider.apiKey.manage.error"),
-          })
-        },
-      },
-    )
-  }
-
   onCleanup(() => {
-    // LOCK-007: Clear pending credential request and plaintext signal on cleanup
-    pendingCredentialID = undefined
-    setOriginalKey(null)
     action.dispose()
   })
 
@@ -200,8 +146,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       const apiIndex = methods().findIndex((m) => m.type === "api")
       if (apiIndex >= 0) {
         selectMethod(apiIndex)
-        // LOCK-003/005: On-demand credential fetch for manage mode
-        requestCredential()
         return
       }
       // No API method available — close silently
@@ -218,8 +162,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
 
   function reset() {
     action.clear()
-    pendingCredentialID = undefined
-    setOriginalKey(null)
     setState({
       methodIndex: undefined,
       authorization: undefined,
@@ -228,9 +170,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       field: undefined,
       failed: undefined,
       confirmingRemove: undefined,
-      credentialLoading: undefined,
-      credentialError: undefined,
-      showKey: undefined,
     })
   }
 
@@ -412,21 +351,10 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   }
 
   const ApiView: Component = () => {
-    const [value, setValue] = createSignal("")
     const [fields, setFields] = createStore<Record<string, string>>({})
     const prompts = createMemo(() => method()?.prompts?.filter((prompt) => visible(prompt, fields)) ?? [])
     const apiKeyOptional = () => isLocalProviderOptionalApiKey(props.providerID)
-
-    // Register direct callback so onCredentialLoaded can seed the value without a side-effect memo
-    setApiKeyValue = setValue
-    onCleanup(() => {
-      if (setApiKeyValue === setValue) setApiKeyValue = undefined
-    })
-
-    // LOCK-006: Whether the Update button should be disabled (unchanged value)
-    const unchanged = () => props.manageApiKey && originalKey() !== null && value() === originalKey()
-    // LOCK-006: Whether the value was cleared to empty (validation state, not removal)
-    const emptyEdited = () => props.manageApiKey && originalKey() !== null && value() === "" && !apiKeyOptional()
+    const hasStored = () => provider.providers()[props.providerID]?.hasCredential === true
 
     function apiKeyDescription() {
       if (props.manageApiKey) {
@@ -441,20 +369,8 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       return language.t("provider.connect.apiKey.description", { provider: name() })
     }
 
-    function apiKeyLabel() {
-      if (apiKeyOptional()) {
-        return language.t("provider.connect.apiKey.label.optional", { provider: name() })
-      }
-      return language.t("provider.connect.apiKey.label", { provider: name() })
-    }
-
     function submit(e: SubmitEvent) {
       e.preventDefault()
-      const trimmed = value().trim()
-      if (!canonical() && !trimmed && !apiKeyOptional()) {
-        setState({ ...state, error: language.t("provider.connect.apiKey.required"), field: "apiKey" })
-        return
-      }
       const metadata: Record<string, string> = {}
       for (const prompt of prompts()) {
         const field = (fields[prompt.key] ?? "").trim()
@@ -471,11 +387,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       connect(Object.keys(metadata).length > 0 ? metadata : undefined)
     }
 
-    // LOCK-005: Toggle password visibility — no autofocus
-    function toggleKeyVisibility() {
-      setState({ ...state, showKey: !state.showKey })
-    }
-
     return (
       <form
         class="dialog-confirm-body"
@@ -483,91 +394,12 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
         onSubmit={submit}
       >
         <div class="provider-connect-body">{apiKeyDescription()}</div>
-        <Show when={state.credentialLoading}>
-          <div class="provider-connect-status">
-            <Spinner />
-            <span>{language.t("provider.apiKey.manage.loading")}</span>
-          </div>
+        <Show when={props.manageApiKey && hasStored()}>
+          <div class="provider-connect-body">Stored credential is securely collected (••••••••). It is never displayed; submitting replaces it via the secure host prompt.</div>
         </Show>
-        <Show when={state.credentialError}>
-          <div style={{ color: "var(--vscode-errorForeground)", "font-size": "var(--kilo-font-size-13)" }}>
-            {state.credentialError}
-          </div>
+        <Show when={!props.manageApiKey || !hasStored()}>
+          <div class="provider-connect-body">Credential input is collected securely by the extension host.</div>
         </Show>
-         <Show when={!state.credentialLoading}>
-           <Show when={canonical()}>
-             <div class="provider-connect-body">Credential input is collected securely by the extension host.</div>
-           </Show>
-           <Show when={!canonical()}>
-          {props.manageApiKey && originalKey() !== null ? (
-            /* LOCK-009: Local Kobalte composition — eye toggle as flex sibling inside input-wrapper */
-            <TextFieldRoot
-              data-component="input"
-              data-variant="normal"
-              value={value()}
-              onChange={setValue}
-              validationState={state.field === "apiKey" ? "invalid" : emptyEdited() ? "invalid" : undefined}
-            >
-              <TextFieldRoot.Label data-slot="input-label">{apiKeyLabel()}</TextFieldRoot.Label>
-              <div data-slot="input-wrapper" class="provider-apikey-input-row">
-                <TextFieldRoot.Input
-                  data-slot="input-input"
-                  type={state.showKey ? "text" : "password"}
-                  placeholder={
-                    apiKeyOptional()
-                      ? language.t("provider.connect.apiKey.placeholder.optional")
-                      : language.t("provider.connect.apiKey.placeholder")
-                  }
-                />
-                <Tooltip
-                  value={
-                    state.showKey
-                      ? language.t("provider.connect.apiKey.hide")
-                      : language.t("provider.connect.apiKey.show")
-                  }
-                  placement="top"
-                  gutter={4}
-                >
-                  <IconButton
-                    type="button"
-                    icon="eye"
-                    variant="ghost"
-                    size="small"
-                    onClick={toggleKeyVisibility}
-                    class="provider-apikey-eye-toggle"
-                    aria-label={
-                      state.showKey
-                        ? language.t("provider.connect.apiKey.hide")
-                        : language.t("provider.connect.apiKey.show")
-                    }
-                  />
-                </Tooltip>
-              </div>
-              <TextFieldRoot.ErrorMessage data-slot="input-error">
-                {state.field === "apiKey"
-                  ? state.error
-                  : emptyEdited()
-                    ? language.t("provider.connect.apiKey.required")
-                    : ""}
-              </TextFieldRoot.ErrorMessage>
-            </TextFieldRoot>
-          ) : (
-            <TextField
-              type="password"
-              label={apiKeyLabel()}
-              placeholder={
-                apiKeyOptional()
-                  ? language.t("provider.connect.apiKey.placeholder.optional")
-                  : language.t("provider.connect.apiKey.placeholder")
-              }
-              value={value()}
-              onChange={setValue}
-              validationState={state.field === "apiKey" ? "invalid" : undefined}
-              error={state.field === "apiKey" ? state.error : undefined}
-            />
-          )}
-           </Show>
-         </Show>
         <For each={prompts()}>
           {(prompt) => (
             <Switch>
@@ -646,12 +478,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
           <Button variant="ghost" size="large" type="button" onClick={back}>
             {language.t(props.manageApiKey ? "common.cancel" : "common.goBack")}
           </Button>
-          <Button
-            variant="primary"
-            size="large"
-            type="submit"
-            disabled={state.phase === "connecting" || state.credentialLoading || unchanged()}
-          >
+          <Button variant="primary" size="large" type="submit" disabled={state.phase === "connecting"}>
             {language.t(props.manageApiKey ? "settings.providers.action.update" : "common.submit")}
           </Button>
         </div>

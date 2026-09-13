@@ -3,7 +3,7 @@
  * Stories for Settings and ProvidersTab components.
  */
 
-import { onMount, onCleanup, createSignal } from "solid-js"
+import { onMount } from "solid-js"
 import type { Meta, StoryObj } from "storybook-solidjs-vite"
 import { StoryProviders, mockSessionValue } from "./StoryProviders"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
@@ -20,7 +20,6 @@ import McpEditView from "../components/settings/McpEditView"
 import type { AgentConfig, CommandConfig, Config } from "../types/messages"
 import { SidebarEmptyState } from "../components/chat/SidebarEmptyState"
 import { WorkStyleContext, type WorkStyleContextValue } from "../context/work-style"
-import { getVSCodeAPI } from "../context/vscode"
 import { useConfig } from "../context/config"
 
 const meta: Meta = {
@@ -626,36 +625,10 @@ export const ModeEditPermissions: Story = {
 }
 
 
-/** LOCK-078/LOCK-010: ProviderConnectDialog in manageApiKey mode with deterministic credential response. */
+/** ProviderConnectDialog in manageApiKey mode: stored credential is never echoed; submit replaces via the secure host prompt. */
 export const ProviderConnectManageApiKey: Story = {
-  name: "ProviderConnectDialog — manage API key (loaded)",
+  name: "ProviderConnectDialog — manage API key (secure replace)",
   render: () => {
-    // LOCK-010: Override the mock vscode API's postMessage to intercept
-    // getProviderCredential and dispatch providerCredentialLoaded via window.postMessage.
-    const api = getVSCodeAPI()
-    const origPost = (api as any).postMessage?.bind(api) as ((msg: any) => void) | undefined
-    if (origPost) {
-      ;(api as any).postMessage = (msg: any) => {
-        origPost(msg)
-        if (msg?.type === "getProviderCredential" && typeof msg.requestID === "string") {
-          queueMicrotask(() => {
-            window.postMessage(
-              {
-                type: "providerCredentialLoaded",
-                requestID: msg.requestID,
-                providerID: msg.providerID,
-                apiKey: "test-api-key-placeholder",
-              },
-              "*",
-            )
-          })
-        }
-      }
-      // Restore original postMessage on cleanup
-      onCleanup(() => {
-        ;(api as any).postMessage = origPost
-      })
-    }
     return (
       <StoryProviders
         connected={["openai"]}
@@ -723,34 +696,10 @@ export const CustomProviderDialogNarrow: Story = {
   parameters: { viewport: { defaultViewport: "mobile1" } },
 }
 
-/** Edit existing custom provider — shows pre-filled fields and credential loading. */
+/** Edit existing custom provider — credential stays masked; untouched preserves, typing replaces. */
 export const CustomProviderDialogEdit: Story = {
   name: "CustomProviderDialog — edit existing",
   render: () => {
-    // Mock postMessage to intercept getProviderCredential and respond with a test key
-    const api = getVSCodeAPI()
-    const origPost = (api as any).postMessage?.bind(api) as ((msg: any) => void) | undefined
-    if (origPost) {
-      ;(api as any).postMessage = (msg: any) => {
-        origPost(msg)
-        if (msg?.type === "getProviderCredential" && typeof msg.requestID === "string") {
-          queueMicrotask(() => {
-            window.postMessage(
-              {
-                type: "providerCredentialLoaded",
-                requestID: msg.requestID,
-                providerID: msg.providerID,
-                apiKey: "test-api-key-placeholder",
-              },
-              "*",
-            )
-          })
-        }
-      }
-      onCleanup(() => {
-        ;(api as any).postMessage = origPost
-      })
-    }
     return (
       <StoryProviders
         connected={["custom-myapi"]}
