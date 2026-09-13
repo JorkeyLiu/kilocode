@@ -3,7 +3,7 @@ import { readFile } from "fs/promises"
 import { join } from "path"
 
 // Structural lock for the Settings MCP switch: the Settings host
-// (`KiloProvider`) and BrowserAutomation perform connect/disconnect only
+// (`KiloProvider`) and BrowserAutomation perform connect/disconnect/add only
 // through the private-only helper with zero direct SDK mutation calls. The
 // single remaining direct `.mcp.disconnect(` site stays untouched: the
 // env-gated E2E fixture bridge (`mcpDisconnectForFixture`).
@@ -25,6 +25,7 @@ describe("mcp-connection Settings call sites", () => {
     expect(calls(text, "connect")).toBe(0)
     expect(calls(text, "disconnect")).toBe(0)
     expect(calls(text, "authenticate")).toBe(0)
+    expect(calls(text, "add")).toBe(0)
     expect(text.match(/attemptMcpConnectPrivate/g)?.length ?? 0).toBeGreaterThan(0)
     expect(text.match(/attemptMcpDisconnectPrivate/g)?.length ?? 0).toBeGreaterThan(0)
   })
@@ -40,7 +41,10 @@ describe("mcp-connection Settings call sites", () => {
     expect(calls(auto, "disconnect")).toBe(0)
     expect(calls(auto, "connect")).toBe(0)
     expect(calls(auto, "authenticate")).toBe(0)
+    expect(calls(auto, "add")).toBe(0)
     expect(auto.match(/attemptMcpDisconnectPrivate/g)?.length ?? 0).toBeGreaterThan(0)
     expect(auto.match(/buildMcpDisconnectReq/g)?.length ?? 0).toBeGreaterThan(0)
+    expect(auto.match(/attemptMcpAddPrivate/g)?.length ?? 0).toBeGreaterThan(0)
+    expect(auto.match(/buildMcpAddReq/g)?.length ?? 0).toBeGreaterThan(0)
   })
 })

@@ -90,6 +90,8 @@ import {
   removeSkillPrivate,
 } from "@/kilocode/skill-remove-private"
 import {
+  ADD_OP as MCP_ADD_OP,
+  ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
   AUTHENTICATE_VERSION as MCP_AUTHENTICATE_VERSION,
   CONNECT_OP as MCP_CONNECT_OP,
@@ -97,9 +99,11 @@ import {
   DISCONNECT_OP as MCP_DISCONNECT_OP,
   DISCONNECT_VERSION as MCP_DISCONNECT_VERSION,
   INTERNAL_MESSAGE as MCP_CONNECTION_INTERNAL_MESSAGE,
+  addMcpPrivate,
   authenticateMcpPrivate,
   connectMcpPrivate,
   disconnectMcpPrivate,
+  fallbackMcpAddIds,
   fallbackMcpAuthenticateIds,
   fallbackMcpConnectIds,
   fallbackMcpDisconnectIds,
@@ -5094,6 +5098,57 @@ export function createFdCarrier(
                   opId: fallbackMcpAuthenticateIds(params).opId,
                   op: MCP_AUTHENTICATE_OP,
                   idempotencyKey: fallbackMcpAuthenticateIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === MCP_ADD_OP || method === "mcp/add") {
+        // Private-only MCP add (register): same-directory MCP.Service.add()
+        // via the existing drain-control + InstanceRef lane. Same ownership
+        // and no-replay semantics as mcp/connect above. Accepted success
+        // carries the full status map (same Record<string, Status> shape as
+        // the HTTP add route); failures are typed terminal
+        // (validation/scope/internal) or retryable fence. No cache, no
+        // durable journal, no SDK/HTTP forwarding, no replay.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* addMcpPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: MCP_ADD_VERSION,
+                  requestId: fallbackMcpAddIds(params).requestId,
+                  opId: fallbackMcpAddIds(params).opId,
+                  op: MCP_ADD_OP,
+                  idempotencyKey: fallbackMcpAddIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: MCP_CONNECTION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: MCP_ADD_VERSION,
+                  requestId: fallbackMcpAddIds(params).requestId,
+                  opId: fallbackMcpAddIds(params).opId,
+                  op: MCP_ADD_OP,
+                  idempotencyKey: fallbackMcpAddIds(params).idempotencyKey,
                   status: "failed" as const,
                   outcome: {
                     type: "failed" as const,

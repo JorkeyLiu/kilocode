@@ -287,6 +287,12 @@ import type {
   McpDisconnectContractRequest,
   McpDisconnectWireOutcome,
 } from "./serve-private-mcp-connection-contract"
+import {
+  makeMcpAddAmbiguous,
+  normalizePrivateMcpAddWire,
+  validateMcpAddContractRequest,
+} from "./serve-private-mcp-add-contract"
+import type { McpAddContractRequest, McpAddWireOutcome } from "./serve-private-mcp-add-contract"
 import type {
   PermissionAmbiguous,
   PermissionContractRequest,
@@ -4002,6 +4008,45 @@ export class ServePrivatePeer {
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeMcpAuthenticateAmbiguous(req, true) }
       return normalizePrivateMcpAuthenticateWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the private-only mcp/add registration,
+   * same fail-closed semantics as mcp/connect above. There is no SDK
+   * fallback: every non-succeeded outcome fails closed and the caller
+   * converges BrowserAutomation state from the returned status map only.
+   */
+  privateMcpAddOutcomeWithHandle(req: McpAddContractRequest): {
+    id: number
+    promise: Promise<McpAddWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMcpAddContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("mcp/add")) {
+      throw new Error("Private peer missing mcp/add capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("mcp/add", req)
+    const promise = (async (): Promise<McpAddWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
+        return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
+      return normalizePrivateMcpAddWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }

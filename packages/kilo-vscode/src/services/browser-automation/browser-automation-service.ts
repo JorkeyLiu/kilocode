@@ -1,6 +1,6 @@
 import * as vscode from "vscode"
-import type { KiloClient } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../cli-backend"
+import { attemptMcpAddPrivate, buildMcpAddReq, mcpAddFailureMessage } from "../../kilo-provider/mcp-add-privatefirst"
 import { attemptMcpDisconnectPrivate, buildMcpDisconnectReq } from "../../kilo-provider/mcp-connection-privatefirst"
 
 type BrowserAutomationState = "disabled" | "registering" | "connected" | "failed" | "disconnected"
@@ -52,16 +52,12 @@ export class BrowserAutomationService implements vscode.Disposable {
 
   /**
    * Register the Playwright MCP server with the CLI backend.
+   * Private-only: at most one private `mcp/add` call per registration with
+   * zero SDK fallback and zero retry. The returned status map is the sole
+   * convergence source for the automation state.
    */
   private async register(): Promise<void> {
     this.setState("registering")
-
-    const client = this.getClient()
-    if (!client) {
-      console.error("[Kilo New] BrowserAutomationService: No SDK client available")
-      this.setState("failed")
-      return
-    }
 
     const config = vscode.workspace.getConfiguration("kilo-code.new.browserAutomation")
     const useSystemChrome = config.get<boolean>("useSystemChrome", true)
@@ -78,21 +74,23 @@ export class BrowserAutomationService implements vscode.Disposable {
 
     try {
       const directory = this.getWorkspaceDirectory()
-      const { data: status } = await client.mcp.add(
-        {
-          name: BrowserAutomationService.MCP_SERVER_NAME,
-          config: {
-            type: "local",
-            command,
-            enabled: true,
-            timeout: 60000,
-          },
-          directory,
-        },
-        { throwOnError: true },
-      )
+      const req = buildMcpAddReq(directory, BrowserAutomationService.MCP_SERVER_NAME, {
+        type: "local",
+        command,
+        enabled: true,
+        timeout: 60000,
+      })
+      const attempt = await attemptMcpAddPrivate(this.connectionService, req)
+      if (attempt.kind !== "ok") {
+        const detail = attempt.kind === "failed" ? attempt.code : attempt.reason
+        console.error(
+          `[Kilo New] BrowserAutomationService: Failed to register MCP server "${BrowserAutomationService.MCP_SERVER_NAME}": ${mcpAddFailureMessage(detail)} (${detail})`,
+        )
+        this.setState("failed")
+        return
+      }
 
-      const serverStatus = status[BrowserAutomationService.MCP_SERVER_NAME]
+      const serverStatus = attempt.status[BrowserAutomationService.MCP_SERVER_NAME]
       if (serverStatus?.status === "connected") {
         this.setState("connected")
       } else if (serverStatus?.status === "failed") {
@@ -133,14 +131,6 @@ export class BrowserAutomationService implements vscode.Disposable {
     }
 
     this.setState("disabled")
-  }
-
-  private getClient(): KiloClient | null {
-    try {
-      return this.connectionService.getClient()
-    } catch {
-      return null
-    }
   }
 
   private getWorkspaceDirectory(): string {

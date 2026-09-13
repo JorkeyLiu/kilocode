@@ -4,6 +4,7 @@ import {
   makeMcpConnectAmbiguous,
   makeMcpDisconnectAmbiguous,
 } from "./serve-private-mcp-connection-contract"
+import { makeMcpAddAmbiguous } from "./serve-private-mcp-add-contract"
 import type {
   McpAuthenticateContractRequest,
   McpAuthenticateWireOutcome,
@@ -12,6 +13,7 @@ import type {
   McpDisconnectContractRequest,
   McpDisconnectWireOutcome,
 } from "./serve-private-mcp-connection-contract"
+import type { McpAddContractRequest, McpAddWireOutcome } from "./serve-private-mcp-add-contract"
 
 interface McpConnectionOwner {
   isCurrent(): boolean
@@ -160,5 +162,25 @@ export function mcpAuthenticateOutcomeForOwner(
   return wrapOutcome(ownerOf(svc, peerAtCall, epochAtCall, req.opId), handle, req, "mcp/authenticate", (r) => ({
     kind: "valid",
     result: makeMcpAuthenticateAmbiguous(r, true),
+  }))
+}
+
+/**
+ * Thin owner delegation for the private-only mcp/add registration, same
+ * fail-closed semantics as mcp/connect above. The returned status map is the
+ * sole convergence source for BrowserAutomation state; there is no SDK
+ * fallback.
+ */
+export function mcpAddOutcomeForOwner(
+  svc: McpConnectionSvc,
+  req: McpAddContractRequest,
+): { id: number; promise: Promise<McpAddWireOutcome>; cancel: (msg?: string) => boolean } {
+  const peer = checkPeer(svc, "mcp/add")
+  const epochAtCall = svc.getPrivateEpoch()
+  const peerAtCall = peer
+  const handle = peerAtCall.privateMcpAddOutcomeWithHandle(req)
+  return wrapOutcome(ownerOf(svc, peerAtCall, epochAtCall, req.opId), handle, req, "mcp/add", (r) => ({
+    kind: "valid",
+    result: makeMcpAddAmbiguous(r, true),
   }))
 }

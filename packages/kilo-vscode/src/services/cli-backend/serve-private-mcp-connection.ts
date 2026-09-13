@@ -4,6 +4,7 @@ import {
   makeMcpConnectAmbiguous,
   makeMcpDisconnectAmbiguous,
 } from "./serve-private-mcp-connection-contract"
+import { makeMcpAddAmbiguous } from "./serve-private-mcp-add-contract"
 import type {
   McpAuthenticateContractRequest,
   McpAuthenticateWireOutcome,
@@ -12,6 +13,7 @@ import type {
   McpDisconnectContractRequest,
   McpDisconnectWireOutcome,
 } from "./serve-private-mcp-connection-contract"
+import type { McpAddContractRequest, McpAddWireOutcome } from "./serve-private-mcp-add-contract"
 import { wrapEpochHandle } from "./serve-private-epoch"
 
 type Deps = {
@@ -59,6 +61,20 @@ export function mcpAuthenticateOutcomeHandle(
     req,
     call: (peer) => peer.privateMcpAuthenticateOutcomeWithHandle(req),
     vague: (r) => ({ kind: "valid", result: makeMcpAuthenticateAmbiguous(r, true) }),
+    settled: (outcome) => outcome.kind === "valid",
+  })
+}
+
+export function mcpAddOutcomeHandle(
+  deps: Deps,
+  req: McpAddContractRequest,
+): { id: number; promise: Promise<McpAddWireOutcome>; cancel: (msg?: string) => boolean } {
+  return wrapEpochHandle({
+    conn: { peer: deps.peer, live: deps.live, epoch: deps.epoch, invalidate: deps.invalidate },
+    cap: "mcp/add",
+    req,
+    call: (peer) => peer.privateMcpAddOutcomeWithHandle(req),
+    vague: (r) => ({ kind: "valid", result: makeMcpAddAmbiguous(r, true) }),
     settled: (outcome) => outcome.kind === "valid",
   })
 }
