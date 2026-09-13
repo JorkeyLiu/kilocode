@@ -5546,31 +5546,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       client: this.client,
       postMessage: (msg) => this.postMessage(msg),
       getWorkspaceDirectory: () => this.getWorkspaceDirectory(),
-      disposeGlobal: () => this.disposeGlobal(),
       fetchAndSendProviders: () => this.fetchAndSendProviders(),
       fetchAndSendAgents: () => this.fetchAndSendAgents(),
-    }
-  }
-
-  private async disposeGlobal(): Promise<void> {
-    if (!this.client) return
-
-    await this.client.global
-      .dispose()
-      .catch((e: unknown) => console.warn("[Kilo New] KiloProvider: global.dispose() after org switch failed:", e))
-
-    // Org switch succeeded — refresh profile and providers independently (best-effort)
-    try {
-      const profileResult = await this.client!.kilo.profile()
-      // Broadcast to all webviews (editor tabs, profile tab, agent manager, etc.)
-      this.connectionService.notifyProfileChanged(profileResult.data ?? null)
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to refresh profile after org switch:", error)
-    }
-    try {
-      await this.fetchAndSendProviders()
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to refresh providers after org switch:", error)
     }
   }
 

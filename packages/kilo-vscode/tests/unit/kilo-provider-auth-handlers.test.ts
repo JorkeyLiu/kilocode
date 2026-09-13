@@ -18,7 +18,6 @@ type MockOpts = {
 function createCtx(opts: MockOpts = {}) {
   const calls = {
     posts: [] as Msg[],
-    dispose: 0,
     refresh: 0,
     refreshAgents: 0,
     callback: 0,
@@ -68,9 +67,6 @@ function createCtx(opts: MockOpts = {}) {
     client,
     postMessage: (msg: unknown) => calls.posts.push(msg as Msg),
     getWorkspaceDirectory: () => "/tmp",
-    disposeGlobal: async () => {
-      calls.dispose += 1
-    },
     fetchAndSendProviders: async () => {
       calls.refresh += 1
       if (opts.failRefresh) throw new Error("refresh exploded")
@@ -88,7 +84,8 @@ describe("handleLogin", () => {
 
     await handleLogin(ctx, 1, () => 1)
 
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.callback).toBe(1)
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "deviceAuthStarted" }))
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "profileData", data: { username: "kilo-user" } }))
@@ -102,7 +99,8 @@ describe("handleLogin", () => {
     await handleLogin(ctx, 1, () => 1)
 
     // The OAuth callback response IS the login acknowledgement.
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.callback).toBe(1)
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "deviceAuthComplete" }))
     expect(calls.posts.some((m) => m.type === "deviceAuthFailed")).toBe(false)
@@ -117,7 +115,8 @@ describe("handleLogin", () => {
       expect.objectContaining({ type: "deviceAuthFailed", error: "callback exploded" }),
     )
     expect(calls.posts.some((m) => m.type === "deviceAuthComplete")).toBe(false)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
   })
 
   it("returns without acknowledging when the login attempt was cancelled", async () => {
@@ -128,7 +127,8 @@ describe("handleLogin", () => {
     expect(calls.callback).toBe(1)
     expect(calls.posts.some((m) => m.type === "deviceAuthComplete")).toBe(false)
     expect(calls.posts.some((m) => m.type === "profileData")).toBe(false)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
   })
 })
 
@@ -138,7 +138,8 @@ describe("handleLogout", () => {
 
     await handleLogout(ctx)
 
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.authRemove).toBe(1)
     expect(calls.posts).toContainEqual({ type: "profileData", data: null })
     expect(calls.refresh).toBe(1)
@@ -156,7 +157,8 @@ describe("handleLogout", () => {
     )
     expect(calls.posts.some((m) => m.type === "profileData")).toBe(false)
     expect(calls.refresh).toBe(0)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
   })
 
   it("never reports a post-success provider refresh failure as a logout failure", async () => {
@@ -164,7 +166,8 @@ describe("handleLogout", () => {
 
     await handleLogout(ctx)
 
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.authRemove).toBe(1)
     expect(calls.posts).toContainEqual({ type: "profileData", data: null })
     expect(calls.posts.some((m) => m.type === "error")).toBe(false)
@@ -181,7 +184,8 @@ describe("handleSetOrganization (LOCK-001)", () => {
     // extension must not trigger a second disposal that races the backend's
     // own rebuild.
     expect(calls.orgSet).toBe(1)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "profileData" }))
     expect(calls.refresh).toBe(1)
     expect(calls.refreshAgents).toBe(1)
@@ -196,7 +200,8 @@ describe("handleSetOrganization (LOCK-001)", () => {
     // The org set succeeded (truthful): the refresh failure is guard/log-only
     // and must not surface as an error message in the webview.
     expect(calls.orgSet).toBe(1)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     expect(calls.refresh).toBe(1)
     expect(calls.refreshAgents).toBe(1)
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "profileData" }))
@@ -209,7 +214,8 @@ describe("handleSetOrganization (LOCK-001)", () => {
     await handleSetOrganization(ctx, "org-1")
 
     expect(calls.orgSet).toBe(1)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
     // The mutation failure is logged; the profile reset is best-effort only.
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "profileData" }))
     expect(calls.refresh).toBe(0)

@@ -17,7 +17,6 @@ function createCtx(existing: ExistingGlobal = { disabled_providers: [] }, merged
     project: [] as Array<{ config: Record<string, unknown> }>,
     cached: [] as unknown[],
     refresh: 0,
-    dispose: 0,
     customProviderDelete: [] as Array<{ providerID: string; directory?: string }>,
     customProviderSave: [] as Array<{ providerID: string; config: unknown; auth: unknown; directory?: string }>,
     globalGets: 0,
@@ -99,9 +98,6 @@ function createCtx(existing: ExistingGlobal = { disabled_providers: [] }, merged
     postMessage: (message: unknown) => calls.posts.push(message),
     getErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
     workspaceDir: "/tmp",
-    disposeGlobal: async () => {
-      calls.dispose += 1
-    },
     fetchAndSendProviders: async () => {
       calls.refresh += 1
     },
@@ -130,8 +126,12 @@ describe("completeProviderOAuth", () => {
     expect(calls.config).toHaveLength(0)
     expect(calls.refresh).toBe(1)
     expect(calls.posts).toContainEqual({ type: "providerConnected", requestId: "req", providerID: "openai" })
-    // LOCK-001: the backend coordinates drain/rebuild — no explicit global.dispose.
-    expect(calls.dispose).toBe(0)
+    // LOCK-001: the backend coordinates drain/rebuild — the extension exposes
+    // no global.dispose surface; the callback response is the acknowledgement.
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect(
+      (ctx.client as unknown as { global?: Record<string, unknown> }).global?.dispose,
+    ).toBeUndefined()
   })
 
   it("does not read or write global config when provider is not disabled", async () => {
@@ -184,9 +184,9 @@ describe("completeProviderOAuth", () => {
     expect(calls.config).toHaveLength(0)
     expect(calls.refresh).toBe(0)
     expect(calls.posts).toContainEqual(expect.objectContaining({ type: "providerActionError", providerID: "openai" }))
-    // No success message, no dispose on a failed mutation.
+    // No success message, and no global.dispose surface on a failed mutation.
     expect(calls.posts.some((message) => (message as { type?: string }).type === "providerConnected")).toBe(false)
-    expect(calls.dispose).toBe(0)
+    expect((failCtx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
   })
 
   it("never reports a post-success refresh failure as an OAuth connect failure (LOCK-001/004)", async () => {
@@ -200,7 +200,10 @@ describe("completeProviderOAuth", () => {
     expect(calls.oauth).toHaveLength(1)
     expect(calls.globalGets).toBe(0)
     expect(calls.config).toHaveLength(0)
-    expect(calls.dispose).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect(
+      (ctx.client as unknown as { global?: Record<string, unknown> }).global?.dispose,
+    ).toBeUndefined()
     expect(calls.posts).toContainEqual({ type: "providerConnected", requestId: "req", providerID: "openai" })
     expect(calls.posts.some((message) => (message as { type?: string }).type === "providerActionError")).toBe(false)
   })

@@ -12,7 +12,6 @@ export interface AuthContext {
   readonly client: KiloClient | null
   postMessage(msg: unknown): void
   getWorkspaceDirectory(): string
-  disposeGlobal(): Promise<void>
   fetchAndSendProviders(): Promise<void>
   fetchAndSendAgents(): Promise<void>
 }
