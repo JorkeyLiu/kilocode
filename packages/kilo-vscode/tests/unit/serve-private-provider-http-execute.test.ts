@@ -13,7 +13,6 @@ function linkedPair(deps: { resolveSecret: (ref: string) => Promise<string | und
     writer: hostToClient,
     pid: 701,
     epoch: 71,
-    providerExecuteDeps: deps,
     providerHttpExecuteDeps: deps,
     initializeTimeoutMs: 500,
   })

@@ -1325,7 +1325,7 @@ export class KiloConnectionService {
       epoch: server.epoch,
       process: server.process,
       initializeTimeoutMs: 5000,
-      ...(deps ? { providerExecuteDeps: deps, providerHttpExecuteDeps: deps } : {}),
+      ...(deps ? { providerHttpExecuteDeps: deps } : {}),
     })
   }
 

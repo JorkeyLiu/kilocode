@@ -8,8 +8,8 @@
  * injects the secret, and streams the HTTP response as correlated $/event
  * events via the peer emit.
  *
- * Closure rules match canonical-executor: endpoint/protocol/credential/model
- * preserve granular codes; validated record is closed; secret never leaks.
+ * Closure rules: endpoint/protocol/credential/model preserve granular codes;
+ * validated record is closed; secret never leaks.
  */
 
 import { isValidCanonicalProviderEntry, isValidModelEntry, parseOwnedCredentialRef, type CanonicalProviderProtocol } from "../config/types"

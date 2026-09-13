@@ -1,5 +1,5 @@
 // kilocode_change - typed resolver over pinned/current canonical provenance
-// Does not execute or select; returns exact closed record ready for ProviderExecuteBroker.
+// Does not execute or select; returns exact closed record for streaming provider/httpExecute.
 // Reads pinned snapshot via CanonicalProviderSnapshotRef if present, else current provenance via Config.Service.
 
 import { Context, Data, Effect } from "effect"

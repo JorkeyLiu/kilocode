@@ -21,7 +21,6 @@ import type {
   ServePrivateMessagesResult,
 } from "./serve-private-messages"
 import { makeChildrenCancel, requestChildrenOutcome, validateChildrenRequest } from "./serve-private-children"
-import { handleProviderExecute, isProviderExecuteAvailable, PROVIDER_EXECUTE_METHOD } from "./serve-private-provider-execute"
 import {
   handleProviderHttpExecute,
   isProviderHttpExecuteAvailable,
@@ -2276,11 +2275,10 @@ export interface ServePrivatePeerOptions {
    */
   reverseCapabilities?: readonly string[]
   /**
-   * Host-owned provider execution dependencies. When provided and
-   * execution deps are installed, `provider/execute` is advertised and
+   * Host-owned streaming provider execution dependencies. When provided and
+   * execution deps are installed, `provider/httpExecute` is advertised and
    * handled. The service instance is not owned; no duplicate SecretStorage.
    */
-  providerExecuteDeps?: import("./serve-private-provider-execute").ProviderExecuteDeps
   providerHttpExecuteDeps?: import("./serve-private-provider-http-execute").ProviderHttpExecuteDeps
 }
 
@@ -2401,18 +2399,13 @@ export class ServePrivatePeer {
     }
     const epochAtStart = this.opts.epoch
     this.initEpoch = epochAtStart
-    const providerDeps = this.opts.providerExecuteDeps
-    const httpDeps = this.opts.providerHttpExecuteDeps ?? providerDeps
-    // Advertise provider/execute and provider/httpExecute only when host can handle.
+    const httpDeps = this.opts.providerHttpExecuteDeps
+    // Advertise provider/httpExecute only when host can handle.
     // Fail closed if caller explicitly offered without deps.
-    const canExecute = !!providerDeps && isProviderExecuteAvailable()
     const canHttp = !!httpDeps && isProviderHttpExecuteAvailable()
     const onRequest =
-      (providerDeps && canExecute) || (httpDeps && canHttp)
+      httpDeps && canHttp
         ? async (method: string, params: unknown, ctx: import("../../private-worker/peer").RequestContext) => {
-            if (method === PROVIDER_EXECUTE_METHOD && providerDeps && canExecute) {
-              return handleProviderExecute(params, providerDeps, ctx.signal)
-            }
             if (method === PROVIDER_HTTP_EXECUTE_METHOD && httpDeps && canHttp) {
               return handleProviderHttpExecute(params, httpDeps, ctx)
             }
@@ -2439,15 +2432,10 @@ export class ServePrivatePeer {
     let reverseOffer: string[]
     try {
       const base = normalizeReverseCapabilities(this.opts.reverseCapabilities)
-      const hasOfferedExecute = base.includes("provider/execute")
       const hasOfferedHttp = base.includes("provider/httpExecute")
-      if (hasOfferedExecute && !canExecute) {
-        throw new TypeError("provider/execute reverse capability requires execution dependencies")
-      }
       if (hasOfferedHttp && !canHttp) {
         throw new TypeError("provider/httpExecute reverse capability requires execution dependencies")
       }
-      if (canExecute && !hasOfferedExecute) base.push("provider/execute")
       if (canHttp && !hasOfferedHttp) base.push("provider/httpExecute")
       reverseOffer = base
     } catch (err) {
