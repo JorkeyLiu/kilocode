@@ -4887,7 +4887,20 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           metadata: metadata as unknown as Record<string, unknown> | undefined,
         })
         if (draftID && this.closedDrafts.delete(draftID)) {
-          await this.client!.session.delete({ sessionID: session.id, query_directory: dir }, { throwOnError: true })
+          try {
+            await deleteSessionPrivateFirst({
+              client: this.client!,
+              connection: this.connectionService,
+              sessionId: session.id,
+              directory: dir,
+            })
+          } catch (error) {
+            console.error("[Kilo New] KiloProvider: Failed to delete orphaned draft session:", {
+              sessionId: session.id,
+              directory: dir,
+              error,
+            })
+          }
           return undefined
         }
         const detail = sdkSessionToDetail(session as Session)
