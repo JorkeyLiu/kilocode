@@ -349,6 +349,18 @@ import type {
   ProviderAuthWireOutcome,
 } from "./serve-private-provider-auth-contract"
 import {
+  isSettledConfigUiDefaultsResult,
+  makeConfigUiDefaultsAmbiguous,
+  normalizePrivateConfigUiDefaultsWire,
+  ConfigUiDefaultsValidationError,
+  validateConfigUiDefaultsContractRequest,
+} from "./serve-private-config-ui-defaults-contract"
+import type {
+  ConfigUiDefaultsContractRequest,
+  ConfigUiDefaultsResult,
+  ConfigUiDefaultsWireOutcome,
+} from "./serve-private-config-ui-defaults-contract"
+import {
   makeMcpAuthenticateAmbiguous,
   makeMcpConnectAmbiguous,
   makeMcpDisconnectAmbiguous,
@@ -4520,6 +4532,76 @@ export class ServePrivatePeer {
       if (isSettledProviderAuthResult(wire.result, req)) return wire
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeProviderAuthAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedConfigUiDefaults(req: ConfigUiDefaultsContractRequest, code: string, msg: string): ConfigUiDefaultsResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "config/ui-defaults",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  async privateConfigUiDefaults(req: ConfigUiDefaultsContractRequest): Promise<ConfigUiDefaultsResult> {
+    const handle = this.privateConfigUiDefaultsOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new ConfigUiDefaultsValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /**
+   * Internal normalized handle for the read-only `config/ui-defaults`
+   * private-first observation. Resolves the discriminated wire outcome so
+   * invalid wire is an explicit `{ kind: "invalid" }` value consumed before
+   * any SDK fallback, never a normal result. Observation identity is
+   * `requestId` only.
+   *
+   * Settle-first stale semantics (this op only; other ops keep the generic
+   * stale-first path): the raw result is normalized/validated first, then a
+   * validated settled outcome (success or `retryable === false` terminal) is
+   * preserved across post-response stale/epoch drift. Only unresolved wire
+   * (invalid, ambiguous, or retryable failure) maps drift to ambiguous
+   * `transportUnknown`.
+   */
+  privateConfigUiDefaultsOutcomeWithHandle(req: ConfigUiDefaultsContractRequest): {
+    id: number
+    promise: Promise<ConfigUiDefaultsWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateConfigUiDefaultsContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("config/ui-defaults")) {
+      throw new Error("Private peer missing config/ui-defaults capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("config/ui-defaults", req)
+    const promise = (async (): Promise<ConfigUiDefaultsWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeConfigUiDefaultsAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedConfigUiDefaults(req, code, msg) }
+      }
+      const wire = normalizePrivateConfigUiDefaultsWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledConfigUiDefaultsResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeConfigUiDefaultsAmbiguous(req, true) }
       return wire
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)

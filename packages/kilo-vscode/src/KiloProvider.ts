@@ -2638,7 +2638,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const workspaceDir = this.getContextDirectory()
     let metadata: Record<string, unknown> | undefined
     try {
-      metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, workspaceDir)
+      metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, workspaceDir, this.connectionService)
     } catch (e) {
       console.warn("[Kilo New] KiloProvider: sandbox metadata lookup failed, using empty", String(e))
       metadata = undefined
@@ -4671,7 +4671,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (!client || !sandbox || this.connectionState !== "connected") return
     try {
       const [desired, result] = await Promise.all([
-        sandboxDefault(this.connectionService.sandboxPreference, client, directory),
+        sandboxDefault(this.connectionService.sandboxPreference, client, directory, this.connectionService),
         sandbox.support({ directory }, { throwOnError: true }),
       ])
       if (this.connectionState !== "connected" || this.connectionGeneration !== generation || this.client !== client)
@@ -4919,7 +4919,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (pending) return pending
       if (draftID) this.creatingDrafts.add(draftID)
       const creation = (async () => {
-        const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, dir)
+        const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, dir, this.connectionService)
         const session = await createSessionPrivateFirst({
           client: this.client!,
           connection: this.connectionService,

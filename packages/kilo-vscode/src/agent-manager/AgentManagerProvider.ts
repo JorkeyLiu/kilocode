@@ -1048,7 +1048,7 @@ export class AgentManagerProvider implements Disposable {
           } catch {
             return false
           }
-          const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, client, root)
+          const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, client, root, this.connectionService)
           const { createSessionPrivateFirst } = await import("../kilo-provider/session-create")
           const session = await startSession(
             client,

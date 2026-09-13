@@ -1,7 +1,12 @@
 import * as vscode from "vscode"
 import type { Config } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
-import type { WorkStyle, WorkStyleConfig, WorkStyleState } from "../shared/work-style-presets"
+import type { WorkStyle, WorkStyleState } from "../shared/work-style-presets"
+import {
+  fetchConfigUiDefaultsPrivateFirst,
+  requireUiDefaults,
+  toWorkStyleConfig,
+} from "../shared/config-ui-defaults-privatefirst"
 import { applyWorkStyle, type WorkStyleSettingSnapshot } from "./work-style-apply"
 
 function inspect(config: vscode.WorkspaceConfiguration, key: string): WorkStyleSettingSnapshot {
@@ -18,8 +23,8 @@ async function apply(connection: KiloConnectionService, directory: string, style
   return applyWorkStyle(style, {
     read: async () => {
       const client = await connection.getClientAsync(directory)
-      const { data } = await client.config.get({ directory }, { throwOnError: true })
-      return (data ?? {}) as WorkStyleConfig
+      const out = await fetchConfigUiDefaultsPrivateFirst({ connection, client: client as never, directory })
+      return toWorkStyleConfig(requireUiDefaults(out, "work-style config"))
     },
     inspect: (key) => inspect(settings, key),
     write: async (key, value) => {

@@ -142,6 +142,13 @@ import {
   providerAuthPrivate,
 } from "@/kilocode/provider-auth"
 import {
+  INTERNAL_MESSAGE as CONFIG_UI_DEFAULTS_INTERNAL_MESSAGE,
+  OP as CONFIG_UI_DEFAULTS_OP,
+  VERSION as CONFIG_UI_DEFAULTS_VERSION,
+  configUiDefaultsPrivate,
+  fallbackConfigUiDefaultsIds,
+} from "@/kilocode/config-ui-defaults"
+import {
   ADD_OP as MCP_ADD_OP,
   ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
@@ -5410,6 +5417,60 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: PROVIDER_AUTH_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === CONFIG_UI_DEFAULTS_OP || method === "config/ui-defaults") {
+        // Read-only `config/ui-defaults` observation: the same effective
+        // `Config.Service.get()` (global/project merge) as `GET /config`
+        // (`identifier: "config.get"`) via the shared `configUiDefaultsPrivate`
+        // (existing drain-control + `InstanceRef` lane, same lane as
+        // `provider/catalog` — no new lifecycle lane, no manual `InstanceRef`,
+        // no new drain/read lease, no external network, no cache, no fence, no
+        // journal). `directory`/`workspace` are carrier routing identity only.
+        // The wire projection is closed and minimal: work-style presence plus
+        // scalar display values plus `sandbox.enabled`; permission rule
+        // content, provider records, MCP config, and any other field are
+        // rejected so secrets can never cross. Read-only, safely repeatable:
+        // an ambiguous transport outcome may safely repeat via the
+        // same-directory SDK `client.config.get` fallback projected locally;
+        // the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* configUiDefaultsPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: CONFIG_UI_DEFAULTS_VERSION,
+                  requestId: fallbackConfigUiDefaultsIds(params).requestId,
+                  op: CONFIG_UI_DEFAULTS_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: CONFIG_UI_DEFAULTS_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: CONFIG_UI_DEFAULTS_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: CONFIG_UI_DEFAULTS_VERSION,
+                  requestId: fallbackConfigUiDefaultsIds(params).requestId,
+                  op: CONFIG_UI_DEFAULTS_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: CONFIG_UI_DEFAULTS_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: CONFIG_UI_DEFAULTS_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )
