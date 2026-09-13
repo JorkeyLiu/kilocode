@@ -114,6 +114,13 @@ import {
   kiloProfilePrivate,
 } from "@/kilocode/kilo-profile"
 import {
+  INTERNAL_MESSAGE as AGENT_LIST_INTERNAL_MESSAGE,
+  OP as AGENT_LIST_OP,
+  VERSION as AGENT_LIST_VERSION,
+  agentListPrivate,
+  fallbackAgentListIds,
+} from "@/kilocode/agent-list"
+import {
   ADD_OP as MCP_ADD_OP,
   ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
@@ -5177,6 +5184,59 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: KILO_PROFILE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === AGENT_LIST_OP || method === "agent/list") {
+        // Read-only `agent/list` observation: the same `Agent.Service.list()`
+        // as `GET /agent` (`identifier: "app.agents"`) via the shared
+        // `agentListPrivate` (existing drain-control + `InstanceRef` lane,
+        // same lane as `skill/list`/`command/list` — no new lifecycle lane,
+        // no manual `InstanceRef`, no new drain/read lease, no external
+        // network, no secret, no cache). `directory`/`workspace` are carrier
+        // routing identity only and never reach the service beyond
+        // `InstanceState` selection. The wire projection is the exact
+        // `Agent.Info` shape (full SDK wire, not the UI subset); unknown
+        // fields are rejected so provider credentials or hidden runtime
+        // state can never cross. Read-only, safely repeatable: an ambiguous
+        // transport outcome may safely repeat via the same-directory SDK
+        // `client.app.agents` fallback; the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* agentListPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: AGENT_LIST_VERSION,
+                  requestId: fallbackAgentListIds(params).requestId,
+                  op: AGENT_LIST_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: AGENT_LIST_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: AGENT_LIST_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: AGENT_LIST_VERSION,
+                  requestId: fallbackAgentListIds(params).requestId,
+                  op: AGENT_LIST_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: AGENT_LIST_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: AGENT_LIST_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

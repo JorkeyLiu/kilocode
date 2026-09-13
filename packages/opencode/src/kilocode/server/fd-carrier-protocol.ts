@@ -49,6 +49,7 @@ export const FD_CAPABILITIES = [
   "session/command",
   "skill/remove",
   "skill/list",
+  "agent/list",
   "auth/remove",
   "kilo/organization/set",
   "kilo/profile",

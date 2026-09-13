@@ -1,4 +1,5 @@
 import { Agent } from "@/agent/agent"
+import { fetchAgentListData } from "@/kilocode/agent-list"
 import { Command } from "@/command"
 import * as InstanceState from "@/effect/instance-state"
 import { Format } from "@/format"
@@ -14,7 +15,6 @@ import { markInstanceForDisposal } from "../lifecycle"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
-    const agent = yield* Agent.Service
     const command = yield* Command.Service
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
@@ -78,7 +78,9 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
-      return yield* agent.list()
+      // Shared with the private `agent/list` observation: the same
+      // `Agent.Service.list()` owner and exact `Agent.Info` wire result.
+      return yield* fetchAgentListData()
     })
 
     const getSkill = Effect.fn("InstanceHttpApi.skill")(function* () {

@@ -87,6 +87,7 @@ import { interceptMessage } from "./kilo-provider/git-changes-request"
 import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/followup-session"
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
 import { loadSkills } from "./kilo-provider/skills"
+import { fetchAgentsPrivateFirst } from "./kilo-provider/agent-list-privatefirst"
 import { fetchConfigWarningsPrivateFirst } from "./kilo-provider/config-warnings-privatefirst"
 import { fetchKiloProfilePrivateFirst } from "./kilo-provider/kilo-profile-privatefirst"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
@@ -3802,6 +3803,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   /**
    * Fetch agents (modes) from the backend and send to webview.
+   * Canonical mode still takes the existing `sendCanonicalAgents` short-circuit
+   * untouched. Non-canonical reads are private-first via
+   * `fetchAgentsPrivateFirst` (the SDK call lives only in the helper
+   * fallback — never here); the transient `retry()` wrapper, `filterVisibleAgents`,
+   * order preservation, `cachedAgentsMessage`, and `postMessage` semantics are
+   * unchanged. Validated terminal closes with zero SDK and no post/cache.
    */
   private async fetchAndSendAgents(): Promise<void> {
     if (this.canonicalConfig) {
@@ -3817,16 +3824,27 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const workspaceDir = this.getWorkspaceDirectory()
-      const { data: agents } = await retry(() =>
-        this.client!.app.agents({ directory: workspaceDir }, { throwOnError: true }),
+      const out = await retry(() =>
+        fetchAgentsPrivateFirst({
+          connection: this.connectionService as never,
+          client: this.client as never,
+          directory: workspaceDir,
+        }).then((r) => {
+          if (r.kind === "ok") return r
+          // Preserve the transient retry surface: surface the underlying
+          // cause (e.g. network) so `retry` retries transient failures and
+          // fails fast on validated terminal.
+          throw (r as { cause?: unknown }).cause ?? r
+        }),
       )
+      const agents = out.agents
 
-      const { visible, defaultAgent } = filterVisibleAgents(agents)
+      const { visible, defaultAgent } = filterVisibleAgents(agents as never)
 
       const message = {
         type: "agentsLoaded",
         agents: visible.map(mapAgent),
-        allAgents: agents.map(mapAgent),
+        allAgents: (agents as never[]).map(mapAgent),
         defaultAgent,
       }
       this.cachedAgentsMessage = message
