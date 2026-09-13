@@ -121,6 +121,13 @@ import {
   fallbackAgentListIds,
 } from "@/kilocode/agent-list"
 import {
+  INTERNAL_MESSAGE as PROVIDER_CATALOG_INTERNAL_MESSAGE,
+  OP as PROVIDER_CATALOG_OP,
+  VERSION as PROVIDER_CATALOG_VERSION,
+  fallbackProviderCatalogIds,
+  providerCatalogPrivate,
+} from "@/kilocode/provider-catalog"
+import {
   ADD_OP as MCP_ADD_OP,
   ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
@@ -5237,6 +5244,57 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: AGENT_LIST_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === PROVIDER_CATALOG_OP || method === "provider/catalog") {
+        // Read-only `provider/catalog` observation: the same redacted owner as
+        // `GET /provider/catalog` (`identifier: "provider.catalog"`) via the
+        // shared `providerCatalogPrivate` (existing drain-control + `InstanceRef`
+        // lane, same lane as `agent/list` — no new lifecycle lane, no manual
+        // `InstanceRef`, no new drain/read lease, no external network, no
+        // cache). `directory`/`workspace` are carrier routing identity only.
+        // The wire projection is the exact closed `ProviderCatalog.CatalogResult`;
+        // `key`/`options`/`headers` or other unknown fields are rejected so
+        // secrets can never cross. Read-only, safely repeatable: an ambiguous
+        // transport outcome may safely repeat via the same-directory SDK
+        // `client.provider.catalog` fallback; the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* providerCatalogPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: PROVIDER_CATALOG_VERSION,
+                  requestId: fallbackProviderCatalogIds(params).requestId,
+                  op: PROVIDER_CATALOG_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: PROVIDER_CATALOG_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: PROVIDER_CATALOG_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: PROVIDER_CATALOG_VERSION,
+                  requestId: fallbackProviderCatalogIds(params).requestId,
+                  op: PROVIDER_CATALOG_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: PROVIDER_CATALOG_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: PROVIDER_CATALOG_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

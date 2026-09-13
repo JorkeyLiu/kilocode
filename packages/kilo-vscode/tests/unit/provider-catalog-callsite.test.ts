@@ -9,11 +9,20 @@ async function src(rel: string) {
 describe("provider catalog call-site lock", () => {
   it("regular reads use catalog; no production caller uses provider.list", async () => {
     const actions = await src("../../src/provider-actions.ts")
-    expect(actions).toContain("client.provider.catalog")
+    expect(actions).toContain("fetchProviderCatalogPrivateFirst")
     expect(actions).not.toContain("client.provider.list")
     expect(actions).not.toContain("raw.key")
     expect(actions).not.toContain("authorizeCredentialRead")
     expect(actions).toContain("hasCredential")
+
+    const helper = await src("../../src/kilo-provider/provider-catalog-privatefirst.ts")
+    expect(helper).toContain("client.provider.catalog")
+    expect(helper).not.toContain("client.provider.list")
+    // Production `.provider.catalog(` lives only in the helper fallback.
+    for (const rel of ["../../src/provider-actions.ts", "../../src/KiloProvider.ts"]) {
+      const text = await src(rel)
+      expect(text).not.toMatch(/client\.provider\.catalog\s*\(/)
+    }
 
     const kilo = await src("../../src/KiloProvider.ts")
     expect(kilo).not.toMatch(/\.provider\.list\(/)
@@ -24,6 +33,7 @@ describe("provider catalog call-site lock", () => {
     expect(kilo).not.toContain("getProviderCredential")
     expect(kilo).toContain("fetchProviderData")
 
+    // Fixture callers are explicitly excluded and stay on the direct SDK read.
     const ext = await src("../../src/extension.ts")
     expect(ext).toContain("client.provider.catalog")
     expect(ext).not.toContain("client.provider.list")

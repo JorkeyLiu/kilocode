@@ -3,6 +3,8 @@
  * These are pure async functions that operate on the SDK client — no vscode dependency.
  */
 import type { KiloClient } from "@kilocode/sdk/v2"
+import type { KiloConnectionService } from "./services/cli-backend/connection-service"
+import { fetchProviderCatalogPrivateFirst } from "./kilo-provider/provider-catalog-privatefirst"
 import { validateProviderID as validateProviderIDShared } from "./shared/custom-provider"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
 
@@ -13,7 +15,11 @@ import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider
 type AuthState = "api" | "oauth" | "wellknown"
 
 /** Fetch redacted provider catalog and derive authentication state without credential exposure. */
-export async function fetchProviderData(client: KiloClient, dir: string) {
+export async function fetchProviderData(
+  client: KiloClient,
+  dir: string,
+  connection?: KiloConnectionService | null,
+) {
   const authRequest =
     typeof client.provider.auth === "function"
       ? client.provider
@@ -26,14 +32,33 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
     .then((r) => (r.data?.authenticated ? (r.data.type ?? null) : null))
     .catch(() => null)
 
-  const [{ data: response }, authMethods, kiloAuth] = await Promise.all([
-    client.provider.catalog({ directory: dir }, { throwOnError: true }),
-    authRequest,
-    kiloRequest,
-  ])
+  // Private-first catalog branch only: `provider.auth` and `kilo.authStatus`
+  // stay parallel with their own `catch`-to-`{}`/`null` failure isolation
+  // (never combined into a snapshot). Catalog private success and validated
+  // terminal close with zero SDK; only unavailable/retryable/invalid/
+  // ambiguous/transport/closed/timeout takes exactly one same-directory
+  // `client.provider.catalog` fallback inside the helper (no retry, no post,
+  // no cache, no journal/reconcile). A catalog failure still rejects the whole
+  // `fetchProviderData` so the outer `KiloProvider` keeps its old cache.
+  const catalogRequest = fetchProviderCatalogPrivateFirst({
+    connection: (connection ?? null) as never,
+    client: client as never,
+    directory: dir,
+  }).then((out) => {
+    if (out.kind === "ok") return out.data
+    throw out.kind === "terminal" ? new Error(`provider catalog terminal: ${out.code ?? "unknown"}`) : (out.cause ?? new Error("provider catalog unavailable"))
+  })
+
+  const [catalog, authMethods, kiloAuth] = await Promise.all([catalogRequest, authRequest, kiloRequest])
+  const response = catalog as unknown as {
+    all: Array<{ id: string; hasCredential?: boolean }>
+    default: Record<string, string>
+    connected: string[]
+    failed: string[]
+  }
   const authStates: Record<string, AuthState> = {}
   for (const item of response.all) {
-    if (typeof item.id === "string" && item.hasCredential === true) {
+    if (typeof item.id === "string" && (item as { hasCredential?: unknown }).hasCredential === true) {
       authStates[item.id] = "api"
     }
   }

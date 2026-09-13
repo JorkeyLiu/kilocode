@@ -216,9 +216,15 @@ describe("provider catalog redaction", () => {
 
     const handler = await repoText("../../src/server/routes/instance/httpapi/handlers/provider.ts")
     expect(handler).toContain('.handle("catalog", catalog)')
-    expect(handler).toContain("ProviderCatalog.toCatalogResult")
+    expect(handler).toContain("fetchProviderCatalogData")
+    expect(handler).not.toContain("ProviderCatalog.toCatalogResult")
+    expect(handler).toContain("provider.list()")
     expect(handler).toContain("Provider.toPublicInfo")
     expect(handler).toContain('.handle("list", list)')
+    const shared = await repoText("../../src/kilocode/provider-catalog.ts")
+    expect(shared).toContain("ProviderCatalog.toCatalogResult")
+    expect(shared).toContain("filterPromptTrainingModels")
+    expect(shared).not.toContain("provider.list(")
 
     const sdk = await repoText("../../../sdk/js/src/v2/gen/sdk.gen.ts")
     expect(sdk).toContain("public catalog")

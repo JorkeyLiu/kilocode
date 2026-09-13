@@ -3569,6 +3569,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           const { response, authMethods, authStates } = await fetchProviderData(
             client,
             this.getWorkspaceDirectory(),
+            this.connectionService as never,
           )
           if (generation !== this.providersGeneration || client !== this.client) {
             if (!this.providersQueued) return
@@ -3578,7 +3579,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           const settings = vscode.workspace.getConfiguration("kilo-code.new.model")
           const message = {
             type: "providersLoaded",
-            providers: indexProvidersById(response.all),
+            providers: indexProvidersById(response.all as never),
             connected: response.connected,
             defaults: response.default,
             defaultSelection: computeDefaultSelection(

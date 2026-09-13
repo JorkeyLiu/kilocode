@@ -314,6 +314,18 @@ import type {
   AgentListWireOutcome,
 } from "./serve-private-agent-list-contract"
 import {
+  isSettledProviderCatalogResult,
+  makeProviderCatalogAmbiguous,
+  normalizePrivateProviderCatalogWire,
+  ProviderCatalogValidationError,
+  validateProviderCatalogContractRequest,
+} from "./serve-private-provider-catalog-contract"
+import type {
+  ProviderCatalogContractRequest,
+  ProviderCatalogResult,
+  ProviderCatalogWireOutcome,
+} from "./serve-private-provider-catalog-contract"
+import {
   makeMcpAuthenticateAmbiguous,
   makeMcpConnectAmbiguous,
   makeMcpDisconnectAmbiguous,
@@ -4282,6 +4294,76 @@ export class ServePrivatePeer {
       if (isSettledAgentListResult(wire.result, req)) return wire
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeAgentListAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedProviderCatalog(req: ProviderCatalogContractRequest, code: string, msg: string): ProviderCatalogResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "provider/catalog",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  async privateProviderCatalog(req: ProviderCatalogContractRequest): Promise<ProviderCatalogResult> {
+    const handle = this.privateProviderCatalogOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new ProviderCatalogValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /**
+   * Internal normalized handle for the read-only `provider/catalog`
+   * private-first observation. Resolves the discriminated wire outcome so
+   * invalid wire is an explicit `{ kind: "invalid" }` value consumed before
+   * any SDK fallback, never a normal result. Observation identity is
+   * `requestId` only.
+   *
+   * Settle-first stale semantics (this op only; other ops keep the generic
+   * stale-first path): the raw result is normalized/validated first, then a
+   * validated settled outcome (success or `retryable === false` terminal) is
+   * preserved across post-response stale/epoch drift. Only unresolved wire
+   * (invalid, ambiguous, or retryable failure) maps drift to ambiguous
+   * `transportUnknown`.
+   */
+  privateProviderCatalogOutcomeWithHandle(req: ProviderCatalogContractRequest): {
+    id: number
+    promise: Promise<ProviderCatalogWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateProviderCatalogContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("provider/catalog")) {
+      throw new Error("Private peer missing provider/catalog capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("provider/catalog", req)
+    const promise = (async (): Promise<ProviderCatalogWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeProviderCatalogAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedProviderCatalog(req, code, msg) }
+      }
+      const wire = normalizePrivateProviderCatalogWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledProviderCatalogResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeProviderCatalogAmbiguous(req, true) }
       return wire
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
