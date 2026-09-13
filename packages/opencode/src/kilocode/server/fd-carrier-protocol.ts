@@ -49,6 +49,7 @@ export const FD_CAPABILITIES = [
   "session/command",
   "skill/remove",
   "skill/list",
+  "auth/remove",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",

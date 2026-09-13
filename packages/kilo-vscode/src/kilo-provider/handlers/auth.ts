@@ -7,6 +7,10 @@
 
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { getErrorMessage } from "../../kilo-provider-utils"
+import {
+  removeAuthPrivateFirst,
+  type AuthRemovePrivateConnection,
+} from "../auth-remove-privatefirst"
 
 export interface AuthContext {
   readonly client: KiloClient | null
@@ -14,6 +18,8 @@ export interface AuthContext {
   getWorkspaceDirectory(): string
   fetchAndSendProviders(): Promise<void>
   fetchAndSendAgents(): Promise<void>
+  /** Private-first `auth/remove` connection (owner: `KiloConnectionService`). Absent stays SDK-only. */
+  readonly connection?: AuthRemovePrivateConnection | null
 }
 
 /**
@@ -91,7 +97,23 @@ export async function handleLogout(ctx: AuthContext): Promise<void> {
     // emits global.disposed — the extension must NOT call global.dispose.
     // auth.remove is never best-effort: a backend failure must surface as a
     // real logout error, never a silent success.
-    await ctx.client.auth.remove({ providerID: "kilo" }, { throwOnError: true })
+    //
+    // Private-first `auth/remove` over the fd carrier with exactly one
+    // same-identity SDK `client.auth.remove` fallback (see
+    // `kilo-provider/auth-remove-privatefirst.ts`; the SDK call lives only in
+    // that helper's fallback — never here).
+    const outcome = await removeAuthPrivateFirst({
+      connection: ctx.connection ?? null,
+      client: ctx.client as never,
+      providerID: "kilo",
+      directory: ctx.getWorkspaceDirectory(),
+    })
+    if (outcome.kind === "terminal")
+      throw new Error(outcome.code ? `logout failed: ${outcome.code}` : "logout failed")
+    if (outcome.kind === "unavailable") {
+      const cause = (outcome as { cause?: unknown }).cause
+      throw cause instanceof Error ? cause : new Error("Failed to logout")
+    }
     console.log("[Kilo New] KiloProvider: 🚪 Logged out successfully")
     ctx.postMessage({ type: "profileData", data: null })
 

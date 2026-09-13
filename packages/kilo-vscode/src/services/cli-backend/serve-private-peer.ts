@@ -85,6 +85,17 @@ import type {
   ServePrivateRemoteToggleRequest,
   ServePrivateRemoteToggleResult,
 } from "./serve-private-remote-toggle"
+import {
+  makeAuthRemoveCancel,
+  PrivateAuthRemoveValidationError,
+  requestAuthRemoveOutcome,
+  validateAuthRemoveRequest,
+} from "./serve-private-auth-remove"
+import type {
+  PrivateAuthRemoveWireOutcome,
+  ServePrivateAuthRemoveRequest,
+  ServePrivateAuthRemoveResult,
+} from "./serve-private-auth-remove"
 import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
 import { requestSessionListOutcome } from "./serve-private-session-list"
 import type {
@@ -439,6 +450,19 @@ export type {
   ServePrivateRemoteToggleRequest,
   ServePrivateRemoteToggleResult,
 } from "./serve-private-remote-toggle"
+export {
+  makeAuthRemoveCancel,
+  PrivateAuthRemoveValidationError,
+  requestAuthRemoveOutcome,
+  validateAuthRemoveRequest,
+  validateAuthRemoveResult,
+  wrapAuthRemoveOutcomeForOwner,
+} from "./serve-private-auth-remove"
+export type {
+  PrivateAuthRemoveWireOutcome,
+  ServePrivateAuthRemoveRequest,
+  ServePrivateAuthRemoveResult,
+} from "./serve-private-auth-remove"
 export {
   canonicalPathOpId,
   comparePathParity,
@@ -3130,6 +3154,57 @@ export class ServePrivatePeer {
     const promise = (async (): Promise<ServePrivateRemoteToggleResult> => {
       const wire = await outcome.promise
       if (wire.kind === "invalid") throw new PrivateRemoteToggleValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
+  privateAuthRemoveOutcomeWithHandle(req: ServePrivateAuthRemoveRequest): {
+    id: number
+    promise: Promise<PrivateAuthRemoveWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateAuthRemoveRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(req.op)) throw new Error(`Private peer missing ${req.op} capability`)
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const op = req.op
+    return requestAuthRemoveOutcome(
+      peerAtCall as unknown as import("./serve-private-auth-remove").AuthRemoveRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeAuthRemoveCancel(
+          id,
+          {
+            isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+            tryCancel: (msg) => this.tryCancelPending(id, msg),
+            invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+          },
+          op,
+        ),
+      req,
+    )
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid auth-remove results; invalid wire rejects
+   * with PrivateAuthRemoveValidationError and never resolves as a normal result.
+   */
+  privateAuthRemoveWithHandle(req: ServePrivateAuthRemoveRequest): {
+    id: number
+    promise: Promise<ServePrivateAuthRemoveResult>
+    cancel: (msg?: string) => boolean
+  } {
+    const outcome = this.privateAuthRemoveOutcomeWithHandle(req)
+    const promise = (async (): Promise<ServePrivateAuthRemoveResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivateAuthRemoveValidationError(wire.detail)
       return wire.result
     })()
     return { id: outcome.id, promise, cancel: outcome.cancel }

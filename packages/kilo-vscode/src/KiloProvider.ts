@@ -5566,6 +5566,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       getWorkspaceDirectory: () => this.getWorkspaceDirectory(),
       fetchAndSendProviders: () => this.fetchAndSendProviders(),
       fetchAndSendAgents: () => this.fetchAndSendAgents(),
+      connection: this.connectionService,
     }
   }
 

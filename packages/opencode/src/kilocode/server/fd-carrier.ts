@@ -93,6 +93,13 @@ import {
   removeSkillPrivate,
 } from "@/kilocode/skill-remove-private"
 import {
+  INTERNAL_MESSAGE as AUTH_REMOVE_INTERNAL_MESSAGE,
+  OP as AUTH_REMOVE_OP,
+  VERSION as AUTH_REMOVE_VERSION,
+  fallbackAuthRemoveIds,
+  removeAuthPrivate,
+} from "@/kilocode/auth-remove-private"
+import {
   ADD_OP as MCP_ADD_OP,
   ADD_VERSION as MCP_ADD_VERSION,
   AUTHENTICATE_OP as MCP_AUTHENTICATE_OP,
@@ -5002,6 +5009,58 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: SKILL_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === AUTH_REMOVE_OP || method === "auth/remove") {
+        // Authoritative auth removal: the same global cold mutation as the
+        // HTTP `auth.remove` route (`invalidateAfterProviderAuthChange`
+        // over `Auth.remove`, no `cleanupDisabled`). Directory/workspace are
+        // routing identity only (canonical validation, never an auth scope):
+        // no drain-control/`InstanceRef` lane, no scope mismatch, no journal,
+        // no replay, no new fence. `Auth.remove` is idempotent, so an
+        // ambiguous transport outcome may safely repeat via the same-tuple
+        // SDK `auth.remove` fallback.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* removeAuthPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: AUTH_REMOVE_VERSION,
+                  requestId: fallbackAuthRemoveIds(params).requestId,
+                  opId: fallbackAuthRemoveIds(params).opId,
+                  op: AUTH_REMOVE_OP,
+                  idempotencyKey: fallbackAuthRemoveIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: AUTH_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: AUTH_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: AUTH_REMOVE_VERSION,
+                  requestId: fallbackAuthRemoveIds(params).requestId,
+                  opId: fallbackAuthRemoveIds(params).opId,
+                  op: AUTH_REMOVE_OP,
+                  idempotencyKey: fallbackAuthRemoveIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: AUTH_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: AUTH_REMOVE_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

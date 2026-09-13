@@ -13,6 +13,7 @@ type MockOpts = {
   failProfile?: boolean
   failRefresh?: boolean
   failOrgSet?: boolean
+  privateOutcome?: "ok" | "terminal" | "unavailable" | "timeout"
 }
 
 function createCtx(opts: MockOpts = {}) {
@@ -24,6 +25,8 @@ function createCtx(opts: MockOpts = {}) {
     authRemove: 0,
     profile: 0,
     orgSet: 0,
+    private: 0,
+    cancelled: [] as string[],
   }
   const client = {
     provider: {
@@ -74,8 +77,79 @@ function createCtx(opts: MockOpts = {}) {
     fetchAndSendAgents: async () => {
       calls.refreshAgents += 1
     },
+    ...(opts.privateOutcome === undefined
+      ? {}
+      : {
+          connection: privateConnFor(opts.privateOutcome, calls),
+        }),
   } as unknown as Parameters<typeof handleLogin>[0]
   return { calls, ctx }
+}
+
+function privateConnFor(
+  outcome: NonNullable<MockOpts["privateOutcome"]>,
+  calls: { private: number; cancelled: string[] },
+): unknown {
+  if (outcome === "unavailable") return { isPrivateAvailable: () => false }
+  if (outcome === "timeout")
+    return {
+      isPrivateAvailable: () => true,
+      privateAuthRemoveOutcomeWithHandle: () => ({
+        id: 42,
+        promise: new Promise(() => {}),
+        cancel: (msg?: string) => {
+          calls.cancelled.push(msg ?? "")
+          return true
+        },
+      }),
+    }
+  return {
+    isPrivateAvailable: () => true,
+    privateAuthRemoveOutcomeWithHandle: (
+      req: { requestId: string; opId: string; op: string; idempotencyKey: string },
+    ) => {
+      calls.private += 1
+      return {
+        id: 7,
+        promise: Promise.resolve(outcome === "ok" ? okPrivateResult(req) : terminalPrivateResult(req)),
+        cancel: () => true,
+      }
+    },
+  }
+}
+
+function okPrivateResult(req: { requestId: string; opId: string; op: string; idempotencyKey: string }) {
+  return {
+    kind: "valid" as const,
+    result: {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: req.op,
+      idempotencyKey: req.idempotencyKey,
+      status: "succeeded",
+      outcome: { type: "succeeded", time: 1 },
+      accepted: true,
+      data: { removed: true },
+    },
+  }
+}
+
+function terminalPrivateResult(req: { requestId: string; opId: string; op: string; idempotencyKey: string }) {
+  return {
+    kind: "valid" as const,
+    result: {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: req.op,
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: 1, failure: { code: "internal", message: "m", retryable: false } },
+      accepted: false,
+      failure: { code: "internal", message: "m", retryable: false },
+    },
+  }
 }
 
 describe("handleLogin", () => {
@@ -168,6 +242,55 @@ describe("handleLogout", () => {
 
     expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
     expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
+    expect(calls.authRemove).toBe(1)
+    expect(calls.posts).toContainEqual({ type: "profileData", data: null })
+    expect(calls.posts.some((m) => m.type === "error")).toBe(false)
+  })
+
+  it("private-first success clears the profile with zero SDK auth.remove", async () => {
+    const { calls, ctx } = createCtx({ privateOutcome: "ok" })
+
+    await handleLogout(ctx)
+
+    expect(calls.private).toBe(1)
+    expect(calls.authRemove).toBe(0)
+    expect(calls.posts).toContainEqual({ type: "profileData", data: null })
+    expect(calls.refresh).toBe(1)
+    expect(calls.posts.some((m) => m.type === "error")).toBe(false)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
+  })
+
+  it("private terminal surfaces the logout error with zero SDK auth.remove", async () => {
+    const { calls, ctx } = createCtx({ privateOutcome: "terminal" })
+
+    await handleLogout(ctx)
+
+    expect(calls.private).toBe(1)
+    expect(calls.authRemove).toBe(0)
+    expect(calls.posts).toContainEqual(expect.objectContaining({ type: "error" }))
+    expect(calls.posts.some((m) => m.type === "profileData")).toBe(false)
+    expect(calls.refresh).toBe(0)
+    expect((ctx as unknown as Record<string, unknown>).disposeGlobal).toBeUndefined()
+    expect((ctx.client as unknown as Record<string, unknown>).global).toBeUndefined()
+  })
+
+  it("private unavailable falls back to exactly one same-identity SDK auth.remove", async () => {
+    const { calls, ctx } = createCtx({ privateOutcome: "unavailable" })
+
+    await handleLogout(ctx)
+
+    expect(calls.authRemove).toBe(1)
+    expect(calls.posts).toContainEqual({ type: "profileData", data: null })
+    expect(calls.refresh).toBe(1)
+    expect(calls.posts.some((m) => m.type === "error")).toBe(false)
+  })
+
+  it("private timeout exact-cancels and falls back to exactly one SDK auth.remove", async () => {
+    const { calls, ctx } = createCtx({ privateOutcome: "timeout" })
+
+    await handleLogout(ctx)
+
     expect(calls.authRemove).toBe(1)
     expect(calls.posts).toContainEqual({ type: "profileData", data: null })
     expect(calls.posts.some((m) => m.type === "error")).toBe(false)
