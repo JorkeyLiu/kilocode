@@ -32,8 +32,14 @@ this note; when they disagree, the code is right.
   payloads fail fast with a structured `providerActionError` and never fall
   back to the SDK bridge. The legacy SDK mutation callers are removed.
   OAuth `authorize`/`complete` keeps its legacy path with canonical
-  `unsupported`; credential reads and custom model discovery keep their
-  legacy read paths.
+  `unsupported`; explicit credential reveal keeps its legacy one-shot
+  read path. Stored model-discovery credentials no longer cross the
+  broad provider-list refresh (no extension-side key cache): editing an
+  existing legacy provider without retyping the key discovers models
+  through the runtime narrow endpoint `POST /provider/:providerID/models`
+  (exact provider plus exact stored `baseURL`, backend-held Bearer key);
+  freshly typed keys, custom headers, and canonical `SecretStorage`
+  discovery keep their existing paths.
 - Authored canonical custom-provider protocol is converged: `CanonicalProviderPayload`
   persists only `{name, endpoint, protocol, models}` plus the extension-host
   credential reference, with protocol exactly `openai/completions`,

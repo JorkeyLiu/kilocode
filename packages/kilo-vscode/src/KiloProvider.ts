@@ -138,13 +138,12 @@ import {
   buildActionContext,
   computeDefaultSelection,
   fetchProviderData,
+  isProviderModelsAuthError,
   validateRecents,
   validateFavorites,
   authorizeProviderOAuth as authorizeOAuthAction,
   completeProviderOAuth as completeOAuthAction,
-  resolveStoredKey,
 } from "./provider-actions"
-import type { StoredProviderKey } from "./provider-actions"
 import { AnacondaDesktopBridge } from "./anaconda-desktop/bridge"
 import { isUnsafeKey } from "./shared/agent-credentials"
 import { fetchOpenAIModels, FetchModelsError } from "./shared/fetch-models"
@@ -396,13 +395,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly extensionVersion =
     vscode.extensions.getExtension("kilocode.kilo-code")?.packageJSON?.version ?? "unknown"
   private cachedProvidersMessage: unknown = null
-  /**
-   * Provider API keys retained extension-side for authenticated model
-   * fetches (#10139). Keys are stripped before provider data reaches the
-   * webview, so fetch requests for an existing provider carry a providerID
-   * and the key is resolved here. Refreshed on every provider fetch.
-   */
-  private storedProviderKeys: Record<string, StoredProviderKey> = {}
   /** Coalesce provider refreshes — at most one follow-up rerun when a request lands mid-flight. */
   private providersRefresh: Promise<void> | null = null
   private providersQueued = false
@@ -3553,7 +3545,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           return
         }
         try {
-          const { response, authMethods, authStates, storedKeys } = await fetchProviderData(
+          const { response, authMethods, authStates } = await fetchProviderData(
             client,
             this.getWorkspaceDirectory(),
           )
@@ -3562,7 +3554,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             generation = this.providersGeneration
             continue
           }
-          this.storedProviderKeys = storedKeys
           const settings = vscode.workspace.getConfiguration("kilo-code.new.model")
           const message = {
             type: "providersLoaded",
@@ -3713,7 +3704,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       )
       const auth = authorizeCredentialRead(pid, response.all as Array<Record<string, unknown>>)
       if (!auth.authorized) return errReply(auth.error)
-      // LOCK-004: one-shot response — never cache key in storedProviderKeys or providersLoaded
+      // LOCK-004: one-shot response — the key is never cached or broadcast
       this.postMessage({
         type: "providerCredentialLoaded",
         requestID: rid,
@@ -3775,20 +3766,68 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // Exact owned ref only — never reconstruct a derived key as fallback.
       if (ref) key = await this.canonicalConfig.resolveSecret(ref)
     }
-    if (!key && !this.canonicalConfig) key = resolveStoredKey(this.storedProviderKeys, msg.providerID, url)
     // Canonical mode never passes headers — they are host-only credential data
     const headers = this.canonicalConfig
       ? undefined
       : msg.headers && typeof msg.headers === "object"
         ? (msg.headers as Record<string, string>)
         : undefined
+    if (this.canonicalConfig) {
+      try {
+        const models = await fetchOpenAIModels({ baseURL: url, apiKey: key, headers })
+        this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models })
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to fetch models"
+        const auth = err instanceof FetchModelsError && err.auth
+        this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: message, auth })
+      }
+      return
+    }
+    // Legacy path: a freshly typed key or custom headers still fetch direct
+    // from the extension host. Only the stored-backend-credential case (no
+    // raw key, no headers, existing providerID) uses the runtime narrow
+    // endpoint, so the secret never crosses the provider-list refresh.
+    if (key || headers) {
+      try {
+        const models = await fetchOpenAIModels({ baseURL: url, apiKey: key, headers })
+        this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models })
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to fetch models"
+        const auth = err instanceof FetchModelsError && err.auth
+        this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: message, auth })
+      }
+      return
+    }
+    const pid = typeof msg.providerID === "string" ? msg.providerID : ""
+    if (!pid) {
+      try {
+        const models = await fetchOpenAIModels({ baseURL: url })
+        this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models })
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Failed to fetch models"
+        const auth = err instanceof FetchModelsError && err.auth
+        this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: message, auth })
+      }
+      return
+    }
+    if (!this.client) {
+      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: "Not connected to CLI backend" })
+      return
+    }
     try {
-      const models = await fetchOpenAIModels({ baseURL: url, apiKey: key, headers })
-      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models })
+      const { data } = await this.client.provider.models.discover(
+        { providerID: pid, baseURL: url, directory: this.getWorkspaceDirectory() },
+        { throwOnError: true },
+      )
+      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models: data?.models ?? [] })
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to fetch models"
-      const auth = err instanceof FetchModelsError && err.auth
-      this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: message, auth })
+      const message = getErrorMessage(err) || "Failed to fetch models"
+      this.postMessage({
+        type: "customProviderModelsFetched",
+        requestId: rid,
+        error: message,
+        auth: isProviderModelsAuthError(err),
+      })
     }
   }
 

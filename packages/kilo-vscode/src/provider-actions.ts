@@ -12,16 +12,6 @@ import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider
  */
 type AuthState = "api" | "oauth" | "wellknown"
 
-/** API key retained extension-side for authenticated model fetches (#10139). */
-export interface StoredProviderKey {
-  key: string
-  baseURL: string
-}
-
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
-}
-
 /** Fetch provider availability and authentication state without exposing stored credentials. */
 export async function fetchProviderData(client: KiloClient, dir: string) {
   const authRequest =
@@ -42,18 +32,10 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
     kiloRequest,
   ])
   const authStates: Record<string, AuthState> = {}
-  const storedKeys: Record<string, StoredProviderKey> = {}
   const all = response.all.map((item) => {
     const raw = item as Record<string, unknown>
     if (typeof raw.id === "string" && typeof raw.key === "string" && raw.key) {
       authStates[raw.id] = "api"
-      // Retain the key on the extension side so model fetches for an existing
-      // provider can authenticate without the webview ever seeing the secret
-      // (#10139). Only providers with a configured baseURL are retained — the
-      // fetch handler requires a URL match before applying a stored key.
-      const options = record(raw.options) ? raw.options : undefined
-      const baseURL = options && typeof options.baseURL === "string" ? options.baseURL : undefined
-      if (baseURL) storedKeys[raw.id] = { key: raw.key, baseURL }
     }
     if (!("key" in raw)) return item
     const next = { ...raw }
@@ -62,25 +44,7 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
   })
   delete authStates[KILO_PROVIDER_ID]
   if (kiloAuth) authStates[KILO_PROVIDER_ID] = kiloAuth
-  return { response: { ...response, all }, authMethods, authStates, storedKeys }
-}
-
-/**
- * Resolve the stored API key for a model fetch on an existing provider.
- * The key is only applied when the requested URL matches the provider's
- * configured baseURL, so a stored secret can never be redirected to a
- * different host (e.g. after the user edits the URL field).
- */
-export function resolveStoredKey(
-  storedKeys: Record<string, StoredProviderKey>,
-  providerID: unknown,
-  url: string,
-): string | undefined {
-  if (typeof providerID !== "string" || !providerID) return undefined
-  const stored = storedKeys[providerID]
-  if (!stored) return undefined
-  const normalize = (value: string) => value.trim().replace(/\/+$/, "")
-  return normalize(stored.baseURL) === normalize(url) ? stored.key : undefined
+  return { response: { ...response, all }, authMethods, authStates }
 }
 
 export function buildActionContext(
@@ -295,4 +259,29 @@ export function authorizeCredentialRead(
   }
 
   return { authorized: false, error: "Unable to load API key" }
+}
+
+/**
+ * Map a runtime model-discovery failure to the existing
+ * `customProviderModelsFetched` auth UX. The backend reports stored-key
+ * authentication failures as `Unauthorized` (upstream 401/403); every other
+ * failure is a non-auth error. Inspects the hey-api error body
+ * (`{name, data.message}`), nested causes, and plain messages.
+ */
+export function isProviderModelsAuthError(error: unknown): boolean {
+  if (typeof error === "string") return /401|403|unauthor|authentication/i.test(error)
+  if (!error || typeof error !== "object") return false
+  const record = error as Record<string, unknown>
+  if (record.name === "Unauthorized") return true
+  const candidates: unknown[] = [record.message, record.error]
+  const data = record.data
+  if (data && typeof data === "object") {
+    const inner = data as Record<string, unknown>
+    candidates.push(inner.message)
+  }
+  const cause = (record as { cause?: unknown }).cause
+  if (cause !== undefined) candidates.push(cause)
+  return candidates.some(
+    (item) => typeof item === "string" && /401|403|unauthor|authentication/i.test(item),
+  )
 }

@@ -31,6 +31,34 @@ export class ProviderAuthApiError extends Schema.ErrorClass<ProviderAuthApiError
   { httpApiStatus: 400 },
 ) {}
 
+export const ProviderModelsInput = Schema.Struct({
+  baseURL: Schema.String,
+})
+export const ProviderModelEntry = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+})
+export const ProviderModelsResult = Schema.Struct({
+  models: Schema.Array(ProviderModelEntry),
+})
+
+const ProviderModelsErrorName = Schema.Union([
+  Schema.Literal("BadRequest"),
+  Schema.Literal("Unauthorized"),
+  Schema.Literal("InvalidResponse"),
+  Schema.Literal("UpstreamError"),
+])
+export class ProviderModelsApiError extends Schema.ErrorClass<ProviderModelsApiError>("ProviderModelsError")(
+  {
+    name: ProviderModelsErrorName,
+    data: Schema.Struct({
+      providerID: Schema.optional(ProviderV2.ID),
+      message: Schema.optional(Schema.String),
+    }),
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export const ProviderApi = HttpApi.make("provider")
   .add(
     HttpApiGroup.make("provider")
@@ -79,6 +107,20 @@ export const ProviderApi = HttpApi.make("provider")
             identifier: "provider.oauth.callback",
             summary: "Handle OAuth callback",
             description: "Handle the OAuth callback from a provider after user authorization.",
+          }),
+        ),
+        HttpApiEndpoint.post("models", `${root}/:providerID/models`, {
+          params: { providerID: ProviderV2.ID },
+          query: WorkspaceRoutingQuery,
+          payload: ProviderModelsInput,
+          success: described(ProviderModelsResult, "Models discovered with the stored backend credential"),
+          error: ProviderModelsApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "provider.models.discover",
+            summary: "Discover models with the stored credential",
+            description:
+              "Fetch OpenAI-compatible models using the backend-stored credential for the exact provider and baseURL.",
           }),
         ),
       )

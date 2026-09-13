@@ -3,7 +3,7 @@ import {
   authorizeCredentialRead,
   completeProviderOAuth,
   fetchProviderData,
-  resolveStoredKey,
+  isProviderModelsAuthError,
 } from "../../src/provider-actions"
 
 type ExistingGlobal = { disabled_providers?: string[]; provider?: Record<string, unknown> }
@@ -287,7 +287,7 @@ describe("fetchProviderData", () => {
     expect(result.authStates).toEqual({})
   })
 
-  it("retains stripped keys for providers with a configured baseURL", async () => {
+  it("strips keys without retaining them extension-side", async () => {
     const client = {
       provider: {
         list: async () => ({
@@ -324,35 +324,28 @@ describe("fetchProviderData", () => {
 
     const result = await fetchProviderData(client, "/tmp")
 
-    expect(result.storedKeys).toEqual({
-      myprovider: { key: "sk-stored", baseURL: "https://example.com/v1" },
-    })
+    expect("storedKeys" in result).toBe(false)
+    expect(result.authStates).toEqual({ myprovider: "api", "no-url": "api" })
     expect(result.response.all.every((item) => !("key" in (item as Record<string, unknown>)))).toBe(true)
   })
 })
 
-describe("resolveStoredKey", () => {
-  const storedKeys = {
-    myprovider: { key: "sk-stored", baseURL: "https://example.com/v1" },
-  }
-
-  it("returns the stored key when the fetch URL matches the configured baseURL", () => {
-    expect(resolveStoredKey(storedKeys, "myprovider", "https://example.com/v1")).toBe("sk-stored")
+describe("isProviderModelsAuthError", () => {
+  it("maps runtime Unauthorized failures to auth UX", () => {
+    expect(isProviderModelsAuthError({ name: "Unauthorized", data: { message: "Stored credential failed authentication (HTTP 401)" } })).toBe(true)
+    expect(isProviderModelsAuthError({ name: "Unauthorized", data: {} })).toBe(true)
   })
 
-  it("tolerates trailing-slash differences", () => {
-    expect(resolveStoredKey(storedKeys, "myprovider", "https://example.com/v1/")).toBe("sk-stored")
+  it("detects auth status and credential wording in plain messages", () => {
+    expect(isProviderModelsAuthError({ name: "UpstreamError", data: { message: "HTTP 403 from provider" } })).toBe(true)
+    expect(isProviderModelsAuthError("authentication failed")).toBe(true)
   })
 
-  it("refuses to apply the stored key to a different host or path", () => {
-    expect(resolveStoredKey(storedKeys, "myprovider", "https://evil.example.net/v1")).toBeUndefined()
-    expect(resolveStoredKey(storedKeys, "myprovider", "https://example.com/v2")).toBeUndefined()
-  })
-
-  it("returns undefined for unknown or missing provider ids", () => {
-    expect(resolveStoredKey(storedKeys, "other", "https://example.com/v1")).toBeUndefined()
-    expect(resolveStoredKey(storedKeys, undefined, "https://example.com/v1")).toBeUndefined()
-    expect(resolveStoredKey(storedKeys, "", "https://example.com/v1")).toBeUndefined()
+  it("keeps invalid and transport failures as non-auth errors", () => {
+    expect(isProviderModelsAuthError({ name: "BadRequest", data: { message: "Provider model discovery request is invalid" } })).toBe(false)
+    expect(isProviderModelsAuthError({ name: "InvalidResponse", data: { message: "Provider returned an invalid models response" } })).toBe(false)
+    expect(isProviderModelsAuthError({ name: "UpstreamError", data: { message: "Provider models request failed" } })).toBe(false)
+    expect(isProviderModelsAuthError(undefined)).toBe(false)
   })
 })
 

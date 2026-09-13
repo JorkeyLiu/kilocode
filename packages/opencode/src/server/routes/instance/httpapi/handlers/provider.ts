@@ -1,6 +1,13 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
+import {
+  ModelDiscoveryError,
+  fetchModelsWithKey,
+  isDiscoveryCredentialAllowed,
+  isStrictBaseURL,
+  normalizeBaseURL,
+} from "@/provider/model-discovery"
 
 import { pickBy } from "remeda" // kilocode_change
 import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
@@ -9,7 +16,7 @@ import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ProviderAuthApiError } from "../groups/provider"
+import { ProviderAuthApiError, ProviderModelsApiError } from "../groups/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
@@ -104,10 +111,66 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       return true
     })
 
+    const models = Effect.fn("ProviderHttpApi.models")(function* (ctx: {
+      params: { providerID: ProviderV2.ID }
+      payload: { baseURL: string }
+    }) {
+      const fail = (name: "BadRequest" | "Unauthorized" | "InvalidResponse" | "UpstreamError", message: string) =>
+        new ProviderModelsApiError({ name, data: { providerID: ctx.params.providerID, message } })
+      const providerID = String(ctx.params.providerID ?? "").trim()
+      const requestedBaseURL = typeof ctx.payload.baseURL === "string" ? ctx.payload.baseURL : ""
+      if (!providerID) return yield* Effect.fail(fail("BadRequest", "Provider model discovery request is invalid"))
+      // Strict URL shape on the request URL first: plain http(s) only, no
+      // embedded credentials, query, or fragment.
+      if (!isStrictBaseURL(requestedBaseURL)) {
+        return yield* Effect.fail(fail("BadRequest", "Provider model discovery request is invalid"))
+      }
+      const connected = yield* provider.list()
+      const target = connected[providerID as keyof typeof connected]
+      if (!target) return yield* Effect.fail(fail("BadRequest", "Provider model discovery request is invalid"))
+      const raw = target as unknown as Record<string, unknown>
+      const allowed = isDiscoveryCredentialAllowed({
+        providerID,
+        source: raw.source,
+        key: raw.key,
+        env: raw.env,
+      })
+      if (!allowed) return yield* Effect.fail(fail("BadRequest", "Provider model discovery request is invalid"))
+      const storedBaseURL =
+        raw.options && typeof raw.options === "object" && !Array.isArray(raw.options)
+          ? (raw.options as Record<string, unknown>).baseURL
+          : undefined
+      // Stored URL must satisfy the same strict shape; the request itself is
+      // served from the stored URL, never from request text.
+      if (typeof storedBaseURL !== "string" || !isStrictBaseURL(storedBaseURL)) {
+        return yield* Effect.fail(fail("BadRequest", "Provider model discovery request is invalid"))
+      }
+      // Exact stored baseURL match keeps the stored key from being sent to an
+      // arbitrary host (e.g. after the user edits the URL field). User input
+      // headers are never accepted here, so no stored key injection is possible.
+      if (normalizeBaseURL(storedBaseURL) !== normalizeBaseURL(requestedBaseURL)) {
+        return yield* Effect.fail(fail("BadRequest", "Provider model discovery request is invalid"))
+      }
+      const key = raw.key as string
+      const discovered = yield* Effect.tryPromise({
+        try: () => fetchModelsWithKey({ baseURL: normalizeBaseURL(storedBaseURL), key }),
+        catch: (cause) => {
+          if (cause instanceof ModelDiscoveryError) {
+            if (cause.kind === "auth") return fail("Unauthorized", cause.message)
+            if (cause.kind === "invalid") return fail("InvalidResponse", cause.message)
+            return fail("UpstreamError", cause.message)
+          }
+          return fail("UpstreamError", "Provider models request failed")
+        },
+      })
+      return { models: discovered }
+    })
+
     return handlers
       .handle("list", list)
       .handle("auth", auth)
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)
+      .handle("models", models)
   }),
 )

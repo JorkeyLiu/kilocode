@@ -2129,6 +2129,14 @@ export type ProviderAuthError1 = {
   }
 }
 
+export type ProviderModelsError = {
+  name: "BadRequest" | "Unauthorized" | "InvalidResponse" | "UpstreamError"
+  data: {
+    providerID?: string
+    message?: string
+  }
+}
+
 export type Session1 = {
   id: string
   slug: string
@@ -8097,6 +8105,43 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type ProviderModelsDiscoverData = {
+  body?: {
+    baseURL: string
+  }
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}/models"
+}
+
+export type ProviderModelsDiscoverErrors = {
+  /**
+   * ProviderModelsError | InvalidRequestError
+   */
+  400: ProviderModelsError | InvalidRequestError
+}
+
+export type ProviderModelsDiscoverError = ProviderModelsDiscoverErrors[keyof ProviderModelsDiscoverErrors]
+
+export type ProviderModelsDiscoverResponses = {
+  /**
+   * Models discovered with the stored backend credential
+   */
+  200: {
+    models: Array<{
+      id: string
+      name: string
+    }>
+  }
+}
+
+export type ProviderModelsDiscoverResponse = ProviderModelsDiscoverResponses[keyof ProviderModelsDiscoverResponses]
 
 export type SessionListData = {
   body?: never

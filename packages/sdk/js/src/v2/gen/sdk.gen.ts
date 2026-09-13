@@ -251,6 +251,8 @@ import type {
   ProviderAuthResponses,
   ProviderListErrors,
   ProviderListResponses,
+  ProviderModelsDiscoverErrors,
+  ProviderModelsDiscoverResponses,
   ProviderOauthAuthorizeErrors,
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
@@ -3702,6 +3704,51 @@ export class Oauth extends HeyApiClient {
   }
 }
 
+export class Models extends HeyApiClient {
+  /**
+   * Discover models with the stored credential
+   *
+   * Fetch OpenAI-compatible models using the backend-stored credential for the exact provider and baseURL.
+   */
+  public discover<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      directory?: string
+      workspace?: string
+      baseURL?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "baseURL" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ProviderModelsDiscoverResponses,
+      ProviderModelsDiscoverErrors,
+      ThrowOnError
+    >({
+      url: "/provider/{providerID}/models",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Provider extends HeyApiClient {
   /**
    * List providers
@@ -3766,6 +3813,11 @@ export class Provider extends HeyApiClient {
   private _oauth?: Oauth
   get oauth(): Oauth {
     return (this._oauth ??= new Oauth({ client: this.client }))
+  }
+
+  private _models?: Models
+  get models(): Models {
+    return (this._models ??= new Models({ client: this.client }))
   }
 }
 
@@ -6412,7 +6464,7 @@ export class Audio extends HeyApiClient {
   }
 }
 
-export class Models extends HeyApiClient {
+export class Models2 extends HeyApiClient {
   /**
    * Image generation models
    *
@@ -6611,9 +6663,9 @@ export class Kilo extends HeyApiClient {
     return (this._audio ??= new Audio({ client: this.client }))
   }
 
-  private _models?: Models
-  get models(): Models {
-    return (this._models ??= new Models({ client: this.client }))
+  private _models?: Models2
+  get models(): Models2 {
+    return (this._models ??= new Models2({ client: this.client }))
   }
 
   private _organization?: Organization
