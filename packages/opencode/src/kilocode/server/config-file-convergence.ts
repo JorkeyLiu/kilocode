@@ -25,8 +25,13 @@
  * are authorized against InstanceStore loaded identities (established via
  * store load when legal-but-unloaded) plus realpath containment in the
  * backend authorized roots; normalized traversal escapes and symlink escapes
- * are rejected. Nonexistent targets are allowed only when the nearest
- * existing parent is contained.
+ * are rejected. Every resolved descriptor file is additionally guarded
+ * from its authorized root (project directory or global config dir) to
+ * the target: each existing intermediate/leaf component must not be a
+ * symlink and the nearest existing ancestor plus any not-yet-created
+ * tail must stay inside the root. Nonexistent targets are allowed only
+ * when the nearest existing parent is contained and creation does not
+ * pass through an existing symlink.
  *
  * Acquire outcomes strictly distinguish fresh/pending (`acquired`) from
  * already-resolved (`resolved` terminal): a resolved-lease acquire replay
@@ -338,12 +343,15 @@ export function resolveDescriptorPaths(descriptors: readonly ConvergenceDescript
 /**
  * F-02 identity-guarded single read. For project files the lexical
  * directory is verified (non-symlink + realpath == authorized identity)
+ * plus every existing component from the authorized root to the target
+ * file is verified (no intermediate/leaf symlink, realpath contained)
  * immediately before the read, the test hook window runs, the single
  * filesystem read executes, the second hook window runs, then the same
- * identity is verified again immediately after. Any verification failure
+ * verifications run again immediately after. Any verification failure
  * discards the just-read bytes (never returned) and throws so the caller
  * fails closed to a failed terminal with a safe release. Global files
- * (dir undefined) carry no project guard.
+ * (dir undefined) carry the same file guard rooted at the global config
+ * directory.
  *
  * Detect-before-use only: the two verifications bracket the read but
  * cannot atomically prevent an OS-level swap-and-swap-back inside the
@@ -353,26 +361,48 @@ export function resolveDescriptorPaths(descriptors: readonly ConvergenceDescript
  * bytes never participate in diff/hot/cold/boot.
  */
 function guardedReadResolved(entry: FileEntry, auth: ReadonlyMap<string, DirAuth>): ResolvedFile {
-  if (!entry.dir) return readResolved(entry.path)
+  if (!entry.dir) {
+    const root = globalRootSync()
+    verifyFileSync(entry.path, root.base, root.expected)
+    fileReadHooks?.beforeRead?.(entry.path)
+    const out = readResolved(entry.path)
+    fileReadHooks?.afterRead?.(entry.path)
+    const again = globalRootSync()
+    verifyFileSync(entry.path, again.base, again.expected)
+    return out
+  }
   const guard = auth.get(entry.dir)
   if (!guard) throw new Error(`directory identity changed: ${entry.dir}`)
   verifyDirectorySync(entry.dir, guard)
+  verifyFileSync(entry.path, entry.dir, guard.expected)
   fileReadHooks?.beforeRead?.(entry.path)
   const out = readResolved(entry.path)
   fileReadHooks?.afterRead?.(entry.path)
   verifyDirectorySync(entry.dir, guard)
+  verifyFileSync(entry.path, entry.dir, guard.expected)
   return out
 }
 
 function guardedReadBytes(entry: FileEntry, auth: ReadonlyMap<string, DirAuth>): string | undefined {
-  if (!entry.dir) return readBytesOpt(entry.path)
+  if (!entry.dir) {
+    const root = globalRootSync()
+    verifyFileSync(entry.path, root.base, root.expected)
+    fileReadHooks?.beforeRead?.(entry.path)
+    const out = readBytesOpt(entry.path)
+    fileReadHooks?.afterRead?.(entry.path)
+    const again = globalRootSync()
+    verifyFileSync(entry.path, again.base, again.expected)
+    return out
+  }
   const guard = auth.get(entry.dir)
   if (!guard) throw new Error(`directory identity changed: ${entry.dir}`)
   verifyDirectorySync(entry.dir, guard)
+  verifyFileSync(entry.path, entry.dir, guard.expected)
   fileReadHooks?.beforeRead?.(entry.path)
   const out = readBytesOpt(entry.path)
   fileReadHooks?.afterRead?.(entry.path)
   verifyDirectorySync(entry.dir, guard)
+  verifyFileSync(entry.path, entry.dir, guard.expected)
   return out
 }
 
@@ -473,6 +503,118 @@ function verifyDirectorySync(lexical: string, auth: DirAuth): void {
 
 function verifyAllSync(auth: ReadonlyMap<string, DirAuth>): void {
   for (const [lexical, entry] of auth) verifyDirectorySync(lexical, entry)
+}
+
+/**
+ * Descriptor path guard: every existing component from the authorized
+ * root to the target file must not be a symlink, and the nearest
+ * existing ancestor (plus any not-yet-created tail) must resolve inside
+ * the authorized root. Absent files/directories stay allowed for
+ * create/delete/absent, but creation through an existing symlink
+ * escape is rejected. Failure message keeps the existing
+ * `not authorized` classification so the fd carrier maps it to
+ * InvalidParams without a protocol change.
+ */
+function verifyFileSync(file: string, base: string, expected: string): void {
+  const fail = (): never => {
+    throw new Error(`path not authorized: ${file}`)
+  }
+  if (!isWithin(file, base)) fail()
+  const rest = path.relative(base, file)
+  const segs = rest.split(path.sep).filter((s) => s.length > 0)
+  if (segs.includes("..")) fail()
+  try {
+    if (fs.lstatSync(base).isSymbolicLink()) fail()
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("path not authorized")) throw err
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === "ENOTDIR") fail()
+    if (code !== "ENOENT") fail()
+  }
+  let cur = base
+  for (const seg of segs) {
+    cur = path.join(cur, seg)
+    let stat: fs.Stats
+    try {
+      stat = fs.lstatSync(cur)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === "ENOENT") break
+      fail()
+    }
+    if (stat!.isSymbolicLink()) fail()
+    if (cur !== file && !stat!.isDirectory()) fail()
+  }
+  const ancestor = nearestExistingAncestor(file)
+  if (!ancestor) throw new Error(`path not authorized: ${file}`)
+  // The ancestor itself may be unresolvable (e.g. a chmod 000 leaf
+  // fails realpath while its parent resolves). The lstat walk above
+  // already proved every existing component is not a symlink, so fall
+  // back to the nearest resolvable parent and project the tail. Only
+  // the projected location must stay inside the authorized root: the
+  // ancestor itself may be above it when the target does not exist yet
+  // (future create/delete/absent paths).
+  let real = realpathOrNull(ancestor)
+  let tail = path.relative(ancestor, file)
+  if (!real) {
+    let cur = path.dirname(ancestor)
+    for (let i = 0; i < 64; i++) {
+      const cand = realpathOrNull(cur)
+      if (cand) {
+        real = cand
+        tail = path.relative(cur, file)
+        break
+      }
+      const parent = path.dirname(cur)
+      if (parent === cur) break
+      cur = parent
+    }
+    if (!real) throw new Error(`path not authorized: ${file}`)
+  }
+  if (tail.split(path.sep).includes("..")) throw new Error(`path not authorized: ${file}`)
+  const current = tail ? path.join(real, tail) : real
+  if (current !== expected && !isWithin(current, expected)) throw new Error(`path not authorized: ${file}`)
+}
+
+/** Authorized global root: lexical config dir plus its expected realpath. */
+function globalRootSync(): { readonly base: string; readonly expected: string } {
+  const base = Global.Path.config
+  try {
+    if (fs.lstatSync(base).isSymbolicLink()) throw new Error(`path not authorized: ${base}`)
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("path not authorized")) throw err
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw new Error(`path not authorized: ${base}`)
+    if (code === "ENOTDIR") throw new Error(`path not authorized: ${base}`)
+  }
+  const ancestor = nearestExistingAncestor(base)
+  if (!ancestor) throw new Error(`path not authorized: ${base}`)
+  const real = realpathOrNull(ancestor)
+  if (!real) throw new Error(`path not authorized: ${base}`)
+  const rest = path.relative(ancestor, base)
+  if (rest.split(path.sep).includes("..")) throw new Error(`path not authorized: ${base}`)
+  const expected = rest ? path.join(real, rest) : real
+  if (ancestor === base) {
+    const cur = realpathOrNull(base)
+    if (!cur || cur !== expected) throw new Error(`path not authorized: ${base}`)
+  }
+  return { base, expected }
+}
+
+function verifyEntrySync(entry: FileEntry, auth: ReadonlyMap<string, DirAuth>): void {
+  if (!entry.dir) {
+    const root = globalRootSync()
+    verifyFileSync(entry.path, root.base, root.expected)
+    return
+  }
+  const guard = auth.get(entry.dir)
+  if (!guard) throw new Error(`directory identity changed: ${entry.dir}`)
+  verifyDirectorySync(entry.dir, guard)
+  verifyFileSync(entry.path, entry.dir, guard.expected)
+}
+
+function verifyEntriesSync(files: readonly FileEntry[], auth: ReadonlyMap<string, DirAuth>): void {
+  for (const entry of files) verifyEntrySync(entry, auth)
 }
 
 export interface ConfigFileConvergence {
@@ -969,6 +1111,9 @@ export const layer = Layer.effect(
           const auth = yield* authorizeDescriptors(descriptors)
           const scope = leaseScopeFor(descriptors)
           const files = resolveDescriptorFiles(descriptors)
+          // Descriptor path guard before the fence: intermediate/leaf
+          // symlinks and realpath escapes fail closed with no fence raised.
+          yield* Effect.sync(() => verifyEntriesSync(files, auth))
           // F-01: begin failure clears the reservation (the gate is released
           // by the ensuring below) and the concurrent caller safely retries
           // with its own begin — never a second fence for one successful
@@ -1103,11 +1248,12 @@ export const layer = Layer.effect(
             return yield* Effect.die(new Error("observe rejects asset descriptors"))
           if (shuttingDown) return yield* Effect.die(new Error("convergence shutting down"))
           const auth = yield* authorizeDescriptors(descriptors)
-          // Resolve canonical paths + re-verify directory identity with the
-          // existing guards so symlink/traversal escapes fail closed.
+          // Resolve canonical paths + re-verify directory identity and
+          // every descriptor file component with the shared guards so
+          // intermediate/leaf symlink and traversal escapes fail closed.
           const files = resolveDescriptorFiles(descriptors)
           yield* Effect.sync(() => verifyAllSync(auth))
-          void files
+          yield* Effect.sync(() => verifyEntriesSync(files, auth))
           const scope = leaseScopeFor(descriptors)
           const scopeOut: ObserveTerminal["scope"] =
             scope === "global" ? "global" : { directory: scope.directory }

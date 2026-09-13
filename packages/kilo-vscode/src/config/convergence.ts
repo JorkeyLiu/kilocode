@@ -11,8 +11,10 @@
  * persisted with a structured `runtime convergence pending` diagnostic and the
  * backend auto-resolves after a bounded grace. Canonical GUI config writes
  * use the same fence through the activation-owned adapter and fail closed
- * without one (no mutation, no resolve). Intentionally unfenced:
- * agent/skill markdown/asset file writes and external watcher edits.
+ * without one (no mutation, no resolve). Outside that pre-write fence:
+ * intentionally non-canonical direct agent/skill `.md` writes and external
+ * watcher edits (external canonical edits converge instead via the
+ * descriptor-only observe hint below).
  *
  * External canonical config edits (VS Code watcher, not own writes) are
  * observed via a descriptor-only private hint (`config/convergence/observe`)
