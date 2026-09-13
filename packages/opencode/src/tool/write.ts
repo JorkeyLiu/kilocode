@@ -14,6 +14,7 @@ import { build } from "./filediff" // kilocode_change - shared formatter-final d
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import { Snapshot } from "@/snapshot" // kilocode_change - shared worktree exclusive with revert
 import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
+import { WriteCas } from "./write-cas" // kilocode_change - write-anchored external drift guard
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { filterDiagnostics } from "./diagnostics" // kilocode_change
 import { ConfigValidation } from "../kilocode/config-validation" // kilocode_change
@@ -88,6 +89,13 @@ export const WriteTool = Tool.define(
             journal,
             (scope) =>
               Effect.gen(function* () {
+                // kilocode_change - write-anchored CAS: re-read disk inside the
+                // exclusive before prepare; external drift aborts with no row.
+                const anchored = yield* WriteCas.match(fs, filepath, pre.bytes)
+                if (!anchored) {
+                  yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids } } }).pipe(Effect.ignore)
+                  yield* Effect.fail(WriteCas.error(filepath))
+                }
                 const noted = yield* journal
                   .prepare({
                     sessionID: ctx.sessionID,
@@ -113,6 +121,9 @@ export const WriteTool = Tool.define(
                 ids.push(noted.row.id)
               yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids } } })
               const exit = yield* Effect.gen(function* () {
+                // kilocode_change - re-check before write; drift fails the prepared row.
+                const fresh = yield* WriteCas.match(fs, filepath, pre.bytes)
+                if (!fresh) yield* Effect.fail(WriteCas.error(filepath))
                 yield* EncodedIO.write(fs, filepath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces fs.writeWithDirs
                 if (yield* format.file(filepath)) {
                   box.final = yield* EncodedIO.sync(fs, filepath, desiredBom, source.encoding)

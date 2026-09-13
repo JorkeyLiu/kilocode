@@ -24,6 +24,7 @@ import * as Encoding from "../kilocode/encoding" // kilocode_change
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
+import { WriteCas } from "./write-cas" // kilocode_change - write-anchored external drift guard
 
 export { trimDiff } from "./filediff" // kilocode_change - compat re-export
 
@@ -160,6 +161,13 @@ export const EditTool = Tool.define(
                   journal,
                   (scope) =>
                     Effect.gen(function* () {
+                      // kilocode_change - write-anchored CAS: re-read disk inside the
+                      // exclusive before prepare; external create aborts with no row.
+                      const anchored = yield* WriteCas.match(afs, filePath, null)
+                      if (!anchored) {
+                        yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore)
+                        yield* Effect.fail(WriteCas.error(filePath))
+                      }
                       const created = yield* journal
                         .prepare({
                           sessionID: ctx.sessionID,
@@ -187,6 +195,9 @@ export const EditTool = Tool.define(
                     yield* runGuarded(
                       created.row.id,
                       Effect.gen(function* () {
+                        // kilocode_change - re-check before write; drift fails the prepared row.
+                        const fresh = yield* WriteCas.match(afs, filePath, null)
+                        if (!fresh) yield* Effect.fail(WriteCas.error(filePath))
                         yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
                         if (yield* format.file(filePath)) {
                           contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
@@ -246,6 +257,13 @@ export const EditTool = Tool.define(
                 journal,
                 (scope) =>
                   Effect.gen(function* () {
+                    // kilocode_change - write-anchored CAS: re-read disk inside the
+                    // exclusive before prepare; external change/delete aborts with no row.
+                    const anchored = yield* WriteCas.match(afs, filePath, pre.bytes)
+                    if (!anchored) {
+                      yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore)
+                      yield* Effect.fail(WriteCas.error(filePath))
+                    }
                     // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
                     const changed = yield* journal
                       .prepare({
@@ -274,6 +292,9 @@ export const EditTool = Tool.define(
                   yield* runGuarded(
                     changed.row.id,
                     Effect.gen(function* () {
+                      // kilocode_change - re-check before write; drift fails the prepared row.
+                      const fresh = yield* WriteCas.match(afs, filePath, pre.bytes)
+                      if (!fresh) yield* Effect.fail(WriteCas.error(filePath))
                       yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
                       if (yield* format.file(filePath)) {
                         contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, source.encoding)

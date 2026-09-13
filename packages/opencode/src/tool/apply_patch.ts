@@ -18,6 +18,7 @@ import { Format } from "../format"
 import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import { Snapshot } from "@/snapshot" // kilocode_change - shared worktree exclusive with revert
 import { JournalWindow } from "./journal-window" // kilocode_change - shared worktree exclusive for writers
+import { WriteCas } from "./write-cas" // kilocode_change - write-anchored external drift guard
 import * as Bom from "@/util/bom"
 
 export const Parameters = Schema.Struct({
@@ -370,6 +371,19 @@ export const ApplyPatchTool = Tool.define(
         Effect.gen(function* () {
         let item = 0
         let done = 0
+        // kilocode_change - write-anchored CAS: batch-sequential expected state so
+        // the batch's own prefix never misreads as external drift.
+        const expected = new Map<string, Buffer | null>()
+        const want = (file: string, base: Buffer | null): Buffer | null => {
+          const hit = expected.get(file)
+          if (hit !== undefined) return hit
+          return base
+        }
+        const guard = (file: string, base: Buffer | null) =>
+          Effect.gen(function* () {
+            const ok = yield* WriteCas.match(afs, file, want(file, base))
+            if (!ok) yield* Effect.fail(WriteCas.error(file))
+          })
       for (const change of fileChanges) {
         if (change.type === "move" && change.movePath) {
           // Dual-fact move: both prepares before any write of this hunk.
@@ -379,6 +393,9 @@ export const ApplyPatchTool = Tool.define(
           let srcID: string | undefined
           let tgtID: string | undefined
           const exit = yield* Effect.gen(function* () {
+            // kilocode_change - pre-prepare CAS on both paths; drift aborts with no rows.
+            yield* guard(moveTarget, change.targetBefore ?? null)
+            yield* guard(change.filePath, change.beforeBytes)
             // Target sub 0 first, source sub 1 second; ids order matches list order.
             const tgt = yield* journal.prepare({
               sessionID: ctx.sessionID,
@@ -429,6 +446,9 @@ export const ApplyPatchTool = Tool.define(
           tgtID = exit.value.tgt.row.id
           yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: [...journalIDs] } } })
           const settleExit = yield* Effect.gen(function* () {
+            // kilocode_change - re-check both paths before any write/remove of this hunk.
+            yield* guard(moveTarget, change.targetBefore ?? null)
+            yield* guard(change.filePath, change.beforeBytes)
             // Target first, then source — matches historic write order.
             yield* EncodedIO.write(afs, moveTarget, Bom.join(change.newContent, change.bom), change.encoding)
             if (yield* format.file(moveTarget)) {
@@ -457,6 +477,10 @@ export const ApplyPatchTool = Tool.define(
                 beforeFallback: change.beforeBytes,
               })
             }
+            // kilocode_change - project batch-sequential expected state on success.
+            const landed = Buffer.from(yield* afs.readFile(moveTarget))
+            expected.set(moveTarget, landed)
+            expected.set(change.filePath, null)
           }).pipe(Effect.exit)
           if (settleExit._tag === "Failure") {
             const message = Cause.pretty(settleExit.cause as never)
@@ -473,8 +497,10 @@ export const ApplyPatchTool = Tool.define(
           item += 1
           continue
         }
-        const prepExit = yield* journal
-          .prepare({
+        // kilocode_change - pre-prepare CAS; drift aborts with no row, prefix stays applied.
+        const prepExit = yield* Effect.gen(function* () {
+          yield* guard(change.filePath, change.beforeBytes)
+          return yield* journal.prepare({
             sessionID: ctx.sessionID,
             messageID: ctx.messageID,
             callID: ctx.callID,
@@ -489,7 +515,7 @@ export const ApplyPatchTool = Tool.define(
             encoding: change.encoding,
             bom: change.bom,
           })
-          .pipe(Effect.exit)
+        }).pipe(Effect.exit)
         if (prepExit._tag === "Failure") {
           progress.done = done
           progress.end = done
@@ -502,6 +528,8 @@ export const ApplyPatchTool = Tool.define(
         yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: [...journalIDs] } } })
 
         const settle = Effect.gen(function* () {
+          // kilocode_change - re-check before any write/remove; drift fails the prepared row.
+          yield* guard(change.filePath, change.beforeBytes)
           const edited = change.type === "delete" ? undefined : change.filePath
           switch (change.type) {
             case "add":
@@ -536,6 +564,8 @@ export const ApplyPatchTool = Tool.define(
               bom: change.bom,
               beforeFallback: change.beforeBytes,
             })
+            // kilocode_change - project batch-sequential expected state on success.
+            expected.set(change.filePath, after)
         })
         const exit = yield* settle.pipe(Effect.exit)
         if (exit._tag === "Failure") {

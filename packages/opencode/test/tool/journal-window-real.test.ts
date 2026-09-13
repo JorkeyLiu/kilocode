@@ -177,8 +177,19 @@ describe("journal window real Snapshot exclusive", () => {
         })
         // Both sides use the real worktree exclusive; neither may die with a
         // lock defect. Writer execute is orDie-wrapped so check exits.
-        if (writerExit._tag === "Failure") throw new Error(`writer failed: ${Cause.pretty(writerExit.cause)}`)
+        // Unrevert always lands. The writer either won the race (applied) or
+        // lost it and failed closed on the write-anchored drift guard instead
+        // of silently overwriting the restore; either way nothing is torn.
         if (unrevertExit._tag === "Failure") throw new Error(`unrevert failed: ${Cause.pretty(unrevertExit.cause)}`)
+        if (writerExit._tag === "Failure") {
+          expect(Cause.pretty(writerExit.cause)).toContain("changed on disk")
+          const rows = yield* journal.list({ sessionID: writerSid })
+          expect(rows.filter((row) => row.status === "applied")).toEqual([])
+          expect(yield* preparedOf(writerSid)).toEqual([])
+          expect((yield* session.get(sid)).revert).toBeUndefined()
+          expect(yield* readFile(file)).toBe("base")
+          return
+        }
 
         // Writer window was atomic: its journal after image is exactly what
         // the writer wrote, even though unrevert ran concurrently. Without
