@@ -83,6 +83,7 @@ import type { PrivateRemoteToggleWireOutcome, ServePrivateRemoteToggleRequest } 
 import { wrapAuthRemoveOutcomeForOwner } from "./serve-private-auth-remove"
 import type { PrivateAuthRemoveWireOutcome, ServePrivateAuthRemoveRequest } from "./serve-private-auth-remove"
 import { wrapOrganizationSetOutcomeForOwner } from "./serve-private-organization-set"
+import { backgroundStopSessionOutcomeForOwner } from "./serve-private-background-process-stop-session-owner"
 import type {
   PrivateOrganizationSetWireOutcome,
   ServePrivateOrganizationSetRequest,
@@ -3068,6 +3069,10 @@ export class KiloConnectionService {
       peerAtCall.privateOrganizationSetOutcomeWithHandle(req),
       req,
     )
+  }
+
+  privateBackgroundStopSessionOutcomeWithHandle(req: Parameters<typeof backgroundStopSessionOutcomeForOwner>[1]) {
+    return backgroundStopSessionOutcomeForOwner(this, req)
   }
 
   /**

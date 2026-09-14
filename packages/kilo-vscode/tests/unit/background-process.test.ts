@@ -41,6 +41,9 @@ describe("stopSessionProcesses", () => {
     await stopSessionProcesses(client as never, "s1", "/repo")
 
     expect(warnings).toHaveLength(1)
+    expect(warnings[0]?.[0]).toBe("[Kilo New] KiloProvider: Failed to stop background processes:")
     expect(warnings[0]?.[1]).toBe(err)
+    expect(JSON.stringify(warnings)).not.toContain("s1")
+    expect(JSON.stringify(warnings)).not.toContain("/repo")
   })
 })

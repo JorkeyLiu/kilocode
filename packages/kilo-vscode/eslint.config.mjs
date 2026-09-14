@@ -124,7 +124,19 @@ export default [
       // insertion points (peer method plus thin owner delegation) remain
       // inline. connection-service.ts measures 3748 lines, so 3750 is the
       // smallest passing cap.
-    rules: { "max-lines": ["error", 3750] },
+    // Raised 3750 → 3760 for the `background-process/stop-session`
+    // private-first cleanup: the new stop-session capability/peer/owner
+    // surface (strict opaque `background-process-stop-session:<token>`
+    // binding, echo validation, epoch-guarded exact-cancel handle,
+    // single-SDK-fallback helper) must live alongside the existing
+    // branches per the same convention. New logic lives in
+    // serve-private-background-process-stop-session-contract.ts,
+    // serve-private-background-process-stop-session(-owner).ts, and
+    // kilo-provider/background-process-stop-session-privatefirst.ts; only
+    // the required insertion points (peer methods plus thin owner
+    // delegation) remain inline. connection-service.ts measures 3753
+    // lines, so 3760 is the smallest passing cap.
+    rules: { "max-lines": ["error", 3760] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

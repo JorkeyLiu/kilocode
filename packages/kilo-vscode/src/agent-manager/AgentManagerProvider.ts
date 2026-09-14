@@ -1116,7 +1116,7 @@ export class AgentManagerProvider implements Disposable {
     const root = this.getRoot() ?? ""
     try {
       const { stopSessionProcesses } = await import("../kilo-provider/background-process")
-      await stopSessionProcesses(this.connectionService.getClient(), sessionId, root)
+      await stopSessionProcesses(this.connectionService.getClient(), sessionId, root, this.connectionService)
     } catch (err) {
       this.log(`Failed to stop session processes for ${sessionId}:`, err)
     }

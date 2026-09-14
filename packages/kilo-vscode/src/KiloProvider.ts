@@ -1490,7 +1490,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const sid = this.contextSessionID ?? this.currentSession?.id
     if (!sid || sid === next) return
     const session = this.currentSession?.id === sid ? this.currentSession : undefined
-    void stopSessionProcesses(this.client, sid, this.getSessionDirectory(sid, session))
+    void stopSessionProcesses(this.client, sid, this.getSessionDirectory(sid, session), this.connectionService)
   }
 
   private sendRemoteStatus(): void {
@@ -3477,7 +3477,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         sessionID,
         this.currentSession?.id === sessionID ? this.currentSession : undefined,
       )
-      await stopSessionProcesses(this.client, sessionID, workspaceDir)
+      await stopSessionProcesses(this.client, sessionID, workspaceDir, this.connectionService)
       await deleteSessionPrivateFirst({
         client: this.client,
         connection: this.connectionService,

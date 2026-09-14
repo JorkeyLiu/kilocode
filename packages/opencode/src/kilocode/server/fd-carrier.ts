@@ -182,6 +182,13 @@ import {
   fallbackMcpDisconnectIds,
 } from "@/kilocode/mcp-connection-private"
 import { ConfigFileConvergence } from "./config-file-convergence"
+import {
+  INTERNAL_MESSAGE as BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE,
+  OP as BACKGROUND_STOP_SESSION_OP,
+  VERSION as BACKGROUND_STOP_SESSION_VERSION,
+  fallbackBackgroundStopSessionIds,
+  stopSessionProcessesPrivate,
+} from "@/kilocode/background-process-stop-session-private"
 
 export interface FdCarrierHandle {
   peer: Peer
@@ -5231,6 +5238,57 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: INSTANCE_RELOAD_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === BACKGROUND_STOP_SESSION_OP || method === "background-process/stop-session") {
+        // Session-scoped background cleanup: the same `BackgroundProcess.
+        // stopSession(sessionID)` as the HTTP `backgroundProcess.stopSession`
+        // route under the existing drain-control + `InstanceRef` lane
+        // (canonical routing directory, scope_mismatch on stored drift, fence
+        // retryable, no journal/replay/new fence). Stopping is idempotent, so
+        // an ambiguous transport outcome may safely repeat via the
+        // same-identity SDK fallback; the op never retries.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* stopSessionProcessesPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: BACKGROUND_STOP_SESSION_VERSION,
+                  requestId: fallbackBackgroundStopSessionIds(params).requestId,
+                  opId: fallbackBackgroundStopSessionIds(params).opId,
+                  op: BACKGROUND_STOP_SESSION_OP,
+                  idempotencyKey: fallbackBackgroundStopSessionIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: BACKGROUND_STOP_SESSION_VERSION,
+                  requestId: fallbackBackgroundStopSessionIds(params).requestId,
+                  opId: fallbackBackgroundStopSessionIds(params).opId,
+                  op: BACKGROUND_STOP_SESSION_OP,
+                  idempotencyKey: fallbackBackgroundStopSessionIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

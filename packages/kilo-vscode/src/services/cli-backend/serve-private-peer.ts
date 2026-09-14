@@ -102,6 +102,17 @@ import {
   requestOrganizationSetOutcome,
   validateOrganizationSetRequest,
 } from "./serve-private-organization-set"
+import {
+  makeBackgroundStopSessionCancel,
+  PrivateBackgroundStopSessionValidationError,
+  requestBackgroundStopSessionOutcome,
+  validateBackgroundStopSessionRequest,
+} from "./serve-private-background-process-stop-session"
+import type {
+  PrivateBackgroundStopSessionWireOutcome,
+  ServePrivateBackgroundStopSessionRequest,
+  ServePrivateBackgroundStopSessionResult,
+} from "./serve-private-background-process-stop-session"
 import type {
   PrivateOrganizationSetWireOutcome,
   ServePrivateOrganizationSetRequest,
@@ -3391,6 +3402,57 @@ export class ServePrivatePeer {
     return { id: outcome.id, promise, cancel: outcome.cancel }
   }
 
+  privateBackgroundStopSessionOutcomeWithHandle(req: ServePrivateBackgroundStopSessionRequest): {
+    id: number
+    promise: Promise<PrivateBackgroundStopSessionWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateBackgroundStopSessionRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(req.op)) throw new Error(`Private peer missing ${req.op} capability`)
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const op = req.op
+    return requestBackgroundStopSessionOutcome(
+      peerAtCall as unknown as import("./serve-private-background-process-stop-session").BackgroundStopSessionRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeBackgroundStopSessionCancel(
+          id,
+          {
+            isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+            tryCancel: (msg) => this.tryCancelPending(id, msg),
+            invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+          },
+          op,
+        ),
+      req,
+    )
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid background stop-session results; invalid wire rejects
+   * with PrivateBackgroundStopSessionValidationError and never resolves as a normal result.
+   */
+  privateBackgroundStopSessionWithHandle(req: ServePrivateBackgroundStopSessionRequest): {
+    id: number
+    promise: Promise<ServePrivateBackgroundStopSessionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    const outcome = this.privateBackgroundStopSessionOutcomeWithHandle(req)
+    const promise = (async (): Promise<ServePrivateBackgroundStopSessionResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivateBackgroundStopSessionValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
   privateInstanceReloadOutcomeWithHandle(req: ServePrivateInstanceReloadRequest): {
     id: number
     promise: Promise<PrivateInstanceReloadWireOutcome>
@@ -3563,6 +3625,7 @@ export class ServePrivatePeer {
       if (cap === "permission/reply" && c["permission/reply"]) return true
       if (cap === "permission/allow-everything" && c["permission/allow-everything"]) return true
       if (cap === "skill/remove" && c["skill/remove"]) return true
+      if (cap === "background-process/stop-session" && c["background-process/stop-session"]) return true
     }
     return false
   }
