@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync as readBin, rmSync } from "node:fs"
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync as readBin, rmSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import {
@@ -148,11 +148,15 @@ describe("custom-only webview surface", () => {
     expect(src).not.toContain("oauthOnly")
   })
 
-  it("ProviderConnectDialog never opens the Anaconda backend in custom-only mode", () => {
+  it("ProviderConnectDialog webview Anaconda dead leaf stays deleted", () => {
     const src = read("webview-ui/src/components/settings/ProviderConnectDialog.tsx")
-    expect(src).toContain("AnacondaDesktopDialog")
-    expect(src).toContain("!CUSTOM_ONLY")
-    expect(src).toContain('props.providerID === "anaconda-desktop"')
+    expect(src).not.toContain("AnacondaDesktopDialog")
+    expect(src).not.toContain("!CUSTOM_ONLY")
+    expect(src).not.toContain('props.providerID === "anaconda-desktop"')
+    expect(src).not.toContain("anacondaDesktop")
+    expect(existsSync(resolve(ROOT, "webview-ui/src/components/settings/AnacondaDesktopDialog.tsx"))).toBe(false)
+    expect(existsSync(resolve(ROOT, "webview-ui/src/utils/anaconda-desktop-action.ts"))).toBe(false)
+    expect(existsSync(resolve(ROOT, "webview-ui/src/stories/anaconda-desktop.stories.tsx"))).toBe(false)
   })
 
   it("ProfileView hides sign-in actions and keeps only the unavailable notice", () => {
@@ -868,6 +872,8 @@ describe("custom-only anaconda boundary", () => {
     expect(calls).toEqual({ status: 0, open: 0, sync: 0 })
     const errors = messages.filter((m) => (m as Record<string, unknown>).type === "anacondaDesktopActionError") as Record<string, unknown>[]
     expect(errors).toHaveLength(3)
+    // Fail-closed: the three fallible messages error, cancel stays silent, no success leaks.
+    expect(messages).toHaveLength(3)
     expect(errors.map((e) => e.action).sort()).toEqual(["open", "status", "sync"])
     for (const e of errors) expect(String(e.message)).toContain("temporarily unavailable")
     const src = read("src/KiloProvider.ts")

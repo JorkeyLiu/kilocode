@@ -1,7 +1,5 @@
 import { describe, expect, it } from "bun:test"
 import { AnacondaDesktopBridge } from "../../src/anaconda-desktop/bridge"
-import { createAnacondaDesktopAction } from "../../webview-ui/src/utils/anaconda-desktop-action"
-import type { ExtensionMessage, WebviewMessage } from "../../webview-ui/src/types/messages"
 
 const ready = {
   type: "ready" as const,
@@ -62,40 +60,4 @@ describe("AnacondaDesktopBridge", () => {
     await request
     expect(posts).toEqual([])
   })
-})
-
-function transport() {
-  const sent: WebviewMessage[] = []
-  const listeners = new Set<(message: ExtensionMessage) => void>()
-  return {
-    sent,
-    postMessage: (message: WebviewMessage) => sent.push(message),
-    onMessage: (handler: (message: ExtensionMessage) => void) => {
-      listeners.add(handler)
-      return () => listeners.delete(handler)
-    },
-    receive: (message: ExtensionMessage) => listeners.forEach((handler) => handler(message)),
-  }
-}
-
-it("correlates results and cancels pending webview requests", () => {
-  const vscode = transport()
-  const action = createAnacondaDesktopAction(vscode)
-  const seen: string[] = []
-  const requestId = action.send(
-    { type: "anacondaDesktopStatus" },
-    { onStatus: (message) => seen.push(message.status.type) },
-  )
-
-  vscode.receive({
-    type: "anacondaDesktopStatusResult",
-    requestId,
-    status: { type: "no-running-server", downloadedModels: 1 },
-  })
-  const cancelled = action.send({ type: "anacondaDesktopOpen" })
-  action.clear(cancelled)
-
-  expect(seen).toEqual(["no-running-server"])
-  expect(vscode.sent.at(-1)).toEqual({ type: "cancelAnacondaDesktopRequest", requestId: cancelled })
-  action.dispose()
 })

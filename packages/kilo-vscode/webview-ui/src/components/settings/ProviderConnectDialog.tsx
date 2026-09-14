@@ -15,7 +15,6 @@ import {
   ATOMIC_CHAT_PROVIDER_KEY,
   isLocalProviderOptionalApiKey,
 } from "../../utils/local-providers"
-import AnacondaDesktopDialog from "./AnacondaDesktopDialog"
 import { CUSTOM_ONLY_UNSUPPORTED } from "./provider-tab-helpers"
 
 interface ProviderConnectDialogProps {
@@ -56,14 +55,7 @@ function visible(prompt: Prompt, values: Record<string, string>) {
   return value !== rule.value
 }
 
-const CUSTOM_ONLY = true
-
 const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => {
-  // Custom-only product boundary: Anaconda Desktop is a built-in connection
-  // capability and stays unavailable in the product surface. The backend
-  // dialog implementation is retained but unreachable while the boundary holds.
-  if (!CUSTOM_ONLY && props.providerID === "anaconda-desktop") return <AnacondaDesktopDialog />
-
   const dialog = useDialog()
   const language = useLanguage()
   const provider = useProvider()
