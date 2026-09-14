@@ -1173,8 +1173,8 @@ describe("drain-control bypass - Server.listen path", () => {
             return response
           })
 
-        // The listener shares the canonical SessionStatus/gate with AppRuntime
-        // (standalone topology); status is polled through the listener HTTP
+        // The listener shares the canonical SessionStatus/gate with the canonical
+        // runtime (standalone topology); status is polled through the listener HTTP
         // surface as production-path evidence.
         const listenerStatus = (sessionID: string) =>
           Effect.promise(async () => {
@@ -1299,8 +1299,8 @@ describe("drain-control bypass - Server.listen path", () => {
             return response
           })
 
-        // The listener shares the canonical SessionStatus/gate with AppRuntime
-        // (standalone topology); status is polled through the listener HTTP
+        // The listener shares the canonical SessionStatus/gate with the canonical
+        // runtime (standalone topology); status is polled through the listener HTTP
         // surface as production-path evidence.
         const listenerStatus = (sessionID: string) =>
           Effect.promise(async () => {
@@ -1407,7 +1407,7 @@ describe("drain-control bypass - Server.listen path", () => {
         expect(allowed.status).toBe(200)
         // The pending ID must be observed through the listener's own
         // GET /kilocode/notebook before the fence goes up — same-store
-        // AppRuntime probes are not evidence for this runtime.
+        // canonical-runtime probes are not evidence for this runtime.
         const pending = yield* pollWithTimeout(
           Effect.gen(function* () {
             const response = yield* send(f.project, "/kilocode/notebook")

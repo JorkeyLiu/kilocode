@@ -201,6 +201,16 @@ import {
   fallbackBackgroundStopSessionIds,
   stopSessionProcessesPrivate,
 } from "@/kilocode/background-process-stop-session-private"
+import {
+  INTERNAL_MESSAGE as PTY_PRIVATE_INTERNAL_MESSAGE,
+  REMOVE_OP as PTY_REMOVE_OP,
+  UPDATE_OP as PTY_UPDATE_OP,
+  VERSION as PTY_PRIVATE_VERSION,
+  fallbackPtyRemoveIds,
+  fallbackPtyUpdateIds,
+  removePtyPrivate,
+  updatePtyPrivate,
+} from "@/kilocode/pty-private"
 
 export interface FdCarrierHandle {
   peer: Peer
@@ -5560,6 +5570,68 @@ export function createFdCarrier(
                   failure: { code: "internal", message: BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === PTY_UPDATE_OP || method === "pty/update") {
+        // Active PTY resize via `updatePtyPrivate` (canonical directory +
+        // drain-control/`InstanceRef` lane, canonical `PtyServiceMap` owner,
+        // closed size-only payload). Idempotent, so ambiguous safely falls
+        // back once.
+        const ids = fallbackPtyUpdateIds(params)
+        const failed = () => ({
+          v: PTY_PRIVATE_VERSION,
+          requestId: ids.requestId,
+          opId: ids.opId,
+          op: PTY_UPDATE_OP,
+          idempotencyKey: ids.idempotencyKey,
+          status: "failed" as const,
+          outcome: {
+            type: "failed" as const,
+            time: Date.now(),
+            failure: { code: "internal", message: PTY_PRIVATE_INTERNAL_MESSAGE, retryable: false },
+          },
+          accepted: false as const,
+          failure: { code: "internal", message: PTY_PRIVATE_INTERNAL_MESSAGE, retryable: false },
+        })
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* updatePtyPrivate(params).pipe(
+              Effect.catch(() => Effect.succeed(failed())),
+              Effect.catchDefect(() => Effect.succeed(failed())),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === PTY_REMOVE_OP || method === "pty/remove") {
+        // Active PTY close/dispose via `removePtyPrivate` (empty payload).
+        // Idempotent already-gone maps to terminal `pty.not_found`.
+        const ids = fallbackPtyRemoveIds(params)
+        const failed = () => ({
+          v: PTY_PRIVATE_VERSION,
+          requestId: ids.requestId,
+          opId: ids.opId,
+          op: PTY_REMOVE_OP,
+          idempotencyKey: ids.idempotencyKey,
+          status: "failed" as const,
+          outcome: {
+            type: "failed" as const,
+            time: Date.now(),
+            failure: { code: "internal", message: PTY_PRIVATE_INTERNAL_MESSAGE, retryable: false },
+          },
+          accepted: false as const,
+          failure: { code: "internal", message: PTY_PRIVATE_INTERNAL_MESSAGE, retryable: false },
+        })
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* removePtyPrivate(params).pipe(
+              Effect.catch(() => Effect.succeed(failed())),
+              Effect.catchDefect(() => Effect.succeed(failed())),
             )
             return out
           }),

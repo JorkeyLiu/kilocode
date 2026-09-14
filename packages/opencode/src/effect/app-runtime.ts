@@ -1,5 +1,6 @@
 import { Layer, ManagedRuntime } from "effect"
 import { attach } from "./run-service"
+import * as PtyMap from "@/kilocode/pty/map"
 import * as Observability from "@opencode-ai/core/effect/observability"
 
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -174,6 +175,7 @@ const FeatureLayer = Layer.mergeAll(
   ProjectCopy.defaultLayer, // kilocode_change - satisfy listener route handlers through AppLayer
   MoveSession.defaultLayer, // kilocode_change - satisfy listener route handlers through AppLayer
   PtyTicket.defaultLayer, // kilocode_change - satisfy listener route handlers through AppLayer
+  PtyMap.layer, // kilocode_change - AppLayer-owned dedicated per-directory Pty.Service owner (HTTP+fd share)
   Vcs.defaultLayer,
   Reference.defaultLayer,
   WorkspaceLive,
@@ -182,6 +184,12 @@ const FeatureLayer = Layer.mergeAll(
   SessionShare.defaultLayer, // kilocode_change - canonical AppLayer service
   // kilocode_change - canonical feature service layer
 ) // kilocode_change - canonical feature service layer
+
+// kilocode_change - AppLayer-owned dedicated PTY map registers its single
+// directory invalidation in the layer's own scope (unregistered via
+// finalizer). InstanceStore dispose/reload/cold convergence
+// runDisposers(directory) reaps exactly once. AppLayer scope close finalizes
+// all entries.
 
 // kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults (P4.4-G2: no preset catalog)
 const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {

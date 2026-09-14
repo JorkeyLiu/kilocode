@@ -28,6 +28,7 @@ import { parseToolRequest, startFromTool, type ToolRequest } from "./tool-start"
 import { sandboxSessionMetadata } from "../shared/sandbox-session"
 import { startSession } from "./mcp-warmup"
 import { readTerminalFont, watchTerminalFont } from "./terminal-font"
+import type { PtyPrivateConnection } from "../kilo-provider/pty-privatefirst"
 import { buildKeybindingMap } from "./format-keybinding"
 import { Semaphore } from "./semaphore"
 import { SessionTiming } from "./session-timing"
@@ -114,6 +115,7 @@ export class AgentManagerProvider implements Disposable {
       log: (...args) => this.log("[XTerm]", ...args),
       post: (msg) => this.postToWebview(msg),
       getTerminalFont: () => readTerminalFont(),
+      getPrivateConnection: () => this.connectionService as unknown as PtyPrivateConnection,
     })
     this.unsubFont = watchTerminalFont((font) => {
       this.postToWebview({ type: "agentManager.terminal.fontChanged", font })

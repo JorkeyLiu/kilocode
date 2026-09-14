@@ -23,7 +23,6 @@ import { LocationSearch } from "./location-search"
 import { FileMutation } from "./file-mutation"
 import { ProjectReference } from "./project-reference"
 import { RepositoryCache } from "./repository-cache"
-import { Pty } from "./pty"
 import { SkillV2 } from "./skill"
 import { SkillGuidance } from "./skill/guidance"
 import { BuiltInTools } from "./tool/builtins"
@@ -60,7 +59,6 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       PluginBoot.locationLayer,
       FileSystem.locationLayer,
       Watcher.locationLayer,
-      Pty.locationLayer,
       SkillV2.locationLayer,
       systemContext,
       permissionsAndTools,

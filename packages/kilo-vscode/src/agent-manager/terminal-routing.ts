@@ -17,6 +17,7 @@
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import type { AgentManagerInMessage, AgentManagerOutMessage, TerminalFont } from "./types"
 import { TerminalManager } from "./terminal-manager"
+import type { PtyPrivateConnection } from "../kilo-provider/pty-privatefirst"
 
 interface ServerConfig {
   baseUrl: string
@@ -36,6 +37,8 @@ export interface TerminalRoutingDeps {
   post(message: AgentManagerOutMessage): void
   /** Return the current terminal font settings. */
   getTerminalFont(): TerminalFont
+  /** Private fd-carrier connection for `pty/update` + `pty/remove`. Absent means SDK-only fallback. */
+  getPrivateConnection?(): PtyPrivateConnection | null | undefined
 }
 
 /** True iff the message belongs to the terminal-tab subsystem. */
@@ -58,6 +61,7 @@ export class TerminalRouter {
       getClient: () => deps.getClient(),
       buildWsUrl: (ptyID, cwd) => this.buildWsUrl(ptyID, cwd),
       log: deps.log,
+      getPrivateConnection: () => deps.getPrivateConnection?.() ?? null,
     })
   }
 

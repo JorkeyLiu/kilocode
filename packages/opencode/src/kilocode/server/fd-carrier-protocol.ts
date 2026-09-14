@@ -63,6 +63,8 @@ export const FD_CAPABILITIES = [
   "kilo/profile",
   "kilo/auth-status",
   "background-process/stop-session",
+  "pty/update",
+  "pty/remove",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",

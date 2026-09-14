@@ -209,6 +209,46 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "private peer registry integration test via AppRuntime (same-identity carrier install, CLI->extension request, drop abort, dispose unavailable, conflict keeps old)",
   },
+  "kilocode/server/listener-app-sharing.test.ts": {
+    count: 9,
+    reason:
+      "listener standalone topology integration test via the canonical production runtime (two Server.listen transports share SessionStatus with AppRuntime; a local layer cannot prove cross-transport sharing or listener-stop ownership)",
+  },
+  "kilocode/server/fd-carrier-permission.test.ts": {
+    count: 9,
+    reason:
+      "fd-carrier permission integration test via the canonical production runtime (real permission dispatch and ticket lifecycle over the production runtime identity with live carriers; a local layer cannot serve the carrier path)",
+  },
+  "kilocode/server/fd-carrier-permission-allow-everything.test.ts": {
+    count: 7,
+    reason:
+      "fd-carrier allow-everything permission integration test via the canonical production runtime (real allow-everything dispatch over the production runtime identity with live carriers; a local layer cannot serve the carrier path)",
+  },
+  "kilocode/server/fd-carrier-suggestion.test.ts": {
+    count: 26,
+    reason:
+      "fd-carrier suggestion integration test via the canonical production runtime (real suggestion create/list/dispatch over the production runtime identity with live carriers; a local layer cannot serve the carrier path)",
+  },
+  "kilocode/server/fd-carrier-background-stop-session.test.ts": {
+    count: 2,
+    reason:
+      "fd-carrier background stop-session integration test via the canonical production runtime (real instance load for carrier dispatch identity; a local layer cannot serve the carrier path)",
+  },
+  "kilocode/server/fd-carrier-notebook.test.ts": {
+    count: 14,
+    reason:
+      "fd-carrier notebook integration test via the canonical production runtime (real notebook create/snapshot/dispatch over the production runtime identity with live carriers; a local layer cannot serve the carrier path)",
+  },
+  "kilocode/server/fd-carrier-pty.test.ts": {
+    count: 2,
+    reason:
+      "fd-carrier PTY integration test via the canonical production runtime (HTTP-created PTY shares the AppLayer-owned PtyServiceMap owner with fd update/remove; a local layer cannot prove the shared-owner topology)",
+  },
+  "kilocode/pty/pty-map-lifecycle.test.ts": {
+    count: 3,
+    reason:
+      "PTY map lifecycle integration test via the canonical production runtime (HTTP-created PTY reaped by InstanceStore load/dispose and reload through the AppLayer-owned map; a local layer cannot prove production-path invalidation)",
+  },
   "kilocode/server/fd-carrier-abort.test.ts": {
     count: 13,
     reason:
