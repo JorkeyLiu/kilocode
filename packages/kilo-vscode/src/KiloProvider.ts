@@ -5722,11 +5722,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Reset all "kilo-code.new.*" extension settings to their defaults by reading
+   * Reset VS Code extension-owned settings to defaults by reading
    * contributes.configuration from the extension's package.json at runtime.
    * Only resets settings under the "kilo-code.new." namespace to avoid touching
    * settings from the previous version of the extension which shares the same
    * extension ID and "kilo-code.*" namespace.
+   *
+   * Reset boundary (intentional, do not expand without a product decision):
+   * resets extension-owned `kilo-code.new.*` settings plus `recentModels` and
+   * the migration banner only. It preserves CLI/TUI shared model/variant
+   * memory: it never deletes the shared `model.json`, and in canonical mode
+   * it also preserves the `globalState.variantSelections` compatibility cache
+   * (`ModelState.reset` skips file/cache writes and only posts the existing
+   * empty selection events). Non-canonical mode keeps the existing
+   * clear-extension-model-state behavior. Custom canonical provider config,
+   * SecretStorage, workspace Agent Manager persistence, session/backend,
+   * favorites, and modelSelectorExpanded are untouched. Despite the
+   * "Reset All" label, "all" means extension-owned settings only.
    */
   private async handleResetAllSettings(): Promise<void> {
     const confirmed = await vscode.window.showWarningMessage(

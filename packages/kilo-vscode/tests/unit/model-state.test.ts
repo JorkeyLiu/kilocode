@@ -460,6 +460,13 @@ describe("model-state model persistence (existing behavior)", () => {
   })
 })
 
+/**
+ * Reset All Settings contract matrix (unit level, no provider involved).
+ * Canonical reset preserves CLI/TUI shared memory: model.json bytes and the
+ * variantSelections compatibility cache stay untouched, only empty selection
+ * events are posted. Non-canonical keeps the existing clear-extension-model-state
+ * behavior. Favorites/modelSelectorExpanded are out of scope and never cleared here.
+ */
 describe("model-state reset canonical boundary (resetAllSettings)", () => {
   it("canonical=true preserves model.json bytes and the cache, still posts empty selections", async () => {
     const c = client()
@@ -491,6 +498,15 @@ describe("model-state reset canonical boundary (resetAllSettings)", () => {
   })
 })
 
+/**
+ * Reset All Settings host boundary (real KiloProvider + ModelState.reset).
+ * Locks the decided contract: reset touches only extension-owned
+ * `kilo-code.new.*` settings plus recentModels/migration banner; canonical
+ * preserves shared model.json + variant cache and custom canonical
+ * config/secrets, non-canonical keeps the existing clear; SecretStorage,
+ * workspace Agent Manager persistence, session/backend, favorites, and
+ * modelSelectorExpanded are never touched by this unit.
+ */
 describe("resetAllSettings host boundary (real KiloProvider + ModelState.reset)", () => {
   function store() {
     const m = new Map<string, unknown>()
@@ -645,7 +661,7 @@ describe("resetAllSettings host boundary (real KiloProvider + ModelState.reset)"
     }
   })
 
-  it("noncanonical host reset clears model.json and the variant cache", async () => {
+  it("noncanonical host reset keeps the existing clear-extension-model-state behavior", async () => {
     const { s, messages } = await runReset({ canonical: false })
     expect(JSON.parse(fs.readFileSync(file(), "utf-8"))).toEqual({ model: {}, variant: {} })
     expect(s.map.get("variantSelections")).toEqual({})
