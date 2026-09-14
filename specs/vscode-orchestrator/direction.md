@@ -107,22 +107,21 @@ Exact protocols, table shapes, file layouts, numeric thresholds, and migration
 steps stay open until reality forces them. This document fixes the meaning of
 the target, not its implementation detail.
 
-## Temporary custom-only provider boundary
+## Custom-only provider boundary
 
-VS Code product surface temporarily supports only user-created custom
-providers over non-login compatible channels. Built-in provider
-configuration/connection, OAuth authorize/callback, device login/logout,
-organization switch, and profile/account management are dormant: backend,
-plugin, auth, route, and SDK implementation stays in place, but webview and
-host message routing must not trigger them. API keys remain credentials, not
-login, and are only supported for new custom providers through the existing
-canonical save plus extension-host `SecretStorage` flow. Custom model
-discovery fails closed for currently configured non-custom entries (no stored
-credential use, no custom models). Unconfigured ordinary IDs are not reserved
-for future built-ins: a custom provider created today under such an ID is
-accepted and any future built-in collision is handled if it arises; the
-reserved internal IDs (`kilo`, `anaconda-desktop`, `_custom`) stay rejected as
-existing routing reservations, not a future provider denylist. CLI/TUI login paths
-outside the VS Code orchestrator are out of scope for this boundary and stay
-as dormant backend capability. Restoring built-in providers and OAuth is a
-future product decision, not an implementation deletion.
+VS Code product surface supports only user-created custom providers over
+non-login compatible channels. Built-in provider configuration/connection,
+provider OAuth authorize/callback, device login/logout, organization switch,
+and profile/account management are removed from the VS Code product surface
+with no migration; webview and host message routing must not trigger them.
+API keys remain credentials, not login, and are only supported for new custom
+providers through the existing canonical save plus extension-host
+`SecretStorage` flow. Custom model discovery fails closed for currently
+configured non-custom entries (no stored credential use, no custom models).
+Unconfigured ordinary IDs are not reserved for future built-ins: a custom
+provider created today under such an ID is accepted and any future built-in
+collision is handled if it arises; the reserved internal IDs (`kilo`,
+`anaconda-desktop`, `_custom`) stay rejected as existing routing reservations,
+not a future provider denylist. CLI/TUI paths outside the VS Code orchestrator
+are out of scope for this boundary; CLI/backend provider auth scope is
+unchanged.

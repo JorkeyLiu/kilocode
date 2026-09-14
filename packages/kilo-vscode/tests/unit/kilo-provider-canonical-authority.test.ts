@@ -98,14 +98,15 @@ describe("KiloProvider canonical GUI authority", () => {
     expect(block).not.toContain("credential")
   })
 
-  it("requires OAuth messages to declare the noncanonical discriminator", async () => {
+  it("has no provider OAuth webview messages", async () => {
     const source = await Bun.file(
       new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url),
     ).text()
     for (const name of ["AuthorizeProviderOAuthMessage", "CompleteProviderOAuthMessage"]) {
-      const block = source.match(new RegExp(`export interface ${name}[\\s\\S]*?\\n}\\n`))?.[0] ?? ""
-      expect(block).toContain("canonical: false")
+      expect(source).not.toContain(name)
     }
+    expect(source).not.toContain("authorizeProviderOAuth")
+    expect(source).not.toContain("completeProviderOAuth")
   })
   it("keeps canonical provider and credential message contracts plaintext-free", async () => {
     const messages = await Bun.file(

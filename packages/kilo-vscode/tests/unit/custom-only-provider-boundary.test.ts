@@ -135,12 +135,17 @@ describe("custom-only webview surface", () => {
     expect(src).not.toContain("available.map")
   })
 
-  it("ProviderConnectDialog keeps dormant flows but shows custom-only first", () => {
+  it("ProviderConnectDialog keeps custom form with provider OAuth removed", () => {
     const src = read("webview-ui/src/components/settings/ProviderConnectDialog.tsx")
     expect(src).toContain("CUSTOM_ONLY_UNSUPPORTED")
     expect(src).toContain("<Match when={true}>")
     expect(src).toContain("credentialRequested: true")
     expect(src).toContain("provider-connect-byok")
+    expect(src).not.toContain("authorizeProviderOAuth")
+    expect(src).not.toContain("completeProviderOAuth")
+    expect(src).not.toContain("providerOAuthReady")
+    expect(src).not.toContain("onOAuthReady")
+    expect(src).not.toContain("oauthOnly")
   })
 
   it("ProviderConnectDialog never opens the Anaconda backend in custom-only mode", () => {
@@ -386,7 +391,7 @@ function builtinGlobalConfig() {
 }
 
 describe("custom-only host routing", () => {
-  it("rejects OAuth authorize/complete without touching the SDK", async () => {
+  it("ignores removed provider OAuth message types without touching the SDK", async () => {
     let calls = 0
     const client = {
       provider: {
@@ -403,15 +408,14 @@ describe("custom-only host routing", () => {
       },
     }
     const { host, messages } = makeHost(client)
+    const src = read("src/KiloProvider.ts")
+    expect(src).not.toContain("authorizeProviderOAuth")
+    expect(src).not.toContain("completeProviderOAuth")
     await host.handleProviderAction({ type: "authorizeProviderOAuth", requestId: "r1", providerID: "openai", method: 0 })
     await host.handleProviderAction({ type: "completeProviderOAuth", requestId: "r2", providerID: "openai", method: 0 })
     expect(calls).toBe(0)
     const errors = messages.filter((m) => (m as Record<string, unknown>).type === "providerActionError")
-    expect(errors).toHaveLength(2)
-    for (const err of errors) {
-      expect((err as Record<string, unknown>).kind).toBe("unsupported")
-      expect(String((err as Record<string, unknown>).message)).toContain("temporarily unavailable")
-    }
+    expect(errors).toHaveLength(0)
     host.dispose()
   })
 
@@ -455,6 +459,16 @@ describe("custom-only host routing", () => {
     expect(actions).not.toContain("completeProviderOAuth")
     expect(actions).toContain("fetchProviderData")
     expect(actions).toContain("isProviderModelsAuthError")
+    const webview = read("webview-ui/src/types/messages/webview-messages.ts")
+    expect(webview).not.toContain("authorizeProviderOAuth")
+    expect(webview).not.toContain("completeProviderOAuth")
+    const extension = read("webview-ui/src/types/messages/extension-messages.ts")
+    expect(extension).not.toContain("providerOAuthReady")
+    const util = read("webview-ui/src/utils/provider-action.ts")
+    expect(util).not.toContain("authorizeProviderOAuth")
+    expect(util).not.toContain("completeProviderOAuth")
+    expect(util).not.toContain("providerOAuthReady")
+    expect(util).not.toContain("onOAuthReady")
   })
 })
 
@@ -799,7 +813,7 @@ describe("custom-only auth routing", () => {
     host.dispose()
   })
 
-  it("direct OAuth sends stay unsupported without SDK calls", async () => {
+  it("removed provider OAuth sends are ignored without SDK calls", async () => {
     let calls = 0
     const client = {
       provider: { oauth: { authorize: async () => { calls += 1 }, callback: async () => { calls += 1 } } },
@@ -808,6 +822,7 @@ describe("custom-only auth routing", () => {
     await host.handleProviderAction({ type: "authorizeProviderOAuth", requestId: "r-a", providerID: "openai", method: 0 })
     await host.handleProviderAction({ type: "completeProviderOAuth", requestId: "r-c", providerID: "openai", method: 0 })
     expect(calls).toBe(0)
+    expect(messages.filter((m) => (m as Record<string, unknown>).type === "providerActionError")).toHaveLength(0)
     host.dispose()
   })
 })

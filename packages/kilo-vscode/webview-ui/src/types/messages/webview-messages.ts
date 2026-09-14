@@ -721,23 +721,6 @@ export interface CanonicalConnectProviderMessage {
 
 export type ConnectProviderMessage = CanonicalConnectProviderMessage
 
-export interface AuthorizeProviderOAuthMessage {
-  type: "authorizeProviderOAuth"
-  canonical: false
-  requestId: string
-  providerID: string
-  method: number
-}
-
-export interface CompleteProviderOAuthMessage {
-  type: "completeProviderOAuth"
-  canonical: false
-  requestId: string
-  providerID: string
-  method: number
-  code?: string
-}
-
 export interface DisconnectProviderMessage {
   type: "disconnectProvider"
   requestId: string
@@ -970,8 +953,6 @@ export type WebviewMessage =
   | ToggleSandboxMessage
   | DismissAgentMigrationBannerMessage
   | ConnectProviderMessage
-  | AuthorizeProviderOAuthMessage
-  | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
   | RetryProviderCleanupMessage
   | AnacondaDesktopWebviewMessage

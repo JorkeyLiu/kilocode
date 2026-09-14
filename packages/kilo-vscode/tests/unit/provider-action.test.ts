@@ -69,12 +69,14 @@ describe("createProviderAction", () => {
 
     action.send(
       {
-        type: "authorizeProviderOAuth",
+        type: "connectProvider",
         providerID: "anthropic",
-        method: 0,
+        canonical: true,
+        credentialRequested: true,
+        stamp: { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null },
       },
       {
-        onOAuthReady: (message) => seen.push(`oauth:${message.authorization.method}`),
+        onConnected: (message) => seen.push(`connected:${message.providerID}`),
       },
     )
     action.send(
@@ -87,9 +89,9 @@ describe("createProviderAction", () => {
       },
     )
 
-    const oauth = transport.sent[0]
+    const connected = transport.sent[0]
     const disconnect = transport.sent[1]
-    const oauthId = "requestId" in (oauth ?? {}) ? oauth.requestId : ""
+    const connectedId = "requestId" in (connected ?? {}) ? connected.requestId : ""
     const disconnectId = "requestId" in (disconnect ?? {}) ? disconnect.requestId : ""
 
     transport.receive({
@@ -98,13 +100,12 @@ describe("createProviderAction", () => {
       providerID: "openai",
     })
     transport.receive({
-      type: "providerOAuthReady",
-      requestId: oauthId,
+      type: "providerConnected",
+      requestId: connectedId,
       providerID: "anthropic",
-      authorization: { url: "https://example.com", method: "code", instructions: "Code: 1234" },
     })
 
-    expect(seen).toEqual(["disconnect:openai", "oauth:code"])
+    expect(seen).toEqual(["disconnect:openai", "connected:anthropic"])
     action.dispose()
   })
 

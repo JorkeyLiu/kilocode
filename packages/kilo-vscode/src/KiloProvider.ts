@@ -250,10 +250,11 @@ function filterCanonicalScope(value: Record<string, unknown>): Record<string, un
 
 const CREDENTIAL_KEY = /^(?:api[_-]?key|authorization|token|password|secret|cookie|credential|headers?)$/i
 
-// Temporary custom-only product boundary (VS Code orchestrator).
+// Custom-only product boundary (VS Code orchestrator).
 // Only user-created custom providers are supported in the product surface.
-// Built-in provider configuration, OAuth, and sign-in/account flows are
-// dormant in the backend but must not be triggerable from the webview.
+// Built-in provider configuration, provider OAuth, and sign-in/account flows
+// are removed from the VS Code product surface and must not be triggerable
+// from the webview. CLI/backend provider auth scope is unchanged.
 // Custom canonical save/delete/disconnect/fetch continue with existing guards.
 // Unconfigured ordinary IDs are NOT reserved for future built-ins: creating a
 // custom provider under such an ID is accepted, and any future built-in ID
@@ -975,10 +976,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (!parsedProviders) return fail("Provider record contains invalid entries", "invalid")
     const providers: Record<string, CanonicalProviderPayload> = { ...parsedProviders }
     const ref = `secret:kilo.credentials.${scope}.provider.${id}`
-    if (msg.type === "authorizeProviderOAuth" || msg.type === "completeProviderOAuth") {
-      return fail("OAuth provider authentication is unavailable in canonical GUI authority", "unsupported")
-    }
-    // Temporary custom-only boundary: canonical connect/disconnect/save/delete
+    // Custom-only product boundary: canonical connect/disconnect/save/delete
     // are allowed only for custom IDs with custom authored entries
     // (ID pattern + internal reserved deny + endpoint/protocol, no legacy
     // keys). Configured non-custom entries fail with unsupported and no
@@ -2076,8 +2074,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendProviders().catch((e) => console.error("[Kilo New] fetchAndSendProviders failed:", e))
           break
         case "connectProvider":
-        case "authorizeProviderOAuth":
-        case "completeProviderOAuth":
         case "disconnectProvider":
         case "deleteCustomProvider":
         case "saveCustomProvider":
@@ -3646,24 +3642,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   private async handleProviderAction(msg: Record<string, unknown>): Promise<void> {
-    // Temporary custom-only boundary: OAuth can never be triggered from the
-    // webview. Custom save/delete/disconnect/fetch continue with existing
+    // Custom-only product boundary: provider OAuth messages are removed, so
+    // unknown provider action types are ignored for old-webview tolerance.
+    // Custom save/delete/disconnect/fetch continue with existing
     // stamp/credential guards; built-in connect/disconnect is rejected below.
-    if (msg.type === "authorizeProviderOAuth" || msg.type === "completeProviderOAuth") {
-      const pid = typeof msg.providerID === "string" ? msg.providerID : ""
-      const rid = typeof msg.requestId === "string" ? msg.requestId : crypto.randomUUID()
-      const action = msg.type === "authorizeProviderOAuth" ? "authorize" : "connect"
-      this.postMessage({
-        type: "providerActionError",
-        requestId: rid,
-        providerID: pid,
-        action,
-        message: CUSTOM_ONLY_PROVIDER_MESSAGE,
-        kind: "unsupported",
-        ...(this.canonicalConfig ? { canonical: true, stamp: this.canonicalConfig.stamp } : {}),
-      })
-      return
-    }
     if (
       this.canonicalConfig &&
       (msg.type === "connectProvider" ||
@@ -3718,7 +3700,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Temporary custom-only boundary: true when any authored scope holds an
+   * Custom-only product boundary: true when any authored scope holds an
    * entry for this ID that is not a custom authored entry (non-custom shape
    * or unparseable/legacy record). Such IDs must not lend a stored credential
    * to custom model discovery and must not return custom models.

@@ -2,11 +2,10 @@ import { Button } from "@kilocode/kilo-ui/button"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { Dialog } from "@kilocode/kilo-ui/dialog"
 import { Select } from "@kilocode/kilo-ui/select"
-import { Spinner } from "@kilocode/kilo-ui/spinner"
 import { TextField } from "@kilocode/kilo-ui/text-field"
 import { showToast } from "@kilocode/kilo-ui/toast"
-import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@kilocode/sdk/v2/client"
-import { Component, For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import type { ProviderAuthMethod } from "@kilocode/sdk/v2/client"
+import { Component, For, Match, Show, Switch, createMemo, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
@@ -21,18 +20,15 @@ import { CUSTOM_ONLY_UNSUPPORTED } from "./provider-tab-helpers"
 
 interface ProviderConnectDialogProps {
   providerID: string
-  oauthOnly?: boolean
   /** When true, skip method selection and go directly to the API form (LOCK-035). */
   manageApiKey?: boolean
 }
 
 interface ViewState {
   methodIndex?: number
-  authorization?: ProviderAuthAuthorization
-  phase?: "authorizing" | "connecting"
+  phase?: "connecting"
   error?: string
   field?: string
-  failed?: string
   /** LOCK-072: inline confirmation view within the same dialog instance */
   confirmingRemove?: boolean
 }
@@ -63,7 +59,7 @@ function visible(prompt: Prompt, values: Record<string, string>) {
 const CUSTOM_ONLY = true
 
 const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => {
-  // Temporary custom-only boundary: Anaconda Desktop is a built-in connection
+  // Custom-only product boundary: Anaconda Desktop is a built-in connection
   // capability and stays unavailable in the product surface. The backend
   // dialog implementation is retained but unreachable while the boundary holds.
   if (!CUSTOM_ONLY && props.providerID === "anaconda-desktop") return <AnacondaDesktopDialog />
@@ -78,14 +74,12 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
 
   const item = createMemo(() => provider.providers()[props.providerID])
   const name = () => item()?.name ?? props.providerID
-  const canonical = () => provider.canonical?.() === true || provider.providers()[props.providerID]?.hasCredential !== undefined
   const methods = createMemo<ProviderAuthMethod[]>(() => {
     const list =
       provider.authMethods()[props.providerID] ?? fallbackMethods(language.t("provider.connect.method.apiKey"))
-    if (props.oauthOnly && canonical()) return []
-    if (props.oauthOnly) return list.filter((item) => item.type === "oauth")
-    if (canonical()) return list.filter((item) => item.type !== "oauth")
-    return list
+    // VS Code product surface is custom-only: provider OAuth is removed, so
+    // only API methods remain selectable here.
+    return list.filter((item) => item.type === "api")
   })
   const method = createMemo(() => {
     const index = state.methodIndex
@@ -170,11 +164,9 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     action.clear()
     setState({
       methodIndex: undefined,
-      authorization: undefined,
       phase: undefined,
       error: undefined,
       field: undefined,
-      failed: undefined,
       confirmingRemove: undefined,
     })
   }
@@ -188,13 +180,11 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   }
 
   function fail(message: string) {
-    const failed = state.authorization?.method === "auto" || state.phase === "authorizing"
     setState({
       ...state,
       phase: undefined,
-      error: failed ? undefined : message,
+      error: message,
       field: undefined,
-      failed: failed ? message : undefined,
     })
   }
 
@@ -243,38 +233,13 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   }
 
   function selectMethod(index: number) {
-    const current = methods()[index]
     action.clear()
     setState({
       methodIndex: index,
-      authorization: undefined,
-      phase: current?.type === "oauth" ? "authorizing" : undefined,
+      phase: undefined,
       error: undefined,
       field: undefined,
-      failed: undefined,
     })
-    if (current?.type !== "oauth") return
-
-    action.send(
-      {
-        type: "authorizeProviderOAuth",
-        canonical: false,
-        providerID: props.providerID,
-        method: index,
-      },
-      {
-        onOAuthReady: (message) => {
-          setState({
-            ...state,
-            authorization: message.authorization,
-            phase: undefined,
-            error: undefined,
-            failed: undefined,
-          })
-        },
-        onError: (message) => fail(message.message),
-      },
-    )
   }
 
   function connect(metadata?: Record<string, string>) {
@@ -285,7 +250,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       phase: "connecting",
       error: undefined,
       field: undefined,
-      failed: undefined,
     })
     action.send(
       {
@@ -295,32 +259,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
         metadata,
         credentialRequested: true,
          stamp,
-      },
-      {
-        onConnected: succeed,
-        onError: (message) => fail(message.message),
-      },
-    )
-  }
-
-  function complete(code?: string) {
-    const index = state.methodIndex
-    if (index === undefined) return
-
-    setState({
-      ...state,
-      phase: "connecting",
-      error: undefined,
-      field: undefined,
-      failed: undefined,
-    })
-    action.send(
-      {
-        type: "completeProviderOAuth",
-        canonical: false,
-        providerID: props.providerID,
-        method: index,
-        code,
       },
       {
         onConnected: succeed,
@@ -492,117 +430,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     )
   }
 
-  const OAuthCodeView: Component = () => {
-    const [value, setValue] = createSignal("")
-
-    onMount(() => {
-      if (!state.authorization?.url) return
-      openExternal(state.authorization.url)
-    })
-
-    function submit(e: SubmitEvent) {
-      e.preventDefault()
-      const code = value().trim()
-      if (!code) {
-        setState({ ...state, error: language.t("provider.connect.oauth.code.required") })
-        return
-      }
-      complete(code)
-    }
-
-    return (
-      <form
-        class="dialog-confirm-body"
-        style={{ display: "flex", "flex-direction": "column", gap: "16px" }}
-        onSubmit={submit}
-      >
-        <div class="provider-connect-body">
-          {language.t("provider.connect.oauth.code.visit.prefix")}
-          <a
-            href={state.authorization?.url ?? "#"}
-            onClick={(e) => {
-              e.preventDefault()
-              if (!state.authorization?.url) return
-              openExternal(state.authorization.url)
-            }}
-          >
-            {language.t("provider.connect.oauth.code.visit.link")}
-          </a>
-          {language.t("provider.connect.oauth.code.visit.suffix", { provider: name() })}
-        </div>
-        <TextField
-          type="text"
-          label={language.t("provider.connect.oauth.code.label", { method: method()?.label ?? "" })}
-          placeholder={language.t("provider.connect.oauth.code.placeholder")}
-          value={value()}
-          onChange={setValue}
-          validationState={state.error ? "invalid" : undefined}
-          error={state.error}
-        />
-        <div class="dialog-confirm-actions">
-          <Button variant="ghost" size="large" type="button" onClick={back}>
-            {language.t("common.goBack")}
-          </Button>
-          <Button variant="primary" size="large" type="submit" disabled={state.phase === "connecting"}>
-            {language.t("common.submit")}
-          </Button>
-        </div>
-      </form>
-    )
-  }
-
-  const OAuthAutoView: Component = () => {
-    const code = createMemo(() => {
-      const instructions = state.authorization?.instructions
-      if (!instructions) return ""
-      if (!instructions.includes(":")) return instructions
-      return instructions.split(":")[1]?.trim() ?? instructions
-    })
-
-    onMount(() => {
-      if (state.authorization?.url) openExternal(state.authorization.url)
-      complete()
-    })
-
-    return (
-      <div class="dialog-confirm-body" style={{ display: "flex", "flex-direction": "column", gap: "16px" }}>
-        <div class="provider-connect-body">
-          {language.t("provider.connect.oauth.auto.visit.prefix")}
-          <a
-            href={state.authorization?.url ?? "#"}
-            onClick={(e) => {
-              e.preventDefault()
-              if (!state.authorization?.url) return
-              openExternal(state.authorization.url)
-            }}
-          >
-            {language.t("provider.connect.oauth.auto.visit.link")}
-          </a>
-          {language.t("provider.connect.oauth.auto.visit.suffix", { provider: name() })}
-        </div>
-        <Show when={code()}>
-          <div>
-            <div class="provider-connect-code-label">{language.t("provider.connect.oauth.auto.confirmationCode")}</div>
-            <div class="provider-connect-code">{code()}</div>
-          </div>
-        </Show>
-        <div class="provider-connect-status">
-          <Spinner />
-          <span>
-            {state.error
-              ? language.t("provider.connect.status.failed", { error: state.error })
-              : language.t("provider.connect.status.waiting")}
-          </span>
-        </div>
-        <div class="dialog-confirm-actions">
-          <Button variant="ghost" size="large" type="button" onClick={() => dialog.close()}>
-            {language.t("common.cancel")}
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
   /** LOCK-072/073: Inline confirmation view — rendered within the same Dialog instance. */
   const RemoveConfirmView: Component = () => {
     return (
@@ -630,14 +457,10 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   return (
     <Dialog title={title()} fit>
       <Switch>
-        {/* Temporary custom-only boundary: built-in provider connection is
-            unavailable. Dormant OAuth/API implementation below is retained
-            but unreachable in the product surface. */}
+        {/* Custom-only product boundary: built-in provider connection is
+            removed from the VS Code product surface. */}
         <Match when={true}>
           <div class="dialog-confirm-body">{CUSTOM_ONLY_UNSUPPORTED}</div>
-        </Match>
-        <Match when={canonical() && props.oauthOnly}>
-          <div class="dialog-confirm-body">OAuth provider authentication is unavailable in canonical GUI configuration.</div>
         </Match>
         <Match when={state.methodIndex === undefined}>
           <MethodSelection />
@@ -645,36 +468,12 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
         <Match when={state.confirmingRemove}>
           <RemoveConfirmView />
         </Match>
-        <Match when={state.phase === "authorizing"}>
-          <div class="dialog-confirm-body">
-            <div class="provider-connect-status">
-              <Spinner />
-              <span>{language.t("provider.connect.status.inProgress")}</span>
-            </div>
-          </div>
-        </Match>
-        <Match when={state.failed}>
-          <div class="dialog-confirm-body" style={{ display: "flex", "flex-direction": "column", gap: "16px" }}>
-            <div>{formatError(state.failed, language.t("common.requestFailed"))}</div>
-            <div class="dialog-confirm-actions">
-              <Button variant="ghost" size="large" onClick={back}>
-                {language.t("common.goBack")}
-              </Button>
-            </div>
-          </div>
-        </Match>
         <Match when={method()?.type === "api"}>
           <ApiView />
         </Match>
-        <Match when={state.authorization?.method === "code"}>
-          <OAuthCodeView />
-        </Match>
-        <Match when={state.authorization?.method === "auto"}>
-          <OAuthAutoView />
-        </Match>
         <Match when={true}>
           <div class="dialog-confirm-body" style={{ display: "flex", "flex-direction": "column", gap: "16px" }}>
-            <div>{formatError(state.error ?? state.failed, language.t("common.requestFailed"))}</div>
+            <div>{formatError(state.error, language.t("common.requestFailed"))}</div>
             <div class="dialog-confirm-actions">
               <Button variant="ghost" size="large" onClick={back}>
                 {language.t("common.goBack")}

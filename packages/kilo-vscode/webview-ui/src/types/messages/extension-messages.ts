@@ -1,4 +1,4 @@
-import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@kilocode/sdk/v2/client"
+import type { ProviderAuthMethod } from "@kilocode/sdk/v2/client"
 import type { PartBatch, PartRemove, PartUpdate } from "../../../../src/shared/stream-messages"
 import type { ConnectionState, ServerInfo, SessionStatus } from "./connection"
 import type { FileAttachment, Part } from "./parts"
@@ -836,13 +836,6 @@ export interface TelemetryStateMessage {
   enabled: boolean
 }
 
-export interface ProviderOAuthReadyMessage {
-  type: "providerOAuthReady"
-  requestId: string
-  providerID: string
-  authorization: ProviderAuthAuthorization
-}
-
 export interface ProviderConnectedMessage {
   type: "providerConnected"
   requestId: string
@@ -1082,7 +1075,6 @@ export type ExtensionMessage =
   | AgentManagerTerminalErrorMessage
   | EnhancePromptResultMessage
   | EnhancePromptErrorMessage
-  | ProviderOAuthReadyMessage
   | ProviderConnectedMessage
   | CanonicalProviderConnectedMessage
   | ProviderDisconnectedMessage

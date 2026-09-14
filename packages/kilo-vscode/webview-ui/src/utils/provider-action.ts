@@ -1,6 +1,4 @@
 import type {
-  AuthorizeProviderOAuthMessage,
-  CompleteProviderOAuthMessage,
   ConnectProviderMessage,
   CanonicalConnectProviderMessage,
   CanonicalDeleteCustomProviderMessage,
@@ -14,23 +12,18 @@ import type {
   CanonicalProviderDeletedMessage,
   ProviderDisconnectedMessage,
   CanonicalProviderDisconnectedMessage,
-  ProviderOAuthReadyMessage,
   SaveCustomProviderMessage,
   WebviewMessage,
 } from "../types/messages"
 
 type ProviderRequest =
   | ConnectProviderMessage
-  | AuthorizeProviderOAuthMessage
-  | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
   | DeleteCustomProviderMessage
   | SaveCustomProviderMessage
 
 type ProviderRequestInput =
   | Omit<CanonicalConnectProviderMessage, "requestId">
-  | Omit<AuthorizeProviderOAuthMessage, "requestId">
-  | Omit<CompleteProviderOAuthMessage, "requestId">
   | Omit<DisconnectProviderMessage, "requestId">
   | Omit<CanonicalDeleteCustomProviderMessage, "requestId">
   | Omit<SaveCustomProviderMessage, "requestId">
@@ -41,7 +34,6 @@ type Transport = {
 }
 
 type Handlers = {
-  onOAuthReady?: (message: ProviderOAuthReadyMessage) => void
   onConnected?: (message: ProviderConnectedMessage | CanonicalProviderConnectedMessage) => void
   onDisconnected?: (message: ProviderDisconnectedMessage | CanonicalProviderDisconnectedMessage) => void
   onDeleted?: (message: ProviderDeletedMessage | CanonicalProviderDeletedMessage) => void
@@ -60,11 +52,6 @@ export function createProviderAction(vscode: Transport) {
     const item = pending.get(rid)
     if (!item) return
     pending.delete(rid)
-
-    if (message.type === "providerOAuthReady") {
-      item.onOAuthReady?.(message)
-      return
-    }
 
     if (message.type === "providerConnected") {
       item.onConnected?.(message)
