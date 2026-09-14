@@ -80,3 +80,19 @@ export const NotLoggedIn: Story = {
     </StoryProviders>
   ),
 }
+
+/**
+ * Custom-only product boundary: no profile data and idle device auth render
+ * the header plus the custom-only unavailable notice, with no Login,
+ * organization, logout, or dashboard actionable controls.
+ */
+export const ProfileCustomOnly: Story = {
+  name: "ProfileView — custom-only unavailable",
+  render: () => (
+    <StoryProviders noPadding>
+      <div style={{ "max-height": "500px", overflow: "auto" }}>
+        <ProfileView profileData={null} deviceAuth={idleAuth} onLogin={noop} />
+      </div>
+    </StoryProviders>
+  ),
+}

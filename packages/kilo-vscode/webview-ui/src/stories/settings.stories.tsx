@@ -847,3 +847,36 @@ export const AgentBehaviourCanonicalCustomAgentError: Story = {
     )
   },
 }
+
+/**
+ * Custom-only product boundary: one canonical custom provider configured.
+ * Renders the custom configured row (name/Custom tag/edit/delete/switch),
+ * the custom Configure entry, and the custom-only unavailable notice, with
+ * no built-in provider rows, OAuth, ChatGPT/API-key manage, or Anaconda
+ * entries (built-in add rows are dormant in helpers and not rendered).
+ */
+export const ProvidersCustomOnly: Story = {
+  name: "ProvidersTab — custom-only boundary",
+  render: () => (
+    <StoryProviders
+      canonical
+      connected={["custom-acme"]}
+      authStates={{ "custom-acme": "api" }}
+      config={
+        {
+          provider: {
+            "custom-acme": {
+              name: "Acme Custom",
+              endpoint: "https://api.acme.example/v1",
+              protocol: "openai/completions",
+            },
+          },
+        } as any
+      }
+    >
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <ProvidersTab />
+      </div>
+    </StoryProviders>
+  ),
+}
