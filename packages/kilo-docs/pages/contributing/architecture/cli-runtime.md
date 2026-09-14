@@ -139,7 +139,7 @@ Provider auth records use `api`, `oauth`, or `wellknown` variants in `${Global.P
 
 Preset catalog and models.dev fallback are fully removed. Generic `BUNDLED_PROVIDERS` adapters, `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` helpers, and custom-provider save/delete/auth paths are retained; old CLI/TUI/server/generated-SDK surfaces remain.
 
-The full capability above is CLI-runtime scope. The VS Code product surface temporarily exposes only the custom-provider subset (custom ID plus `baseURL` plus `openai/completions` / `openai/responses` / `anthropic/messages`; built-in providers, OAuth, login/logout, organization, profile, and Anaconda entry are fail-closed in host/webview while backend/plugin/HTTP/SDK code stays dormant). See [VS Code Extension](/docs/contributing/architecture/vscode-extension#temporary-custom-only-provider-boundary) for that product-surface boundary; CLI/TUI scope is unchanged.
+The full capability above is CLI-runtime scope. The VS Code product surface has a custom-only provider boundary exposing only the custom-provider subset (custom ID plus `baseURL` plus `openai/completions` / `openai/responses` / `anthropic/messages`); VS Code provider OAuth, built-in providers, and Anaconda setup are removed from the VS Code surface with no migration. See [VS Code Extension](/docs/contributing/architecture/vscode-extension#custom-only-provider-boundary) for that product-surface boundary; CLI/TUI scope is unchanged.
 
 ### Remote MCP OAuth
 
