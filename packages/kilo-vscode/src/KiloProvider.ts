@@ -136,7 +136,6 @@ import {
   validateRecents,
   validateFavorites,
 } from "./provider-actions"
-import { AnacondaDesktopBridge } from "./anaconda-desktop/bridge"
 import { isUnsafeKey } from "./shared/agent-credentials"
 import { fetchOpenAIModels, FetchModelsError } from "./shared/fetch-models"
 import type { Agent } from "@kilocode/sdk/v2/client"
@@ -471,7 +470,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly sandboxTransitions = new Map<string, Promise<void>>()
   private readonly revisions = new Map<string, { id: string; seq: number }>()
   private readonly refreshes = new Map<string, number>()
-  private readonly anacondaDesktop = new AnacondaDesktopBridge()
   private sessionStatusMap = new Map<string, SessionStatus["type"]>() // Latest status used for destructive config warnings.
   private sessionDirectories = new Map<string, string>() // Per-session directory resolution for permission/question/reload routing.
   private readonly aborts = new SessionAbort()
@@ -2086,8 +2084,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         // Temporary custom-only boundary: Anaconda Desktop is treated as a
         // built-in/non-custom provider connection capability and fails closed.
-        // The bridge backend stays in the codebase but is never invoked from
-        // the webview; cancellations are no-ops since no request starts.
+        // The VS Code bridge implementation is removed; cancellations are
+        // no-ops since no request starts.
         case "anacondaDesktopStatus":
         case "anacondaDesktopOpen":
         case "anacondaDesktopSync":
@@ -6502,7 +6500,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.syncedChildSessions.clear()
     this.draftSessions.clear()
     this.sessionDirectories.clear()
-    this.anacondaDesktop.dispose()
     this.aborts.clear()
     this.sessionStatusMap.clear()
     this.requirements.dispose()
