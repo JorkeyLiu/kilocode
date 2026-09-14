@@ -57,12 +57,13 @@ describe("P4.4-T12 dead factory/i18n residue removal — no synthetic Kilo", () 
     expect(text).not.toContain("server.goToProfile")
     expect(text).not.toContain("isKiloProvider")
     expect(text).not.toContain('from "../../context/server"')
-    expect(text).toContain("buildAddList")
-    expect(text).toContain("buildConfiguredList")
+    // Temporary custom-only surface: only custom configured/add lists exist.
+    expect(text).toContain("buildCustomAddList")
+    expect(text).toContain("buildCustomConfiguredList")
     expect(text).toContain("providerIcon")
     expect(text).toContain("isCustomConfigured")
     expect(text).toContain("CustomProviderDialog")
-    expect(text).toContain("ProviderConnectDialog")
+    expect(text).not.toContain("ProviderConnectDialog")
   })
 
   it("ProviderSelectDialog no longer injects Kilo fallback or recommended tag and has no priority sorting (T20)", async () => {

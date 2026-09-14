@@ -135,8 +135,21 @@ export function useSpeechToText(vscode: VSCode, server: Server, lang: Lang): Spe
     setError(undefined)
   }
 
+  // Temporary custom-only boundary: speech-to-text sign-in is unavailable.
+  // Show only the unavailable notice with dismiss; no sign-in action is
+  // rendered. Settings/profile navigation stays available elsewhere.
+  const CUSTOM_ONLY = true
   function login() {
     const message = lang.t("speechToText.error.loginRequired")
+    if (CUSTOM_ONLY) {
+      showToast({
+        variant: "error",
+        title: message,
+        actions: [{ label: lang.t("common.dismiss"), onClick: "dismiss" }],
+      })
+      fail(message, false)
+      return
+    }
     showToast({
       variant: "error",
       title: message,

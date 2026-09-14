@@ -17,10 +17,14 @@ Kilo Code uses **explicit provider configuration** — every model comes from yo
 
 Add custom models under the `provider.<provider_id>.models` key in your config file. The model key becomes the model ID you reference elsewhere.
 
+{% callout type="info" %}
+VS Code currently supports only user-created custom providers. Built-in provider setup, OAuth sign-in, and account management are temporarily unavailable in the VS Code surface.
+{% /callout %}
+
 {% tabs %}
 {% tab label="VSCode" %}
 
-1. Open **Settings** (gear icon) and go to the **Providers** tab.
+1. Open **Settings** (gear icon) and go to the **Providers** tab. Only custom providers are listed; built-in provider rows and sign-in entries are temporarily hidden.
 
 2. Scroll to the bottom of the provider list and click **Custom provider**.
 

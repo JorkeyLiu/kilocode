@@ -608,14 +608,13 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
             onChange={(v) => setForm("providerID", v)}
             validationState={errors.providerID ? "invalid" : undefined}
             error={errors.providerID}
-            disabled={editing() || isCanonical()}
+            disabled={editing()}
           />
           <TextField
             label={language.t("provider.custom.field.name.label")}
             placeholder={language.t("provider.custom.field.name.placeholder")}
             value={form.name}
             onChange={(v) => setForm("name", v)}
-            disabled={isCanonical()}
             validationState={errors.name ? "invalid" : undefined}
             error={errors.name}
           />
@@ -644,8 +643,12 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
                 current={PROTOCOL_OPTIONS.find((option) => option.value === form.protocol)}
                 value={(option) => option.value}
                 label={(option) => option.label}
-                onSelect={() => {
-                  return
+                onSelect={(option) => {
+                  if (!option) return
+                  setForm("protocol", option.value)
+                  const pkg = packageForProtocol(option.value)
+                  setForm("npm", pkg)
+                  setFetchPackage(pkg)
                 }}
                 variant="secondary"
                 triggerVariant="settings"
@@ -657,7 +660,6 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
             placeholder={language.t("provider.custom.field.baseURL.placeholder")}
             value={form.baseURL}
             onChange={(v) => {
-              if (isCanonical()) return
               setForm("baseURL", v)
               setFetchURL(v)
             }}

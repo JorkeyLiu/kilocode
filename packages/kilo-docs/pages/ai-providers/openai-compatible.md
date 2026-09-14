@@ -22,10 +22,14 @@ Use Kilo Code's native `azure` provider instead. If your Azure deployment name d
 
 ## General Configuration
 
+{% callout type="info" %}
+VS Code currently supports only user-created custom providers. Built-in provider setup, OAuth sign-in, and account management are temporarily unavailable in the VS Code surface; use the custom provider flow below. CLI configuration is unchanged.
+{% /callout %}
+
 {% tabs %}
 {% tab label="VSCode" %}
 
-1. Open **Settings** (gear icon) and go to the **Providers** tab.
+1. Open **Settings** (gear icon) and go to the **Providers** tab. Only custom providers are listed; built-in provider rows and sign-in entries are temporarily hidden.
 2. Scroll to the bottom and click **Custom provider**.
 
 ![Custom provider button](/docs/img/custom-models/custom-provider-button.png)

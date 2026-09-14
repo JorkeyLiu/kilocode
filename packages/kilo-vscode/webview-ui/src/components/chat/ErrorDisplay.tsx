@@ -22,6 +22,11 @@ export interface ErrorDisplayProps {
   onLogin?: () => void
 }
 
+// Temporary custom-only boundary: built-in provider connect and sign-in
+// entries are hidden. Dormant ProviderConnectDialog implementation stays
+// but is not opened from error surfaces.
+const CUSTOM_ONLY = true
+
 export const ErrorDisplay: Component<ErrorDisplayProps> = (props) => {
   const { t } = useLanguage()
   const dialog = useDialog()
@@ -34,6 +39,7 @@ export const ErrorDisplay: Component<ErrorDisplayProps> = (props) => {
     return provider.providers()[err.providerID]
   })
   const canAuth = createMemo(() => {
+    if (CUSTOM_ONLY) return false
     const err = auth()
     if (!err || !authProvider()) return false
     return (provider.authMethods()[err.providerID] ?? []).length > 0
@@ -55,6 +61,7 @@ export const ErrorDisplay: Component<ErrorDisplayProps> = (props) => {
   })
 
   function connectProvider() {
+    if (CUSTOM_ONLY) return
     const err = auth()
     if (!err) return
     dialog.show(() => <ProviderConnectDialog providerID={err.providerID} oauthOnly={oauth()} />)
@@ -80,7 +87,7 @@ export const ErrorDisplay: Component<ErrorDisplayProps> = (props) => {
         </Card>
       }
     >
-      <Match when={isUnauthorizedPaidModelError(parsed())}>
+      <Match when={!CUSTOM_ONLY && isUnauthorizedPaidModelError(parsed())}>
         <div data-component="auth-prompt">
           <div data-slot="auth-prompt-header">
             <span data-slot="auth-prompt-icon">✨</span>
@@ -92,7 +99,7 @@ export const ErrorDisplay: Component<ErrorDisplayProps> = (props) => {
           </Button>
         </div>
       </Match>
-      <Match when={isUnauthorizedPromotionLimitError(parsed())}>
+      <Match when={!CUSTOM_ONLY && isUnauthorizedPromotionLimitError(parsed())}>
         <div data-component="auth-prompt">
           <div data-slot="auth-prompt-header">
             <span data-slot="auth-prompt-icon">🕙</span>

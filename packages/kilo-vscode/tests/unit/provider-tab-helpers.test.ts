@@ -93,6 +93,14 @@ describe("resolveConfiguredProvider", () => {
     expect(p!.source).toBe("custom")
   })
 
+  it("marks canonical endpoint+protocol config entries as custom source", () => {
+    const p = resolveConfiguredProvider("canon1", allProviders, {
+      canon1: { name: "Canon One", endpoint: "https://example.com/v1", protocol: "openai/completions" },
+    })
+    expect(p!.name).toBe("Canon One")
+    expect(p!.source).toBe("custom")
+  })
+
   it("does not synthesize Kilo when backend omits it even with config entry (P4.4-T11 blocker)", () => {
     const p = resolveConfiguredProvider(KILO_PROVIDER_ID, allProviders, {
       [KILO_PROVIDER_ID]: { name: "Kilo Gateway", npm: "@ai-sdk/openai-compatible" },
@@ -270,8 +278,40 @@ describe("isCustomConfigured", () => {
     expect(isCustomConfigured(makeProvider("azure", "Azure", "config"), { azure: { name: "Azure" } })).toBe(false)
   })
 
-  it("returns false when no config provided", () => {
-    expect(isCustomConfigured(makeProvider("custom1", "Custom", "custom"))).toBe(false)
+  it("returns true for canonical source custom without config entry (canonical view signal)", () => {
+    expect(isCustomConfigured(makeProvider("custom1", "Custom", "custom"))).toBe(true)
+  })
+
+  it("returns false when no config and source is not custom", () => {
+    expect(isCustomConfigured(makeProvider("plain1", "Plain"))).toBe(false)
+    expect(isCustomConfigured(makeProvider("anthropic", "Anthropic", "api"))).toBe(false)
+  })
+
+  it("returns true for canonical endpoint+protocol config shape", () => {
+    const config = {
+      mycustom: { name: "My Custom", endpoint: "https://example.com/v1", protocol: "openai/completions" },
+    }
+    expect(isCustomConfigured(makeProvider("mycustom", "My Custom", "custom"), config)).toBe(true)
+    // Canonical shape is recognized even when the view source is not yet custom.
+    expect(isCustomConfigured(makeProvider("mycustom", "My Custom", "config"), config)).toBe(true)
+  })
+
+  it("returns false for reserved internal IDs even with custom source or custom shape", () => {
+    const config = {
+      [KILO_PROVIDER_ID]: { name: "Kilo", endpoint: "https://example.com/v1", protocol: "openai/completions" },
+      _custom: { name: "Synthetic", endpoint: "https://example.com/v1", protocol: "openai/completions" },
+      "anaconda-desktop": { name: "Local", endpoint: "https://example.com/v1", protocol: "openai/completions" },
+    }
+    expect(isCustomConfigured(makeProvider(KILO_PROVIDER_ID, "Kilo", "custom"), config)).toBe(false)
+    expect(isCustomConfigured(makeProvider("_custom", "Synthetic", "custom"), config)).toBe(false)
+    expect(isCustomConfigured(makeProvider("anaconda-desktop", "Local", "custom"), config)).toBe(false)
+  })
+
+  it("does not treat ordinary future-like IDs as reserved", () => {
+    const config = {
+      openrouter: { name: "OpenRouter", endpoint: "https://example.com/v1", protocol: "openai/completions" },
+    }
+    expect(isCustomConfigured(makeProvider("openrouter", "OpenRouter", "custom"), config)).toBe(true)
   })
 })
 

@@ -39,6 +39,13 @@ interface OrgOption {
   description?: string
 }
 
+// Temporary custom-only boundary (VS Code orchestrator): sign-in,
+// organization, and account management are unavailable. Custom providers
+// only. Dormant device-auth implementation is retained but not triggered.
+const CUSTOM_ONLY = true
+const CUSTOM_ONLY_PROFILE_MESSAGE =
+  "Sign-in, organization, and account management are temporarily unavailable — custom providers only"
+
 const ProfileView: Component<ProfileViewProps> = (props) => {
   const vscode = useVSCode()
   const language = useLanguage()
@@ -46,9 +53,9 @@ const ProfileView: Component<ProfileViewProps> = (props) => {
 
   const personal = createMemo(() => props.profileData?.profile.hasPersonalAccount !== false)
 
-  // Always fetch fresh profile+balance when navigating to this view
+  // Custom-only: do not trigger profile refresh/login flows from the webview.
   onMount(() => {
-    vscode.postMessage({ type: "refreshProfile" })
+    if (!CUSTOM_ONLY) vscode.postMessage({ type: "refreshProfile" })
   })
 
   // Reset pending target whenever profileData changes (success or failure both send a fresh profile)
@@ -81,6 +88,7 @@ const ProfileView: Component<ProfileViewProps> = (props) => {
   })
 
   const selectOrg = (option: OrgOption | undefined) => {
+    if (CUSTOM_ONLY) return
     if (!option) return
     if (option.value === currentId()) return
     setTarget(option.value)
@@ -91,15 +99,16 @@ const ProfileView: Component<ProfileViewProps> = (props) => {
   }
 
   const handleLogin = () => {
+    if (CUSTOM_ONLY) return
     props.onLogin()
   }
 
   const handleLogout = () => {
-    vscode.postMessage({ type: "logout" })
+    if (CUSTOM_ONLY) return
   }
 
   const handleRefresh = () => {
-    vscode.postMessage({ type: "refreshProfile" })
+    if (CUSTOM_ONLY) return
   }
 
   const handleDashboard = () => {
@@ -115,7 +124,7 @@ const ProfileView: Component<ProfileViewProps> = (props) => {
   }
 
   const handleCancelLogin = () => {
-    vscode.postMessage({ type: "cancelLogin" })
+    if (CUSTOM_ONLY) return
   }
 
   return (
@@ -136,42 +145,56 @@ const ProfileView: Component<ProfileViewProps> = (props) => {
       <div
         style={{ padding: "16px", "max-width": "480px", margin: "0 auto", width: "100%", "box-sizing": "border-box" }}
       >
-        <Show
-          when={props.profileData}
-          fallback={
-            <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
-              <Show
-                when={props.deviceAuth.status !== "idle"}
-                fallback={
-                  <>
-                    <p
-                      style={{
-                        "font-size": "var(--kilo-font-size-13)",
-                        color: "var(--vscode-descriptionForeground)",
-                        margin: "0 0 8px 0",
-                      }}
-                    >
-                      {language.t("profile.notLoggedIn")}
-                    </p>
-                    <Button variant="primary" onClick={handleLogin}>
-                      {language.t("profile.action.login")}
-                    </Button>
-                  </>
-                }
-              >
-                <DeviceAuthCard
-                  status={props.deviceAuth.status}
-                  code={props.deviceAuth.code}
-                  verificationUrl={props.deviceAuth.verificationUrl}
-                  expiresIn={props.deviceAuth.expiresIn}
-                  error={props.deviceAuth.error}
-                  onCancel={handleCancelLogin}
-                  onRetry={handleLogin}
-                />
-              </Show>
-            </div>
-          }
-        >
+        <Show when={CUSTOM_ONLY}>
+          <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
+            <p
+              style={{
+                "font-size": "var(--kilo-font-size-13)",
+                color: "var(--vscode-descriptionForeground)",
+                margin: "0 0 8px 0",
+              }}
+            >
+              {CUSTOM_ONLY_PROFILE_MESSAGE}
+            </p>
+          </div>
+        </Show>
+        <Show when={!CUSTOM_ONLY}>
+          <Show
+            when={props.profileData}
+            fallback={
+              <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
+                <Show
+                  when={props.deviceAuth.status !== "idle"}
+                  fallback={
+                    <>
+                      <p
+                        style={{
+                          "font-size": "var(--kilo-font-size-13)",
+                          color: "var(--vscode-descriptionForeground)",
+                          margin: "0 0 8px 0",
+                        }}
+                      >
+                        {language.t("profile.notLoggedIn")}
+                      </p>
+                      <Button variant="primary" onClick={handleLogin}>
+                        {language.t("profile.action.login")}
+                      </Button>
+                    </>
+                  }
+                >
+                  <DeviceAuthCard
+                    status={props.deviceAuth.status}
+                    code={props.deviceAuth.code}
+                    verificationUrl={props.deviceAuth.verificationUrl}
+                    expiresIn={props.deviceAuth.expiresIn}
+                    error={props.deviceAuth.error}
+                    onCancel={handleCancelLogin}
+                    onRetry={handleLogin}
+                  />
+                </Show>
+              </div>
+            }
+          >
           {(data) => (
             <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
               {/* User header */}
@@ -393,6 +416,7 @@ const ProfileView: Component<ProfileViewProps> = (props) => {
               </div>
             </div>
           )}
+          </Show>
         </Show>
       </div>
     </div>

@@ -94,7 +94,7 @@ describe("useSpeechToText", () => {
     ctx.dispose()
   })
 
-  it("offers sign-in when stored credentials stop authenticating", () => {
+  it("shows only dismiss without sign-in when stored credentials stop authenticating (temporary custom-only)", () => {
     const ctx = setup()
 
     ctx.speech.start({ model: "scribe", insert: () => {} })
@@ -108,9 +108,9 @@ describe("useSpeechToText", () => {
       code: "not_authenticated",
     })
     const action = toasts[0]?.actions?.find((item) => typeof item.onClick === "function")
-    if (typeof action?.onClick === "function") action.onClick()
+    expect(action).toBeUndefined()
 
-    expect(ctx.logins()).toBe(1)
+    expect(ctx.logins()).toBe(0)
     expect(ctx.speech.error()).toBe("speechToText.error.loginRequired")
     ctx.dispose()
   })

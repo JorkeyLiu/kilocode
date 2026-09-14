@@ -17,6 +17,7 @@ import {
   isLocalProviderOptionalApiKey,
 } from "../../utils/local-providers"
 import AnacondaDesktopDialog from "./AnacondaDesktopDialog"
+import { CUSTOM_ONLY_UNSUPPORTED } from "./provider-tab-helpers"
 
 interface ProviderConnectDialogProps {
   providerID: string
@@ -59,8 +60,13 @@ function visible(prompt: Prompt, values: Record<string, string>) {
   return value !== rule.value
 }
 
+const CUSTOM_ONLY = true
+
 const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => {
-  if (props.providerID === "anaconda-desktop") return <AnacondaDesktopDialog />
+  // Temporary custom-only boundary: Anaconda Desktop is a built-in connection
+  // capability and stays unavailable in the product surface. The backend
+  // dialog implementation is retained but unreachable while the boundary holds.
+  if (!CUSTOM_ONLY && props.providerID === "anaconda-desktop") return <AnacondaDesktopDialog />
 
   const dialog = useDialog()
   const language = useLanguage()
@@ -624,6 +630,12 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   return (
     <Dialog title={title()} fit>
       <Switch>
+        {/* Temporary custom-only boundary: built-in provider connection is
+            unavailable. Dormant OAuth/API implementation below is retained
+            but unreachable in the product surface. */}
+        <Match when={true}>
+          <div class="dialog-confirm-body">{CUSTOM_ONLY_UNSUPPORTED}</div>
+        </Match>
         <Match when={canonical() && props.oauthOnly}>
           <div class="dialog-confirm-body">OAuth provider authentication is unavailable in canonical GUI configuration.</div>
         </Match>

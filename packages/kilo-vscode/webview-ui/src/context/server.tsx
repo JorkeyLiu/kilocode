@@ -147,26 +147,18 @@ export const ServerProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "webviewReady" })
   })
 
+  // Temporary custom-only boundary: webview must not trigger device login.
+  // Dormant device-auth implementation is retained but unreachable.
   const startLogin = () => {
-    const status = deviceAuth().status
-    if (status === "initiating" || status === "pending") {
-      return
-    }
-    setDeviceAuth({ status: "initiating" })
-    vscode.postMessage({ type: "login" })
+    return
   }
 
   /**
-   * Route any "Sign In" action through the Profile view so the user always
-   * sees the device-auth UI (URL, QR, code, timer, cancel). Entry points
-   * outside the Profile page — e.g. the Kilo Gateway card in the Providers
-   * settings tab, or the provider picker — must call this helper instead of
-   * `startLogin()` directly. Otherwise the login flow runs silently and the
-   * user has no way to see the code or cancel if the browser is dismissed.
+   * Custom-only: sign-in entry points are disabled. Navigation is retained
+   * so the Profile view can show its temporarily-unavailable status.
    */
   const goToLogin = () => {
     window.postMessage({ type: "navigate", view: "profile" }, "*")
-    startLogin()
   }
 
   const goToProfile = () => {

@@ -16,19 +16,18 @@ import { useProvider } from "../../context/provider"
 import { useVSCode } from "../../context/vscode"
 import type { ProviderView } from "../../types/messages"
 import CustomProviderDialog from "./CustomProviderDialog"
-import ProviderConnectDialog from "./ProviderConnectDialog"
 import ProviderSelectDialog from "./ProviderSelectDialog"
 import { providerIcon, providerNoteKey } from "./provider-catalog"
 import { isCustomProviderPackage } from "../../../../src/shared/provider-model"
 import { createProviderAction } from "../../utils/provider-action"
 import {
-  buildConfiguredList,
-  buildAddList,
-  allConfiguredIds,
   providerSource,
   showInlineApiKey,
   isCustomConfigured,
   resolvePrimarySlot,
+  buildCustomConfiguredList,
+  buildCustomAddList,
+  CUSTOM_ONLY_UNSUPPORTED,
 } from "./provider-tab-helpers"
 
 const ProvidersTab: Component = () => {
@@ -52,16 +51,19 @@ const ProvidersTab: Component = () => {
     () => Object.fromEntries(allProviders().map((item) => [item.id, item])) as Record<string, ProviderView>,
   )
 
-  // Configured IDs: connected + disabled + config entries + auth states
-  const configuredIds = createMemo(() =>
-    allConfiguredIds(provider.connected(), disabledIds(), config().provider, provider.authStates()),
-  )
-
+  // Temporary custom-only boundary: only custom configured providers are shown.
+  // Built-in configured/add rows stay dormant in helpers but are not rendered.
   const configured = createMemo(() =>
-    buildConfiguredList(providerMap(), provider.connected(), disabledIds(), config().provider, provider.authStates()),
+    buildCustomConfiguredList(
+      providerMap(),
+      provider.connected(),
+      disabledIds(),
+      config().provider,
+      provider.authStates(),
+    ),
   )
 
-  const addList = createMemo(() => buildAddList(providerMap(), configuredIds()))
+  const addList = createMemo(() => buildCustomAddList())
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -87,7 +89,9 @@ const ProvidersTab: Component = () => {
   }
 
   function deleteCustom(providerID: string, name: string) {
-    if (canonicalMode()) return
+    // Custom delete is canonical-only at send time (stamp + host credential
+    // guards below). The confirm dialog itself opens in any mode; the
+    // non-canonical path surfaces the explicit canonical-only error.
     dialog.show(() => (
       <Dialog title={language.t("provider.delete.confirm.title", { provider: name })} fit>
         <div class="dialog-confirm-body">
@@ -150,14 +154,14 @@ const ProvidersTab: Component = () => {
     }
   }
 
-  function connectProvider(item: ProviderView) {
-    if (canonicalMode()) return
-    dialog.show(() => <ProviderConnectDialog providerID={item.id} />)
+  // Temporary custom-only boundary: built-in connect/ChatGPT entries are
+  // unsupported. Custom providers use CustomProviderDialog via saveCustomProvider.
+  function connectProvider(_item: ProviderView) {
+    showToast({ title: language.t("common.requestFailed"), description: CUSTOM_ONLY_UNSUPPORTED })
   }
 
-  function connectChatGPT(item: ProviderView) {
-    if (canonicalMode()) return
-    dialog.show(() => <ProviderConnectDialog providerID={item.id} oauthOnly />)
+  function connectChatGPT(_item: ProviderView) {
+    showToast({ title: language.t("common.requestFailed"), description: CUSTOM_ONLY_UNSUPPORTED })
   }
 
   function chatgpt(item: ProviderView) {
@@ -166,10 +170,9 @@ const ProvidersTab: Component = () => {
     return (provider.authMethods()[item.id] ?? []).some((method) => method.type === "oauth")
   }
 
-  /** Open the API Key management dialog (LOCK-035). */
-  function manageApiKey(item: ProviderView) {
-    if (canonicalMode()) return
-    dialog.show(() => <ProviderConnectDialog providerID={item.id} manageApiKey />)
+  /** Built-in API Key management is unsupported in custom-only mode. */
+  function manageApiKey(_item: ProviderView) {
+    showToast({ title: language.t("common.requestFailed"), description: CUSTOM_ONLY_UNSUPPORTED })
   }
 
   // ── Control policy predicates ──────────────────────────────────────────
@@ -242,7 +245,16 @@ const ProvidersTab: Component = () => {
           )
         }}
       </Show>
-      {/* Configured providers */}
+      <div
+        style={{
+          padding: "8px 0",
+          "font-size": "var(--kilo-font-size-12)",
+          color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
+        }}
+      >
+        {CUSTOM_ONLY_UNSUPPORTED}
+      </div>
+      {/* Configured providers (custom-only) */}
       <h4 style={{ "margin-top": "16px", "margin-bottom": "8px" }}>
         {language.t("settings.providers.section.configured")}
       </h4>
@@ -291,10 +303,7 @@ const ProvidersTab: Component = () => {
                               size="large"
                               variant="ghost"
                               aria-label={language.t("common.edit")}
-                              onClick={() => {
-                                if (!canonicalMode()) editProvider(item)
-                              }}
-                              disabled={canonicalMode() === true}
+                              onClick={() => editProvider(item)}
                             />
                           </Tooltip>
                         </div>
@@ -366,7 +375,6 @@ const ProvidersTab: Component = () => {
                             variant="ghost"
                             aria-label={language.t("settings.providers.action.deleteProvider")}
                             onClick={() => deleteCustom(item.id, item.name)}
-                            disabled={canonicalMode() === true}
                           />
                         </Tooltip>
                       </div>
@@ -453,10 +461,7 @@ const ProvidersTab: Component = () => {
             size="large"
             variant="secondary"
             icon="plus-small"
-            onClick={() => {
-              if (!canonicalMode()) dialog.show(() => <CustomProviderDialog />)
-            }}
-            disabled={canonicalMode() === true}
+            onClick={() => dialog.show(() => <CustomProviderDialog />)}
           >
             {language.t("settings.providers.action.configure")}
           </Button>
@@ -465,10 +470,7 @@ const ProvidersTab: Component = () => {
         {/* Show more providers */}
         <button
           type="button"
-          onClick={() => {
-            if (!canonicalMode()) dialog.show(() => <ProviderSelectDialog />)
-          }}
-          disabled={canonicalMode() === true}
+          onClick={() => dialog.show(() => <ProviderSelectDialog />)}
           style={{
             display: "flex",
             "align-items": "center",

@@ -118,10 +118,10 @@ import {
   requestInstanceReload,
 } from "./kilo-provider/instance-reload"
 import {
-  handleLogin,
-  handleLogout,
-  handleSetOrganization,
-  handleRefreshProfile,
+  handleLogin as dormantHandleLogin,
+  handleLogout as dormantHandleLogout,
+  handleSetOrganization as dormantHandleSetOrganization,
+  handleRefreshProfile as dormantHandleRefreshProfile,
   type AuthContext,
 } from "./kilo-provider/handlers/auth"
 import {
@@ -176,6 +176,7 @@ import {
   narrowProviderEntry,
   isValidCanonicalProviderEntry,
 } from "./config/types"
+import { KILO_PROVIDER_ID, PROVIDER_ID_PATTERN } from "./shared/provider-model"
 import { parseSecretKey } from "./config/secret-adapter"
 import { CLOSED_JSONC_FIELDS, isGuiField } from "./config/registry"
 import { composeScopePatch } from "./util/config-patch"
@@ -260,6 +261,65 @@ function filterCanonicalScope(value: Record<string, unknown>): Record<string, un
 }
 
 const CREDENTIAL_KEY = /^(?:api[_-]?key|authorization|token|password|secret|cookie|credential|headers?)$/i
+
+// Temporary custom-only product boundary (VS Code orchestrator).
+// Only user-created custom providers are supported in the product surface.
+// Built-in provider configuration, OAuth, and sign-in/account flows are
+// dormant in the backend but must not be triggerable from the webview.
+// Custom canonical save/delete/disconnect/fetch continue with existing guards.
+// Unconfigured ordinary IDs are NOT reserved for future built-ins: creating a
+// custom provider under such an ID is accepted, and any future built-in ID
+// collision is handled if and when it arises.
+const CUSTOM_ONLY_PROVIDER_MESSAGE =
+  "Built-in provider configuration is temporarily unavailable (custom providers only)"
+const CUSTOM_ONLY_AUTH_MESSAGE =
+  "Sign-in and account management are temporarily unavailable (custom providers only)"
+
+function isCanonicalCustomEntry(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return typeof value.endpoint === "string" && typeof value.protocol === "string"
+}
+
+// Temporary custom-only ID/entry gate. A custom ID uses the shared provider
+// ID pattern and never the reserved internal routing IDs (Kilo/synthetic/
+// Anaconda). Those three are existing internal reservations, not a future
+// provider denylist: ordinary IDs pass syntax when unconfigured, including
+// future built-in-like IDs. A custom payload carries endpoint + protocol;
+// legacy provider keys never qualify as custom authoring. Stored-entry
+// custom-ness is a best-effort shape signal: without an authoritative
+// built-in ID catalog, a built-in override authored with a full custom shape
+// is indistinguishable from a true custom entry. Configured non-custom (or
+// unparseable/legacy) entries fail closed; unconfigured ordinary IDs stay
+// creatable and any future collision is handled if it arises.
+const RESERVED_CUSTOM_IDS = new Set([KILO_PROVIDER_ID, "_custom", "anaconda-desktop"])
+
+function isCustomIDSyntax(id: string): boolean {
+  if (!id || !PROVIDER_ID_PATTERN.test(id)) return false
+  if (RESERVED_CUSTOM_IDS.has(id)) return false
+  return true
+}
+
+// Legacy provider authoring keys are never custom payloads in the canonical
+// boundary. Canonical schema validation rejects them as invalid; the
+// custom-only gate rejects them first as unsupported so legacy entries fail
+// closed without touching config or secrets.
+const LEGACY_PROVIDER_KEYS = new Set(["npm", "package", "env", "options", "baseURL", "model", "apiKey", "headers"])
+
+function hasLegacyProviderKeys(raw: unknown): boolean {
+  if (!isRecord(raw)) return false
+  return Object.keys(raw).some((key) => LEGACY_PROVIDER_KEYS.has(key))
+}
+
+// Dormant auth flows are retained for a future restore but unreachable from
+// the webview while the custom-only boundary holds. Referenced here so the
+// implementation stays compiled without becoming product-reachable.
+const _dormantAuthFlows = [
+  dormantHandleLogin,
+  dormantHandleLogout,
+  dormantHandleSetOrganization,
+  dormantHandleRefreshProfile,
+] as const
+void _dormantAuthFlows
 
 /**
  * Sanitize a value tree for credential-bearing keys. Returns true only when
@@ -941,6 +1001,32 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (msg.type === "authorizeProviderOAuth" || msg.type === "completeProviderOAuth") {
       return fail("OAuth provider authentication is unavailable in canonical GUI authority", "unsupported")
     }
+    // Temporary custom-only boundary: canonical connect/disconnect/save/delete
+    // are allowed only for custom IDs with custom authored entries
+    // (ID pattern + internal reserved deny + endpoint/protocol, no legacy
+    // keys). Configured non-custom entries fail with unsupported and no
+    // config/secret write; unconfigured ordinary IDs pass syntax for save
+    // (future collisions handled if they arise). Custom fetch keeps existing
+    // guards plus a configured-non-custom fail-closed check below. New custom
+    // IDs are allowed for save only when no scope holds a non-custom entry
+    // with the same ID.
+    if (
+      (msg.type === "connectProvider" || msg.type === "disconnectProvider") &&
+      (!isCustomIDSyntax(id) || !isCanonicalCustomEntry(providers[id]))
+    ) {
+      return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
+    }
+    if (msg.type === "deleteCustomProvider") {
+      if (!isCustomIDSyntax(id) || !isCanonicalCustomEntry(providers[id])) {
+        return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
+      }
+    }
+    if (msg.type === "saveCustomProvider") {
+      const rawGate = msg.config
+      if (!isCustomIDSyntax(id) || !isCanonicalCustomEntry(rawGate) || hasLegacyProviderKeys(rawGate)) {
+        return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
+      }
+    }
     if (msg.type === "connectProvider") {
       if (
         msg.canonical !== true ||
@@ -1048,6 +1134,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return fail("Canonical provider requests must not contain credential-bearing fields", "invalid")
     if (!isValidCanonicalProviderEntry(raw, id))
       return fail("Canonical provider payload failed shared schema validation", "invalid")
+    // Temporary custom-only boundary: never overwrite an existing
+    // non-custom (or unparseable/legacy) entry with the same ID, even when
+    // the incoming payload is a valid custom entry. New custom IDs and
+    // existing custom entries pass. Without a built-in ID catalog this is a
+    // best-effort shape signal: a built-in override authored with a full
+    // custom shape is indistinguishable and its collision is accepted.
+    if (msg.type === "saveCustomProvider") {
+      for (const other of ["global", "project"] as const) {
+        const rawScope = service.getScopeConfig(other).provider as Record<string, unknown> | undefined
+        const parsedScope = parseCanonicalProviderRecord(rawScope ?? {})
+        if (!parsedScope) return fail("Provider record contains invalid entries", "invalid")
+        const existing = parsedScope[id]
+        if (existing && !isCanonicalCustomEntry(existing)) {
+          return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
+        }
+      }
+    }
     // Canonical-only serialization: emit name/endpoint/protocol/models.
     // Never reuse legacy {npm, env, options:{baseURL,headers}, models} shape.
     // ID is the map key — never injected into the persisted record (LOCK-002).
@@ -1945,25 +2048,25 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "requestSessionModelUsage":
           void this.fetchAndSendSessionModelUsage(message.sessionID, message.requestID)
           break
+        // Temporary custom-only boundary: sign-in/account flows are dormant.
+        // The handlers stay in the codebase for a future restore but are not
+        // reachable from the webview. Rejections use existing message shapes
+        // without secrets.
         case "login": {
-          const attempt = ++this.loginAttempt
-          await handleLogin(this.authCtx, attempt, () => this.loginAttempt)
+          this.postMessage({ type: "deviceAuthFailed", error: CUSTOM_ONLY_AUTH_MESSAGE })
           break
         }
         case "cancelLogin":
-          this.loginAttempt++
           this.postMessage({ type: "deviceAuthCancelled" })
           break
         case "logout":
-          await handleLogout(this.authCtx)
+          this.postMessage({ type: "error", message: CUSTOM_ONLY_AUTH_MESSAGE })
           break
         case "setOrganization":
-          if (typeof message.organizationId === "string" || message.organizationId === null) {
-            await handleSetOrganization(this.authCtx, message.organizationId)
-          }
+          this.postMessage({ type: "error", message: CUSTOM_ONLY_AUTH_MESSAGE })
           break
         case "refreshProfile":
-          await handleRefreshProfile(this.authCtx)
+          this.postMessage({ type: "profileData", data: null })
           break
         case "openSettingsPanel":
           vscode.commands.executeCommand("kilo-code.new.settingsButtonClicked", message.tab)
@@ -2010,18 +2113,31 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "retryMcpCleanup":
           await this.retryCanonicalMcpCleanup(message)
           break
+        // Temporary custom-only boundary: Anaconda Desktop is treated as a
+        // built-in/non-custom provider connection capability and fails closed.
+        // The bridge backend stays in the codebase but is never invoked from
+        // the webview; cancellations are no-ops since no request starts.
         case "anacondaDesktopStatus":
         case "anacondaDesktopOpen":
         case "anacondaDesktopSync":
-        case "cancelAnacondaDesktopRequest":
-          await this.anacondaDesktop.handle(message, {
-            client: this.client,
-            directory: this.getWorkspaceDirectory(),
-            post: (reply) => this.postMessage(reply),
-            refresh: () => this.fetchAndSendProviders(),
-            error: getErrorMessage,
+        case "cancelAnacondaDesktopRequest": {
+          if (message.type === "cancelAnacondaDesktopRequest") break
+          const rid = typeof message.requestId === "string" ? message.requestId : ""
+          if (!rid) break
+          const action =
+            message.type === "anacondaDesktopStatus"
+              ? ("status" as const)
+              : message.type === "anacondaDesktopOpen"
+                ? ("open" as const)
+                : ("sync" as const)
+          this.postMessage({
+            type: "anacondaDesktopActionError",
+            requestId: rid,
+            action,
+            message: CUSTOM_ONLY_PROVIDER_MESSAGE,
           })
           break
+        }
         case "fetchCustomProviderModels":
           this.handleFetchCustomProviderModels(message).catch((e) =>
             console.error("[Kilo New] fetchCustomProviderModels failed:", e),
@@ -3613,6 +3729,24 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   private async handleProviderAction(msg: Record<string, unknown>): Promise<void> {
+    // Temporary custom-only boundary: OAuth can never be triggered from the
+    // webview. Custom save/delete/disconnect/fetch continue with existing
+    // stamp/credential guards; built-in connect/disconnect is rejected below.
+    if (msg.type === "authorizeProviderOAuth" || msg.type === "completeProviderOAuth") {
+      const pid = typeof msg.providerID === "string" ? msg.providerID : ""
+      const rid = typeof msg.requestId === "string" ? msg.requestId : crypto.randomUUID()
+      const action = msg.type === "authorizeProviderOAuth" ? "authorize" : "connect"
+      this.postMessage({
+        type: "providerActionError",
+        requestId: rid,
+        providerID: pid,
+        action,
+        message: CUSTOM_ONLY_PROVIDER_MESSAGE,
+        kind: "unsupported",
+        ...(this.canonicalConfig ? { canonical: true, stamp: this.canonicalConfig.stamp } : {}),
+      })
+      return
+    }
     if (
       this.canonicalConfig &&
       (msg.type === "connectProvider" ||
@@ -3690,10 +3824,40 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (msg.type === "completeProviderOAuth") return completeOAuthAction(ctx, rid, pid, method, code)
   }
 
+  /**
+   * Temporary custom-only boundary: true when any authored scope holds an
+   * entry for this ID that is not a custom authored entry (non-custom shape
+   * or unparseable/legacy record). Such IDs must not lend a stored credential
+   * to custom model discovery and must not return custom models.
+   * Unconfigured IDs return false: discovery proceeds with existing
+   * typed-key/baseURL semantics and future IDs are not reserved.
+   */
+  private isConfiguredNonCustomProvider(pid: string): boolean {
+    const service = this.canonicalConfig
+    if (!service) return false
+    for (const scope of ["global", "project"] as const) {
+      const raw = service.getScopeConfig(scope).provider as Record<string, unknown> | undefined
+      if (!raw || typeof raw !== "object" || !(pid in raw)) continue
+      const parsed = parseCanonicalProviderRecord(raw)
+      const entry = parsed?.[pid]
+      if (!entry || !isCanonicalCustomEntry(entry)) return true
+    }
+    return false
+  }
+
   private async handleFetchCustomProviderModels(msg: Record<string, unknown>): Promise<void> {
     const rid = typeof msg.requestId === "string" ? msg.requestId : ""
     const url = typeof msg.baseURL === "string" ? msg.baseURL : ""
     if (!rid || !url) return
+    const pid = typeof msg.providerID === "string" ? msg.providerID : ""
+    // Temporary custom-only boundary: reserved internal IDs never discover.
+    if (pid && !isCustomIDSyntax(pid)) {
+      return this.postMessage({
+        type: "customProviderModelsFetched",
+        requestId: rid,
+        error: CUSTOM_ONLY_PROVIDER_MESSAGE,
+      })
+    }
     if (this.canonicalConfig && !this.canonicalReady) {
       return this.postMessage({
         type: "customProviderModelsFetched",
@@ -3718,6 +3882,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         type: "customProviderModelsFetched",
         requestId: rid,
         error: "Canonical provider stamp is stale or incomplete",
+      })
+    }
+    // Temporary custom-only boundary: a configured non-custom (or
+    // unparseable/legacy) entry fails closed here, before any credential
+    // prompt, stored-credential resolution, or network fetch. Configured
+    // custom entries, fresh typed keys, and unconfigured ordinary IDs keep
+    // existing discovery semantics.
+    if (this.canonicalConfig && pid && this.isConfiguredNonCustomProvider(pid)) {
+      return this.postMessage({
+        type: "customProviderModelsFetched",
+        requestId: rid,
+        error: CUSTOM_ONLY_PROVIDER_MESSAGE,
       })
     }
     if (this.canonicalConfig && msg.canonical === true && msg.credentialRequested === true) {
@@ -3770,7 +3946,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
       return
     }
-    const pid = typeof msg.providerID === "string" ? msg.providerID : ""
     if (!pid) {
       try {
         const models = await fetchOpenAIModels({ baseURL: url })

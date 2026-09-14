@@ -7,6 +7,7 @@
 
 import type { Provider, ProviderAuthState } from "../../types/messages"
 import { isCustomProviderPackage, KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
+import { isCanonicalProviderProtocol } from "../../../../src/config/types"
 import { sortProviders } from "./provider-catalog"
 
 /** The single control rendered in the primary grid slot of a configured row. */
@@ -22,11 +23,40 @@ export function providerSource(item: Provider): ProviderSource | undefined {
   return undefined
 }
 
-/** Determine if a provider is a custom provider based on its config npm field. */
-export function isCustom(item: Provider, configProvider?: Record<string, unknown>): boolean {
-  const cfg = configProvider?.[item.id]
+/**
+ * Internal reserved IDs that are never custom providers. Mirrors the host
+ * canonical gate (KiloProvider RESERVED_CUSTOM_IDS): only these existing
+ * internal routing IDs are denied. Ordinary IDs — including future
+ * built-in-like IDs — are never added here.
+ */
+const RESERVED_CUSTOM_IDS = new Set([KILO_PROVIDER_ID, "_custom", "anaconda-desktop"])
+
+/** True when a config entry carries the legal canonical custom shape (endpoint + protocol). */
+function isCanonicalCustomConfig(cfg: unknown): boolean {
   if (!cfg || typeof cfg !== "object") return false
-  return isCustomProviderPackage((cfg as Record<string, unknown>).npm)
+  const rec = cfg as Record<string, unknown>
+  return (
+    typeof rec.endpoint === "string" && rec.endpoint.length > 0 && isCanonicalProviderProtocol(rec.protocol)
+  )
+}
+
+/**
+ * Determine if a provider is a custom provider.
+ * Accepts (a) the canonical view signal `source === "custom"` on a
+ * non-reserved ID (canonical providers always carry `source: "custom"`),
+ * (b) the legal canonical authored shape `{endpoint, protocol}`, or
+ * (c) the legacy compat shape `{npm: <custom package>}`.
+ */
+export function isCustom(item: Provider, configProvider?: Record<string, unknown>): boolean {
+  if (RESERVED_CUSTOM_IDS.has(item.id)) return false
+  const cfg = configProvider?.[item.id]
+  if (cfg && typeof cfg === "object") {
+    const rec = cfg as Record<string, unknown>
+    if (isCustomProviderPackage(rec.npm)) return true
+    if (isCanonicalCustomConfig(cfg)) return true
+  }
+  if (providerSource(item) === "custom") return true
+  return false
 }
 
 /**
@@ -83,7 +113,7 @@ export function resolveConfiguredProvider(
       id,
       name: typeof c.name === "string" ? c.name : id,
       models: {},
-      source: isCustomProviderPackage(c.npm) ? "custom" : "config",
+      source: isCustomProviderPackage(c.npm) || isCanonicalCustomConfig(cfg) ? "custom" : "config",
     }
   }
 
@@ -113,6 +143,37 @@ export function buildConfiguredList(
 /** Build the Add providers list: generic unconfigured providers (alphabetical; no preset popularity). */
 export function buildAddList(allProviders: Record<string, Provider>, configuredIds: Set<string>): Provider[] {
   return sortProviders(Object.values(allProviders).filter((item) => !configuredIds.has(item.id)))
+}
+
+/**
+ * Temporary custom-only product boundary (VS Code orchestrator).
+ * Only user-created custom providers are supported; built-in provider
+ * configuration/connection is hidden in the product surface. Dormant
+ * backend/OAuth implementation is retained but must not be triggered.
+ */
+export const CUSTOM_ONLY_UNSUPPORTED =
+  "Only custom providers are supported temporarily — built-in provider setup is unavailable"
+
+export function isCustomOnlyConfigured(item: Provider, configProvider?: Record<string, unknown>): boolean {
+  return isCustomConfigured(item, configProvider)
+}
+
+/** Custom-only configured list: keep only custom configured providers. */
+export function buildCustomConfiguredList(
+  allProviders: Record<string, Provider>,
+  connected: string[],
+  disabledIds: Set<string>,
+  configProvider: Record<string, unknown> | undefined,
+  authStates: Record<string, ProviderAuthState>,
+): Provider[] {
+  return buildConfiguredList(allProviders, connected, disabledIds, configProvider, authStates).filter((item) =>
+    isCustomConfigured(item, configProvider),
+  )
+}
+
+/** Custom-only add list: built-in add rows are hidden; custom entry is rendered separately. */
+export function buildCustomAddList(): Provider[] {
+  return []
 }
 
 /**

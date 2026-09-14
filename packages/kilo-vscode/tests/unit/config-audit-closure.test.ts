@@ -590,15 +590,27 @@ describe("P4.1 provider retry operation record", () => {
   })
 
   it("overlapping cleanup failures for the same provider keep distinct retry IDs/records", async () => {
-    const ref = "secret:kilo.credentials.global.provider.openai"
-    const cfg = { provider: { openai: { name: "OpenAI", credential: ref } } }
+    // Custom-only boundary: disconnect retry coverage uses a custom authored
+    // entry (endpoint + protocol); built-in name-only entries are unsupported.
+    const ref = "secret:kilo.credentials.global.provider.mycustom"
+    const cfg = {
+      provider: {
+        mycustom: {
+          name: "My Custom",
+          endpoint: "https://example.com/v1",
+          protocol: "openai/completions",
+          models: { m1: { name: "M1" } },
+          credential: ref,
+        },
+      },
+    }
     const { canonical, provider, messages } = await providerActionSetup(cfg)
     // No stored secret → cleanup cannot remove it → retryable failure with a record.
-    await provider.handleCanonicalProviderAction({ type: "disconnectProvider", providerID: "openai", requestId: "r1", canonical: true, stamp: canonical.stamp })
+    await provider.handleCanonicalProviderAction({ type: "disconnectProvider", providerID: "mycustom", requestId: "r1", canonical: true, stamp: canonical.stamp })
     // Re-add the provider with the same credential ref so a second operation can fail identically.
     const written = await canonical.writeConfig("global", cfg, canonical.getConfigHash("global") ?? "absent")
     expect(written.ok).toBe(true)
-    await provider.handleCanonicalProviderAction({ type: "disconnectProvider", providerID: "openai", requestId: "r2", canonical: true, stamp: canonical.stamp })
+    await provider.handleCanonicalProviderAction({ type: "disconnectProvider", providerID: "mycustom", requestId: "r2", canonical: true, stamp: canonical.stamp })
 
     const records = [...provider.cleanupRetries.entries()]
     expect(records.length).toBe(2)
@@ -609,12 +621,12 @@ describe("P4.1 provider retry operation record", () => {
     expect(id1.length).toBeGreaterThan(20)
     expect(id2.length).toBeGreaterThan(20)
     expect(rec1.kind).toBe("provider")
-    expect(rec1.id).toBe("openai")
+    expect(rec1.id).toBe("mycustom")
     expect(rec1.scope).toBe("global")
     expect(rec1.mode).toBe("delete")
     expect(rec1.ref).toBe(ref)
     expect(rec1.state).toBe("available")
-    expect(rec2).toEqual(expect.objectContaining({ kind: "provider", id: "openai", scope: "global", mode: "delete", ref, state: "available" }))
+    expect(rec2).toEqual(expect.objectContaining({ kind: "provider", id: "mycustom", scope: "global", mode: "delete", ref, state: "available" }))
     // The retry payloads exposed to the webview carry the distinct opaque IDs.
     const retries = messages
       .filter((m) => (m as Record<string, unknown>).type === "providerActionError")
@@ -1190,7 +1202,9 @@ describe("P4.1 canonical provider save uses shared schema validator", () => {
     await canonical.initialize()
     const { provider, messages } = makeProvider(canonical)
 
-    // Attempt to save a provider with a legacy field (npm) — shared schema rejects it
+    // Attempt to save a provider with a legacy field (npm) — the temporary
+    // custom-only gate rejects legacy keys as unsupported before shared
+    // schema validation, so legacy entries fail closed without config writes.
     await provider.handleCanonicalProviderAction({
       type: "saveCustomProvider",
       providerID: "openai",
@@ -1201,8 +1215,8 @@ describe("P4.1 canonical provider save uses shared schema validator", () => {
     })
     const err = messages.find((m) => (m as Record<string, unknown>).type === "providerActionError") as Record<string, unknown> | undefined
     expect(err).toBeDefined()
-    expect(err!.kind).toBe("invalid")
-    expect((err!.message as string).includes("shared schema")).toBe(true)
+    expect(err!.kind).toBe("unsupported")
+    expect((err!.message as string).includes("temporarily unavailable")).toBe(true)
     provider.cleanupRetries.clear()
     canonical.dispose()
   })
