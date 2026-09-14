@@ -1,6 +1,6 @@
 ---
 title: "Using Anaconda Desktop with Kilo Code | Local Models"
-description: "Connect Kilo Code to a local Anaconda Desktop text-generation model server from the TUI or VS Code."
+description: "Connect Kilo Code to a local Anaconda Desktop text-generation model server from the Kilo TUI."
 sidebar_label: Anaconda Desktop
 ---
 
@@ -20,7 +20,7 @@ Anaconda Desktop and Kilo must run on the same supported computer.
 | macOS | macOS 13 or later, Apple Silicon |
 | Linux | Debian or Ubuntu, x86-64 or ARM64 |
 
-Remote backends, remote-only model endpoints, and non-interactive or headless setup are not supported. Complete setup in the Kilo TUI or VS Code on the computer running Anaconda Desktop.
+Remote backends, remote-only model endpoints, and non-interactive or headless setup are not supported. Complete setup in the Kilo TUI on the computer running Anaconda Desktop. The VS Code extension currently does not expose Anaconda Desktop provider setup; VS Code supports custom non-login providers only.
 
 ## Set Up Anaconda Desktop
 
@@ -49,12 +49,7 @@ To refresh an existing connection, run `/connect`, select **Anaconda Desktop**, 
 {% /tab %}
 {% tab label="VS Code" %}
 
-1. Open Kilo Code **Settings** using the gear icon and select **Providers**.
-2. Add **Anaconda Desktop**. No manual API-key field is shown.
-3. Follow the setup dialog. Kilo can open Anaconda Desktop; after making changes there, return and select **Check again**.
-4. When the model server is ready, select **Connect** to import its connection and refresh the model picker.
-
-For an existing connection, open **Settings**, select **Providers**, and select **Manage / Refresh** for Anaconda Desktop after changing the model, server address or port, or server API key in Desktop.
+VS Code extension currently does not expose Anaconda Desktop provider setup; VS Code supports custom non-login providers only. There is no Settings → Providers → Anaconda entry, setup dialog, or Manage / Refresh action in VS Code. Use the Kilo TUI `/connect` flow above on the computer running Anaconda Desktop instead; that flow belongs to the CLI/TUI backend, not the VS Code orchestrator.
 
 {% /tab %}
 {% /tabs %}
@@ -78,7 +73,7 @@ Kilo never asks you to paste either key. If the inference server key or endpoint
 
 ## Disconnect
 
-In VS Code, open **Settings** > **Providers** and select **Disconnect** for Anaconda Desktop. In a terminal, run `kilo auth logout` and select Anaconda Desktop. Disconnecting removes only Kilo's stored provider authentication and connection metadata. It does not stop Anaconda Desktop, stop the model server, or delete the downloaded model.
+In a terminal, run `kilo auth logout` and select Anaconda Desktop. There is no Settings > Providers > Anaconda Disconnect entry in VS Code. Disconnecting removes only Kilo's stored provider authentication and connection metadata. It does not stop Anaconda Desktop, stop the model server, or delete the downloaded model.
 
 Use Anaconda Desktop itself to stop or change the server.
 
