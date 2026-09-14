@@ -255,8 +255,15 @@ export function createRoutes(
   ) as Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements>
 }
 
-// kilocode_change start - keep listener routes local while application services come from AppRuntime
-export function createListenerRoutes(corsOptions?: CorsOptions, app: AppLayer = AppLayer) {
+// kilocode_change start - standalone listener topology: transport fresh, AppLayer canonical.
+// `createListenerRoutesUnprovided` assembles ONLY the listener-local route +
+// transport-middleware graph. It MUST NOT provide AppLayer: the AppLayer is
+// supplied OUTSIDE `Layer.fresh` by `KiloListener.build` so every default
+// listener shares the one canonical AppLayer identity (process `memoMap`,
+// same as global `AppRuntime`) while router/middleware/sockets stay fresh per
+// listener. Providing the app inside this layer would put canonical services
+// inside the fresh graph and fork them per listener (standalone topology bug).
+export function createListenerRoutesUnprovided(corsOptions?: CorsOptions) {
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
@@ -265,8 +272,15 @@ export function createListenerRoutes(corsOptions?: CorsOptions, app: AppLayer = 
     docRoute,
     legacyGlobalHealthRoute,
     uiRoute,
-  ).pipe(
-    provideKiloListenerRoutes(corsOptions),
+  ).pipe(provideKiloListenerRoutes(corsOptions))
+}
+
+// Kept for direct callers/tests that expect a self-contained app-provided
+// route layer (e.g. `HttpRouter.serve(createListenerRoutes())` in layerTest).
+// `Server.listen` MUST use `createListenerRoutesUnprovided` instead, so the
+// app stays outside `Layer.fresh`.
+export function createListenerRoutes(corsOptions?: CorsOptions, app: AppLayer = AppLayer) {
+  return createListenerRoutesUnprovided(corsOptions).pipe(
     Layer.provide(app), // kilocode_change
   )
 }

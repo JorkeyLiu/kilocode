@@ -120,7 +120,17 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 )
 
 function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createListenerRoutes(opts, opts.appLayer), {
+  // kilocode_change start - standalone listener topology: fresh transport,
+  // canonical app outside. `createListenerRoutesUnprovided` intentionally
+  // carries NO AppLayer so `KiloListener.build` can apply
+  // `Layer.fresh(transport).pipe(Layer.provide(app))` with the correct order:
+  // router/middleware/WebSocketTracker/Node server/ConfigProvider stay fresh
+  // per listener, while the selected app (canonical `AppLayer` by default,
+  // custom `opts.appLayer` for deterministic tests) is shared through the
+  // process `memoMap` with global `AppRuntime`. Do NOT provide the app here —
+  // embedding it inside the fresh graph would fork SessionStatus,
+  // GenerationGate, InstanceStore, PtyServiceMap, etc. per listener.
+  return HttpRouter.serve(HttpApiApp.createListenerRoutesUnprovided(opts), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,
@@ -134,6 +144,7 @@ function listenerLayer(opts: ListenOptions, port: number) {
     // every later `Server.listen()` keeps observing that initial snapshot.
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
   )
+  // kilocode_change end
 }
 
 function startWithPortFallback(opts: ListenOptions) {

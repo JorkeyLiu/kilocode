@@ -832,6 +832,15 @@ Testing expectations: tests must cover saving during active streaming, not only 
 
 Both streams send initial `server.connected` event and heartbeat every 10 seconds. VS Code consumes `/global/event` so one server connection can route events for multiple directories.
 
+## Standalone listener assembly
+
+| Aspect | Behavior |
+|---|---|
+| Transport freshness | `Server.listen` builds a fresh transport graph per listener: unprovided listener routes (`createListenerRoutesUnprovided`), `HttpRouter.serve`, route/middleware graph, listener-local `WebSocketTracker`, Node `HttpServer`, `ListenerServerService`, and per-listener `ConfigProvider` snapshot |
+| Canonical runtime sharing | The selected app (`AppLayer` by default, custom `opts.appLayer` for deterministic tests) is provided OUTSIDE `Layer.fresh` via `KiloListener.build`, so all default listeners share one canonical AppLayer identity through the process `memoMap` — the same identity global `AppRuntime` uses |
+| Order | `Layer.fresh(transport).pipe(Layer.provide(app))` is load-bearing; embedding the app inside the fresh graph forks `SessionStatus`/`GenerationGate`/`InstanceStore`/`PtyServiceMap` per listener |
+| Ownership | Stopping a listener closes only its own scope/transport (including its `WebSocketTracker`); the process owner remains responsible for final AppLayer disposal; custom-app fd/private parity stays unsupported |
+
 ## Source map
 
 Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/kilocode).

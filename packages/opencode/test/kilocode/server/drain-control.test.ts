@@ -1173,8 +1173,9 @@ describe("drain-control bypass - Server.listen path", () => {
             return response
           })
 
-        // The listener is a fresh layer with its own SessionStatus and gate
-        // instances, so status must be polled through the listener itself.
+        // The listener shares the canonical SessionStatus/gate with AppRuntime
+        // (standalone topology); status is polled through the listener HTTP
+        // surface as production-path evidence.
         const listenerStatus = (sessionID: string) =>
           Effect.promise(async () => {
             const response = await fetch(`${base}/session/status`, {
@@ -1298,8 +1299,9 @@ describe("drain-control bypass - Server.listen path", () => {
             return response
           })
 
-        // The listener is a fresh layer with its own SessionStatus and gate
-        // instances, so status must be polled through the listener itself.
+        // The listener shares the canonical SessionStatus/gate with AppRuntime
+        // (standalone topology); status is polled through the listener HTTP
+        // surface as production-path evidence.
         const listenerStatus = (sessionID: string) =>
           Effect.promise(async () => {
             const response = await fetch(`${base}/session/status`, {
