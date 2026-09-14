@@ -369,7 +369,6 @@ function makeCanonicalHost(canonical: CanonicalConfigService, client: unknown = 
   ;(connection as unknown as { getClient: () => unknown }).getClient = () => client as never
   const host = new KiloProvider({} as never, connection, undefined, { canonicalConfig: canonical }) as unknown as Host & {
     canonicalReady: boolean
-    loginAttempt: number
   }
   const messages: unknown[] = []
   host.postMessage = (message) => messages.push(message)
@@ -761,7 +760,6 @@ describe("custom-only auth routing", () => {
     const connection = new KiloConnectionService({} as never)
     ;(connection as unknown as { getClient: () => unknown }).getClient = () => client as never
     const host = new KiloProvider({} as never, connection, undefined, canonical ? { canonicalConfig: canonical } : {}) as unknown as {
-      loginAttempt: number
       postMessage: (m: unknown) => void
       dispose: () => void
     }
@@ -781,25 +779,25 @@ describe("custom-only auth routing", () => {
     return { host, messages, send: async (msg: Record<string, unknown>) => { await handler?.(msg) } }
   }
 
-  it("login fails closed without incrementing attempts and with no host handler", async () => {
+  it("login fails closed with the existing failed shape and no Started/Complete path", async () => {
     const { host, messages, send } = makeWebviewHost(null)
-    expect(host.loginAttempt).toBe(0)
     await send({ type: "login" })
-    expect(host.loginAttempt).toBe(0)
     const failed = messages.find((m) => (m as Record<string, unknown>).type === "deviceAuthFailed") as Record<string, unknown> | undefined
     expect(failed).toBeDefined()
     expect(String(failed!.error)).toContain("temporarily unavailable")
+    expect(messages.some((m) => (m as Record<string, unknown>).type === "deviceAuthStarted")).toBe(false)
+    expect(messages.some((m) => (m as Record<string, unknown>).type === "deviceAuthComplete")).toBe(false)
     host.dispose()
   })
 
-  it("cancelLogin posts cancelled without incrementing attempts", async () => {
+  it("cancelLogin posts cancelled with the existing shape and no Started/Complete path", async () => {
     const { host, messages, send } = makeWebviewHost(null)
     await send({ type: "login" })
-    expect(host.loginAttempt).toBe(0)
     await send({ type: "cancelLogin" })
-    expect(host.loginAttempt).toBe(0)
     const cancelled = messages.filter((m) => (m as Record<string, unknown>).type === "deviceAuthCancelled")
     expect(cancelled).toHaveLength(1)
+    expect(messages.some((m) => (m as Record<string, unknown>).type === "deviceAuthStarted")).toBe(false)
+    expect(messages.some((m) => (m as Record<string, unknown>).type === "deviceAuthComplete")).toBe(false)
     host.dispose()
   })
 

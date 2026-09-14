@@ -106,23 +106,6 @@ export const ServerProvider: ParentComponent = (props) => {
           setProfileData(message.data)
           break
 
-        case "deviceAuthStarted":
-          console.log("[Kilo New] Device auth started")
-          setDeviceAuth({
-            status: "pending",
-            code: message.code,
-            verificationUrl: message.verificationUrl,
-            expiresIn: message.expiresIn,
-          })
-          break
-
-        case "deviceAuthComplete":
-          console.log("[Kilo New] Device auth complete")
-          setDeviceAuth({ status: "success" })
-          // Reset to idle after a short delay
-          setTimeout(() => setDeviceAuth(initialDeviceAuth), 1500)
-          break
-
         case "deviceAuthFailed":
           console.log("[Kilo New] Device auth failed:", message.error)
           setDeviceAuth({ status: "error", error: message.error })
@@ -147,8 +130,9 @@ export const ServerProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "webviewReady" })
   })
 
-  // Temporary custom-only boundary: webview must not trigger device login.
-  // Dormant device-auth implementation is retained but unreachable.
+  // Custom-only boundary: webview must not trigger device login.
+  // VS Code has no production Started/Complete path; Failed/Cancelled
+  // handlers exist only for old-message compatibility.
   const startLogin = () => {
     return
   }

@@ -262,17 +262,6 @@ export interface ProfileDataMessage {
   data: ProfileData | null
 }
 
-export interface DeviceAuthStartedMessage {
-  type: "deviceAuthStarted"
-  code?: string
-  verificationUrl: string
-  expiresIn: number
-}
-
-export interface DeviceAuthCompleteMessage {
-  type: "deviceAuthComplete"
-}
-
 export interface DeviceAuthFailedMessage {
   type: "deviceAuthFailed"
   error: string
@@ -1002,8 +991,6 @@ export type ExtensionMessage =
   | SessionsLoadedMessage
   | ActionMessage
   | ProfileDataMessage
-  | DeviceAuthStartedMessage
-  | DeviceAuthCompleteMessage
   | DeviceAuthFailedMessage
   | DeviceAuthCancelledMessage
   | NavigateMessage
