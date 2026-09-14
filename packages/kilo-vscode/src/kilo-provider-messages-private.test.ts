@@ -197,7 +197,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("private malformed falls back exactly once with bounded warn and no raw data", async () => {
+  it("private malformed falls back exactly once with bounded warn, no second private request, and no raw data", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -215,7 +215,7 @@ describe("paged messages private-first", () => {
       expect(h.privateCalls).toHaveLength(1)
       expect(h.sdkCalls).toHaveLength(1)
       await tick()
-      expect(h.parityCalls.length).toBeGreaterThanOrEqual(1)
+      expect(h.parityCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
       for (const w of warns) {
         const text = w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
@@ -227,7 +227,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("private InternalError/MethodNotFound/transport/closed each fallback exactly once", async () => {
+  it("private InternalError/MethodNotFound/transport/closed each fallback exactly once with no second private request", async () => {
     const cases: unknown[] = [
       Object.assign(new Error("boom"), { code: ErrorCode.InternalError }),
       Object.assign(new Error("missing"), { code: ErrorCode.MethodNotFound }),
@@ -254,7 +254,7 @@ describe("paged messages private-first", () => {
         expect(h.privateCalls).toHaveLength(1)
         expect(h.sdkCalls).toHaveLength(1)
         await tick()
-        expect(h.parityCalls.length).toBeGreaterThanOrEqual(1)
+        expect(h.parityCalls).toHaveLength(0)
         expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
         for (const w of warns) {
           const text = w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
@@ -267,7 +267,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("disabled/not-started/legacy reader fallback silently to SDK once", async () => {
+  it("disabled/not-started/legacy reader fallback silently to SDK once with no second private request", async () => {
     for (const opts of [{ privateEnabled: false }, { privateStarted: false }, { hasPrivateMessagesFn: false }]) {
       const h = makeHarness(opts)
       const page = await fetchMessagePage(
@@ -279,7 +279,7 @@ describe("paged messages private-first", () => {
       expect(page.items).toHaveLength(1)
       expect(h.sdkCalls).toHaveLength(1)
       await tick()
-      expect(h.parityCalls.length).toBeGreaterThanOrEqual(1)
+      expect(h.parityCalls).toHaveLength(0)
     }
     // Disabled path makes no private call.
     const h2 = makeHarness({ privateEnabled: false })
@@ -346,7 +346,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("limit=0 second-page failure falls back to exactly one SDK full-read with one parity", async () => {
+  it("limit=0 second-page failure falls back to exactly one SDK full-read with no second private request", async () => {
     const newest = Array.from({ length: 100 }, (_, i) => userMsg(`msg_${String(i + 2).padStart(3, "0")}`, i + 2))
     const cursor0 = encodeMessageCursor({ id: newest[0]!.info.id, time: 2 })
     const warns: unknown[][] = []
@@ -378,7 +378,7 @@ describe("paged messages private-first", () => {
       expect(h.sdkCalls).toHaveLength(1)
       expect((h.sdkCalls[0] as Record<string, unknown>).limit).toBe(0)
       await tick()
-      expect(h.parityCalls).toHaveLength(1)
+      expect(h.parityCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
       for (const w of warns) {
         const text = w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
@@ -390,7 +390,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("limit=0 private unavailable falls back to exactly one SDK full-read", async () => {
+  it("limit=0 private unavailable falls back to exactly one SDK full-read with no second private request", async () => {
     const h = makeHarness({ privateEnabled: false })
     const page = await fetchMessagePage(
       h.client as never,
@@ -403,17 +403,17 @@ describe("paged messages private-first", () => {
     expect((h.sdkCalls[0] as Record<string, unknown>).limit).toBe(0)
     expect(page.cursor).toBeUndefined()
     await tick()
-    expect(h.parityCalls.length).toBeGreaterThanOrEqual(1)
+    expect(h.parityCalls).toHaveLength(0)
   })
 
-  it("limit=0 transient SDK rejection is not retried and observes parity once", async () => {
+  it("limit=0 transient SDK rejection is not retried with no second private request", async () => {
     const seenOpts: unknown[] = []
     const h = makeHarness({
       privateEnabled: false,
       sdkMessages: async (_p: unknown, o: unknown) => {
         seenOpts.push(o)
-        // Transient per retry helper ("load failed") and terminal per parity
-        // (cause status 404): old retry fallback would read three times.
+        // Transient per retry helper ("load failed") with cause status 404:
+        // old retry fallback would read three times.
         throw Object.assign(new Error("load failed"), { cause: { status: 404 } })
       },
     })
@@ -434,10 +434,10 @@ describe("paged messages private-first", () => {
     expect((h.sdkCalls[0] as Record<string, unknown>).limit).toBe(0)
     expect(seenOpts).toHaveLength(1)
     await tick()
-    expect(h.parityCalls).toHaveLength(1)
+    expect(h.parityCalls).toHaveLength(0)
   })
 
-  it("limit=0 transient SDK rejection preserves AbortSignal with one SDK read and one parity", async () => {
+  it("limit=0 transient SDK rejection preserves AbortSignal with one SDK read and no second private request", async () => {
     const seenOpts: Array<{ signal?: AbortSignal }> = []
     const h = makeHarness({
       privateEnabled: false,
@@ -463,7 +463,7 @@ describe("paged messages private-first", () => {
     expect(seenOpts).toHaveLength(1)
     expect(seenOpts[0]!.signal).toBe(ctrl.signal)
     await tick()
-    expect(h.parityCalls).toHaveLength(1)
+    expect(h.parityCalls).toHaveLength(0)
   })
 
   it("cursor passthrough: before maps to private cursor input", async () => {
@@ -725,7 +725,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("per-page fallback: double private failure yields two private attempts, one logical SDK fallback per page, one parity, merged fill", async () => {
+  it("per-page fallback: double private failure yields two private attempts, one logical SDK fallback per page, no second private request, merged fill", async () => {
     const assistant = {
       info: { id: "msg_old", sessionID: SECRET_SES, role: "assistant", time: { created: 100 } },
       parts: [],
@@ -763,8 +763,7 @@ describe("paged messages private-first", () => {
     expect((page.items[1] as { info: { id: string } }).info.id).toBe("msg_old")
     expect(page.cursor).toBeUndefined()
     await tick()
-    expect(h.parityCalls).toHaveLength(1)
-    expect(((h.parityCalls[0] as Record<string, unknown>).payload as Record<string, unknown>).limit).toBe(2)
+    expect(h.parityCalls).toHaveLength(0)
   })
 
   it("paged fallback preserves transient retry: one logical SDK fallback per page", async () => {

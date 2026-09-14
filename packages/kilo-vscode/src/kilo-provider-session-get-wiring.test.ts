@@ -96,7 +96,7 @@ async function tick(ms = 60) {
 }
 
 describe("KiloProvider B6 live session.get wiring (LOCK-006)", () => {
-  test("getSessionInfo is SDK-first with exact-once observer", async () => {
+  test("getSessionInfo falls back to SDK exactly once with no second private request", async () => {
     const h = makeHarness("ses_abc")
     const warns: unknown[][] = []
     const orig = console.warn
@@ -111,18 +111,14 @@ describe("KiloProvider B6 live session.get wiring (LOCK-006)", () => {
       expect((out as Record<string, unknown>).id).toBe("ses_abc")
       expect(h.sdkGets).toHaveLength(1)
       await tick()
-      expect(h.privOutcomes).toHaveLength(1)
-      const req = h.privOutcomes[0] as Record<string, unknown>
-      expect(String(req.opId).startsWith("get:ses_abc:")).toBeTrue()
-      expect((req.context as Record<string, unknown>).sessionId).toBe("ses_abc")
-      expect((req.context as Record<string, unknown>).directory).toBe("/tmp")
+      expect(h.privOutcomes).toHaveLength(0)
       expect(warns.filter((w) => String(w[0]).includes("parity divergence"))).toHaveLength(0)
     } finally {
       console.warn = orig
     }
   })
 
-  test("refreshSessionDetails is SDK-first with exact-once observer", async () => {
+  test("refreshSessionDetails falls back to SDK exactly once with no second private request", async () => {
     const h = makeHarness("ses_bbb")
     // Satisfy the revision guard: current context matches the refreshed session.
     h.provider["contextSessionID"] = "ses_bbb"
@@ -137,12 +133,10 @@ describe("KiloProvider B6 live session.get wiring (LOCK-006)", () => {
     ;(h.provider as unknown as { refreshSessionDetails: (s: string, d: string) => void }).refreshSessionDetails("ses_bbb", "/tmp")
     await tick(80)
     expect(h.sdkGets).toHaveLength(1)
-    expect(h.privOutcomes).toHaveLength(1)
-    const req = h.privOutcomes[0] as Record<string, unknown>
-    expect((req.context as Record<string, unknown>).sessionId).toBe("ses_bbb")
+    expect(h.privOutcomes).toHaveLength(0)
   })
 
-  test("doLoadMessages focus strict metadata read is SDK-first with exact-once observer", async () => {
+  test("doLoadMessages focus strict metadata read falls back to SDK exactly once with no second private request", async () => {
     const h = makeHarness("ses_ccc")
     h.provider["trackedSessionIds"] = new Set<string>()
     h.provider["lastReconciledAt"] = new Map([["ses_ccc", Date.now()]])
@@ -158,12 +152,10 @@ describe("KiloProvider B6 live session.get wiring (LOCK-006)", () => {
     ).doLoadMessages("ses_ccc", { mode: "focus" }, true)
     expect(h.sdkGets).toHaveLength(1)
     await tick()
-    expect(h.privOutcomes).toHaveLength(1)
-    const req = h.privOutcomes[0] as Record<string, unknown>
-    expect((req.context as Record<string, unknown>).sessionId).toBe("ses_ccc")
+    expect(h.privOutcomes).toHaveLength(0)
   })
 
-  test("doLoadMessages replace strict metadata read is SDK-first with exact-once observer", async () => {
+  test("doLoadMessages replace strict metadata read falls back to SDK exactly once with no second private request", async () => {
     const h = makeHarness("ses_ddd")
     h.provider["trackedSessionIds"] = new Set<string>()
     const data = makeSessionData("ses_ddd", "/tmp")
@@ -178,12 +170,10 @@ describe("KiloProvider B6 live session.get wiring (LOCK-006)", () => {
     ).doLoadMessages("ses_ddd", { mode: "replace" }, true)
     expect(h.sdkGets).toHaveLength(1)
     await tick()
-    expect(h.privOutcomes).toHaveLength(1)
-    const req = h.privOutcomes[0] as Record<string, unknown>
-    expect((req.context as Record<string, unknown>).sessionId).toBe("ses_ddd")
+    expect(h.privOutcomes).toHaveLength(0)
   })
 
-  test("handleSyncSession metadata read is SDK-first with exact-once observer", async () => {
+  test("handleSyncSession metadata read falls back to SDK exactly once with no second private request", async () => {
     const h = makeHarness("ses_eee")
     const data = makeSessionData("ses_eee", "/tmp")
     ;(h.client.session as Record<string, unknown>).get = async (p: unknown) => {
@@ -193,8 +183,6 @@ describe("KiloProvider B6 live session.get wiring (LOCK-006)", () => {
     await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_eee")
     expect(h.sdkGets).toHaveLength(1)
     await tick()
-    expect(h.privOutcomes).toHaveLength(1)
-    const req = h.privOutcomes[0] as Record<string, unknown>
-    expect((req.context as Record<string, unknown>).sessionId).toBe("ses_eee")
+    expect(h.privOutcomes).toHaveLength(0)
   })
 })

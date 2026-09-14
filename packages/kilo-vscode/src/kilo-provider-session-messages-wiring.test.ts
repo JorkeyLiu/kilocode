@@ -131,7 +131,7 @@ async function tick(ms = 60) {
 }
 
 describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", () => {
-  test("doLoadMessages replace is SDK-first with exact-once messages observer (limit 80)", async () => {
+  test("doLoadMessages replace is private-first with SDK fallback and no second private request (limit 80)", async () => {
     const h = makeHarness("ses_abc")
     h.provider["trackedSessionIds"] = new Set<string>()
     const order: string[] = []
@@ -153,16 +153,11 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     ).doLoadMessages("ses_abc", { mode: "replace" }, false)
     expect(h.sdkMessages).toHaveLength(1)
     await tick()
-    expect(h.privMessagesOutcomes).toHaveLength(1)
-    expect(order).toEqual(["sdk", "private"])
-    const req = h.privMessagesOutcomes[0] as Record<string, unknown>
-    expect(String(req.opId).startsWith("messages:ses_abc:")).toBeTrue()
-    expect((req.context as Record<string, unknown>).sessionId).toBe("ses_abc")
-    expect((req.context as Record<string, unknown>).directory).toBe("/tmp")
-    expect(req.payload).toEqual({ limit: 80 })
+    expect(h.privMessagesOutcomes).toHaveLength(0)
+    expect(order).toEqual(["sdk"])
   })
 
-  test("fetchMessagePage fill backfill still observes exactly once (initial query)", async () => {
+  test("fetchMessagePage fill backfill issues no second private request (initial query)", async () => {
     const assistant = msgItem("msg_old", 1, "assistant")
     const newer = msgItem("msg_new", 2, "user")
     let calls = 0
@@ -216,12 +211,10 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     expect(calls).toBe(2)
     expect(page.items).toHaveLength(2)
     await tick(30)
-    expect(privCalls).toHaveLength(1)
-    const req = privCalls[0] as Record<string, unknown>
-    expect(req.payload).toEqual({ limit: 2 })
+    expect(privCalls).toHaveLength(0)
   })
 
-  test("fetchMessagePage full limit:0 binds exact full-read query", async () => {
+  test("fetchMessagePage full limit:0 binds exact full-read query with no second private request", async () => {
     const client = {
       session: {
         messages: async (p: unknown) => {
@@ -263,11 +256,10 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     }
     await fetchMessagePage(client as never, { sessionID: "ses_abc", workspaceDir: "/tmp", limit: 0 }, conn as never)
     await tick(30)
-    expect(privCalls).toHaveLength(1)
-    expect((privCalls[0] as Record<string, unknown>).payload).toEqual({ limit: 0 })
+    expect(privCalls).toHaveLength(0)
   })
 
-  test("handleSyncSession full load via boundary fallback with exact-once get + messages observers and no duplicates", async () => {
+  test("handleSyncSession full load via boundary fallback with exact-once get + messages SDK and no second private request", async () => {
     const h = makeHarness("ses_eee")
     const data = makeSessionData("ses_eee", "/tmp")
     ;(h.client.session as Record<string, unknown>).get = async (p: unknown) => {
@@ -278,17 +270,11 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     expect(h.sdkGets).toHaveLength(1)
     expect(h.sdkMessages).toHaveLength(1)
     await tick()
-    expect(h.privGetOutcomes).toHaveLength(1)
-    expect(h.privMessagesOutcomes).toHaveLength(1)
-    const mreq = h.privMessagesOutcomes[0] as Record<string, unknown>
-    expect((mreq.context as Record<string, unknown>).sessionId).toBe("ses_eee")
-    expect(mreq.payload).toEqual({ limit: 0 })
-    expect(String(mreq.opId).startsWith("messages:ses_eee:")).toBeTrue()
-    const greq = h.privGetOutcomes[0] as Record<string, unknown>
-    expect(String(greq.opId).startsWith("get:ses_eee:")).toBeTrue()
+    expect(h.privGetOutcomes).toHaveLength(0)
+    expect(h.privMessagesOutcomes).toHaveLength(0)
   })
 
-  test("handleSyncSession terminal messages failure still yields detached observation while preserving rejection", async () => {
+  test("handleSyncSession terminal messages failure preserves rejection with no second private request", async () => {
     const h = makeHarness("ses_term")
     const data = makeSessionData("ses_term", "/tmp")
     ;(h.client.session as Record<string, unknown>).get = async (p: unknown) => {
@@ -305,15 +291,12 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_term")
     expect(attempts).toBe(1)
     await tick()
-    expect(h.privMessagesOutcomes).toHaveLength(1)
-    const mreq = h.privMessagesOutcomes[0] as Record<string, unknown>
-    expect((mreq.context as Record<string, unknown>).sessionId).toBe("ses_term")
-    expect(mreq.payload).toEqual({ limit: 0 })
+    expect(h.privMessagesOutcomes).toHaveLength(0)
     // Catch behavior preserved: failed sync is evicted so a later sync retries SDK.
     await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_term")
     expect(attempts).toBe(2)
     await tick()
-    expect(h.privMessagesOutcomes).toHaveLength(2)
+    expect(h.privMessagesOutcomes).toHaveLength(0)
   })
 
   test("aborted load never observes", async () => {
@@ -362,7 +345,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     void abort
   })
 
-  test("transcript export path observes full read exactly once via fetchMessagePage", async () => {
+  test("transcript export path issues no second private request via fetchMessagePage", async () => {
     const items = [msgItem("msg_1", 1)]
     const client = {
       session: {
@@ -408,8 +391,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     const { fetchMessagePage: page } = await import("./kilo-provider/message-page")
     await page(client as never, { sessionID: "ses_abc", workspaceDir: "/tmp", limit: 0 }, conn as never)
     await tick(30)
-    expect(privCalls).toHaveLength(1)
-    expect((privCalls[0] as Record<string, unknown>).payload).toEqual({ limit: 0 })
+    expect(privCalls).toHaveLength(0)
     void exportTranscript
   })
 
@@ -552,7 +534,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     }
   })
 
-  test("fetchMessagePage terminal thrown Error with cause status still observes detached", async () => {
+  test("fetchMessagePage terminal thrown Error with cause status preserves rejection with no second private request", async () => {
     const client = {
       session: {
         messages: async () => {
@@ -601,8 +583,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     }
     expect(caught).toBeInstanceOf(Error)
     await tick(30)
-    expect(privCalls).toHaveLength(1)
-    expect(((privCalls[0] as Record<string, unknown>).context as Record<string, unknown>).sessionId).toBe("ses_term")
+    expect(privCalls).toHaveLength(0)
   })
 
   test("handleSyncSession real thrown non-terminal Error never observes but still evicts for retry", async () => {
@@ -642,7 +623,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     }
   })
 
-  test("handleSyncSession terminal thrown Error with cause status still observes detached", async () => {
+  test("handleSyncSession terminal thrown Error with cause status preserves rejection with no second private request", async () => {
     const h = makeHarness("ses_tcause")
     const data = makeSessionData("ses_tcause", "/tmp")
     ;(h.client.session as Record<string, unknown>).get = async (p: unknown) => {
@@ -658,8 +639,6 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_tcause")
     expect(attempts).toBe(1)
     await tick()
-    expect(h.privMessagesOutcomes).toHaveLength(1)
-    const mreq = h.privMessagesOutcomes[0] as Record<string, unknown>
-    expect((mreq.context as Record<string, unknown>).sessionId).toBe("ses_tcause")
+    expect(h.privMessagesOutcomes).toHaveLength(0)
   })
 })

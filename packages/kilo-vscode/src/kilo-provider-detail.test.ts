@@ -168,7 +168,7 @@ describe("KiloProvider detail private-first matrix", () => {
     expect(h.sdkGets).toHaveLength(0)
   })
 
-  it("private malformed -> bounded warning then SDK exactly once with parity", async () => {
+  it("private malformed -> bounded warning then SDK exactly once with no second private request", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -180,16 +180,16 @@ describe("KiloProvider detail private-first matrix", () => {
       expect((out as Record<string, unknown>).id).toBe("ses_abc")
       expect(h.sdkGets).toHaveLength(1)
       expect(h.privateGets).toHaveLength(1)
-      // wait for detached parity
+      // fallback issues no second private request (no parity observer)
       await new Promise((r) => setTimeout(r, 60))
-      expect(h.parityGets.length).toBeGreaterThanOrEqual(1)
+      expect(h.parityGets).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
     } finally {
       console.warn = orig
     }
   })
 
-  it("private InternalError -> fallback SDK once with parity", async () => {
+  it("private InternalError -> fallback SDK once with no second private request", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -202,7 +202,7 @@ describe("KiloProvider detail private-first matrix", () => {
       expect((out as Record<string, unknown>).id).toBe("ses_abc")
       expect(h.sdkGets).toHaveLength(1)
       await new Promise((r) => setTimeout(r, 60))
-      expect(h.parityGets.length).toBeGreaterThanOrEqual(1)
+      expect(h.parityGets).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
     } finally {
       console.warn = orig
@@ -217,13 +217,13 @@ describe("KiloProvider detail private-first matrix", () => {
     expect(h.sdkGets).toHaveLength(1)
   })
 
-  it("gate off (disabled) -> SDK once with parity", async () => {
+  it("gate off (disabled) -> SDK once with no second private request", async () => {
     const h = makeHarness({ privateEnabled: false })
     const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<unknown> }).getSessionInfo("ses_abc")
     expect((out as Record<string, unknown>).id).toBe("ses_abc")
     expect(h.sdkGets).toHaveLength(1)
     await new Promise((r) => setTimeout(r, 60))
-    expect(h.parityGets.length).toBeGreaterThanOrEqual(1)
+    expect(h.parityGets).toHaveLength(0)
     expect(h.privateGets).toHaveLength(0)
   })
 
@@ -504,7 +504,7 @@ describe("KiloProvider detail private-first matrix", () => {
     }
   })
 
-  it("thrown host-closed generic error -> exactly one SDK with parity, no lifecycle", async () => {
+  it("thrown host-closed generic error -> exactly one SDK with no second private request, no lifecycle", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -518,7 +518,7 @@ describe("KiloProvider detail private-first matrix", () => {
       expect(h.privateGets).toHaveLength(1)
       expect(h.sdkGets).toHaveLength(1)
       await new Promise((r) => setTimeout(r, 60))
-      expect(h.parityGets.length).toBeGreaterThanOrEqual(1)
+      expect(h.parityGets).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
       expect(init).not.toHaveBeenCalled()
     } finally {
@@ -773,7 +773,7 @@ describe("KiloProvider detail generation invalidation", () => {
     expect(posts.some((p) => (p as Record<string, unknown>).type === "messagesLoaded")).toBeFalse()
   })
 
-  it("SDK-error parity path preserves original error with bounded diagnostics only", async () => {
+  it("SDK-error path preserves original error with no second private request", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -792,6 +792,7 @@ describe("KiloProvider detail generation invalidation", () => {
       }
       expect(threw).toBe(sdkErr)
       await new Promise((r) => setTimeout(r, 60))
+      expect(h.parityGets).toHaveLength(0)
       for (const w of warns) {
         expect(String(w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "))).not.toContain(secret)
       }

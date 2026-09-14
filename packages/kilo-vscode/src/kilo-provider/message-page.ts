@@ -1,6 +1,6 @@
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { retry } from "../services/cli-backend/retry"
-import { observeSessionMessagesParityDetached, type MessagesParityConnection } from "./session-messages-parity"
+import type { MessagesParityConnection } from "./session-messages-parity"
 import { tryPrivateMessagesPage } from "./session-messages-private"
 import type { PrivateSessionReader } from "./options"
 
@@ -33,39 +33,22 @@ export async function fetchMessagePage(
     before?: string
     signal?: AbortSignal
   },
-  parityConnection?: MessagesParityConnection | null,
+  // Retained for call-site compatibility only. The SDK fallback path issues
+  // no second private request; this connection is never used for parity
+  // observation. `compareMessagesParity` stays as pure diagnostic/test
+  // evidence only.
+  _parityConnection?: MessagesParityConnection | null,
   privateReader?: PrivateSessionReader | null,
 ) {
   // limit: 0 is the server contract for "return every message".
   const full = input.limit === 0
-  let observed = false
-  const observeOnce = (
-    result: { data?: unknown; error?: unknown; response?: unknown },
-    query: { limit?: number; before?: string },
-  ): void => {
-    if (observed) return
-    observed = true
-    if (!parityConnection) return
-    if (input.signal?.aborted) return
-    try {
-      observeSessionMessagesParityDetached(parityConnection, result, input.sessionID, input.workspaceDir, query)
-    } catch {
-      console.warn("[Kilo Messages] private parity observation failed (fail-closed):", {
-        op: "session/messages",
-        observationFailed: true,
-      })
-    }
-  }
   if (full) return collect()
   const read = async (before?: string) => {
-    const query: { limit?: number; before?: string } =
-      before === undefined ? { limit: input.limit } : { limit: input.limit, before }
     // Paged private-first, per bounded page read: at most one private attempt
     // and on failure/unavailability one logical SDK fallback for that page
     // (existing transient retry preserved for bounded UI pages).
-    // The outer assistant-boundary fill may legitimately read multiple pages;
-    // parity observation stays intentionally bounded to once per outer
-    // fetchMessagePage operation. Non-owning.
+    // The outer assistant-boundary fill may legitimately read multiple pages.
+    // No parity observer: the SDK fallback issues no second private request.
     const attempt = await tryPrivateMessagesPage(privateReader ?? null, {
       directory: input.workspaceDir,
       sessionId: input.sessionID,
@@ -79,15 +62,7 @@ export async function fetchMessagePage(
         { sessionID: input.sessionID, directory: input.workspaceDir, limit: input.limit, before },
         { throwOnError: true, signal: input.signal },
       ),
-    ).catch((e: unknown) => {
-      // SDK-first detached parity for terminal failures only; the observer
-      // itself gates on terminal class and returns synchronously. Rethrow so
-      // paging, fill, cancellation, and error behavior stay unchanged.
-      observeOnce(e as { data?: unknown; error?: unknown; response?: unknown }, query)
-      throw e
-    })
-    // Attach only after the SDK result is available and never await the observer.
-    observeOnce(result as unknown as { data?: unknown; error?: unknown; response?: unknown }, query)
+    )
     // When a proxy/auth gateway strips X-Next-Cursor but the response fills
     // the requested limit, synthesize a cursor from the oldest item so the
     // "load earlier" path keeps working. Risk of one extra empty request is
@@ -113,8 +88,8 @@ export async function fetchMessagePage(
   // oldest-first concatenation preserves chronological ASC and the projected
   // message shape. Terminal outcomes surface without SDK. Any skip/fallback,
   // cycle, or bound overflow falls back to exactly one SDK limit:0 read with
-  // no transient retry, with parity bounded once per outer operation, never
-  // once per private page. Private iteration stops promptly on input.signal:
+  // no transient retry and no parity observer. Private iteration stops
+  // promptly on input.signal:
   // throwIfAborted runs before and after each awaited private page and before
   // the SDK fallback, so no further private pages or SDK read run after abort.
   async function collect() {
@@ -124,24 +99,16 @@ export async function fetchMessagePage(
       if (typeof s.throwIfAborted === "function") s.throwIfAborted()
       throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
     }
-    const query: { limit?: number; before?: string } =
-      input.before === undefined ? { limit: 0 } : { limit: 0, before: input.before }
     const fallback = async () => {
       // Full-read fallback is exactly one SDK limit:0 invocation per outer
       // operation: no retry helper, so a transient rejection surfaces after
-      // a single read while signal propagation, response shape, and
-      // exactly-once parity observation stay unchanged. Never runs after abort.
+      // a single read while signal propagation and response shape stay
+      // unchanged, with no second private request. Never runs after abort.
       throwIfAborted()
-      const result = await client.session
-        .messages(
-          { sessionID: input.sessionID, directory: input.workspaceDir, limit: 0, before: input.before },
-          { throwOnError: true, signal: input.signal },
-        )
-        .catch((e: unknown) => {
-          observeOnce(e as { data?: unknown; error?: unknown; response?: unknown }, query)
-          throw e
-        })
-      observeOnce(result as unknown as { data?: unknown; error?: unknown; response?: unknown }, query)
+      const result = await client.session.messages(
+        { sessionID: input.sessionID, directory: input.workspaceDir, limit: 0, before: input.before },
+        { throwOnError: true, signal: input.signal },
+      )
       return { items: result.data, cursor: undefined as string | undefined }
     }
     const pages: import("@opencode-ai/core/v1/session").SessionV1.WithParts[][] = []

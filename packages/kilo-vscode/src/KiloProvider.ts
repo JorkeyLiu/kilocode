@@ -75,8 +75,6 @@ import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
 import { revertSessionPrivateFirst, unrevertSessionPrivateFirst } from "./kilo-provider/session-revert"
 import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
 import { ensureCommandMessageId, sendCommandOnce } from "./kilo-provider/session-command"
-import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
-import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
 import { handleFilePicker } from "./kilo-provider/file-picker"
@@ -2672,7 +2670,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    * Centralized private-first single-session detail authority.
    * - Private valid `found` => authoritative detail, no SDK and no parity observer.
    * - Private `not_found`/`scope_mismatch` => authoritative terminal (bounded domain error), no SDK.
-   * - Gate off/not started, malformed revalidation, JSON-RPC InternalError/MethodNotFound/transport/host-closed => bounded warning then SDK exactly once if client available.
+   * - Gate off/not started, malformed revalidation, JSON-RPC InternalError/MethodNotFound/transport/host-closed => bounded warning then SDK exactly once if client available, with no second private request.
    * - Never retry private, never init/reconnect, never cache private errors, never post private-specific error.
    * - Strict callers receive domain error for missing metadata so message load aborts; optional callers catch and return undefined / fail-closed.
    * - Signal is forwarded to SDK fallback only; private lacks signal but generation checks prevent stale writes.
@@ -2702,7 +2700,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         // fall through to SDK exactly once if client available
       }
     }
-    // SDK exactly once (gate off/not started/malformed/transport path)
+    // SDK exactly once (gate off/not started/malformed/transport path), no parity observer.
     if (!this.client) throw new Error("Not connected to CLI backend")
     let res: { data?: unknown; error?: unknown; response?: unknown }
     try {
@@ -2712,33 +2710,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       } as unknown as { throwOnError: true })
       res = raw as unknown as { data?: unknown; error?: unknown; response?: unknown }
       if (!res.data) throw new Error("Session metadata not found")
-      try {
-        const { observeSessionGetParityDetached } = await import("./kilo-provider/session-get-parity")
-        observeSessionGetParityDetached(
-          this.connectionService as unknown as Parameters<typeof observeSessionGetParityDetached>[0],
-          res as unknown as { data?: unknown },
-          sessionID,
-          directory,
-        )
-      } catch (err) {
-        console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(err).slice(0, 200))
-      }
       return sdkSessionToDetail(res.data as Session)
     } catch (sdkErr) {
-      try {
-        const { observeSessionGetParityDetached } = await import("./kilo-provider/session-get-parity")
-        observeSessionGetParityDetached(
-          this.connectionService as unknown as Parameters<typeof observeSessionGetParityDetached>[0],
-          sdkErr as { data?: unknown; error?: unknown; response?: unknown },
-          sessionID,
-          directory,
-        )
-      } catch {
-        console.warn("[Kilo Get] private parity observation failed (fail-closed):", {
-          op: "session/get",
-          observationFailed: true,
-        })
-      }
       throw sdkErr
     }
   }
@@ -3242,7 +3215,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private get sessionRefreshContext(): SessionRefreshContext {
     const client = this.client
     const directory = this.getWorkspaceDirectory()
-    const connection = this.connectionService
     const privateList = this.privateSessionList
     const hasPrivate = !!privateList && privateList.isEnabled() && privateList.isStarted()
     const hasClient = !!client
@@ -3366,7 +3338,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               }
             }
             if (!client) throw new Error("Not connected to CLI backend")
-            const filter = { limit: input.limit, ...(input.cursor !== undefined ? { cursor: input.cursor } : {}) }
             try {
               const result = await client.experimental.session.list(
                 { directory, limit: input.limit, cursor: input.cursor },
@@ -3374,40 +3345,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               )
               const raw = result.response.headers.get("x-next-cursor")
               const next = normalizeSessionListNextCursor(raw)
-              try {
-                observeSessionListParityDetached(
-                  connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
-                  { data: result.data, response: result.response } as Parameters<
-                    typeof observeSessionListParityDetached
-                  >[1],
-                  directory,
-                  undefined,
-                  filter,
-                )
-              } catch {
-                console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
-                  op: "experimental/session/list",
-                  observationFailed: true,
-                })
-              }
               return { sessions: result.data, cursor: next }
             } catch (error) {
-              try {
-                observeSessionListParityDetached(
-                  connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
-                  { error, response: (error as { response?: unknown })?.response } as Parameters<
-                    typeof observeSessionListParityDetached
-                  >[1],
-                  directory,
-                  undefined,
-                  filter,
-                )
-              } catch {
-                console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
-                  op: "experimental/session/list",
-                  observationFailed: true,
-                })
-              }
               throw error
             }
           }

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { KiloProvider } from "./KiloProvider"
+import type { KiloConnectionService } from "./services/cli-backend/connection-service"
 import { loadSessions, normalizeSessionListNextCursor, type SessionRefreshContext } from "./kilo-provider-utils"
 import { encodeSessionListCursor } from "./services/cli-backend/serve-private-session-list-contract"
 
@@ -83,5 +85,72 @@ describe("session-list paging header gate and terminal append", () => {
     const msg = posted[0] as Record<string, unknown>
     expect(msg.append).toBe(true)
     expect(msg.hasMore).toBe(false)
+  })
+
+  test("private-first list SDK fallback issues exactly one SDK read with no second private request", async () => {
+    const parity: unknown[] = []
+    const sdkCalls: unknown[] = []
+    const privateCalls: unknown[] = []
+    const client = {
+      experimental: {
+        session: {
+          list: async (p: unknown) => {
+            sdkCalls.push(p)
+            return { data: [], response: { headers: { get: () => null } } }
+          },
+        },
+      },
+    } as unknown as import("@kilocode/sdk/v2/client").KiloClient
+    const privateReader = {
+      isEnabled: () => true,
+      isStarted: () => true,
+      list: async (input: unknown) => {
+        privateCalls.push(input)
+        throw new Error("private failed")
+      },
+      get: async () => ({ v: "1.0", status: "not_found" }),
+    }
+    const connectionService = {
+      isPrivateAvailable: () => true,
+      getPrivateEpoch: () => 1,
+      privateSessionListOutcomeWithHandle: (req: unknown) => {
+        parity.push(req)
+        return { id: 1, promise: new Promise(() => {}) }
+      },
+      getClient: () => client,
+      getClientAsync: async () => client,
+      getConnectionError: () => null,
+      sandboxPreference: { onChange: () => ({ dispose: () => {} }) },
+      onEvent: () => () => {},
+      onEventFiltered: () => () => {},
+      onStateChange: () => () => {},
+      getConfigRevision: () => 0,
+      onConfigRevision: () => () => {},
+      registerDirectoryProvider: () => () => {},
+      registerVisible: () => {},
+      registerAttached: () => {},
+      unregisterVisible: () => {},
+      unregisterAttached: () => {},
+      recordMessageSessionId: () => {},
+      pruneSession: () => {},
+    } as unknown as KiloConnectionService
+    const provider = new KiloProvider(
+      { fsPath: "/tmp" } as unknown as import("vscode").Uri,
+      connectionService,
+      undefined,
+      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<typeof KiloProvider>[3],
+    )
+    Object.defineProperty(provider, "client", { get: () => client })
+    Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => "/tmp", configurable: true })
+    Object.defineProperty(provider, "initializeConnection", { value: async () => {}, configurable: true })
+    const ctx = (provider as unknown as { sessionRefreshContext: SessionRefreshContext }).sessionRefreshContext
+    const out = await ctx.listSessions!({ limit: 10 })
+    expect(out.sessions).toEqual([])
+    expect(out.cursor).toBeNull()
+    expect(privateCalls).toHaveLength(1)
+    expect(sdkCalls).toHaveLength(1)
+    expect((sdkCalls[0] as Record<string, unknown>).limit).toBe(10)
+    await new Promise((r) => setTimeout(r, 60))
+    expect(parity).toHaveLength(0)
   })
 })
