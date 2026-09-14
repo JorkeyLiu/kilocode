@@ -287,6 +287,32 @@ import {
   normalizePrivateQuestionListWire,
   validateQuestionListContractRequest,
 } from "./serve-private-question-list-contract"
+import {
+  makeNotebookAmbiguous,
+  validateNotebookRejectContractRequest,
+  validateNotebookReplyContractRequest,
+  validateNotebookReplyResult,
+  validateNotebookRejectResult,
+  validateNotebookTerminalFailure,
+} from "./serve-private-notebook-contract"
+import type {
+  NotebookAmbiguous,
+  NotebookContractRequest,
+  NotebookRejectContractRequest,
+  NotebookReplyContractRequest,
+  NotebookTerminal,
+  NotebookTerminalFailure,
+} from "./serve-private-notebook-contract"
+import {
+  makeNotebookListAmbiguous,
+  normalizePrivateNotebookListWire,
+  validateNotebookListContractRequest,
+} from "./serve-private-notebook-list-contract"
+import type {
+  NotebookListContractRequest,
+  NotebookListResult,
+  NotebookListWireOutcome,
+} from "./serve-private-notebook-list-contract"
 import type {
   QuestionListContractRequest,
   QuestionListResult,
@@ -1486,6 +1512,9 @@ export function validateAbortResult(raw: unknown, req: ServePrivateAbortRequest)
 export type ServePrivateQuestionReplyRequest = QuestionReplyContractRequest
 export type ServePrivateQuestionRejectRequest = QuestionRejectContractRequest
 export type ServePrivateQuestionResult = QuestionTerminal | QuestionTerminalFailure | QuestionAmbiguous
+export type ServePrivateNotebookReplyRequest = NotebookReplyContractRequest
+export type ServePrivateNotebookRejectRequest = NotebookRejectContractRequest
+export type ServePrivateNotebookResult = NotebookTerminal | NotebookTerminalFailure | NotebookAmbiguous
 
 export function validateQuestionReplyRequest(raw: unknown): ServePrivateQuestionReplyRequest {
   return validateQuestionReplyContractRequest(raw)
@@ -1526,6 +1555,80 @@ export function validateQuestionReplyOutcome(
     return raw as unknown as ServePrivateQuestionResult
   }
   throw new Error(`question reply result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export function validateNotebookReplyRequest(raw: unknown): ServePrivateNotebookReplyRequest {
+  return validateNotebookReplyContractRequest(raw)
+}
+
+export function validateNotebookRejectRequest(raw: unknown): ServePrivateNotebookRejectRequest {
+  return validateNotebookRejectContractRequest(raw)
+}
+
+export function validateNotebookReplyOutcome(
+  raw: unknown,
+  req: ServePrivateNotebookReplyRequest,
+): ServePrivateNotebookResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validateNotebookReplyResult(raw, req)
+  if (kind === "terminal-failure") return validateNotebookTerminalFailure(raw, req)
+  if (kind === "ambiguous") {
+    const allowed = new Set([
+      "kind",
+      "v",
+      "requestId",
+      "opId",
+      "idempotencyKey",
+      "accepted",
+      "terminal",
+      "transportUnknown",
+    ])
+    for (const k of Object.keys(raw)) {
+      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+    }
+    if (raw.v !== 1) throw new Error("v must be 1")
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+    return raw as unknown as ServePrivateNotebookResult
+  }
+  throw new Error(`notebook reply result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export function validateNotebookRejectOutcome(
+  raw: unknown,
+  req: ServePrivateNotebookRejectRequest,
+): ServePrivateNotebookResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validateNotebookRejectResult(raw, req)
+  if (kind === "terminal-failure") return validateNotebookTerminalFailure(raw, req)
+  if (kind === "ambiguous") {
+    const allowed = new Set([
+      "kind",
+      "v",
+      "requestId",
+      "opId",
+      "idempotencyKey",
+      "accepted",
+      "terminal",
+      "transportUnknown",
+    ])
+    for (const k of Object.keys(raw)) {
+      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+    }
+    if (raw.v !== 1) throw new Error("v must be 1")
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+    return raw as unknown as ServePrivateNotebookResult
+  }
+  throw new Error(`notebook reject result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
 }
 
 export function validateQuestionRejectOutcome(
@@ -4060,6 +4163,82 @@ export class ServePrivatePeer {
     return { id: id as unknown as number, promise, cancel }
   }
 
+  async privateNotebookReply(req: ServePrivateNotebookReplyRequest): Promise<ServePrivateNotebookResult> {
+    const handle = this.privateNotebookReplyWithHandle(req)
+    return handle.promise
+  }
+
+  privateNotebookReplyWithHandle(req: ServePrivateNotebookReplyRequest): {
+    id: number
+    promise: Promise<ServePrivateNotebookResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateNotebookReplyRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("notebook/reply")) {
+      throw new Error("Private peer missing notebook/reply capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("notebook/reply", req)
+    const promise = (async (): Promise<ServePrivateNotebookResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validateNotebookReplyOutcome(raw, req)
+        } catch {
+          return makeNotebookAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeNotebookAmbiguous(req)
+        return makeNotebookAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateNotebookReject(req: ServePrivateNotebookRejectRequest): Promise<ServePrivateNotebookResult> {
+    const handle = this.privateNotebookRejectWithHandle(req)
+    return handle.promise
+  }
+
+  privateNotebookRejectWithHandle(req: ServePrivateNotebookRejectRequest): {
+    id: number
+    promise: Promise<ServePrivateNotebookResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateNotebookRejectRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("notebook/reject")) {
+      throw new Error("Private peer missing notebook/reject capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("notebook/reject", req)
+    const promise = (async (): Promise<ServePrivateNotebookResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validateNotebookRejectOutcome(raw, req)
+        } catch {
+          return makeNotebookAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeNotebookAmbiguous(req)
+        return makeNotebookAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
   async privateSuggestionAccept(req: ServePrivateSuggestionAcceptRequest): Promise<ServePrivateSuggestionResult> {
     const handle = this.privateSuggestionAcceptWithHandle(req)
     return handle.promise
@@ -5029,6 +5208,61 @@ export class ServePrivatePeer {
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makePermissionListAmbiguous(req, true) }
       return normalizePrivatePermissionListWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateNotebookList(req: NotebookListContractRequest): Promise<NotebookListResult> {
+    const handle = this.privateNotebookListWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new Error(outcome.detail)
+    return outcome.result
+  }
+
+  private failedNotebookList(req: NotebookListContractRequest, code: string, msg: string): NotebookListResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "notebook/list",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  privateNotebookListWithHandle(req: NotebookListContractRequest): {
+    id: number
+    promise: Promise<NotebookListWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateNotebookListContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("notebook/list")) {
+      throw new Error("Private peer missing notebook/list capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("notebook/list", req)
+    const promise = (async (): Promise<NotebookListWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeNotebookListAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedNotebookList(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeNotebookListAmbiguous(req, true) }
+      return normalizePrivateNotebookListWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }

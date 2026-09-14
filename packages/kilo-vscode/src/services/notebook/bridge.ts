@@ -12,6 +12,11 @@ import type { ConnectionState, KiloConnectionService } from "../cli-backend/conn
 import type { SSEPayload } from "../cli-backend/sdk-sse-adapter"
 import { NotebookAdapter } from "./adapter"
 import { NotebookError } from "./path"
+import {
+  listNotebooksPrivateFirst,
+  rejectNotebookPrivateFirst,
+  replyNotebookPrivateFirst,
+} from "../../kilo-provider/notebook-privatefirst"
 
 const RETAINED_REQUESTS = 1_000
 const CODES = new Set<NotebookFailure["code"]>([
@@ -300,10 +305,14 @@ export class NotebookBridge {
 
   private async reply(requestID: string, directory: string, result: NotebookResult): Promise<boolean> {
     try {
-      const response = await this.connection.getClient().kilocode.notebook.reply({ requestID, directory, result })
-      if (!response.error) return true
-      console.error(`[Kilo New] NotebookBridge: reply ${requestID} failed:`, response.error)
-      return false
+      const { outcome } = await replyNotebookPrivateFirst({
+        connection: this.connection as never,
+        client: this.connection.getClient() as never,
+        directory,
+        requestID,
+        result,
+      })
+      return outcome.kind === "settled"
     } catch (error) {
       console.error(`[Kilo New] NotebookBridge: reply ${requestID} failed:`, error)
       return false
@@ -312,10 +321,14 @@ export class NotebookBridge {
 
   private async reject(requestID: string, directory: string, error: NotebookFailure): Promise<boolean> {
     try {
-      const response = await this.connection.getClient().kilocode.notebook.reject({ requestID, directory, error })
-      if (!response.error) return true
-      console.error(`[Kilo New] NotebookBridge: rejection ${requestID} failed:`, response.error)
-      return false
+      const { outcome } = await rejectNotebookPrivateFirst({
+        connection: this.connection as never,
+        client: this.connection.getClient() as never,
+        directory,
+        requestID,
+        error,
+      })
+      return outcome.kind === "settled"
     } catch (cause) {
       console.error(`[Kilo New] NotebookBridge: rejection ${requestID} failed:`, cause)
       return false
@@ -323,20 +336,23 @@ export class NotebookBridge {
   }
 
   private async recover(revision: number): Promise<void> {
-    const client = this.connection.getClient()
     for (const directory of this.connection.getKnownDirectories()) {
       try {
-        const response = await client.kilocode.notebook.list({ directory })
+        const { outcome } = await listNotebooksPrivateFirst({
+          connection: this.connection as never,
+          client: this.connection.getClient() as never,
+          directory,
+        })
         if (this.disposed || revision !== this.revision) return
-        if (response.error) {
-          console.error(`[Kilo New] NotebookBridge: could not list requests for ${directory}:`, response.error)
+        if (outcome.kind !== "ok") {
+          console.error("[Kilo New] NotebookBridge: could not list pending notebook requests")
           continue
         }
-        for (const request of response.data ?? []) {
-          this.request({ id: request.id, type: "kilocode.notebook.requested", properties: request }, directory)
+        for (const request of outcome.items) {
+          this.request({ id: request.id, type: "kilocode.notebook.requested", properties: request } as never, directory)
         }
       } catch (error) {
-        console.error(`[Kilo New] NotebookBridge: could not list requests for ${directory}:`, error)
+        console.error("[Kilo New] NotebookBridge: could not list pending notebook requests:", error)
       }
     }
   }

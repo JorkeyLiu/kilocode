@@ -277,6 +277,9 @@ describe("isConfigWrite write-intent classification", () => {
     ["POST", "/session/ses_a/permissions/per_1"],
     ["GET", "/session/status"],
     ["POST", "/notebook/req_1/reply"],
+    ["POST", "/kilocode/notebook/nbr_abc123/reply"],
+    ["POST", "/kilocode/notebook/nbr_abc123/reject"],
+    ["GET", "/kilocode/notebook"],
   ] as const)("keeps %s %s on reader admission", (method, path) => {
     expect(isConfigWrite(method, path)).toBe(false)
   })

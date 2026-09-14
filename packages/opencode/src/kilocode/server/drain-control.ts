@@ -4,7 +4,8 @@
  * During a cold config convergence drain, instance-gated reader admission
  * starves behind the fence. The only requests that must still complete are the
  * pre-fence lifecycle controls: session abort, queued-message cancel,
- * permission reply, question reply/reject, and suggestion accept/dismiss.
+ * permission reply, question reply/reject, suggestion accept/dismiss, and
+ * notebook reply/reject.
  * These operate on the OLD
  * (pre-fence) runtime — the exact instance that owns the pending
  * permission/question/run-state entries and the generation holding the drain.
@@ -52,6 +53,8 @@ export type DrainControlKind =
   | "questionReject"
   | "suggestionAccept"
   | "suggestionDismiss"
+  | "notebookReply"
+  | "notebookReject"
 
 /**
  * Fail-closed segment decode (LOCK-004). Returns undefined when the segment is
@@ -85,6 +88,12 @@ const isQuestionID = (value: string): boolean => {
   }
 }
 
+const isNotebookID = (value: string): boolean => {
+  if (value.length <= 4 || !value.startsWith("nbr_")) return false
+  if (value.includes("\0") || value.includes(":") || value.includes("/") || value.includes("\\")) return false
+  return true
+}
+
 const isSuggestionID = (value: string): boolean => {
   if (value.length === 0 || !value.startsWith("sug")) return false
   if (value.includes("\0") || value.includes(":") || value.includes("/") || value.includes("\\")) return false
@@ -103,6 +112,8 @@ const isSuggestionID = (value: string): boolean => {
  * - POST /question/:requestID/reject
  * - POST /suggestion/:requestID/accept
  * - POST /suggestion/:requestID/dismiss
+ * - POST /kilocode/notebook/:requestID/reply
+ * - POST /kilocode/notebook/:requestID/reject
  *
  * Returns undefined for every other path/method. The raw path must be exactly
  * one leading slash followed by non-empty segments (rejects duplicate leading
@@ -147,6 +158,12 @@ export function classifyDrainControl(method: string, path: string): DrainControl
   }
   if (method === "POST" && raw.length === 3 && raw[0] === "suggestion" && raw[2] === "dismiss") {
     return isSuggestionID(ids[1]) ? "suggestionDismiss" : undefined
+  }
+  if (method === "POST" && raw.length === 4 && raw[0] === "kilocode" && raw[1] === "notebook" && raw[3] === "reply") {
+    return isNotebookID(ids[2]) ? "notebookReply" : undefined
+  }
+  if (method === "POST" && raw.length === 4 && raw[0] === "kilocode" && raw[1] === "notebook" && raw[3] === "reject") {
+    return isNotebookID(ids[2]) ? "notebookReject" : undefined
   }
   return undefined
 }

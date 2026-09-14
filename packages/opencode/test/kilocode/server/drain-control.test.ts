@@ -29,6 +29,7 @@ import { AppRuntime } from "../../../src/effect/app-runtime"
 import { Permission } from "../../../src/permission"
 import { Question } from "../../../src/question"
 import { Suggestion } from "../../../src/kilocode/suggestion"
+import { Notebook } from "../../../src/kilocode/notebook/service"
 import { Session } from "../../../src/session/session"
 import { SessionID, MessageID } from "../../../src/session/schema"
 import { TestLLMServer } from "../../lib/llm-server"
@@ -313,7 +314,7 @@ const withInstance = (dir: string) => <A, E, R>(effect: Effect.Effect<A, E, R>) 
 // ─── classifier unit coverage (LOCK-006) ─────────────────────────────
 
 describe("classifyDrainControl exact segment classification", () => {
-  it.effect("classifies the six mandatory control paths", () =>
+  it.effect("classifies the mandatory control paths", () =>
     Effect.gen(function* () {
       expect(classifyDrainControl("POST", "/session/ses_a/abort")).toBe("abort")
       expect(classifyDrainControl("DELETE", "/session/ses_a/queue/msg_b")).toBe("cancelQueued")
@@ -325,6 +326,8 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/question/que_1/reject")).toBe("questionReject")
       expect(classifyDrainControl("POST", "/suggestion/sug_1/accept")).toBe("suggestionAccept")
       expect(classifyDrainControl("POST", "/suggestion/sug_1/dismiss")).toBe("suggestionDismiss")
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/reply")).toBe("notebookReply")
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/reject")).toBe("notebookReject")
     }))
 
   it.effect("rejects near-match and traversal shapes", () =>
@@ -341,6 +344,17 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/suggestion/sug_1/approve")).toBeUndefined()
       expect(classifyDrainControl("PATCH", "/config")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a/message")).toBeUndefined()
+      // notebook near-matches: wrong methods, extra/trailing segments, list route
+      expect(classifyDrainControl("GET", "/kilocode/notebook/nbr_abc123/reply")).toBeUndefined()
+      expect(classifyDrainControl("DELETE", "/kilocode/notebook/nbr_abc123/reject")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/reply/extra")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/reject/extra")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/reply/")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/replies")).toBeUndefined()
+      expect(classifyDrainControl("GET", "/kilocode/notebook")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebooks/nbr_abc123/reply")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/notebook/nbr_abc123/reply")).toBeUndefined()
       // legacy permission reply near-matches (LOCK-007)
       expect(classifyDrainControl("GET", "/session/ses_a/permissions/per_1")).toBeUndefined()
       expect(classifyDrainControl("DELETE", "/session/ses_a/permissions/per_1")).toBeUndefined()
@@ -359,6 +373,10 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/session/ses_a/permissions/per_1/")).toBeUndefined()
       expect(classifyDrainControl("POST", "/suggestion/sug_1/accept/")).toBeUndefined()
       expect(classifyDrainControl("POST", "/suggestion/sug_1/dismiss/")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_abc123/reject/")).toBeUndefined()
+      // notebook traversal / dot shapes
+      expect(classifyDrainControl("POST", "/kilocode/notebook/../reply")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/./reject")).toBeUndefined()
     }))
 
   it.effect("rejects malformed leading, empty, and extra segments fail-closed", () =>
@@ -388,6 +406,10 @@ describe("classifyDrainControl exact segment classification", () => {
       // malformed percent-encoding fails closed
       expect(classifyDrainControl("POST", "/session/%zz/abort")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a%2/abort")).toBeUndefined()
+      // encoded separators inside the notebook request ID fail closed
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_%2Fabc/reply")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_%5Cabc/reject")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/%2E/reject")).toBeUndefined()
     }))
 
   it.effect("rejects variable segments that fail the route ID schemas", () =>
@@ -400,6 +422,10 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/question/not-a-question/reject")).toBeUndefined()
       expect(classifyDrainControl("POST", "/suggestion/not-a-suggestion/accept")).toBeUndefined()
       expect(classifyDrainControl("POST", "/suggestion/not-a-suggestion/dismiss")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/not-a-notebook/reply")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/not-a-notebook/reject")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/que_1/reply")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr_/reject")).toBeUndefined()
       // legacy permission reply validates BOTH variable segments (LOCK-007)
       expect(classifyDrainControl("POST", "/session/not-a-session/permissions/per_1")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a/permissions/not-a-permission")).toBeUndefined()
@@ -415,6 +441,8 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/question/que%5F1/reject")).toBe("questionReject")
       expect(classifyDrainControl("POST", "/suggestion/sug%5F1/accept")).toBe("suggestionAccept")
       expect(classifyDrainControl("POST", "/suggestion/sug%5F1/dismiss")).toBe("suggestionDismiss")
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr%5Fabc/reply")).toBe("notebookReply")
+      expect(classifyDrainControl("POST", "/kilocode/notebook/nbr%5Fabc/reject")).toBe("notebookReject")
     }))
 })
 
@@ -1032,6 +1060,89 @@ describe("drain-control bypass - web handler path", () => {
       }),
     30_000,
   )
+
+  it.live(
+    "notebook reply and reject complete during an active cold save drain",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        const gate = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, void 0).pipe(Effect.ignore))
+        const instanceDisposed = yield* eventLatch("server.instance.disposed", f.project)
+        const disposals = yield* eventCapture<{ directory: string }>("server.instance.disposed", f.project)
+        const session = yield* Effect.promise(() => createSession(f.project))
+        const { fiber, done } = yield* startHeldPrompt(f.project, session.id, gate)
+        yield* waitForBusy(f.project, session.id)
+
+        // Two real pending notebook requests on the pre-fence instance.
+        const sid = SessionID.make(session.id)
+        const ask = withInstance(f.project)(
+          Notebook.Service.use((svc) =>
+            svc.request({ sessionID: sid, path: "b.ipynb", operation: "read", includeOutputs: false }),
+          ),
+        )
+        const replyFiber = yield* Effect.forkDetach(ask)
+        const rejectFiber = yield* Effect.forkDetach(ask)
+        const pending = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const list = yield* withInstance(f.project)(
+              Notebook.Service.use((svc) => svc.list()),
+            )
+            if (list.length >= 2) return list
+            return undefined
+          }),
+          "two notebook requests never became pending",
+        )
+        const replyID = String(pending[0]!.id)
+        const rejectID = String(pending[1]!.id)
+
+        // Cold PATCH: the save drains on the held stream.
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
+        expect(patch.status).toBe(200)
+        expect(yield* isDone(done)).toBe(false)
+        expect(yield* instanceDisposed.done).toBe(false)
+
+        // Both notebook controls must complete during the fence drain through
+        // the exact HTTP shapes: POST /kilocode/notebook/:requestID/reply|reject.
+        const replied = yield* Effect.promise(async () => {
+          const response = await request(f.project, `/kilocode/notebook/${replyID}/reply`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              result: { operation: "read", path: "b.ipynb", requestPath: "b.ipynb", revision: "r1", cells: [] },
+            }),
+          })
+          return response.status
+        })
+        expect(replied).toBe(200)
+        const rejected = yield* Effect.promise(async () => {
+          const response = await request(f.project, `/kilocode/notebook/${rejectID}/reject`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ error: { code: "timeout", message: "timed out" } }),
+          })
+          return response.status
+        })
+        expect(rejected).toBe(200)
+
+        // Both settled BEFORE the fence releases: reply resolves, reject fails
+        // with the host error by design.
+        const replyExit = yield* Fiber.join(replyFiber).pipe(Effect.exit)
+        expect(Exit.isSuccess(replyExit)).toBe(true)
+        const rejectExit = yield* Fiber.join(rejectFiber).pipe(Effect.exit)
+        expect(Exit.isFailure(rejectExit)).toBe(true)
+
+        // The fence still drains normally on the held stream and the save
+        // converges exactly once.
+        yield* Deferred.succeed(gate, void 0)
+        yield* Fiber.await(fiber)
+        yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
+        expect(yield* instanceDisposed.done).toBe(true)
+        yield* awaitRebuilds()
+        expect(disposals.received.length).toBe(1)
+      }),
+    30_000,
+  )
 })
 
 // ─── drain-control bypass through a real listener (Server.listen) ─────
@@ -1139,5 +1250,227 @@ describe("drain-control bypass - Server.listen path", () => {
         expect(status.status).toBe(200)
       }),
     30_000,
+  )
+
+  it.live(
+    "notebook reply completes through a real listener during an active cold save drain",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        // Notebook tools are vscode-gated (KILO_CLIENT=vscode +
+        // experimental.native_notebook_tools). Set the client before the
+        // listener boots its first instance and restore it in a finalizer so
+        // no other test observes the override.
+        const prevClient = process.env["KILO_CLIENT"]
+        process.env["KILO_CLIENT"] = "vscode"
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (prevClient === undefined) delete process.env["KILO_CLIENT"]
+            else process.env["KILO_CLIENT"] = prevClient
+          }),
+        )
+        // Enable native notebook tools in this test's project config before
+        // the listener boots its instance for the directory.
+        yield* Effect.promise(async () => {
+          const file = path.join(f.project, ".kilo", "kilo.jsonc")
+          const raw = (await Bun.file(file).json()) as Record<string, unknown>
+          await Bun.write(file, JSON.stringify({ ...raw, experimental: { native_notebook_tools: true } }, null, 2))
+        })
+        const listener = yield* Effect.acquireRelease(
+          Effect.promise(() => Server.listen({ port: 0, hostname: "127.0.0.1" })),
+          (value) => Effect.promise(() => value.stop(true)).pipe(Effect.ignore),
+        )
+        const gate = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, void 0).pipe(Effect.ignore))
+        const instanceDisposed = yield* eventLatch("server.instance.disposed", f.project)
+        const disposals = yield* eventCapture<{ directory: string }>("server.instance.disposed", f.project)
+        const url = listener.url
+        const base = url.toString().replace(/\/$/, "")
+        const send = (dir: string, input: string, init?: RequestInit) =>
+          Effect.promise(async () => {
+            const response = await fetch(`${base}${input}`, {
+              ...init,
+              headers: {
+                ...(dir ? { "x-kilo-directory": dir } : {}),
+                ...init?.headers,
+              },
+            })
+            return response
+          })
+
+        // The listener is a fresh layer with its own SessionStatus and gate
+        // instances, so status must be polled through the listener itself.
+        const listenerStatus = (sessionID: string) =>
+          Effect.promise(async () => {
+            const response = await fetch(`${base}/session/status`, {
+              headers: { "x-kilo-directory": f.project },
+            })
+            expect(response.status).toBe(200)
+            const map = (await response.json()) as Record<string, { type: string }>
+            return map[sessionID]?.type
+          })
+        const waitForListenerBusy = (sessionID: string) =>
+          pollWithTimeout(
+            Effect.gen(function* () {
+              const type = yield* listenerStatus(sessionID)
+              return type === "busy" ? (true as const) : undefined
+            }),
+            `session ${sessionID} never became busy`,
+          )
+
+        const allowAll = [{ permission: "*", pattern: "*", action: "allow" }]
+        const createHeld = yield* send(f.project, "/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "held stream", permission: allowAll }),
+        })
+        expect(createHeld.status).toBe(200)
+        const held = (yield* Effect.promise(() => createHeld.json())) as SessionV1.Info
+        const createNb = yield* send(f.project, "/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "notebook tool", permission: allowAll }),
+        })
+        expect(createNb.status).toBe(200)
+        const notebook = (yield* Effect.promise(() => createNb.json())) as SessionV1.Info
+
+        // Held stream first: it consumes the hold entry so the later tool/text
+        // entries belong to the notebook generation in FIFO order.
+        yield* f.llm.hold("streamed", deferredAsPromise(gate))
+        const heldDone = yield* Deferred.make<void>()
+        const heldFiber = yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            const response = yield* send(f.project, `/session/${held.id}/message`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                agent: "build",
+                model: { providerID: "test", modelID: "test-model" },
+                parts: [{ type: "text", text: "hello" }],
+              }),
+            })
+            yield* Deferred.succeed(heldDone, void 0)
+            return response.status
+          }),
+        )
+        yield* f.llm.wait(1)
+        yield* waitForListenerBusy(held.id)
+
+        // The notebook generation runs the listener's real generation/tool
+        // path: the model requests exactly one notebook_read, whose
+        // Notebook.Service.request stays pending in the listener runtime.
+        yield* f.llm.tool("notebook_read", { path: "b.ipynb" })
+        yield* f.llm.text("notebook done")
+        const nbDone = yield* Deferred.make<void>()
+        const nbFiber = yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            const response = yield* send(f.project, `/session/${notebook.id}/message`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                agent: "build",
+                model: { providerID: "test", modelID: "test-model" },
+                parts: [{ type: "text", text: "read the notebook" }],
+              }),
+            })
+            yield* Deferred.succeed(nbDone, void 0)
+            return response.status
+          }),
+        )
+        // The model emits the notebook_read call, which first pends as a
+        // notebook_read permission ask in the listener runtime. Allow it
+        // pre-fence through the exact permission shape so the tool proceeds
+        // to its Notebook.Service.request.
+        yield* awaitWithTimeout(f.llm.wait(2), "notebook tool call never reached the LLM", "30 seconds")
+        const ask = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const response = yield* send(f.project, "/permission")
+            if (response.status !== 200) return undefined
+            const list = (yield* Effect.promise(
+              () => response.json() as Promise<Array<{ id: string; sessionID: string; permission: string }>>,
+            )) as Array<{ id: string; sessionID: string; permission: string }>
+            const match = list.find(
+              (entry) => entry.sessionID === notebook.id && entry.permission === "notebook_read",
+            )
+            return match ? match : undefined
+          }),
+          "notebook_read permission never became pending in the listener runtime",
+          "30 seconds",
+        )
+        const allowed = yield* send(f.project, `/permission/${ask.id}/reply`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reply: "once" }),
+        })
+        expect(allowed.status).toBe(200)
+        // The pending ID must be observed through the listener's own
+        // GET /kilocode/notebook before the fence goes up — same-store
+        // AppRuntime probes are not evidence for this runtime.
+        const pending = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const response = yield* send(f.project, "/kilocode/notebook")
+            if (response.status !== 200) return undefined
+            const list = (yield* Effect.promise(
+              () => response.json() as Promise<Array<{ id: string; sessionID: string }>>,
+            )) as Array<{ id: string; sessionID: string }>
+            const match = list.find((entry) => entry.sessionID === notebook.id && entry.id.startsWith("nbr_"))
+            return match ? match : undefined
+          }),
+          "notebook request never became pending in the listener runtime",
+          "30 seconds",
+        )
+        const requestID = pending.id
+        yield* waitForListenerBusy(notebook.id)
+
+        // A cold global PATCH through the listener: the convergence fence covers
+        // every directory and drains on the held stream.
+        const patch = yield* send("", "/config/overlay", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ scope: "global", set: { autoupdate: "notify" } }),
+        })
+        expect(patch.status).toBe(200)
+        expect(yield* isDone(heldDone)).toBe(false)
+        expect(yield* isDone(nbDone)).toBe(false)
+        expect(yield* instanceDisposed.done).toBe(false)
+
+        // Reply through the listener must complete during the fence: the
+        // drain-control lane serves it from the pre-fence snapshot. Reject
+        // shares the same lane (classifier unit tests prove the symmetric
+        // exact POST /kilocode/notebook/:requestID/reject route, and the web
+        // handler live test proves both settle); one listener reply case is
+        // sufficient for the production-path proof.
+        const replied = yield* send(f.project, `/kilocode/notebook/${requestID}/reply`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            result: { operation: "read", path: "b.ipynb", requestPath: "b.ipynb", revision: "r1", cells: [] },
+          }),
+        })
+        expect(replied.status).toBe(200)
+
+        // The waiter settles in the listener runtime, so the admitted
+        // generation progresses and finishes while the fence is still up.
+        yield* awaitWithTimeout(f.llm.wait(3), "notebook follow-up never reached the LLM", "30 seconds")
+        yield* awaitWithTimeout(Deferred.await(nbDone), "notebook generation did not complete after reply", "30 seconds")
+        const nbResult = yield* Fiber.join(nbFiber)
+        expect(nbResult).toBe(200)
+
+        // Releasing the held stream lets the save converge exactly once,
+        // disposing the exact old instance.
+        yield* Deferred.succeed(gate, void 0)
+        yield* awaitWithTimeout(Deferred.await(heldDone), "held stream did not complete after release")
+        yield* Fiber.join(heldFiber)
+        yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
+        expect(yield* instanceDisposed.done).toBe(true)
+        yield* awaitRebuilds()
+        expect(disposals.received.length).toBe(1)
+
+        // The listener keeps serving the rebuilt runtime.
+        expect(listener.url).toBe(url)
+        const status = yield* send(f.project, "/session/status")
+        expect(status.status).toBe(200)
+      }),
+    60_000,
   )
 })

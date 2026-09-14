@@ -24,6 +24,9 @@ import {
   type ServePrivateQuestionRejectRequest,
   type ServePrivateQuestionReplyRequest,
   type ServePrivateQuestionResult,
+  type ServePrivateNotebookRejectRequest,
+  type ServePrivateNotebookReplyRequest,
+  type ServePrivateNotebookResult,
   type PrivateStatusWireOutcome,
   type PrivateGetWireOutcome,
   type PrivateMessagesWireOutcome,
@@ -41,6 +44,7 @@ import {
   compareUpdateParity,
 } from "./serve-private-peer"
 import type { PromptContractRequest, PromptResult } from "./serve-private-prompt-contract"
+import type { NotebookListContractRequest } from "./serve-private-notebook-list-contract"
 import type { CommandContractRequest, CommandResult } from "./serve-private-command-contract"
 import { skillRemoveOutcomeForOwner } from "./serve-private-skill-remove-owner"
 import {
@@ -92,6 +96,7 @@ import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import { isSettledAbortResult, makeAbortAmbiguous } from "./serve-private-abort-contract"
 import { questionRejectHandle, questionReplyHandle } from "./serve-private-question-connection"
+import { notebookListHandle, notebookRejectHandle, notebookReplyHandle } from "./serve-private-notebook-connection"
 import { suggestionAcceptHandle, suggestionDismissHandle } from "./serve-private-suggestion-connection"
 import { wrapEpochHandle } from "./serve-private-epoch"
 
@@ -2012,6 +2017,48 @@ export class KiloConnectionService {
     if ((req as { op: string }).op === "question/reply")
       return questionReplyHandle(deps, req as ServePrivateQuestionReplyRequest)
     return questionRejectHandle(deps, req as ServePrivateQuestionRejectRequest)
+  }
+
+  privateNotebookWithHandle(req: ServePrivateNotebookReplyRequest | ServePrivateNotebookRejectRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    if ((req as { op: string }).op === "notebook/reply")
+      return notebookReplyHandle(deps, req as ServePrivateNotebookReplyRequest)
+    return notebookRejectHandle(deps, req as ServePrivateNotebookRejectRequest)
+  }
+
+  privateNotebookReplyWithHandle(req: ServePrivateNotebookReplyRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    return notebookReplyHandle(deps, req)
+  }
+
+  privateNotebookRejectWithHandle(req: ServePrivateNotebookRejectRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    return notebookRejectHandle(deps, req)
+  }
+
+  privateNotebookListWithHandle(req: NotebookListContractRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    return notebookListHandle(deps, req)
   }
 
   privateSuggestionWithHandle(

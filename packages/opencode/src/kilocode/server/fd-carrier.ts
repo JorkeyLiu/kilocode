@@ -26,6 +26,16 @@ import {
   validateQuestionReplyRequest,
 } from "@/kilocode/question/question-private"
 import {
+  OP_LIST as NOTEBOOK_LIST_OP,
+  OP_REJECT as NOTEBOOK_REJECT_OP,
+  OP_REPLY as NOTEBOOK_REPLY_OP,
+  rejectNotebookPrivate,
+  replyNotebookPrivate,
+  validateNotebookListRequest,
+  validateNotebookRejectRequest,
+  validateNotebookReplyRequest,
+} from "@/kilocode/notebook/notebook-private"
+import {
   OP_ACCEPT as SUGGESTION_ACCEPT_OP,
   OP_DISMISS as SUGGESTION_DISMISS_OP,
   acceptSuggestionPrivate,
@@ -46,6 +56,8 @@ import {
 } from "@/kilocode/permission/permission-private"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
+import { Service as NotebookHost } from "@/kilocode/notebook/service"
+import { Request as NotebookRequest } from "@/kilocode/notebook/protocol"
 import { Suggestion } from "@/kilocode/suggestion"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
@@ -551,6 +563,12 @@ export const FD_PERMISSION_LIST_VERSION = 1 as const
 export const FD_PERMISSION_LIST_OP = "permission/list" as const
 export const FD_QUESTION_LIST_VERSION = 1 as const
 export const FD_QUESTION_LIST_OP = "question/list" as const
+export const FD_NOTEBOOK_LIST_VERSION = 1 as const
+export const FD_NOTEBOOK_LIST_OP = "notebook/list" as const
+export const FD_NOTEBOOK_REPLY_VERSION = 1 as const
+export const FD_NOTEBOOK_REPLY_OP = "notebook/reply" as const
+export const FD_NOTEBOOK_REJECT_VERSION = 1 as const
+export const FD_NOTEBOOK_REJECT_OP = "notebook/reject" as const
 export const FD_SUGGESTION_ACCEPT_VERSION = 1 as const
 export const FD_SUGGESTION_ACCEPT_OP = "suggestion/accept" as const
 export const FD_SUGGESTION_DISMISS_VERSION = 1 as const
@@ -689,6 +707,18 @@ export interface FdQuestionListRequest {
   requestId: string
   opId: string
   op: typeof FD_QUESTION_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdNotebookListRequest {
+  v: typeof FD_NOTEBOOK_LIST_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_NOTEBOOK_LIST_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -2024,6 +2054,48 @@ function safeQuestionListIdentities(req: { requestId: string; opId: string; idem
   }
 }
 
+function notebookListFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_NOTEBOOK_LIST_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_NOTEBOOK_LIST_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function fallbackNotebookListIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeNotebookListIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
 function suggestionListFailed(
   req: { requestId: string; opId: string; idempotencyKey: string },
   code: string,
@@ -2148,6 +2220,10 @@ const QUESTION_LIST_FENCE_MESSAGE =
 const QUESTION_LIST_INTERNAL_MESSAGE = "internal error"
 const QUESTION_LIST_VALIDATION_MESSAGE = "invalid question-list request"
 const QUESTION_LIST_SCOPE_MESSAGE = "directory mismatch"
+const NOTEBOOK_LIST_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const NOTEBOOK_LIST_INTERNAL_MESSAGE = "internal error"
+const NOTEBOOK_LIST_VALIDATION_MESSAGE = "invalid notebook-list request"
+const NOTEBOOK_LIST_SCOPE_MESSAGE = "directory mismatch"
 const SUGGESTION_LIST_FENCE_MESSAGE =
   "Instance is unavailable during config rebuild; no active runtime for this request"
 const SUGGESTION_LIST_INTERNAL_MESSAGE = "internal error"
@@ -2884,6 +2960,95 @@ export function createFdCarrier(
         )
         return result
       }
+      if (method === NOTEBOOK_REPLY_OP || method === "notebook/reply") {
+        // Drain-control notebook reply: the exact `Notebook.Service.reply`
+        // as HTTP POST /kilocode/notebook/:requestID/reply under
+        // acquireDrainControl + InstanceRef held through settlement.
+        // Minimal terminal binding only; never echoes cell source/outputs.
+        // Mismatch settles notebook.invalid_reply (pending intact, zero
+        // SDK fallback); unknown pending settles notebook.not_found
+        // (stale-settled, not a retry); fence stays a transport error so
+        // the caller takes its exactly-one SDK fallback.
+        try {
+          validateNotebookReplyRequest(params)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!msg.includes("op must be notebook/")) {
+            const err = new Error(msg) as Error & { code: number }
+            err.code = ErrorCode.InvalidParams
+            throw err
+          }
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const dir = (() => {
+              try {
+                const p = params as Record<string, unknown>
+                const ctx = p.context as Record<string, unknown> | undefined
+                if (typeof ctx?.directory !== "string") throw new Error("context.directory must be non-empty string")
+                return canonicalDirectory(ctx.directory)
+              } catch (e) {
+                const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+                err.code = ErrorCode.InvalidParams
+                throw err
+              }
+            })()
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => Effect.succeed({ tag: "fail" as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
+            )
+            if (acquired.tag !== "ok") throw acquired.err
+            const inner = Effect.gen(function* () {
+              return yield* replyNotebookPrivate(params)
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner
+          }),
+        )
+        return result
+      }
+      if (method === NOTEBOOK_REJECT_OP || method === "notebook/reject") {
+        // Drain-control notebook reject: the exact `Notebook.Service.reject`
+        // as HTTP POST /kilocode/notebook/:requestID/reject under the same
+        // lane. Unknown pending settles notebook.not_found (stale-settled).
+        try {
+          validateNotebookRejectRequest(params)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!msg.includes("op must be notebook/")) {
+            const err = new Error(msg) as Error & { code: number }
+            err.code = ErrorCode.InvalidParams
+            throw err
+          }
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const dir = (() => {
+              try {
+                const p = params as Record<string, unknown>
+                const ctx = p.context as Record<string, unknown> | undefined
+                if (typeof ctx?.directory !== "string") throw new Error("context.directory must be non-empty string")
+                return canonicalDirectory(ctx.directory)
+              } catch (e) {
+                const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+                err.code = ErrorCode.InvalidParams
+                throw err
+              }
+            })()
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => Effect.succeed({ tag: "fail" as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
+            )
+            if (acquired.tag !== "ok") throw acquired.err
+            const inner = Effect.gen(function* () {
+              return yield* rejectNotebookPrivate(params)
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner
+          }),
+        )
+        return result
+      }
       if (method === SUGGESTION_ACCEPT_OP || method === "suggestion/accept") {
         // Drain-control suggestion accept: globally unique request ID lookup
         // via Suggestion.accept with delete-wins/event/waiter semantics
@@ -3274,6 +3439,110 @@ export function createFdCarrier(
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(questionListFailed(safe, "internal", QUESTION_LIST_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === FD_NOTEBOOK_LIST_OP || method === "notebook/list") {
+        // Read-only notebook list: same-directory Notebook.Service.list()
+        // via the existing drain-control + InstanceRef snapshot-first lane
+        // held to completion. Exact pending shape, no mutation, no durable
+        // operation. Not added to drain-control classification.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdNotebookListRequest
+            try {
+              const validated = validateNotebookListRequest(params)
+              req = {
+                v: validated.v,
+                requestId: validated.requestId,
+                opId: validated.opId,
+                op: FD_NOTEBOOK_LIST_OP,
+                idempotencyKey: validated.idempotencyKey,
+                context: { directory: validated.context.directory },
+                payload: {},
+              }
+            } catch {
+              return notebookListFailed(
+                fallbackNotebookListIds(params),
+                "validation.failed",
+                NOTEBOOK_LIST_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeNotebookListIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return notebookListFailed(safe, "validation.failed", NOTEBOOK_LIST_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? NOTEBOOK_LIST_FENCE_MESSAGE : NOTEBOOK_LIST_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: notebookListFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir) return notebookListFailed(safe, "scope_mismatch", NOTEBOOK_LIST_SCOPE_MESSAGE, false)
+              const svc = yield* NotebookHost
+              const list = yield* svc.list().pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (list.tag !== "ok") return notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false)
+              if (!Array.isArray(list.value))
+                return notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false)
+              for (const item of list.value) {
+                if (!Schema.is(NotebookRequest)(item))
+                  return notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false)
+              }
+              return {
+                v: FD_NOTEBOOK_LIST_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_NOTEBOOK_LIST_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { notebooks: list.value },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(notebookListFailed(safe, "internal", NOTEBOOK_LIST_INTERNAL_MESSAGE, false))
               }),
             )
           }),
