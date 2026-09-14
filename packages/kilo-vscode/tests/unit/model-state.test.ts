@@ -3,7 +3,15 @@ import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
+import * as vscode from "vscode"
 import * as ModelState from "../../src/kilo-provider/model-state"
+import { KiloConnectionService } from "../../src/services/cli-backend/connection-service"
+import { CanonicalConfigService } from "../../src/config/service"
+import { Roots } from "../../src/config/paths"
+import { createMemorySecretAdapter } from "../../src/config/secret-adapter"
+import { createMemoryStateAdapter } from "../../src/config/state-adapter"
+
+const { KiloProvider } = await import("../../src/KiloProvider")
 
 /**
  * LOCK-007 extension bridge tests: the shared model.json `variant` map is the
@@ -449,5 +457,199 @@ describe("model-state model persistence (existing behavior)", () => {
     }
     const leftovers = fs.readdirSync(stateDir).filter((name) => name.endsWith(".tmp"))
     expect(leftovers).toEqual([])
+  })
+})
+
+describe("model-state reset canonical boundary (resetAllSettings)", () => {
+  it("canonical=true preserves model.json bytes and the cache, still posts empty selections", async () => {
+    const c = client()
+    const seed = {
+      model: { code: { providerID: "openai", modelID: "gpt-4.1" } },
+      variant: { "openai/gpt-4.1": "high" },
+      other: { keep: true },
+    }
+    writeState(seed)
+    const before = fs.readFileSync(file(), "utf-8")
+    const compat = cache({ "openai/gpt-4.1": "high", "anthropic/claude-sonnet-4": "medium" })
+    const posted: Array<{ type: string; selections?: unknown; variants?: unknown }> = []
+    await ModelState.reset(c, (m) => posted.push(m as never), compat, undefined, true)
+    expect(fs.readFileSync(file(), "utf-8")).toBe(before)
+    expect(compat.value).toEqual({ "openai/gpt-4.1": "high", "anthropic/claude-sonnet-4": "medium" })
+    expect(posted.map((m) => m.type)).toEqual(["modelSelectionsLoaded", "variantsLoaded"])
+    expect(posted[0]).toEqual({ type: "modelSelectionsLoaded", selections: {} })
+    expect(posted[1]).toEqual({ type: "variantsLoaded", variants: {} })
+  })
+
+  it("canonical=true on a missing file sends empty events without creating state", async () => {
+    const c = client()
+    const compat = cache({ "openai/gpt-4.1": "high" })
+    const posted: Array<{ type: string }> = []
+    await ModelState.reset(c, (m) => posted.push(m as never), compat, undefined, true)
+    expect(fs.existsSync(file())).toBe(false)
+    expect(compat.value).toEqual({ "openai/gpt-4.1": "high" })
+    expect(posted.map((m) => m.type)).toEqual(["modelSelectionsLoaded", "variantsLoaded"])
+  })
+})
+
+describe("resetAllSettings host boundary (real KiloProvider + ModelState.reset)", () => {
+  function store() {
+    const m = new Map<string, unknown>()
+    return {
+      map: m,
+      context: {
+        globalState: {
+          get: (key: string) => m.get(key),
+          update: async (key: string, value: unknown) => {
+            if (value === undefined) m.delete(key)
+            else m.set(key, value)
+          },
+        },
+        workspaceState: { get: () => undefined, update: async () => {} },
+      } as never,
+    }
+  }
+
+  async function canonicalService() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-reset-canonical-"))
+    const global = path.join(root, "global")
+    const project = path.join(root, "project")
+    fs.mkdirSync(global, { recursive: true })
+    fs.mkdirSync(path.join(project, ".kilo"), { recursive: true })
+    const globalFile = path.join(global, "kilo.jsonc")
+    fs.writeFileSync(
+      globalFile,
+      JSON.stringify({
+        provider: {
+          mycustom: {
+            name: "My Custom",
+            endpoint: "https://example.com/v1",
+            protocol: "openai/completions",
+            models: { m1: { name: "M1" } },
+          },
+        },
+      }),
+    )
+    const secrets = createMemorySecretAdapter()
+    await secrets.store("global/provider/mycustom/api_key", "secret-value")
+    const canonical = new CanonicalConfigService({ secrets } as never, {
+      roots: new Roots(project, global),
+      secretAdapter: secrets,
+      globalState: createMemoryStateAdapter(),
+      workspaceState: createMemoryStateAdapter(),
+    })
+    await canonical.initialize()
+    return { root, globalFile, canonical, secrets }
+  }
+
+  async function runReset(opts: { canonical: boolean }) {
+    const vsc = vscode as unknown as {
+      window: { showWarningMessage: unknown; showInformationMessage: unknown }
+      extensions: { getExtension: unknown }
+      workspace: { getConfiguration: unknown }
+    }
+    const origWarning = vsc.window.showWarningMessage
+    const origInfo = vsc.window.showInformationMessage
+    const origExtension = vsc.extensions.getExtension
+    const origConfig = vsc.workspace.getConfiguration
+    const updates: Array<{ section: string | undefined; key: string; value: unknown }> = []
+    vsc.window.showWarningMessage = (async () => "Reset") as never
+    vsc.window.showInformationMessage = (async () => undefined) as never
+    vsc.extensions.getExtension = ((id: string) => {
+      if (id === "kilocode.kilo-code") {
+        return {
+          packageJSON: {
+            contributes: {
+              configuration: {
+                properties: {
+                  "kilo-code.new.foo": {},
+                  "kilo-code.new.bar.baz": {},
+                  "kilo-code.other": {},
+                  "other.ext": {},
+                },
+              },
+            },
+          },
+        }
+      }
+      return (origExtension as (id: string) => unknown)(id)
+    }) as never
+    vsc.workspace.getConfiguration = ((section?: string) => ({
+      get: (_key: string, fallback?: unknown) => fallback,
+      update: async (key: string, value: unknown) => {
+        updates.push({ section, key, value })
+      },
+    })) as never
+    try {
+      const harness = opts.canonical ? await canonicalService() : null
+      const c = client()
+      writeState({
+        model: { code: { providerID: "openai", modelID: "gpt-4.1" } },
+        variant: { "openai/gpt-4.1": "high" },
+      })
+      const before = fs.readFileSync(file(), "utf-8")
+      const s = store()
+      s.map.set("variantSelections", { "openai/gpt-4.1": "high" })
+      s.map.set("recentModels", [{ id: "x" }])
+      s.map.set("kilo.agentMigrationBannerDismissed", true)
+      const canonicalBefore = harness ? fs.readFileSync(harness.globalFile, "utf-8") : null
+      const secretsBefore = harness ? new Map(harness.secrets.store_) : null
+      const connection = new KiloConnectionService({} as never)
+      ;(connection as unknown as { getClient: () => unknown }).getClient = () => c as never
+      const provider = new KiloProvider(
+        {} as never,
+        connection,
+        s.context,
+        harness ? { canonicalConfig: harness.canonical } : {},
+      )
+      const messages: unknown[] = []
+      provider.postMessage = (message) => messages.push(message)
+      try {
+        await (provider as unknown as { handleResetAllSettings: () => Promise<void> }).handleResetAllSettings()
+      } finally {
+        provider.dispose()
+      }
+      return { before, s, canonicalBefore, secretsBefore, harness, messages, updates }
+    } finally {
+      vsc.window.showWarningMessage = origWarning
+      vsc.window.showInformationMessage = origInfo
+      vsc.extensions.getExtension = origExtension
+      vsc.workspace.getConfiguration = origConfig
+    }
+  }
+
+  it("canonical host reset preserves model.json, variant cache, and custom canonical config/secrets", async () => {
+    const { before, s, canonicalBefore, secretsBefore, harness, messages, updates } = await runReset({ canonical: true })
+    try {
+      expect(fs.readFileSync(file(), "utf-8")).toBe(before)
+      expect(s.map.get("variantSelections")).toEqual({ "openai/gpt-4.1": "high" })
+      expect(s.map.has("recentModels")).toBe(false)
+      expect(s.map.has("kilo.agentMigrationBannerDismissed")).toBe(false)
+      expect(fs.readFileSync(harness!.globalFile, "utf-8")).toBe(canonicalBefore)
+      expect(harness!.secrets.store_).toEqual(secretsBefore)
+      const types = messages.map((m) => (m as { type: string }).type)
+      expect(types).toContain("modelSelectionsLoaded")
+      expect(types).toContain("variantsLoaded")
+      expect(types).toContain("recentsLoaded")
+      expect(messages).toContainEqual({ type: "modelSelectionsLoaded", selections: {} })
+      expect(messages).toContainEqual({ type: "variantsLoaded", variants: {} })
+      expect(messages).toContainEqual({ type: "recentsLoaded", recents: [] })
+      const touched = updates.map((u) => `${u.section ?? ""}.${u.key}`)
+      expect(touched.some((k) => k.includes("foo") || k.includes("baz"))).toBe(true)
+      expect(touched.join("\n")).not.toContain("kilo-code.other")
+      expect(touched.join("\n")).not.toContain("other.ext")
+    } finally {
+      if (harness) {
+        harness.canonical.dispose()
+        fs.rmSync(harness.root, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it("noncanonical host reset clears model.json and the variant cache", async () => {
+    const { s, messages } = await runReset({ canonical: false })
+    expect(JSON.parse(fs.readFileSync(file(), "utf-8"))).toEqual({ model: {}, variant: {} })
+    expect(s.map.get("variantSelections")).toEqual({})
+    expect(messages).toContainEqual({ type: "modelSelectionsLoaded", selections: {} })
+    expect(messages).toContainEqual({ type: "variantsLoaded", variants: {} })
   })
 })

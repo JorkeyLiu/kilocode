@@ -5839,7 +5839,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.sendNotificationSettings()
     this.sendTimelineSetting()
     this.sendWorkStyle()
-    await ModelState.reset(this.client, (msg) => this.postMessage(msg), this.variantCache())
+    await ModelState.reset(this.client, (msg) => this.postMessage(msg), this.variantCache(), undefined, this.canonicalMode)
 
     // Re-send globalState items to the webview
     this.postMessage({ type: "recentsLoaded", recents: [] })
