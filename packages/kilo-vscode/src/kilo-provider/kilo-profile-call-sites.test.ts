@@ -34,12 +34,11 @@ describe("kilo-profile call-site guard", () => {
     }
   })
 
-  it("callers route through the helper and never call the SDK directly", () => {
+  it("the VS Code host keeps its profile readers on the helper with no dormant auth module", () => {
     const provider = fs.readFileSync(path.join(__dirname, "..", "KiloProvider.ts"), "utf8")
-    const auth = fs.readFileSync(path.join(__dirname, "handlers", "auth.ts"), "utf8")
     expect(provider).toContain("fetchKiloProfilePrivateFirst")
-    expect(auth).toContain("fetchKiloProfilePrivateFirst")
     expect(provider.match(/\.kilo\.profile\(/g) ?? []).toEqual([])
-    expect(auth.match(/\.kilo\.profile\(/g) ?? []).toEqual([])
+    expect(fs.existsSync(path.join(__dirname, "handlers", "auth.ts"))).toBe(false)
+    expect(provider).toContain('type: "profileData"')
   })
 })

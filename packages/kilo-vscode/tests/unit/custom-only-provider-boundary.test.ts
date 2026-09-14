@@ -435,12 +435,26 @@ describe("custom-only host routing", () => {
     host.dispose()
   })
 
-  it("blocks login/logout/org/profile routing in source without calling dormant handlers", () => {
+  it("blocks login/logout/org/profile routing in source with no dormant host handlers", () => {
     const src = read("src/KiloProvider.ts")
     expect(src).toContain("Temporary custom-only boundary")
     expect(src).toContain('type: "deviceAuthFailed"')
     expect(src).toContain("CUSTOM_ONLY_AUTH_MESSAGE")
-    expect(src).toContain("_dormantAuthFlows")
+    expect(src).not.toContain("_dormantAuthFlows")
+    expect(src).not.toContain("dormantHandleLogin")
+    expect(src).not.toContain("dormantHandleLogout")
+    expect(src).not.toContain("dormantHandleSetOrganization")
+    expect(src).not.toContain("dormantHandleRefreshProfile")
+    expect(src).not.toContain("handlers/auth")
+    expect(src).not.toContain("authCtx")
+  })
+
+  it("keeps no VS Code-side OAuth helper export", () => {
+    const actions = read("src/provider-actions.ts")
+    expect(actions).not.toContain("authorizeProviderOAuth")
+    expect(actions).not.toContain("completeProviderOAuth")
+    expect(actions).toContain("fetchProviderData")
+    expect(actions).toContain("isProviderModelsAuthError")
   })
 })
 
@@ -749,7 +763,7 @@ describe("custom-only auth routing", () => {
     return { host, messages, send: async (msg: Record<string, unknown>) => { await handler?.(msg) } }
   }
 
-  it("login fails closed without incrementing attempts or calling dormant handlers", async () => {
+  it("login fails closed without incrementing attempts and with no host handler", async () => {
     const { host, messages, send } = makeWebviewHost(null)
     expect(host.loginAttempt).toBe(0)
     await send({ type: "login" })

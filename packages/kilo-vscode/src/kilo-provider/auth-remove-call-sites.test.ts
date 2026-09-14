@@ -4,17 +4,26 @@ import { join } from "path"
 
 // Structural lock for profile logout: the only production `client.auth.remove`
 // call lives in the private-first helper's exactly-one SDK fallback
-// (`kilo-provider/auth-remove-privatefirst.ts`). The logout handler
-// (`kilo-provider/handlers/auth.ts`) and `KiloProvider` must never call the
-// SDK directly, so a future edit cannot silently regress to SDK-first logout.
-// Behavioral proof lives in `tests/unit/kilo-provider-auth-handlers.test.ts`
-// (private success/terminal zero-SDK, unavailable/timeout exactly-one fallback)
-// and `src/kilo-provider/auth-remove-privatefirst.test.ts`; this file only
-// locks the call sites.
+// (`kilo-provider/auth-remove-privatefirst.ts`). The VS Code host holds no
+// logout trigger (`kilo-provider/handlers/auth.ts` is removed) and
+// `KiloProvider` must never call the SDK directly, so a future edit cannot
+// silently regress to SDK-first logout or reintroduce a host login flow.
+// Behavioral proof lives in `src/kilo-provider/auth-remove-privatefirst.test.ts`
+// and the `serve-private-auth-remove` contract tests; this file only locks
+// the call sites.
 const ROOT = join(import.meta.dir, "..", "..")
 
 async function src(rel: string): Promise<string> {
   return readFile(join(ROOT, rel), "utf8")
+}
+
+async function missing(rel: string): Promise<boolean> {
+  try {
+    await readFile(join(ROOT, rel), "utf8")
+    return false
+  } catch {
+    return true
+  }
 }
 
 function directAuthRemoveCalls(text: string): number {
@@ -22,9 +31,8 @@ function directAuthRemoveCalls(text: string): number {
 }
 
 describe("auth-remove logout call sites", () => {
-  test("logout handler and KiloProvider have zero direct SDK auth.remove calls", async () => {
-    const handler = await src("src/kilo-provider/handlers/auth.ts")
-    expect(directAuthRemoveCalls(handler)).toBe(0)
+  test("VS Code host has no logout handler and KiloProvider has zero direct SDK auth.remove calls", async () => {
+    expect(await missing("src/kilo-provider/handlers/auth.ts")).toBe(true)
     const provider = await src("src/KiloProvider.ts")
     expect(directAuthRemoveCalls(provider)).toBe(0)
   })
@@ -33,18 +41,20 @@ describe("auth-remove logout call sites", () => {
     const helper = await src("src/kilo-provider/auth-remove-privatefirst.ts")
     expect(helper).toContain("auth/remove")
     expect(helper).toContain("throwOnError")
-    expect(directAuthRemoveCalls(await src("src/kilo-provider/handlers/auth.ts"))).toBe(0)
     // The helper reaches the SDK through the generic client handle (never a
     // second hard-coded call site): exactly one fallback invocation path.
     expect(helper.match(/client\?\.auth\?\.remove/g)?.length ?? 0).toBeGreaterThan(0)
     expect(helper.match(/removeAuthPrivateFirst/g)?.length ?? 0).toBeGreaterThan(0)
   })
 
-  test("logout still routes through handleLogout with the private connection", async () => {
+  test("logout has no production host route and fails closed without SDK", async () => {
     const provider = await src("src/KiloProvider.ts")
-    expect(provider.match(/handleLogout\(this\.authCtx\)/g)?.length ?? 0).toBeGreaterThan(0)
-    expect(provider).toContain("connection: this.connectionService")
-    const handler = await src("src/kilo-provider/handlers/auth.ts")
-    expect(handler).toContain("removeAuthPrivateFirst")
+    expect(provider).not.toContain("handleLogout")
+    expect(provider).not.toContain("authCtx")
+    expect(provider).not.toContain("dormantHandleLogout")
+    expect(provider).not.toContain("_dormantAuthFlows")
+    expect(provider).toContain('case "logout"')
+    expect(provider).toContain("CUSTOM_ONLY_AUTH_MESSAGE")
+    expect(directAuthRemoveCalls(provider)).toBe(0)
   })
 })

@@ -18,8 +18,8 @@
 // - SDK: v2 kilo profile read with optional directory/workspace query issues
 //   `GET /kilo/profile`; v2 generated `KiloProfileResponses[200]` is the exact
 //   success shape mirrored here.
-// - Consumers: `KiloProvider.syncWebviewState` + sse-connected plus
-//   `kilo-provider/handlers/auth.ts` login/org-switch/refresh are private-first:
+// - Consumers: `KiloProvider.syncWebviewState` + sse-connected are private-first
+//   (VS Code-side login/org-switch/refresh triggers/helpers removed):
 //   validated success returns with zero SDK; validated terminal closes with
 //   zero SDK; fallback-eligible outcomes take exactly one same-directory SDK
 //   `client.kilo.profile` call.

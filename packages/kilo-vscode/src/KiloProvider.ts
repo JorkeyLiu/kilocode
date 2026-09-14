@@ -116,13 +116,6 @@ import {
   requestInstanceReload,
 } from "./kilo-provider/instance-reload"
 import {
-  handleLogin as dormantHandleLogin,
-  handleLogout as dormantHandleLogout,
-  handleSetOrganization as dormantHandleSetOrganization,
-  handleRefreshProfile as dormantHandleRefreshProfile,
-  type AuthContext,
-} from "./kilo-provider/handlers/auth"
-import {
   handlePermissionResponse,
   fetchAndSendPendingPermissions,
   type PermissionContext,
@@ -137,14 +130,11 @@ import { nativeTitle } from "./kilo-provider/native-tab-title"
 import { parseReview, reviewMetadata, type ReviewMessageData } from "./shared/review-comments"
 
 import {
-  buildActionContext,
   computeDefaultSelection,
   fetchProviderData,
   isProviderModelsAuthError,
   validateRecents,
   validateFavorites,
-  authorizeProviderOAuth as authorizeOAuthAction,
-  completeProviderOAuth as completeOAuthAction,
 } from "./provider-actions"
 import { AnacondaDesktopBridge } from "./anaconda-desktop/bridge"
 import { isUnsafeKey } from "./shared/agent-credentials"
@@ -307,17 +297,6 @@ function hasLegacyProviderKeys(raw: unknown): boolean {
   if (!isRecord(raw)) return false
   return Object.keys(raw).some((key) => LEGACY_PROVIDER_KEYS.has(key))
 }
-
-// Dormant auth flows are retained for a future restore but unreachable from
-// the webview while the custom-only boundary holds. Referenced here so the
-// implementation stays compiled without becoming product-reachable.
-const _dormantAuthFlows = [
-  dormantHandleLogin,
-  dormantHandleLogout,
-  dormantHandleSetOrganization,
-  dormantHandleRefreshProfile,
-] as const
-void _dormantAuthFlows
 
 /**
  * Sanitize a value tree for credential-bearing keys. Returns true only when
@@ -2046,9 +2025,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "requestSessionModelUsage":
           void this.fetchAndSendSessionModelUsage(message.sessionID, message.requestID)
           break
-        // Temporary custom-only boundary: sign-in/account flows are dormant.
-        // The handlers stay in the codebase for a future restore but are not
-        // reachable from the webview. Rejections use existing message shapes
+        // Temporary custom-only boundary: sign-in/account flows are removed
+        // from the VS Code host. Rejections use existing message shapes
         // without secrets.
         case "login": {
           this.postMessage({ type: "deviceAuthFailed", error: CUSTOM_ONLY_AUTH_MESSAGE })
@@ -3689,15 +3667,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (
       this.canonicalConfig &&
       (msg.type === "connectProvider" ||
-        msg.type === "authorizeProviderOAuth" ||
-        msg.type === "completeProviderOAuth" ||
         msg.type === "disconnectProvider" ||
         msg.type === "deleteCustomProvider" ||
         msg.type === "saveCustomProvider")
     ) {
       // P4.1: every canonical mutation crossing the untrusted runtime boundary
       // requires the canonical === true discriminator; false/missing rejects.
-      if (msg.type !== "authorizeProviderOAuth" && msg.type !== "completeProviderOAuth" && msg.canonical !== true) {
+      if (msg.canonical !== true) {
         const pid = typeof msg.providerID === "string" ? msg.providerID : ""
         const requestId = typeof msg.requestId === "string" ? msg.requestId : crypto.randomUUID()
         const action =
@@ -3739,28 +3715,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       })
       return
     }
-    if (!this.client) {
-      const action = msg.type === "authorizeProviderOAuth" ? "authorize" : "connect"
-      this.postMessage({
-        type: "providerActionError",
-        requestId: rid,
-        providerID: pid,
-        action,
-        message: "Not connected to CLI backend",
-      })
-      return
-    }
-    const ctx = buildActionContext(
-      this.client,
-      (m) => this.postMessage(m),
-      getErrorMessage,
-      this.getWorkspaceDirectory(),
-      () => this.fetchAndSendProviders(),
-    )
-    const method = typeof msg.method === "number" ? msg.method : 0
-    const code = typeof msg.code === "string" ? msg.code : undefined
-    if (msg.type === "authorizeProviderOAuth") return authorizeOAuthAction(ctx, rid, pid, method)
-    if (msg.type === "completeProviderOAuth") return completeOAuthAction(ctx, rid, pid, method, code)
   }
 
   /**
@@ -5741,19 +5695,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       getQuestionRevision: () => this.connectionService.getQuestionRevision(),
       pruneQuestionDirectories: (active: Set<string>, dirs: Set<string>) =>
         this.connectionService.pruneQuestionDirectories(active, dirs),
-    }
-  }
-
-  // Auth handlers extracted to kilo-provider/handlers/auth.ts
-
-  private get authCtx(): AuthContext {
-    return {
-      client: this.client,
-      postMessage: (msg) => this.postMessage(msg),
-      getWorkspaceDirectory: () => this.getWorkspaceDirectory(),
-      fetchAndSendProviders: () => this.fetchAndSendProviders(),
-      fetchAndSendAgents: () => this.fetchAndSendAgents(),
-      connection: this.connectionService,
     }
   }
 

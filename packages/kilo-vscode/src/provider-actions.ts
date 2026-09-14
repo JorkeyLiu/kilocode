@@ -7,7 +7,6 @@ import type { KiloConnectionService } from "./services/cli-backend/connection-se
 import { fetchKiloAuthStatusPrivateFirst } from "./kilo-provider/kilo-auth-status-privatefirst"
 import { fetchProviderAuthPrivateFirst } from "./kilo-provider/provider-auth-privatefirst"
 import { fetchProviderCatalogPrivateFirst } from "./kilo-provider/provider-catalog-privatefirst"
-import { validateProviderID as validateProviderIDShared } from "./shared/custom-provider"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
 
 /**
@@ -97,22 +96,6 @@ export async function fetchProviderData(
   return { response, authMethods, authStates }
 }
 
-export function buildActionContext(
-  client: KiloClient,
-  post: (msg: unknown) => void,
-  errFn: (err: unknown) => string,
-  dir: string,
-  refresh: () => Promise<void>,
-): ActionContext {
-  return {
-    client,
-    postMessage: post,
-    getErrorMessage: errFn,
-    workspaceDir: dir,
-    fetchAndSendProviders: refresh,
-  }
-}
-
 function isModelSelection(r: unknown): r is { providerID: string; modelID: string } {
   return (
     !!r &&
@@ -158,105 +141,6 @@ export function computeDefaultSelection(
   if (configured) return configured
   if (vscodePID && vscodeMID) return { providerID: vscodePID, modelID: vscodeMID }
   return { ...KILO_AUTO }
-}
-
-type PostMessage = (message: unknown) => void
-type GetErrorMessage = (error: unknown) => string
-
-interface ActionContext {
-  client: KiloClient
-  postMessage: PostMessage
-  getErrorMessage: GetErrorMessage
-  workspaceDir: string
-  fetchAndSendProviders: () => Promise<void>
-}
-
-function postError(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  action: "connect" | "authorize",
-  message: string,
-) {
-  ctx.postMessage({ type: "providerActionError", requestId, providerID, action, message })
-}
-
-function validateID(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  action: "connect" | "authorize",
-): string | null {
-  const result = validateProviderIDShared(providerID)
-  if ("value" in result) return result.value
-  postError(ctx, requestId, providerID, action, result.error)
-  return null
-}
-
-export async function authorizeProviderOAuth(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  method: number,
-) {
-  const id = validateID(ctx, requestId, providerID, "authorize")
-  if (!id) return
-  try {
-    const { data: authorization } = await ctx.client.provider.oauth.authorize(
-      { providerID: id, method, directory: ctx.workspaceDir },
-      { throwOnError: true },
-    )
-    if (!authorization) {
-      postError(ctx, requestId, providerID, "authorize", "Failed to start provider authorization")
-      return
-    }
-    ctx.postMessage({ type: "providerOAuthReady", requestId, providerID: id, authorization })
-  } catch (error) {
-    postError(
-      ctx,
-      requestId,
-      providerID,
-      "authorize",
-      ctx.getErrorMessage(error) || "Failed to start provider authorization",
-    )
-  }
-}
-
-export async function completeProviderOAuth(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  method: number,
-  code?: string,
-) {
-  const id = validateID(ctx, requestId, providerID, "connect")
-  if (!id) return
-  try {
-    await ctx.client.provider.oauth.callback(
-      { providerID: id, method, code, directory: ctx.workspaceDir },
-      { throwOnError: true },
-    )
-    // LOCK-001: backend OAuth callback coordinates drain/rebuild and emits
-    // global.disposed — the extension must NOT call global.dispose. The
-    // callback response IS the mutation acknowledgement, so emit the success
-    // message immediately and refresh without waiting for rebuild.
-    ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
-    try {
-      await ctx.fetchAndSendProviders()
-    } catch (error) {
-      // A refresh failure after a successful mutation must never be reported
-      // as a connect failure.
-      console.warn(`[Kilo New] provider ${id} connected but provider refresh failed:`, error)
-    }
-  } catch (error) {
-    postError(
-      ctx,
-      requestId,
-      providerID,
-      "connect",
-      ctx.getErrorMessage(error) || "Failed to complete provider authorization",
-    )
-  }
 }
 
 // ---------------------------------------------------------------------------
