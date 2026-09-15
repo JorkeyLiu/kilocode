@@ -4,10 +4,11 @@
  * Verifies the closed registry: known keys, unknown key rejection,
  * scope validation, composition operators, and cross-scope conflict.
  *
- * The exact closed set of 12 JSONC fields:
+ * The exact closed set of 14 JSONC fields:
  *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
- *   default_agent, provider, mcp, permission, instructions
+ *   default_agent, provider, mcp, permission, instructions,
+ *   terminal_command_display, auto_collapse_reasoning
  */
 
 import { describe, expect, it } from "bun:test"
@@ -79,7 +80,7 @@ describe("registry", () => {
   describe("getAllEntries", () => {
     it("returns all registry entries", () => {
       const entries = getAllEntries()
-      expect(entries.length).toBe(12)
+      expect(entries.length).toBe(14)
       // Check some representative entries exist
       const keys = entries.map((e) => e.key)
       expect(keys).toContain("model")
@@ -94,16 +95,16 @@ describe("registry", () => {
       const keys = keysForScope("global")
       expect(keys).toContain("model")
       expect(keys).toContain("instructions")
-      // All 12 fields are valid in both scopes
-      expect(keys.length).toBe(12)
+      // All 14 fields are valid in both scopes
+      expect(keys.length).toBe(14)
     })
 
     it("returns project-scope keys", () => {
       const keys = keysForScope("project")
       expect(keys).toContain("model")
       expect(keys).toContain("permission")
-      // All 12 fields are valid in both scopes
-      expect(keys.length).toBe(12)
+      // All 14 fields are valid in both scopes
+      expect(keys.length).toBe(14)
     })
   })
 
@@ -154,8 +155,10 @@ describe("registry", () => {
       const keys = snapshotKeys()
       expect(keys).toContain("model")
       expect(keys).toContain("permission")
-      // The 11 snapshot fields appear; the $schema meta-key is excluded
-      expect(keys.length).toBe(11)
+      expect(keys).toContain("terminal_command_display")
+      expect(keys).toContain("auto_collapse_reasoning")
+      // The 13 snapshot fields appear; the $schema meta-key is excluded
+      expect(keys.length).toBe(13)
       expect(keys).not.toContain("$schema")
     })
   })

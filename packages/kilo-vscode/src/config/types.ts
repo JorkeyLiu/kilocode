@@ -302,6 +302,8 @@ export type CanonicalConfigPayload = Partial<{
   mcp: { readonly [name: string]: CanonicalMcpPayload }
   permission: { readonly [key: string]: CanonicalConfigValue }
   instructions: string | readonly string[]
+  terminal_command_display: "expanded" | "collapsed"
+  auto_collapse_reasoning: boolean
 }>
 
 /** Provider metadata persisted in canonical JSONC. Credential is extension-host-only (never sent to webview). */
@@ -432,7 +434,7 @@ function isCanonicalMcpPayload(v: unknown): v is CanonicalMcpPayload {
   return isValidCanonicalMcpEntry(v)
 }
 
-const CANONICAL_KEYS = new Set(["model", "model_variant", "model_variant_overrides", "subagent_model", "subagent_variant", "subagent_variant_overrides", "default_agent", "provider", "mcp", "permission", "instructions"])
+const CANONICAL_KEYS = new Set(["model", "model_variant", "model_variant_overrides", "subagent_model", "subagent_variant", "subagent_variant_overrides", "default_agent", "provider", "mcp", "permission", "instructions", "terminal_command_display", "auto_collapse_reasoning"])
 
 /**
  * Validate and narrow a plain object into a CanonicalConfigPayload.
@@ -465,6 +467,8 @@ function canonicalField(key: string, value: unknown): CanonicalConfigPayload | u
     ["mcp", (item) => isMcpMap(item) ? { mcp: item } : undefined],
     ["permission", (item) => isConfigValueMap(item) ? { permission: item } : undefined],
     ["instructions", (item) => typeof item === "string" || isStringArray(item) ? { instructions: item } : undefined],
+    ["terminal_command_display", (item) => item === "expanded" || item === "collapsed" ? { terminal_command_display: item } : undefined],
+    ["auto_collapse_reasoning", (item) => typeof item === "boolean" ? { auto_collapse_reasoning: item } : undefined],
   ])
   return scalar.get(key)?.(value)
 }

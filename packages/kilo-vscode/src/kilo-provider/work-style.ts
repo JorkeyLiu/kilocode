@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import { getInitialWorkStyle, type WorkStyleState } from "../shared/work-style-presets"
-import { handleWorkStyleApplyMessage } from "./work-style-apply-handler"
+import { handleWorkStyleApplyMessage, type WorkStyleCanonicalWriter } from "./work-style-apply-handler"
 import { hasAnySession } from "./session-existence-privatefirst"
 
 export const WORK_STYLE_SETTING_KEYS = ["showTaskTimeline"] as const
@@ -50,6 +50,7 @@ export async function handleWorkStyleMessage(input: {
   message: { type?: string; style?: WorkStyleState }
   connection: KiloConnectionService
   directory: string
+  canonical?: WorkStyleCanonicalWriter | null
   post: (message: unknown) => void
 }): Promise<boolean> {
   if (input.message.type === "requestWorkStyle") {
@@ -63,7 +64,7 @@ export async function handleWorkStyleMessage(input: {
     input.post(initialized ? payload : { ...payload, style: "skipped" })
     return true
   }
-  if (await handleWorkStyleApplyMessage(input)) return true
+  if (await handleWorkStyleApplyMessage({ ...input, canonical: input.canonical })) return true
   if (input.message.type !== "setWorkStyle") return false
   if (!input.message.style) {
     console.error("[Kilo New] Missing style in setWorkStyle message")

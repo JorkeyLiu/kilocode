@@ -39,12 +39,14 @@ describe("config-ui-defaults call-site guard", () => {
     }
   })
 
-  it("work-style apply reads through the helper and keeps the global.config.update owner", () => {
+  it("work-style apply reads through the helper and writes through the canonical service", () => {
     const handler = fs.readFileSync(path.join(__dirname, "work-style-apply-handler.ts"), "utf8")
     expect(handler).toContain("fetchConfigUiDefaultsPrivateFirst")
     expect(handler).toContain("toWorkStyleConfig")
     expect(handler).toContain("requireUiDefaults")
-    expect(handler).toContain("client.global.config.update")
+    expect(handler).toContain("writeConfigScopes")
+    expect(handler).not.toContain("client.global.config.update")
+    expect(handler).not.toContain("global.config.update({")
     expect(handler.match(/\.config\.get\(/g) ?? []).toEqual([])
   })
 

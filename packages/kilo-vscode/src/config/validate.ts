@@ -64,6 +64,12 @@ const permissionSchema = z.record(z.unknown())
 /** $schema: benign meta-key injected by CLI tooling; any non-empty string */
 const schemaMetaSchema = z.string().min(1, "$schema must not be empty")
 
+/** terminal_command_display: VS Code chat presentation for terminal blocks */
+const terminalCommandDisplaySchema = z.enum(["expanded", "collapsed"])
+
+/** auto_collapse_reasoning: VS Code chat reasoning auto-collapse */
+const autoCollapseReasoningSchema = z.boolean()
+
 // ── Field schema map ─────────────────────────────────────────────────
 
 const fieldSchemas: Record<CanonicalField, z.ZodTypeAny> = {
@@ -79,6 +85,8 @@ const fieldSchemas: Record<CanonicalField, z.ZodTypeAny> = {
   mcp: mcpConfigSchema,
   permission: permissionSchema,
   instructions: instructionsSchema,
+  terminal_command_display: terminalCommandDisplaySchema,
+  auto_collapse_reasoning: autoCollapseReasoningSchema,
 }
 
 // ── Markdown asset frontmatter schemas ───────────────────────────────

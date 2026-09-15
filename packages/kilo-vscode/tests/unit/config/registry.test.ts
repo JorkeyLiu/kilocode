@@ -2,7 +2,7 @@
  * P4.1 Config Foundation — Registry tests.
  *
  * Covers audit triggers:
- * - Closed field set enforcement (exact 12 JSONC fields incl. the $schema meta-key)
+ * - Closed field set enforcement (exact 14 JSONC fields incl. the $schema meta-key)
  * - Rejected fields (server, console, share, enterprise, tools, etc.)
  * - Agent/command as asset-only (never JSONC records)
  * - Credential reference handling (secret-ref entries)
@@ -24,9 +24,9 @@ import {
 } from "../../../src/config/registry"
 
 describe("closed JSONC field set", () => {
-  it("contains exactly 12 fields", () => {
+  it("contains exactly 14 fields", () => {
     const entries = getAllEntries()
-    expect(entries.length).toBe(12)
+    expect(entries.length).toBe(14)
   })
 
   it("matches the CLOSED_JSONC_FIELDS constant", () => {
@@ -56,6 +56,8 @@ describe("closed JSONC field set", () => {
       "mcp",
       "permission",
       "instructions",
+      "terminal_command_display",
+      "auto_collapse_reasoning",
     ])
   })
 })
@@ -66,8 +68,8 @@ describe("rejected fields are absent from registry", () => {
     "tools", "disabled_providers", "enabled_providers",
     "compaction", "indexing", "autocomplete",
     "mode", "shell", "logLevel", "username", "snapshot",
-    "autoupdate", "remote_control", "auto_collapse_reasoning",
-    "terminal_command_display", "code_edit_display", "hide_prompt_training_models",
+    "autoupdate", "remote_control",
+    "code_edit_display", "hide_prompt_training_models",
     "watcher", "reference", "skills", "formatter", "lsp",
     "sandbox", "attachment", "tool_output", "experimental",
     "protected_files", "small_model",
@@ -142,12 +144,12 @@ describe("policy fields", () => {
 describe("scope validation", () => {
   it("all fields valid in global scope", () => {
     const globalKeys = keysForScope("global")
-    expect(globalKeys.length).toBe(12)
+    expect(globalKeys.length).toBe(14)
   })
 
   it("all fields valid in project scope", () => {
     const projectKeys = keysForScope("project")
-    expect(projectKeys.length).toBe(12)
+    expect(projectKeys.length).toBe(14)
   })
 })
 
@@ -155,11 +157,13 @@ describe("composition operators", () => {
   it("single fields", () => {
     const singles = keysByComposition("single")
     expect(singles.map((e) => e.key).sort()).toEqual([
+      "auto_collapse_reasoning",
       "default_agent",
       "model",
       "model_variant",
       "subagent_model",
       "subagent_variant",
+      "terminal_command_display",
     ])
   })
 
@@ -203,7 +207,7 @@ describe("secret-ref keys", () => {
 
 describe("snapshot keys", () => {
   const snapshots = snapshotKeys()
-  expect(snapshots.length).toBe(11)
+  expect(snapshots.length).toBe(13)
   // The $schema meta-key never appears in snapshots
   expect(snapshots).not.toContain("$schema")
 })

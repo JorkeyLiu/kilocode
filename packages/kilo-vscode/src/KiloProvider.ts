@@ -1906,6 +1906,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           message,
           connection: this.connectionService,
           directory: this.getWorkspaceDirectory(this.currentSession?.id),
+          canonical: this.canonicalConfig,
           post: (msg) => this.postMessage(msg),
         })
       )

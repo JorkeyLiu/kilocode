@@ -17,7 +17,8 @@
  * The exact closed set of JSONC field classes:
  *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
- *   default_agent, provider, mcp, permission, instructions
+ *   default_agent, provider, mcp, permission, instructions,
+ *   terminal_command_display, auto_collapse_reasoning
  *
  * `$schema` is a benign meta-key injected into kilo.jsonc by the CLI backend;
  * it is valid in both scopes but never composed — it is excluded from the
@@ -195,6 +196,30 @@ const entries: RegistryEntry[] = [
     provenance: "file",
     removal: "remove",
   },
+  {
+    key: "terminal_command_display",
+    description: "VS Code chat terminal command block presentation (work-style preset owned)",
+    scopes: ["global", "project"],
+    persistence: "jsonc",
+    owner: "extension",
+    composition: "single",
+    secret: "none",
+    snapshot: true,
+    provenance: "file",
+    removal: "remove",
+  },
+  {
+    key: "auto_collapse_reasoning",
+    description: "VS Code chat reasoning auto-collapse (work-style preset owned)",
+    scopes: ["global", "project"],
+    persistence: "jsonc",
+    owner: "extension",
+    composition: "single",
+    secret: "none",
+    snapshot: true,
+    provenance: "file",
+    removal: "remove",
+  },
 ]
 
 // ── Registry API ─────────────────────────────────────────────────────
@@ -275,7 +300,7 @@ export function validateRegistryKeys(
 
 // ── Closed set constant (for external verification) ──────────────────
 
-/** The exact 12 accepted JSONC top-level field names. */
+/** The exact 14 accepted JSONC top-level field names. */
 export const CLOSED_JSONC_FIELDS = [
   "$schema",
   "model",
@@ -289,6 +314,8 @@ export const CLOSED_JSONC_FIELDS = [
   "mcp",
   "permission",
   "instructions",
+  "terminal_command_display",
+  "auto_collapse_reasoning",
 ] as const
 
 // ── Canonical field type ─────────────────────────────────────────────
