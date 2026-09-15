@@ -69,6 +69,7 @@ export const FD_CAPABILITIES = [
   "session/viewed",
   "sandbox/set",
   "sandbox/status",
+  "sandbox/support",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",

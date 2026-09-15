@@ -235,6 +235,13 @@ import {
   fallbackSandboxStatusIds,
   statusSandboxPrivate,
 } from "@/kilocode/sandbox-status-private"
+import {
+  INTERNAL_MESSAGE as SANDBOX_SUPPORT_INTERNAL_MESSAGE,
+  OP as SANDBOX_SUPPORT_OP,
+  VERSION as SANDBOX_SUPPORT_VERSION,
+  fallbackSandboxSupportIds,
+  supportSandboxPrivate,
+} from "@/kilocode/sandbox-support-private"
 
 export interface FdCarrierHandle {
   peer: Peer
@@ -5790,6 +5797,55 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: SANDBOX_STATUS_INTERNAL_MESSAGE, retryable: true },
+                }),
+              ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === SANDBOX_SUPPORT_OP || method === "sandbox/support") {
+        // Sessionless directory-scoped `sandbox/support`: same
+        // `SandboxPolicy.configuredSupport` owner as `GET /sandbox/support`
+        // (same effective config projection, exact `{available,reason?}`
+        // shape). Routing follows the existing drain-control + `InstanceRef`
+        // lane via canonical directory. No session existence, SandboxStore,
+        // preference, status version/event, second layer/store,
+        // persistence/journal, or new fence. Request identity is `requestId`
+        // only. `available:false` is succeeded domain data. Internal/defect
+        // stays retryable (fallback-eligible), never synthesized terminal.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* supportSandboxPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: SANDBOX_SUPPORT_VERSION,
+                  requestId: fallbackSandboxSupportIds(params).requestId,
+                  op: SANDBOX_SUPPORT_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SANDBOX_SUPPORT_INTERNAL_MESSAGE, retryable: true },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SANDBOX_SUPPORT_INTERNAL_MESSAGE, retryable: true },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: SANDBOX_SUPPORT_VERSION,
+                  requestId: fallbackSandboxSupportIds(params).requestId,
+                  op: SANDBOX_SUPPORT_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SANDBOX_SUPPORT_INTERNAL_MESSAGE, retryable: true },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SANDBOX_SUPPORT_INTERNAL_MESSAGE, retryable: true },
                 }),
               ),
             )

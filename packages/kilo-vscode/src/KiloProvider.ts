@@ -73,6 +73,7 @@ import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-fil
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
 import { setSandboxPrivateFirst } from "./kilo-provider/sandbox-set-privatefirst"
 import { fetchSandboxStatusPrivateFirst } from "./kilo-provider/sandbox-status-privatefirst"
+import { fetchSandboxSupportPrivateFirst } from "./kilo-provider/sandbox-support-privatefirst"
 import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
 import { revertSessionPrivateFirst, unrevertSessionPrivateFirst } from "./kilo-provider/session-revert"
 import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
@@ -4739,18 +4740,28 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const sandbox = sandboxClient(client)
     if (!client || !sandbox || this.connectionState !== "connected") return
     try {
-      const [desired, result] = await Promise.all([
+      const [desired, support] = await Promise.all([
         sandboxDefault(this.connectionService.sandboxPreference, client, directory, this.connectionService),
-        sandbox.support({ directory }, { throwOnError: true }),
+        (async () => {
+          const out = await fetchSandboxSupportPrivateFirst({
+            connection: this.connectionService as never,
+            client: client as never,
+            directory,
+          })
+          if (out.kind === "ok") return out.support
+          if (out.kind === "terminal") throw new Error(out.code ?? "Failed to load sandbox default")
+          if (out.cause instanceof Error) throw out.cause
+          throw new Error("Failed to load sandbox default")
+        })(),
       ])
       if (this.connectionState !== "connected" || this.connectionGeneration !== generation || this.client !== client)
         return
       this.postMessage({
         type: "sandboxDefaultStatus",
         desired,
-        enabled: desired && result.data.available,
-        available: result.data.available,
-        reason: result.data.reason,
+        enabled: desired && support.available,
+        available: support.available,
+        reason: support.reason,
         revision,
         requestID,
       })
@@ -4782,8 +4793,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     try {
       await this.connectionService.sandboxPreference.set(enabled, async () => {
-        const { data } = await sandbox.support({ directory }, { throwOnError: true })
-        if (!data.available) throw new Error(data.reason ?? "Sandbox backend is unavailable")
+        const out = await fetchSandboxSupportPrivateFirst({
+          connection: this.connectionService as never,
+          client: client as never,
+          directory,
+        })
+        if (out.kind === "ok") {
+          if (!out.support.available) throw new Error(out.support.reason ?? "Sandbox backend is unavailable")
+          return
+        }
+        if (out.kind === "terminal") throw new Error(out.code ?? "Sandbox backend is unavailable")
+        if (out.cause instanceof Error) throw out.cause
+        throw new Error("Sandbox backend is unavailable")
       })
       await this.fetchAndSendSandboxDefault(directory, requestID)
       vscode.window.showInformationMessage(

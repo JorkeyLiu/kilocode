@@ -25,7 +25,9 @@ describe("sandbox-status call sites", () => {
     expect(provider).toContain("postSandboxError(sessionID")
     // Failed sandbox set still converges on authoritative status.
     expect(provider).toContain("void this.fetchAndSendSandboxStatus(resolved.sid)")
-    // Unmigrated surfaces stay on direct SDK reads.
-    expect(provider).toContain("sandbox.support({ directory }")
+    // Sandbox support reads are private-first via their own helper; no direct
+    // production `sandbox.support` call remains in the provider.
+    expect(provider).toContain("fetchSandboxSupportPrivateFirst")
+    expect(provider).not.toContain("sandbox.support({ directory }")
   })
 })
