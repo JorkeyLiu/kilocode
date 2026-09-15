@@ -1033,6 +1033,77 @@ export const PermissionDockApplyPatch: Story = {
 }
 
 // ---------------------------------------------------------------------------
+// 12c. Permission dock — provenance explanation (redacted, deterministic)
+// ---------------------------------------------------------------------------
+
+const provenancePermission: PermissionRequest = {
+  id: "perm-provenance-001",
+  sessionID: SESSION_ID,
+  toolName: "edit",
+  patterns: ["src/components/App.tsx"],
+  always: ["*"],
+  args: {
+    provenance: {
+      schemaVersion: "1",
+      request: {
+        permissionRequestId: "per_story_001",
+        operationId: "permission:per_story_001",
+        permission: "edit",
+        patterns: ["example:src/components/App.tsx"],
+      },
+      contributingLayers: [
+        {
+          sourceKind: "runtime-safety",
+          canonicalPath: "runtime:ceiling",
+          decision: "ask-ceiling",
+          rules: [{ pattern: "example:config-scope", action: "ask", order: 0 }],
+        },
+        {
+          sourceKind: "project-file",
+          canonicalPath: "example:project-config",
+          decision: "ask",
+          rules: [],
+        },
+        {
+          sourceKind: "agent-manifest",
+          canonicalPath: "example:agent",
+          decision: "allow",
+          rules: [{ pattern: "example:allow-scope", action: "allow", order: 0 }],
+        },
+        {
+          sourceKind: "protected-file",
+          canonicalPath: "example:protected-scope",
+          decision: "ask",
+          rules: [],
+        },
+      ],
+      decisive: { result: "ask-ceiling", reason: "ceiling-b", ceilingId: "(b)" },
+    },
+  },
+  tool: { messageID: ASST_MSG_ID, callID: "call-provenance-001" },
+}
+
+export const PermissionDockProvenance: Story = {
+  name: "Permission Dock — provenance explanation",
+  render: () => {
+    const perms = [provenancePermission]
+    const session = {
+      ...mockSessionValue({ id: SESSION_ID, status: "busy", permissions: perms }),
+      messages: () => [{ id: "msg-001" }] as any[],
+    }
+    return (
+      <StoryProviders permissions={perms} sessionID={SESSION_ID} status="busy" noPadding>
+        <SessionContext.Provider value={session as any}>
+          <div style={{ width: "100%", height: "420px", display: "flex", "flex-direction": "column" }}>
+            <ChatView />
+          </div>
+        </SessionContext.Provider>
+      </StoryProviders>
+    )
+  },
+}
+
+// ---------------------------------------------------------------------------
 // 13. Permission dock — websearch tool
 // ---------------------------------------------------------------------------
 

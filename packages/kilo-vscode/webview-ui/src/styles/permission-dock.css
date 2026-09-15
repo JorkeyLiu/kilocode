@@ -260,12 +260,14 @@
     }
   }
 
-  [data-slot="permission-rules-section"] {
+  [data-slot="permission-rules-section"],
+  [data-slot="permission-provenance-section"] {
     display: flex;
     flex-direction: column;
   }
 
-  [data-slot="permission-rules-header"] {
+  [data-slot="permission-rules-header"],
+  [data-slot="permission-provenance-header"] {
     all: unset;
     display: flex;
     align-items: center;
@@ -282,13 +284,15 @@
     }
   }
 
-  [data-slot="permission-rules-header-title"] {
+  [data-slot="permission-rules-header-title"],
+  [data-slot="permission-provenance-header-title"] {
     font-size: var(--kilo-font-size-12);
     font-weight: 500;
     line-height: 1.4;
   }
 
-  [data-slot="permission-rules-header-chevron"] {
+  [data-slot="permission-rules-header-chevron"],
+  [data-slot="permission-provenance-header-chevron"] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -300,7 +304,8 @@
     }
   }
 
-  [data-slot="permission-rules-collapse"] {
+  [data-slot="permission-rules-collapse"],
+  [data-slot="permission-provenance-collapse"] {
     display: grid;
     grid-template-rows: 0fr;
     transition:
@@ -314,9 +319,41 @@
     }
   }
 
-  [data-slot="permission-rules-collapse-inner"] {
+  [data-slot="permission-rules-collapse-inner"],
+  [data-slot="permission-provenance-collapse-inner"] {
     min-height: 0;
     overflow: hidden;
+  }
+
+  [data-slot="permission-provenance-reason"],
+  [data-slot="permission-provenance-layers-title"],
+  [data-slot="permission-provenance-ceiling"] {
+    font-size: var(--kilo-font-size-12);
+    color: var(--text-weak, var(--vscode-descriptionForeground));
+    padding: 2px 8px;
+  }
+
+  [data-slot="permission-provenance-layers"] {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 2px 0 2px 8px;
+  }
+
+  [data-slot="permission-provenance-layer"] {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: var(--kilo-font-size-12);
+  }
+
+  [data-slot="permission-provenance-layer-source"] {
+    color: var(--text-base, var(--vscode-foreground));
+    font-weight: 500;
+  }
+
+  [data-slot="permission-provenance-layer-decision"] {
+    color: var(--text-weak, var(--vscode-descriptionForeground));
   }
 
   [data-slot="permission-rule-row"] {

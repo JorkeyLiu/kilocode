@@ -45,6 +45,12 @@ export interface PermissionRequest {
     description?: string
     /** Backend-computed canonical protected paths persisted for an "always" approval (LOCK-002/003). */
     protectedPaths?: string[]
+    /**
+     * Evaluator provenance for pending requests (schemaVersion "1").
+     * Read only through the redacted `permission-provenance` projector;
+     * never rendered raw (canonicalPath/patterns/scope/identities stay hidden).
+     */
+    provenance?: unknown
   }
   message?: string
   tool?: { messageID: string; callID: string }

@@ -83,6 +83,10 @@ this note; when they disagree, the code is right.
   global/project/agent/session-restriction layers, deny wins first,
   ask/ceiling next, and allow holds only when every applicable layer allows.
   The old last-match helper is not on this path.
+- Pending permission provenance flows through live/recovery metadata and is
+  projected in PermissionDock with closed enum labels only (raw
+  paths/rules/IDs omitted); answered provenance stays runtime-internal and
+  unavailable, with no new wire or persistence.
 - The extension restrictive `{global,project}` product from
   `packages/kilo-vscode/src/config/compose.ts` feeds only extension
   materialization/webview projection today, not CLI evaluator input; the CLI

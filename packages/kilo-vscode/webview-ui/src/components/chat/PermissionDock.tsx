@@ -26,6 +26,13 @@ import {
   savedRuleStates,
   type RuleDecision,
 } from "./permission-dock-utils"
+import {
+  CEILING_KEYS,
+  DECISION_LABEL_KEYS,
+  REASON_KEYS,
+  SOURCE_LABEL_KEYS,
+  projectProvenance,
+} from "./permission-provenance"
 import { PermissionCommand } from "./PermissionCommand"
 import { PermissionDiff } from "./PermissionDiff"
 import { permissionDiffs } from "./permission-diff-utils"
@@ -96,6 +103,10 @@ export const PermissionDock: Component<{
   const loadState = savedRuleStates(rules(), saved)
   const [decisions, setDecisions] = createSignal<Record<number, RuleDecision>>(loadState)
   const [expanded, setExpanded] = createSignal(rulesExpandedPreference)
+  // Provenance explanation stays collapsed by default and is never persisted;
+  // it only renders the redacted projector output (safe labels, no raw paths).
+  const [whyOpen, setWhyOpen] = createSignal(false)
+  const provenance = () => projectProvenance(props.request.args)
 
   let root!: HTMLDivElement
 
@@ -349,6 +360,58 @@ export const PermissionDock: Component<{
           <div data-slot="permission-diffs" data-count={diffs().length}>
             <For each={diffs()}>{(diff) => <PermissionDiff filediff={diff} />}</For>
           </div>
+        </Show>
+
+        <Show when={provenance()}>
+          {(info) => (
+            <div data-slot="permission-provenance-section">
+              <button
+                type="button"
+                data-slot="permission-provenance-header"
+                data-open={whyOpen() ? "" : undefined}
+                onClick={() => setWhyOpen(!whyOpen())}
+                aria-expanded={whyOpen()}
+              >
+                <span data-slot="permission-provenance-header-chevron" data-open={whyOpen() ? "" : undefined}>
+                  <Icon name="chevron-down" size="small" />
+                </span>
+                <span data-slot="permission-provenance-header-title">
+                  {language.t("ui.permission.provenance.why")}
+                </span>
+              </button>
+
+              <div
+                data-slot="permission-provenance-collapse"
+                data-open={whyOpen() ? "" : undefined}
+                aria-hidden={!whyOpen()}>
+                <div data-slot="permission-provenance-collapse-inner">
+                  <div data-slot="permission-provenance-reason">{language.t(REASON_KEYS[info().result])}</div>
+                  <div data-slot="permission-provenance-layers-title">
+                    {language.t("ui.permission.provenance.layers")}
+                  </div>
+                  <div data-slot="permission-provenance-layers">
+                    <For each={info().layers}>
+                      {(layer) => (
+                        <div data-slot="permission-provenance-layer">
+                          <span data-slot="permission-provenance-layer-source">
+                            {language.t(SOURCE_LABEL_KEYS[layer.source])}
+                          </span>
+                          <span data-slot="permission-provenance-layer-decision">
+                            {language.t(DECISION_LABEL_KEYS[layer.decision])}
+                          </span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                  <Show when={info().ceiling}>
+                    {(top) => (
+                      <div data-slot="permission-provenance-ceiling">{language.t(CEILING_KEYS[top()])}</div>
+                    )}
+                  </Show>
+                </div>
+              </div>
+            </div>
+          )}
         </Show>
 
         <div data-slot="permission-actions">
