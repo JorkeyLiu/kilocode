@@ -2,14 +2,14 @@
  * Agent Manager terminal manager.
  *
  * Maps Agent Manager terminal IDs to backend PTY IDs (from `kilo serve`).
- * Creation funnels through the v2 SDK (`client.pty.create`); resize, close,
- * and bulk dispose are private-first (`pty/update` + `pty/remove` fd carrier
- * via `pty-privatefirst.ts`, same per-directory `Pty.Service` owner as HTTP,
+ * Creation, resize, close, and bulk dispose are private-first
+ * (`pty/create` + `pty/update` + `pty/remove` fd carrier via
+ * `pty-privatefirst.ts`, same per-directory `Pty.Service` owner as HTTP,
  * with exactly-one same-tuple SDK fallback). The backend runs a real shell
  * via `@lydell/node-pty` and streams the output over the `/pty/:id/connect`
  * WebSocket — the webview connects directly to that URL so raw bytes do
- * not travel through postMessage. Creation and `buildWsUrl` (connect
- * URL/auth/bytes) remain SDK/WS unchanged.
+ * not travel through postMessage. Only `buildWsUrl` (connect URL/auth/bytes)
+ * remains SDK/WS unchanged.
  *
  * This module is vscode-free on purpose: it only talks to the SDK and
  * whatever log / post / WS-URL helpers its caller provides. That keeps the
@@ -18,6 +18,7 @@
 
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import {
+  createPtyPrivateFirst,
   removePtyPrivateFirst,
   updatePtyPrivateFirst,
   type PtyPrivateConnection,
@@ -38,7 +39,7 @@ export interface TerminalManagerDeps {
   buildWsUrl(ptyID: string, cwd: string): string
   /** Short logger, routed to the Agent Manager output channel. */
   log(...args: unknown[]): void
-  /** Private fd-carrier connection for `pty/update` + `pty/remove`. Absent means SDK-only fallback. */
+  /** Private fd-carrier connection for `pty/create` + `pty/update` + `pty/remove`. Absent means SDK-only fallback. */
   getPrivateConnection?(): PtyPrivateConnection | null | undefined
 }
 
@@ -77,30 +78,34 @@ export class TerminalManager {
    * Returns the attach info the webview needs: our synthetic terminal ID,
    * the title, and the signed WebSocket URL pointing at the PTY's connect
    * endpoint. The slotId is round-tripped so the webview can route the tab
-   * back into the correct Agent Manager context.
+   * back into the correct Agent Manager context. Private-first: one private
+   * `pty/create` attempt plus at most one same-tuple SDK `pty.create`
+   * fallback, never retried.
    */
   async create(params: {
     slotId: string | null
     cwd: string
     title: string
   }): Promise<{ terminalId: string; slotId: string | null; title: string; wsUrl: string }> {
-    const client = this.deps.getClient()
-    const { data, error } = await client.pty.create({
+    const out = await createPtyPrivateFirst({
+      connection: this.conn(),
+      getClient: () => this.deps.getClient() as unknown as PtySdkClient,
       directory: params.cwd,
       cwd: params.cwd,
       title: params.title,
     })
-    if (error || !data) {
-      const err = error instanceof Error ? error.message : String(error ?? "unknown error")
+    if (out.kind === "terminal") throw new Error(`Failed to create PTY: code=${out.code}`)
+    if (out.kind === "sdkError") {
+      const err = out.error instanceof Error ? out.error.message : String(out.error ?? "unknown error")
       throw new Error(`Failed to create PTY: ${err}`)
     }
     const terminalId = makeTerminalId()
     const entry: Entry = {
       terminalId,
-      ptyID: data.id,
+      ptyID: out.id,
       slotId: params.slotId,
       cwd: params.cwd,
-      title: data.title ?? params.title,
+      title: out.title || params.title,
     }
     this.entries.set(terminalId, entry)
     const wsUrl = this.deps.buildWsUrl(entry.ptyID, entry.cwd)

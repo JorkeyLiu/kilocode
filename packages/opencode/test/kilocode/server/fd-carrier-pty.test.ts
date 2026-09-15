@@ -12,11 +12,14 @@ import { Server } from "../../../src/server/server"
 import { PtyPaths } from "../../../src/server/routes/instance/httpapi/groups/pty"
 import { withTimeout } from "../../../src/util/timeout"
 import {
+  canonicalPtyCreateOpId,
   canonicalPtyRemoveOpId,
   canonicalPtyUpdateOpId,
+  validatePtyCreateRequest,
+  validatePtyCreateResult,
   validatePtyRemoveRequest,
-  validatePtyUpdateRequest,
   validatePtyRemoveResult,
+  validatePtyUpdateRequest,
   validatePtyUpdateResult,
 } from "../../../src/kilocode/pty-private"
 import { tmpdir, disposeAllInstances } from "../../fixture/fixture"
@@ -123,6 +126,24 @@ function linked() {
 }
 
 const FAKE_PTY = "pty_00000000000000000000000000"
+
+function createReq(
+  dir: string,
+  token = "tok1",
+  requestId = "req-mk-1",
+  payload: Record<string, unknown> = { cwd: dir, title: "pty-fd-create" },
+): Record<string, unknown> {
+  const opId = canonicalPtyCreateOpId(token)
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "pty/create",
+    idempotencyKey: opId,
+    context: { directory: dir },
+    payload,
+  }
+}
 
 function updateReq(
   dir: string,
@@ -237,8 +258,7 @@ const originalAuth = {
   envUsername: process.env.KILO_SERVER_USERNAME,
 }
 
-describe("fd-carrier pty/update + pty/remove (Agent Manager PTY)", () => {
-  afterEach(async () => {
+describe("fd-carrier pty/update + pty/remove (Agent Manager PTY)", () => {  afterEach(async () => {
     Flag.KILO_SERVER_PASSWORD = originalAuth.password
     Flag.KILO_SERVER_USERNAME = originalAuth.username
     if (originalAuth.envPassword === undefined) delete process.env.KILO_SERVER_PASSWORD
@@ -254,6 +274,7 @@ describe("fd-carrier pty/update + pty/remove (Agent Manager PTY)", () => {
     try {
       const res = await init(ext)
       const caps = capsOf(res)
+      expect(caps.includes("pty/create")).toBeTrue()
       expect(caps.includes("pty/update")).toBeTrue()
       expect(caps.includes("pty/remove")).toBeTrue()
     } finally {
@@ -421,6 +442,121 @@ describe("fd-carrier pty/update + pty/remove (Agent Manager PTY)", () => {
     }
     expect(validatePtyRemoveResult(okRem, rem).status).toBe("succeeded")
   })
+
+  test("pty create strict identity: opId must equal idempotencyKey with pty-create token", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const dir = tmp.path
+    await loadInstance(dir)
+    const { carrier, ext } = linked()
+    try {
+      await init(ext)
+      const base = createReq(dir, "tok-strict", "req-strict")
+      const bad = { ...base, idempotencyKey: canonicalPtyCreateOpId("other") }
+      const raw = await ext.request("pty/create", bad)
+      const res = asPtyResult(raw, "pty/create")
+      expect(res.status).toBe("failed")
+      expect(codeOf(res)).toBe("validation.failed")
+      expect(res.failure?.retryable).toBe(false)
+      expect(res.requestId).toBe("req-strict")
+    } finally {
+      carrier.dispose()
+      ext.dispose()
+    }
+  })
+
+  test("pty create malformed payload and extra fields fail closed", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const dir = tmp.path
+    await loadInstance(dir)
+    const { carrier, ext } = linked()
+    try {
+      await init(ext)
+      const emptyTitle = createReq(dir, "tok-bad", "req-bad", { cwd: dir, title: "" })
+      const res1 = asPtyResult(await ext.request("pty/create", emptyTitle), "pty/create")
+      expect(res1.status).toBe("failed")
+      expect(codeOf(res1)).toBe("validation.failed")
+      const extra = createReq(dir, "tok-extra", "req-extra", { cwd: dir, title: "t", size: { rows: 1, cols: 1 } })
+      const res2 = asPtyResult(await ext.request("pty/create", extra), "pty/create")
+      expect(res2.status).toBe("failed")
+      expect(codeOf(res2)).toBe("validation.failed")
+      const withPty = {
+        ...createReq(dir, "tok-ctx", "req-ctx"),
+        context: { directory: dir, ptyID: FAKE_PTY },
+      }
+      const res3 = asPtyResult(await ext.request("pty/create", withPty), "pty/create")
+      expect(res3.status).toBe("failed")
+      expect(codeOf(res3)).toBe("validation.failed")
+    } finally {
+      carrier.dispose()
+      ext.dispose()
+    }
+  })
+
+  test("pty create contract validates and echoes id/title", () => {
+    const dir = "/tmp"
+    const req = validatePtyCreateRequest(createReq(dir, "tok-c", "req-c"))
+    expect(req.opId).toBe(canonicalPtyCreateOpId("tok-c"))
+    expect(req.context).toEqual({ directory: dir })
+    const ok = {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "pty/create",
+      idempotencyKey: req.idempotencyKey,
+      status: "succeeded",
+      outcome: { type: "succeeded", time: 1 },
+      accepted: true,
+      data: { id: FAKE_PTY, title: "t" },
+    }
+    const parsed = validatePtyCreateResult(ok, req)
+    expect(parsed.status).toBe("succeeded")
+    if (parsed.status === "succeeded") {
+      expect(parsed.data.id).toBe(FAKE_PTY)
+      expect(parsed.data.title).toBe("t")
+    }
+    const badId = { ...ok, data: { id: "ses_not_a_pty", title: "t" } }
+    expect(() => validatePtyCreateResult(badId, req)).toThrow()
+  })
+
+  test.skipIf(process.platform === "win32")(
+    "fd pty/create shares canonical PtyServiceMap owner with HTTP get/remove",
+    async () => {
+      await using tmp = await tmpdir({ git: true })
+      const dir = tmp.path
+      const listener = await startListener()
+      try {
+        await loadInstance(dir)
+        const { carrier, ext } = linked()
+        try {
+          await init(ext)
+          const created = asPtyResult(
+            await ext.request("pty/create", createReq(dir, "tok-live", "req-live")),
+            "pty/create",
+          )
+          expect(created.status).toBe("succeeded")
+          expect(created.accepted).toBeTrue()
+          expect(created.requestId).toBe("req-live")
+          const data = created.data as Record<string, unknown>
+          expect(typeof data.id).toBe("string")
+          expect(typeof data.title).toBe("string")
+          const id = data.id as string
+          expect(await httpGetStatus(listener, dir, id)).toBe(200)
+          const rem = asPtyResult(
+            await ext.request("pty/remove", removeReq(dir, id, "tok-live-rm", "req-live-rm")),
+            "pty/remove",
+          )
+          expect(rem.status).toBe("succeeded")
+          expect(await httpGetStatus(listener, dir, id)).toBe(404)
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        await stop(listener, "timed out stopping pty fd-create listener").catch(() => undefined)
+      }
+    },
+    { timeout: 60000 },
+  )
 
   test.skipIf(process.platform === "win32")(
     "Server.listen HTTP create shares canonical PtyServiceMap owner with fd update/remove",

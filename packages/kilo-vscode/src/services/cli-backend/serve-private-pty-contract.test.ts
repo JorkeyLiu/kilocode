@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test"
 import {
+  canonicalPtyCreateOpId,
   canonicalPtyRemoveOpId,
   canonicalPtyUpdateOpId,
+  validatePtyCreateContractRequest,
+  validatePtyCreateResult,
   validatePtyRemoveContractRequest,
   validatePtyRemoveResult,
   validatePtyUpdateContractRequest,
@@ -11,6 +14,20 @@ import {
 const DIR = "/tmp/kilo-pty"
 const PTY = "pty_aaaaaaaaaaaaaaaaaaaaaaaaaa"
 const OTHER = "pty_bbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+function createReq(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const opId = canonicalPtyCreateOpId("tok1")
+  return {
+    v: 1,
+    requestId: "8f3c2a1b4d5e6f708192a3b4c5d6e7f8",
+    opId,
+    op: "pty/create",
+    idempotencyKey: opId,
+    context: { directory: DIR },
+    payload: { cwd: DIR, title: "Terminal 1" },
+    ...overrides,
+  }
+}
 
 function updateReq(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const opId = canonicalPtyUpdateOpId(PTY, "tok1")
@@ -41,6 +58,69 @@ function removeReq(overrides: Record<string, unknown> = {}): Record<string, unkn
 }
 
 describe("serve-private-pty-contract", () => {
+  it("accepts strict create requests with opaque pathless token and closed payload", () => {
+    const req = validatePtyCreateContractRequest(createReq())
+    expect(req.opId).toBe(req.idempotencyKey)
+    expect(req.opId).toBe("pty-create:tok1")
+    expect(req.context).toEqual({ directory: DIR })
+    expect(req.payload).toEqual({ cwd: DIR, title: "Terminal 1" })
+    const empty = validatePtyCreateContractRequest(createReq({ payload: {} }))
+    expect(empty.payload).toEqual({})
+  })
+
+  it("rejects create opId/idempotencyKey mismatch and unknown fields", () => {
+    const base = createReq() as Record<string, unknown>
+    expect(() =>
+      validatePtyCreateContractRequest({ ...base, idempotencyKey: canonicalPtyCreateOpId("other") }),
+    ).toThrow()
+    expect(() =>
+      validatePtyCreateContractRequest(createReq({ context: { directory: DIR, ptyID: PTY } })),
+    ).toThrow()
+    expect(() => validatePtyCreateContractRequest(createReq({ payload: { size: { rows: 1, cols: 1 } } }))).toThrow()
+    expect(() => validatePtyCreateContractRequest(createReq({ payload: { cwd: DIR, title: "" } }))).toThrow()
+    expect(() =>
+      validatePtyCreateContractRequest(createReq({ payload: { env: { ["__proto__"]: "x" } } })),
+    ).toThrow()
+  })
+
+  it("validates create success data and terminal failure", () => {
+    const req = validatePtyCreateContractRequest(createReq())
+    const ok = {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "pty/create",
+      idempotencyKey: req.idempotencyKey,
+      status: "succeeded",
+      outcome: { type: "succeeded", time: 1 },
+      accepted: true,
+      data: { id: PTY, title: "Terminal 1" },
+    }
+    const parsed = validatePtyCreateResult(ok, req)
+    expect(parsed.status).toBe("succeeded")
+    if (parsed.status === "succeeded") {
+      expect(parsed.data.id).toBe(PTY)
+      expect(parsed.data.title).toBe("Terminal 1")
+    }
+    const badId = { ...ok, data: { id: "ses_not_a_pty", title: "t" } }
+    expect(() => validatePtyCreateResult(badId, req)).toThrow()
+    const failure = { code: "validation.failed", message: "invalid pty request", retryable: false }
+    const failed = {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "pty/create",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: 1, failure },
+      accepted: false,
+      failure,
+    }
+    const term = validatePtyCreateResult(failed, req)
+    expect(term.status).toBe("failed")
+    if (term.status === "failed") expect(term.failure.retryable).toBe(false)
+  })
+
   it("accepts strict update and remove requests with opaque pathless IDs", () => {
     const upd = validatePtyUpdateContractRequest(updateReq())
     expect(upd.opId).toBe(upd.idempotencyKey)

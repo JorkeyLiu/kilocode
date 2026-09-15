@@ -202,12 +202,15 @@ import {
   stopSessionProcessesPrivate,
 } from "@/kilocode/background-process-stop-session-private"
 import {
+  CREATE_OP as PTY_CREATE_OP,
   INTERNAL_MESSAGE as PTY_PRIVATE_INTERNAL_MESSAGE,
   REMOVE_OP as PTY_REMOVE_OP,
   UPDATE_OP as PTY_UPDATE_OP,
   VERSION as PTY_PRIVATE_VERSION,
+  fallbackPtyCreateIds,
   fallbackPtyRemoveIds,
   fallbackPtyUpdateIds,
+  createPtyPrivate,
   removePtyPrivate,
   updatePtyPrivate,
 } from "@/kilocode/pty-private"
@@ -5570,6 +5573,40 @@ export function createFdCarrier(
                   failure: { code: "internal", message: BACKGROUND_STOP_SESSION_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === PTY_CREATE_OP || method === "pty/create") {
+        // Active PTY spawn via `createPtyPrivate` (canonical directory +
+        // drain-control/`InstanceRef` lane, canonical `PtyServiceMap` owner,
+        // same `PtyPreparation.prepareCreate` as HTTP `POST /pty`). Closed
+        // create-only payload. Non-idempotent: one accepted call spawns one
+        // PTY, so the op never retries — at most one private attempt plus at
+        // most one SDK fallback taken by the caller.
+        const ids = fallbackPtyCreateIds(params)
+        const failed = () => ({
+          v: PTY_PRIVATE_VERSION,
+          requestId: ids.requestId,
+          opId: ids.opId,
+          op: PTY_CREATE_OP,
+          idempotencyKey: ids.idempotencyKey,
+          status: "failed" as const,
+          outcome: {
+            type: "failed" as const,
+            time: Date.now(),
+            failure: { code: "internal", message: PTY_PRIVATE_INTERNAL_MESSAGE, retryable: false },
+          },
+          accepted: false as const,
+          failure: { code: "internal", message: PTY_PRIVATE_INTERNAL_MESSAGE, retryable: false },
+        })
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* createPtyPrivate(params).pipe(
+              Effect.catch(() => Effect.succeed(failed())),
+              Effect.catchDefect(() => Effect.succeed(failed())),
             )
             return out
           }),

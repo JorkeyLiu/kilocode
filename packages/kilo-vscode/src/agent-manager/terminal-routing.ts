@@ -37,7 +37,7 @@ export interface TerminalRoutingDeps {
   post(message: AgentManagerOutMessage): void
   /** Return the current terminal font settings. */
   getTerminalFont(): TerminalFont
-  /** Private fd-carrier connection for `pty/update` + `pty/remove`. Absent means SDK-only fallback. */
+  /** Private fd-carrier connection for `pty/create` + `pty/update` + `pty/remove`. Absent means SDK-only fallback. */
   getPrivateConnection?(): PtyPrivateConnection | null | undefined
 }
 

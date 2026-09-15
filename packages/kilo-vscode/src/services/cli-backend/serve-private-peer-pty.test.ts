@@ -2,9 +2,22 @@ import { describe, expect, test } from "bun:test"
 import { PassThrough } from "stream"
 import { JsonRpcPeer } from "../../private-worker/peer"
 import { ServePrivatePeer } from "./serve-private-peer"
-import { canonicalPtyRemoveOpId, canonicalPtyUpdateOpId } from "./serve-private-pty-contract"
+import { canonicalPtyCreateOpId, canonicalPtyRemoveOpId, canonicalPtyUpdateOpId } from "./serve-private-pty-contract"
 
 const PTY = "pty_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+function createReq(token = "tok1") {
+  const opId = canonicalPtyCreateOpId(token)
+  return {
+    v: 1 as const,
+    requestId: "r1",
+    opId,
+    op: "pty/create" as const,
+    idempotencyKey: opId,
+    context: { directory: "/tmp" },
+    payload: { cwd: "/tmp", title: "Terminal 1" },
+  }
+}
 
 function updateReq(token = "tok1") {
   const opId = canonicalPtyUpdateOpId(PTY, token)
@@ -29,6 +42,20 @@ function removeReq(token = "tok1") {
     idempotencyKey: opId,
     context: { directory: "/tmp", ptyID: PTY },
     payload: {},
+  }
+}
+
+function okCreate(req: ReturnType<typeof createReq>) {
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: req.op,
+    idempotencyKey: req.idempotencyKey,
+    status: "succeeded",
+    outcome: { type: "succeeded", time: 1 },
+    accepted: true,
+    data: { id: PTY, title: "Terminal 1" },
   }
 }
 
@@ -73,16 +100,43 @@ async function peerFor(caps: string[], handler: (method: string, params: unknown
 }
 
 describe("pty private peer", () => {
-  test("capability gating is fail-closed for both ops", async () => {
+  test("capability gating is fail-closed for all three ops", async () => {
     const { peer, backend, client } = await peerFor(["session/status"], async () => okUpdate(updateReq()))
+    expect(peer.hasCapability("pty/create")).toBeFalse()
     expect(peer.hasCapability("pty/update")).toBeFalse()
     expect(peer.hasCapability("pty/remove")).toBeFalse()
+    expect(() => peer.privatePtyCreateOutcomeWithHandle(createReq() as never)).toThrow(
+      "Private peer missing pty/create capability",
+    )
     expect(() => peer.privatePtyUpdateOutcomeWithHandle(updateReq() as never)).toThrow(
       "Private peer missing pty/update capability",
     )
     expect(() => peer.privatePtyRemoveOutcomeWithHandle(removeReq() as never)).toThrow(
       "Private peer missing pty/remove capability",
     )
+    peer.dispose()
+    client.dispose()
+    backend.dispose()
+  })
+
+  test("create success resolves strictly valid result with same tuple", async () => {
+    const { peer, backend, client } = await peerFor(["pty/create"], async (method: string, params: unknown) => {
+      expect(method).toBe("pty/create")
+      const p = params as {
+        context: { directory: string }
+        payload: { cwd: string; title: string }
+      }
+      expect(p.context).toEqual({ directory: "/tmp" })
+      expect(p.payload).toEqual({ cwd: "/tmp", title: "Terminal 1" })
+      return okCreate(params as never)
+    })
+    const out = await peer.privatePtyCreateWithHandle(createReq("peer-ok") as never).promise
+    expect(out.op).toBe("pty/create")
+    expect(out.status).toBe("succeeded")
+    if (out.status === "succeeded") {
+      expect(out.data.id).toBe(PTY)
+      expect(out.data.title).toBe("Terminal 1")
+    }
     peer.dispose()
     client.dispose()
     backend.dispose()
@@ -149,6 +203,16 @@ describe("pty private peer", () => {
     expect(leaked.includes("pty-abc")).toBeFalse()
     expect(leaked.includes("detail=hidden")).toBeFalse()
     expect(leaked.includes("-32603")).toBeFalse()
+  })
+
+  test("invalid create wire rejects with the pty validation error", async () => {
+    const { peer, backend, client } = await peerFor(["pty/create"], async () => ({ garbled: true }))
+    await expect(peer.privatePtyCreateWithHandle(createReq("peer-bad") as never).promise).rejects.toThrow(
+      "invalid private response shape",
+    )
+    peer.dispose()
+    client.dispose()
+    backend.dispose()
   })
 
   test("invalid wire rejects with the pty validation error", async () => {

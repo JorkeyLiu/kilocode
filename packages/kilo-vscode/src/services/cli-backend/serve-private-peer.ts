@@ -114,17 +114,23 @@ import type {
   ServePrivateBackgroundStopSessionResult,
 } from "./serve-private-background-process-stop-session"
 import {
+  makePtyCreateCancel,
   makePtyRemoveCancel,
   makePtyUpdateCancel,
   PrivatePtyValidationError,
+  requestPtyCreateOutcome,
   requestPtyRemoveOutcome,
   requestPtyUpdateOutcome,
+  validatePtyCreateRequest,
   validatePtyRemoveRequest,
   validatePtyUpdateRequest,
 } from "./serve-private-pty"
 import type {
+  PrivatePtyCreateWireOutcome,
   PrivatePtyRemoveWireOutcome,
   PrivatePtyUpdateWireOutcome,
+  ServePrivatePtyCreateRequest,
+  ServePrivatePtyCreateResult,
   ServePrivatePtyRemoveRequest,
   ServePrivatePtyRemoveResult,
   ServePrivatePtyUpdateRequest,
@@ -3568,6 +3574,57 @@ export class ServePrivatePeer {
     const promise = (async (): Promise<ServePrivateBackgroundStopSessionResult> => {
       const wire = await outcome.promise
       if (wire.kind === "invalid") throw new PrivateBackgroundStopSessionValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
+  privatePtyCreateOutcomeWithHandle(req: ServePrivatePtyCreateRequest): {
+    id: number
+    promise: Promise<PrivatePtyCreateWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validatePtyCreateRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(req.op)) throw new Error(`Private peer missing ${req.op} capability`)
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const op = req.op
+    return requestPtyCreateOutcome(
+      peerAtCall as unknown as import("./serve-private-pty").PtyRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makePtyCreateCancel(
+          id,
+          {
+            isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+            tryCancel: (msg) => this.tryCancelPending(id, msg),
+            invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+          },
+          op,
+        ),
+      req,
+    )
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid pty-create results; invalid wire rejects
+   * with PrivatePtyValidationError and never resolves as a normal result.
+   */
+  privatePtyCreateWithHandle(req: ServePrivatePtyCreateRequest): {
+    id: number
+    promise: Promise<ServePrivatePtyCreateResult>
+    cancel: (msg?: string) => boolean
+  } {
+    const outcome = this.privatePtyCreateOutcomeWithHandle(req)
+    const promise = (async (): Promise<ServePrivatePtyCreateResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivatePtyValidationError(wire.detail)
       return wire.result
     })()
     return { id: outcome.id, promise, cancel: outcome.cancel }

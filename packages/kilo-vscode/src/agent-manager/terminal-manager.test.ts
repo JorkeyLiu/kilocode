@@ -54,6 +54,28 @@ function depsFor(opts: {
 function privateOk() {
   return {
     isPrivateAvailable: () => true,
+    privatePtyCreateOutcomeWithHandle: (q: {
+      requestId: string
+      opId: string
+      idempotencyKey: string
+      op: string
+    }) => ({
+      id: 0,
+      promise: Promise.resolve({
+        kind: "valid",
+        result: {
+          v: 1,
+          requestId: q.requestId,
+          opId: q.opId,
+          op: q.op,
+          idempotencyKey: q.idempotencyKey,
+          status: "succeeded",
+          outcome: { type: "succeeded", time: 1 },
+          accepted: true,
+          data: { id: PTY, title: "t" },
+        },
+      }),
+    }),
     privatePtyUpdateOutcomeWithHandle: (q: {
       requestId: string
       opId: string
@@ -105,6 +127,28 @@ function privateNotFound() {
   const failure = { code: "pty.not_found", message: "pty not found", retryable: false }
   return {
     isPrivateAvailable: () => true,
+    privatePtyCreateOutcomeWithHandle: (q: {
+      requestId: string
+      opId: string
+      idempotencyKey: string
+      op: string
+    }) => ({
+      id: 0,
+      promise: Promise.resolve({
+        kind: "valid",
+        result: {
+          v: 1,
+          requestId: q.requestId,
+          opId: q.opId,
+          op: q.op,
+          idempotencyKey: q.idempotencyKey,
+          status: "succeeded",
+          outcome: { type: "succeeded", time: 1 },
+          accepted: true,
+          data: { id: PTY, title: "t" },
+        },
+      }),
+    }),
     privatePtyUpdateOutcomeWithHandle: (q: {
       requestId: string
       opId: string
@@ -156,6 +200,28 @@ function privateTerminal(code = "scope_mismatch") {
   const failure = { code, message: "m", retryable: false }
   return {
     isPrivateAvailable: () => true,
+    privatePtyCreateOutcomeWithHandle: (q: {
+      requestId: string
+      opId: string
+      idempotencyKey: string
+      op: string
+    }) => ({
+      id: 0,
+      promise: Promise.resolve({
+        kind: "valid",
+        result: {
+          v: 1,
+          requestId: q.requestId,
+          opId: q.opId,
+          op: q.op,
+          idempotencyKey: q.idempotencyKey,
+          status: "succeeded",
+          outcome: { type: "succeeded", time: 1 },
+          accepted: true,
+          data: { id: PTY, title: "t" },
+        },
+      }),
+    }),
     privatePtyUpdateOutcomeWithHandle: (q: {
       requestId: string
       opId: string
@@ -209,27 +275,19 @@ async function seed(manager: TerminalManager): Promise<string> {
 }
 
 describe("TerminalManager pty private-first", () => {
-  it("create stays SDK-only with buildWsUrl passthrough and zero update/remove", async () => {
-    const seen = { update: 0, remove: 0, getClient: 0 }
-    const createdArgs: unknown[] = []
-    const wsArgs: Array<[string, string]> = []
-    const privateCalls = { update: 0, remove: 0 }
+  it("create routes private-first with buildWsUrl passthrough and zero SDK on private success", async () => {
+    let sdkCreate = 0
     const sdk = {
       pty: {
-        create: async (args: unknown) => {
-          createdArgs.push(args)
+        create: async () => {
+          sdkCreate += 1
           return { data: { id: PTY, title: "t" }, error: undefined }
         },
-        update: async () => {
-          seen.update += 1
-          return { data: {}, error: undefined }
-        },
-        remove: async () => {
-          seen.remove += 1
-          return { data: true, error: undefined }
-        },
+        update: async () => ({ data: {}, error: undefined }),
+        remove: async () => ({ data: true, error: undefined }),
       },
     }
+    const wsArgs: Array<[string, string]> = []
     const logs: unknown[][] = []
     const manager = new TerminalManager({
       getClient: () => sdk as never,
@@ -240,27 +298,118 @@ describe("TerminalManager pty private-first", () => {
       log: (...args: unknown[]) => {
         logs.push(args)
       },
-      getPrivateConnection: () =>
-        ({
-          isPrivateAvailable: () => true,
-          privatePtyUpdateOutcomeWithHandle: () => {
-            privateCalls.update += 1
-            throw new Error("create must not touch pty/update")
-          },
-          privatePtyRemoveOutcomeWithHandle: () => {
-            privateCalls.remove += 1
-            throw new Error("create must not touch pty/remove")
-          },
-        }) as never,
+      getPrivateConnection: () => privateOk() as never,
     })
     const created = await manager.create({ slotId: "s1", cwd: DIR, title: "Terminal 1" })
-    expect(createdArgs).toEqual([{ directory: DIR, cwd: DIR, title: "Terminal 1" }])
-    expect(privateCalls).toEqual({ update: 0, remove: 0 })
+    expect(sdkCreate).toBe(0)
     expect(wsArgs).toEqual([[PTY, DIR]])
     expect(created.wsUrl).toContain("/pty/")
     expect(created.wsUrl).toContain("directory=")
-    expect(seen.update).toBe(0)
-    expect(seen.remove).toBe(0)
+    expect(created.slotId).toBe("s1")
+    expect(created.title).toBe("t")
+  })
+
+  it("create terminal failure throws with zero SDK and records nothing", async () => {
+    let sdkCreate = 0
+    const sdk = {
+      pty: {
+        create: async () => {
+          sdkCreate += 1
+          return { data: { id: PTY, title: "t" }, error: undefined }
+        },
+        update: async () => ({ data: {}, error: undefined }),
+        remove: async () => ({ data: true, error: undefined }),
+      },
+    }
+    const failure = { code: "scope_mismatch", message: "m", retryable: false }
+    const conn = {
+      isPrivateAvailable: () => true,
+      privatePtyCreateOutcomeWithHandle: (q: {
+        requestId: string
+        opId: string
+        idempotencyKey: string
+        op: string
+      }) => ({
+        id: 0,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: q.requestId,
+            opId: q.opId,
+            op: q.op,
+            idempotencyKey: q.idempotencyKey,
+            status: "failed",
+            outcome: { type: "failed", time: 1, failure },
+            accepted: false,
+            failure,
+          },
+        }),
+      }),
+      privatePtyUpdateOutcomeWithHandle: () => {
+        throw new Error("unexpected")
+      },
+      privatePtyRemoveOutcomeWithHandle: () => {
+        throw new Error("unexpected")
+      },
+    }
+    const manager = new TerminalManager({
+      getClient: () => sdk as never,
+      buildWsUrl: (ptyID: string, cwd: string) => `ws://localhost/pty/${ptyID}?directory=${encodeURIComponent(cwd)}`,
+      log: () => {},
+      getPrivateConnection: () => conn as never,
+    })
+    await expect(manager.create({ slotId: "s1", cwd: DIR, title: "Terminal 1" })).rejects.toThrow(
+      "Failed to create PTY: code=scope_mismatch",
+    )
+    expect(sdkCreate).toBe(0)
+    await manager.resize("terminal:missing", 80, 24)
+  })
+
+  it("create falls back exactly once with the same tuple when private is unavailable", async () => {
+    const createdArgs: unknown[] = []
+    const wsArgs: Array<[string, string]> = []
+    const sdk = {
+      pty: {
+        create: async (args: unknown) => {
+          createdArgs.push(args)
+          return { data: { id: PTY, title: "t" }, error: undefined }
+        },
+        update: async () => ({ data: {}, error: undefined }),
+        remove: async () => ({ data: true, error: undefined }),
+      },
+    }
+    const manager = new TerminalManager({
+      getClient: () => sdk as never,
+      buildWsUrl: (ptyID: string, cwd: string) => {
+        wsArgs.push([ptyID, cwd])
+        return `ws://localhost/pty/${ptyID}?directory=${encodeURIComponent(cwd)}`
+      },
+      log: () => {},
+      getPrivateConnection: () => null,
+    })
+    const created = await manager.create({ slotId: "s1", cwd: DIR, title: "Terminal 1" })
+    expect(createdArgs).toEqual([{ directory: DIR, cwd: DIR, title: "Terminal 1" }])
+    expect(wsArgs).toEqual([[PTY, DIR]])
+    expect(created.wsUrl).toContain("/pty/")
+    expect(created.wsUrl).toContain("directory=")
+  })
+
+  it("create SDK error throws with the legacy message", async () => {
+    const sdk = {
+      pty: {
+        create: async () => ({ data: undefined, error: new Error("denied") }),
+        update: async () => ({ data: {}, error: undefined }),
+        remove: async () => ({ data: true, error: undefined }),
+      },
+    }
+    const manager = new TerminalManager({
+      getClient: () => sdk as never,
+      buildWsUrl: (ptyID: string) => `ws://localhost/pty/${ptyID}`,
+      log: () => {},
+      getPrivateConnection: () => null,
+    })
+    await expect(manager.create({ slotId: null, cwd: DIR, title: "t" })).rejects.toThrow("Failed to create PTY: denied")
   })
 
   it("resize routes only through the private helper with lazy SDK (zero SDK on private success)", async () => {
@@ -402,11 +551,12 @@ describe("TerminalManager pty private-first", () => {
   })
 
   // No source-string assertion remains: routing is proven behaviorally —
-  // private success yields zero SDK calls (lazy `getClient`, see the resize
-  // test above), fallback yields exactly one same-tuple SDK call (see below),
-  // and create never touches the private peer (see above). A direct
-  // `client.pty.update`/`remove` call added alongside the helpers would break
-  // the zero-SDK counts, so a text guard adds no signal.
+  // private success yields zero SDK calls (lazy `getClient`, see the create
+  // and resize tests above), fallback yields exactly one same-tuple SDK call
+  // (see create/resize/close fallback tests), and terminal private failure
+  // throws/closes with zero SDK. A direct `client.pty.*` call added
+  // alongside the helpers would break the zero-SDK counts, so a text guard
+  // adds no signal.
   it("resize/close fall back exactly once with the same tuple when private is unavailable", async () => {
     const seen = { update: 0, remove: 0, getClient: 0 }
     let updateArgs: unknown

@@ -88,7 +88,7 @@ import { wrapAuthRemoveOutcomeForOwner } from "./serve-private-auth-remove"
 import type { PrivateAuthRemoveWireOutcome, ServePrivateAuthRemoveRequest } from "./serve-private-auth-remove"
 import { wrapOrganizationSetOutcomeForOwner } from "./serve-private-organization-set"
 import { backgroundStopSessionOutcomeForOwner } from "./serve-private-background-process-stop-session-owner"
-import { ptyRemoveOutcomeForOwner, ptyUpdateOutcomeForOwner } from "./serve-private-pty-owner"
+import { ptyCreateOutcomeForOwner, ptyRemoveOutcomeForOwner, ptyUpdateOutcomeForOwner } from "./serve-private-pty-owner"
 import type {
   PrivateOrganizationSetWireOutcome,
   ServePrivateOrganizationSetRequest,
@@ -3121,6 +3121,10 @@ export class KiloConnectionService {
 
   privateBackgroundStopSessionOutcomeWithHandle(req: Parameters<typeof backgroundStopSessionOutcomeForOwner>[1]) {
     return backgroundStopSessionOutcomeForOwner(this, req)
+  }
+
+  privatePtyCreateOutcomeWithHandle(req: Parameters<typeof ptyCreateOutcomeForOwner>[1]) {
+    return ptyCreateOutcomeForOwner(this, req)
   }
 
   privatePtyUpdateOutcomeWithHandle(req: Parameters<typeof ptyUpdateOutcomeForOwner>[1]) {

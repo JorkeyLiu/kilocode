@@ -1,15 +1,22 @@
 import { isAbsolute, normalize, resolve } from "path"
 import {
+  isSettledPtyCreateResult,
   isSettledPtyRemoveResult,
   isSettledPtyUpdateResult,
+  makePtyCreateAmbiguous,
   makePtyRemoveAmbiguous,
   makePtyUpdateAmbiguous,
+  validatePtyCreateContractRequest,
+  validatePtyCreateResult,
   validatePtyRemoveContractRequest,
   validatePtyRemoveResult,
   validatePtyUpdateContractRequest,
   validatePtyUpdateResult,
 } from "./serve-private-pty-contract"
 import type {
+  PtyCreateContractRequest,
+  PtyCreateResult,
+  PtyCreateWireOutcome,
   PtyRemoveContractRequest,
   PtyRemoveResult,
   PtyRemoveWireOutcome,
@@ -20,6 +27,13 @@ import type {
 
 function canonicalDir(dir: string): string {
   return normalize(resolve(dir))
+}
+
+export function validatePtyCreateRequest(raw: unknown): PtyCreateContractRequest {
+  const req = validatePtyCreateContractRequest(raw)
+  if (!isAbsolute(req.context.directory)) throw new Error("context.directory must be absolute path")
+  canonicalDir(req.context.directory)
+  return req
 }
 
 export function validatePtyUpdateRequest(raw: unknown): PtyUpdateContractRequest {
@@ -48,6 +62,16 @@ export class PrivatePtyValidationError extends Error {
 
 export function isPrivatePtyValidationError(v: unknown): v is PrivatePtyValidationError {
   return !!v && typeof v === "object" && (v as { kind?: unknown }).kind === "private-pty-validation"
+}
+
+export function normalizePrivatePtyCreateWire(raw: unknown, req: PtyCreateContractRequest): PtyCreateWireOutcome {
+  try {
+    const result = validatePtyCreateResult(raw, req)
+    return { kind: "valid", result }
+  } catch (e) {
+    const detail = String(e instanceof Error ? e.message : e).slice(0, 200)
+    return { kind: "invalid", detail }
+  }
 }
 
 export function normalizePrivatePtyUpdateWire(raw: unknown, req: PtyUpdateContractRequest): PtyUpdateWireOutcome {
@@ -85,8 +109,24 @@ interface PtyRequestHost {
 // paths) so the contract allowlist accepts them and the private-first
 // helper's explicit `transport` branch takes exactly one same-tuple SDK
 // fallback. Mirrors the `project/current` + `config/warnings` convention.
+export const PTY_CREATE_TRANSPORT_MESSAGE = "private pty-create transport failed"
 export const PTY_UPDATE_TRANSPORT_MESSAGE = "private pty-update transport failed"
 export const PTY_REMOVE_TRANSPORT_MESSAGE = "private pty-remove transport failed"
+
+function failedCreateResult(req: PtyCreateContractRequest): PtyCreateResult {
+  const failure = { code: "transport", message: PTY_CREATE_TRANSPORT_MESSAGE, retryable: false }
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: req.op,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time: Date.now(), failure },
+    accepted: false,
+    failure: { ...failure },
+  }
+}
 
 function failedUpdateResult(req: PtyUpdateContractRequest): PtyUpdateResult {
   const failure = { code: "transport", message: PTY_UPDATE_TRANSPORT_MESSAGE, retryable: false }
@@ -116,6 +156,28 @@ function failedRemoveResult(req: PtyRemoveContractRequest): PtyRemoveResult {
     accepted: false,
     failure: { ...failure },
   }
+}
+
+export function requestPtyCreateOutcome(
+  raw: PtyRawTransport,
+  host: PtyRequestHost,
+  makeCancel: (id: number) => (msg?: string) => boolean,
+  req: PtyCreateContractRequest,
+): { id: number; promise: Promise<PtyCreateWireOutcome>; cancel: (msg?: string) => boolean } {
+  const { id, promise: rawPromise } = raw.requestWithId(req.op, req)
+  const promise = (async (): Promise<PtyCreateWireOutcome> => {
+    let wire: unknown
+    try {
+      wire = await rawPromise
+    } catch (e: unknown) {
+      if (host.isClosed(e)) return { kind: "valid", result: makePtyCreateAmbiguous(req, true) }
+      void host.failInfo
+      return { kind: "valid", result: failedCreateResult(req) }
+    }
+    if (host.isStale()) return { kind: "valid", result: makePtyCreateAmbiguous(req, true) }
+    return normalizePrivatePtyCreateWire(wire, req)
+  })()
+  return { id, promise, cancel: makeCancel(id) }
 }
 
 export function requestPtyUpdateOutcome(
@@ -201,6 +263,14 @@ function makeCancel(
   }
 }
 
+export function makePtyCreateCancel(
+  id: number,
+  host: { isStale(): boolean; tryCancel(msg: string): boolean; invalidate(reason: string): void },
+  op: string,
+): (msg?: string) => boolean {
+  return makeCancel(id, host, op, "[Kilo Pty]")
+}
+
 export function makePtyUpdateCancel(
   id: number,
   host: { isStale(): boolean; tryCancel(msg: string): boolean; invalidate(reason: string): void },
@@ -221,6 +291,54 @@ interface PtyOwner {
   epochAtCall: number | null
   isCurrent(): boolean
   invalidate(reason: string): void
+}
+
+export function wrapPtyCreateOutcomeForOwner(
+  owner: PtyOwner,
+  tryCancel: (id: number, msg: string) => boolean,
+  staleCleanup: () => void,
+  handle: { id: number; promise: Promise<PtyCreateWireOutcome> },
+  req: PtyCreateContractRequest,
+): { id: number; promise: Promise<PtyCreateWireOutcome>; cancel: (msg?: string) => boolean | "stale" } {
+  const promise = handle.promise.then((outcome) => {
+    if (!owner.isCurrent()) {
+      if (outcome.kind === "valid" && isSettledPtyCreateResult(outcome.result, req)) return outcome
+      return { kind: "valid", result: makePtyCreateAmbiguous(req, true) } as PtyCreateWireOutcome
+    }
+    return outcome
+  })
+  const cancel = (msg = "private pty-create timeout"): boolean | "stale" => {
+    if (!owner.isCurrent()) {
+      try {
+        staleCleanup()
+      } catch {
+        console.warn("[Kilo Pty] stale observer cleanup failed:", { op: req.op, stale: true, cleanupFailed: true })
+      }
+      return "stale"
+    }
+    let ok = false
+    try {
+      ok = tryCancel(handle.id, msg)
+    } catch {
+      console.warn("[Kilo Pty] observer timeout cancel failed:", { op: req.op, cancelFailed: true })
+      try {
+        owner.invalidate(`${req.op} observer timeout cancel throw`)
+      } catch {
+        console.warn("[Kilo Pty] observer timeout invalidate failed:", { op: req.op, invalidateFailed: true })
+      }
+      return false
+    }
+    if (!ok) {
+      try {
+        owner.invalidate(`${req.op} observer timeout exact cancel miss`)
+      } catch {
+        console.warn("[Kilo Pty] observer timeout invalidate failed:", { op: req.op, invalidateFailed: true })
+      }
+      return false
+    }
+    return true
+  }
+  return { id: handle.id, promise, cancel }
 }
 
 export function wrapPtyUpdateOutcomeForOwner(
@@ -319,10 +437,13 @@ export function wrapPtyRemoveOutcomeForOwner(
   return { id: handle.id, promise, cancel }
 }
 
-export { validatePtyUpdateResult, validatePtyRemoveResult }
+export { validatePtyCreateResult, validatePtyUpdateResult, validatePtyRemoveResult }
+export type { PtyCreateContractRequest as ServePrivatePtyCreateRequest }
 export type { PtyUpdateContractRequest as ServePrivatePtyUpdateRequest }
 export type { PtyRemoveContractRequest as ServePrivatePtyRemoveRequest }
+export type { PtyCreateResult as ServePrivatePtyCreateResult }
 export type { PtyUpdateResult as ServePrivatePtyUpdateResult }
 export type { PtyRemoveResult as ServePrivatePtyRemoveResult }
+export type { PtyCreateWireOutcome as PrivatePtyCreateWireOutcome }
 export type { PtyUpdateWireOutcome as PrivatePtyUpdateWireOutcome }
 export type { PtyRemoveWireOutcome as PrivatePtyRemoveWireOutcome }

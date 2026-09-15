@@ -1,8 +1,10 @@
 import type { ServePrivatePeer } from "./serve-private-peer"
-import { wrapPtyRemoveOutcomeForOwner, wrapPtyUpdateOutcomeForOwner } from "./serve-private-pty"
+import { wrapPtyCreateOutcomeForOwner, wrapPtyRemoveOutcomeForOwner, wrapPtyUpdateOutcomeForOwner } from "./serve-private-pty"
 import type {
+  PrivatePtyCreateWireOutcome,
   PrivatePtyRemoveWireOutcome,
   PrivatePtyUpdateWireOutcome,
+  ServePrivatePtyCreateRequest,
   ServePrivatePtyRemoveRequest,
   ServePrivatePtyUpdateRequest,
 } from "./serve-private-pty"
@@ -19,6 +21,31 @@ interface PtySvc {
  * exact-id handle acquisition, then the epoch-aware wrapper. Only this entry
  * plus the peer methods stay inline per the connection-service cap convention.
  */
+export function ptyCreateOutcomeForOwner(
+  svc: PtySvc,
+  req: ServePrivatePtyCreateRequest,
+): {
+  id: number
+  promise: Promise<PrivatePtyCreateWireOutcome>
+  cancel: (msg?: string) => boolean | "stale"
+} {
+  const peer = svc.getPrivatePeer()
+  if (!peer || !svc.isPrivateAvailable() || !peer.isAvailable()) throw new Error("Private peer unavailable")
+  const epochAtCall = svc.getPrivateEpoch()
+  const peerAtCall = peer
+  return wrapPtyCreateOutcomeForOwner(
+    {
+      epochAtCall,
+      isCurrent: () => svc.getPrivatePeer() === peerAtCall && svc.getPrivateEpoch() === epochAtCall,
+      invalidate: (reason) => svc.invalidatePrivatePeerOnObserverTimeout(reason),
+    },
+    (id, msg) => peerAtCall.tryCancelPending(id, msg),
+    () => peerAtCall.invalidateOnObserverTimeout(`${req.op} stale observer timeout`),
+    peerAtCall.privatePtyCreateOutcomeWithHandle(req),
+    req,
+  )
+}
+
 export function ptyUpdateOutcomeForOwner(
   svc: PtySvc,
   req: ServePrivatePtyUpdateRequest,

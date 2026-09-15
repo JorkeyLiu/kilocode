@@ -161,7 +161,18 @@ export default [
     // (peer methods plus thin owner delegations) remain inline.
     // connection-service.ts measures 3809 lines, so 3809 is the smallest
     // passing cap.
-    rules: { "max-lines": ["error", 3809] },
+    // Raised 3809 → 3813 for the `pty/create` private-first migration closing
+    // the PTY family: the new create capability/peer/owner surface (strict
+    // opaque `pty-create:<token>` binding with no ptyID, closed create-only
+    // payload, echo validation, epoch-guarded exact-cancel handle,
+    // single-SDK-fallback helper) must live alongside the existing branches
+    // per the same convention. New logic lives in
+    // serve-private-pty-contract.ts, serve-private-pty(-owner).ts, and
+    // kilo-provider/pty-privatefirst.ts; only the required insertion points
+    // (peer method plus thin owner delegation) remain inline.
+    // connection-service.ts measures 3813 lines, so 3813 is the smallest
+    // passing cap.
+    rules: { "max-lines": ["error", 3813] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

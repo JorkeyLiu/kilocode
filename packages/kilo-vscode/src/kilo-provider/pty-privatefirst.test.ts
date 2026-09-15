@@ -1,9 +1,34 @@
 import { describe, expect, test } from "bun:test"
-import { buildPtyRemoveReq, buildPtyUpdateReq, removePtyPrivateFirst, updatePtyPrivateFirst } from "./pty-privatefirst"
-import { canonicalPtyRemoveOpId, canonicalPtyUpdateOpId } from "../services/cli-backend/serve-private-pty-contract"
+import {
+  buildPtyCreateReq,
+  buildPtyRemoveReq,
+  buildPtyUpdateReq,
+  createPtyPrivateFirst,
+  removePtyPrivateFirst,
+  updatePtyPrivateFirst,
+} from "./pty-privatefirst"
+import {
+  canonicalPtyCreateOpId,
+  canonicalPtyRemoveOpId,
+  canonicalPtyUpdateOpId,
+} from "../services/cli-backend/serve-private-pty-contract"
 
 const DIR = "/tmp/kilo-pty"
 const PTY = "pty_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+function okCreateFor(req: ReturnType<typeof buildPtyCreateReq>) {
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: req.op,
+    idempotencyKey: req.idempotencyKey,
+    status: "succeeded",
+    outcome: { type: "succeeded", time: 1 },
+    accepted: true,
+    data: { id: PTY, title: "Terminal 1" },
+  }
+}
 
 function okUpdateFor(req: ReturnType<typeof buildPtyUpdateReq>) {
   return {
@@ -110,6 +135,29 @@ function transportFor(req: { requestId: string; opId: string; op: string; idempo
   }
 }
 
+function connCreateFor(build: (req: never) => unknown, seen?: { n: number; cancel: number }) {
+  return {
+    isPrivateAvailable: () => true,
+    privatePtyCreateOutcomeWithHandle: (q: never) => {
+      if (seen) seen.n += 1
+      return {
+        id: 7,
+        promise: Promise.resolve({ kind: "valid", result: build(q) }),
+        cancel: () => {
+          if (seen) seen.cancel += 1
+          return true
+        },
+      }
+    },
+    privatePtyUpdateOutcomeWithHandle: () => {
+      throw new Error("create test must not touch pty/update")
+    },
+    privatePtyRemoveOutcomeWithHandle: () => {
+      throw new Error("create test must not touch pty/remove")
+    },
+  }
+}
+
 function connFor(build: (req: never) => unknown, seen?: { n: number; cancel: number }) {
   return {
     isPrivateAvailable: () => true,
@@ -134,6 +182,27 @@ function connFor(build: (req: never) => unknown, seen?: { n: number; cancel: num
           return true
         },
       }
+    },
+  }
+}
+
+function sdkCreate(
+  seen: { n: number; directory?: unknown; cwd?: unknown; title?: unknown },
+  data?: { id: string; title: string },
+  error?: unknown,
+) {
+  return {
+    pty: {
+      create: async (args: { directory: string; cwd?: string; title?: string }) => {
+        seen.n += 1
+        seen.directory = args.directory
+        seen.cwd = args.cwd
+        seen.title = args.title
+        if (error ?? !data) return { data: undefined, error: error ?? new Error("boom") }
+        return { data, error: undefined }
+      },
+      update: async () => ({ data: {}, error: undefined }),
+      remove: async () => ({ data: {}, error: undefined }),
     },
   }
 }
@@ -369,6 +438,209 @@ describe("pty private-first", () => {
     const raw = ambiguousFor(req)
     const { wrapPtyUpdateOutcomeForOwner } = await import("../services/cli-backend/serve-private-pty")
     const wrapped = wrapPtyUpdateOutcomeForOwner(
+      { epochAtCall: 1, isCurrent: () => false, invalidate: () => {} },
+      () => true,
+      () => {},
+      { id: 1, promise: Promise.resolve({ kind: "valid" as const, result: raw }) },
+      req,
+    )
+    const outcome = await wrapped.promise
+    expect(outcome.kind).toBe("valid")
+    if (outcome.kind === "valid") expect((outcome.result as { status: string }).status).toBe("ambiguous")
+  })
+})
+
+describe("pty create private-first", () => {
+  test("identity binds opaque pathless token with routing-only context", () => {
+    const req = buildPtyCreateReq(DIR, { cwd: DIR, title: "Terminal 1" })
+    expect(req.opId).toBe(req.idempotencyKey)
+    expect(req.opId.startsWith("pty-create:")).toBeTrue()
+    expect(req.op).toBe("pty/create")
+    expect(req.context).toEqual({ directory: DIR })
+    expect(req.payload).toEqual({ cwd: DIR, title: "Terminal 1" })
+    const token = req.opId.split(":")[1]!
+    expect(canonicalPtyCreateOpId(token)).toBe(req.opId)
+  })
+
+  test("private create success returns id/title with zero SDK", async () => {
+    const seen = { n: 0 }
+    const out = await createPtyPrivateFirst({
+      connection: connCreateFor((q) => okCreateFor(q as never)) as never,
+      getClient: () => sdkCreate(seen) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+    })
+    expect(out).toEqual({ kind: "ok", via: "private", id: PTY, title: "Terminal 1" })
+    expect(seen.n).toBe(0)
+  })
+
+  test("private create success with bad id shape falls back once", async () => {
+    const seen = { n: 0, directory: undefined as unknown, cwd: undefined as unknown, title: undefined as unknown }
+    const out = await createPtyPrivateFirst({
+      connection: connCreateFor((q) => ({ ...okCreateFor(q as never), data: { id: "ses_x", title: "t" } })) as never,
+      getClient: () => sdkCreate(seen, { id: PTY, title: "Terminal 1" }) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+    })
+    expect(out).toEqual({ kind: "ok", via: "sdk", id: PTY, title: "Terminal 1" })
+    expect(seen.n).toBe(1)
+  })
+
+  test("terminal validation.failed closes with zero SDK and no replay", async () => {
+    const seen = { n: 0 }
+    const out = await createPtyPrivateFirst({
+      connection: connCreateFor((q) => terminalFor(q as never, "validation.failed")) as never,
+      getClient: () => sdkCreate(seen) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+    })
+    expect(out).toEqual({ kind: "terminal", code: "validation.failed" })
+    expect(seen.n).toBe(0)
+  })
+
+  for (const reason of ["unavailable", "invalid", "ambiguous", "retryable", "closed", "timeout"] as const) {
+    test(`${reason} takes exactly one same-tuple SDK fallback`, async () => {
+      const seen = { n: 0, directory: undefined as unknown, cwd: undefined as unknown, title: undefined as unknown }
+      let conn: unknown
+      if (reason === "unavailable") conn = { isPrivateAvailable: () => false }
+      else if (reason === "invalid") conn = connCreateFor(() => ({ garbled: true }))
+      else if (reason === "ambiguous") conn = connCreateFor((q) => ambiguousFor(q as never))
+      else if (reason === "retryable") conn = connCreateFor((q) => retryableFor(q as never))
+      else if (reason === "closed")
+        conn = {
+          isPrivateAvailable: () => true,
+          privatePtyCreateOutcomeWithHandle: () => {
+            throw new Error("Private peer unavailable")
+          },
+        }
+      else
+        conn = {
+          isPrivateAvailable: () => true,
+          privatePtyCreateOutcomeWithHandle: () => ({ id: 9, promise: new Promise(() => {}), cancel: () => true }),
+        }
+      const out = await createPtyPrivateFirst({
+        connection: conn as never,
+        getClient: () => sdkCreate(seen, { id: PTY, title: "Terminal 1" }) as never,
+        directory: DIR,
+        cwd: DIR,
+        title: "Terminal 1",
+        timeoutMs: reason === "timeout" ? 20 : 3000,
+      })
+      expect(seen.n).toBe(1)
+      expect(seen.directory).toBe(DIR)
+      expect(seen.cwd).toBe(DIR)
+      expect(seen.title).toBe("Terminal 1")
+      expect(out).toEqual({ kind: "ok", via: "sdk", id: PTY, title: "Terminal 1" })
+    })
+  }
+
+  test("validated private transport failure takes exactly one same-tuple SDK fallback", async () => {
+    const seen = { n: 0, directory: undefined as unknown, cwd: undefined as unknown, title: undefined as unknown }
+    const out = await createPtyPrivateFirst({
+      connection: connCreateFor((q) => transportFor(q as never)) as never,
+      getClient: () => sdkCreate(seen, { id: PTY, title: "Terminal 1" }) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+    })
+    expect(out).toEqual({ kind: "ok", via: "sdk", id: PTY, title: "Terminal 1" })
+    expect(seen.n).toBe(1)
+    expect(seen.directory).toBe(DIR)
+    expect(seen.cwd).toBe(DIR)
+    expect(seen.title).toBe("Terminal 1")
+  })
+
+  test("missing capability falls back once with no retry", async () => {
+    const seen = { n: 0 }
+    const conn = {
+      isPrivateAvailable: () => {
+        throw new Error("missing pty/create capability")
+      },
+    }
+    const out = await createPtyPrivateFirst({
+      connection: conn as never,
+      getClient: () => sdkCreate(seen, { id: PTY, title: "Terminal 1" }) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+    })
+    expect(out).toEqual({ kind: "ok", via: "sdk", id: PTY, title: "Terminal 1" })
+    expect(seen.n).toBe(1)
+  })
+
+  test("SDK error surfaces as sdkError with exactly one private attempt", async () => {
+    const priv = { n: 0, cancel: 0 }
+    const seen = { n: 0 }
+    const out = await createPtyPrivateFirst({
+      connection: connCreateFor((q) => ambiguousFor(q as never), priv) as never,
+      getClient: () => sdkCreate(seen, undefined, new Error("denied")) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+    })
+    expect(priv.n).toBe(1)
+    expect(seen.n).toBe(1)
+    expect(out.kind).toBe("sdkError")
+  })
+
+  test("timeout exact-cancels the pending by id with opaque opId only", async () => {
+    let cancelled: string | null = null
+    const conn = {
+      isPrivateAvailable: () => true,
+      privatePtyCreateOutcomeWithHandle: (q: { opId: string }) => ({
+        id: 42,
+        promise: new Promise(() => {}),
+        cancel: (msg?: string) => {
+          cancelled = msg ?? ""
+          return true
+        },
+      }),
+      privatePtyUpdateOutcomeWithHandle: () => {
+        throw new Error("unexpected")
+      },
+      privatePtyRemoveOutcomeWithHandle: () => {
+        throw new Error("unexpected")
+      },
+    }
+    const seen = { n: 0 }
+    const out = await createPtyPrivateFirst({
+      connection: conn as never,
+      getClient: () => sdkCreate(seen, { id: PTY, title: "Terminal 1" }) as never,
+      directory: DIR,
+      cwd: DIR,
+      title: "Terminal 1",
+      timeoutMs: 20,
+    })
+    expect(out).toEqual({ kind: "ok", via: "sdk", id: PTY, title: "Terminal 1" })
+    expect(cancelled ?? "").toContain("private pty-create timeout")
+    expect(cancelled ?? "").toContain("pty-create:")
+    expect(cancelled ?? "").not.toContain(DIR)
+  })
+
+  test("settled create success survives post-response epoch drift", async () => {
+    const req = buildPtyCreateReq(DIR, { cwd: DIR, title: "Terminal 1" })
+    const raw = okCreateFor(req)
+    const { wrapPtyCreateOutcomeForOwner } = await import("../services/cli-backend/serve-private-pty")
+    const wrapped = wrapPtyCreateOutcomeForOwner(
+      { epochAtCall: 1, isCurrent: () => false, invalidate: () => {} },
+      () => true,
+      () => {},
+      { id: 1, promise: Promise.resolve({ kind: "valid" as const, result: raw }) },
+      req,
+    )
+    const outcome = await wrapped.promise
+    expect(outcome.kind).toBe("valid")
+    if (outcome.kind === "valid") expect((outcome.result as { status: string }).status).toBe("succeeded")
+  })
+
+  test("unsettled create drift remains ambiguous for fallback", async () => {
+    const req = buildPtyCreateReq(DIR, { cwd: DIR, title: "Terminal 1" })
+    const raw = ambiguousFor(req)
+    const { wrapPtyCreateOutcomeForOwner } = await import("../services/cli-backend/serve-private-pty")
+    const wrapped = wrapPtyCreateOutcomeForOwner(
       { epochAtCall: 1, isCurrent: () => false, invalidate: () => {} },
       () => true,
       () => {},
