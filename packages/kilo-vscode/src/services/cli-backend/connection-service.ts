@@ -196,6 +196,7 @@ export class KiloConnectionService {
   private readonly firstModelEventMessages = new Set<string>()
 
   private readonly viewerId = crypto.randomUUID()
+  private viewedSequence = 0
   private active = true
   private windowStateDisposable: vscode.Disposable | null = null
   private checkinTimer: ReturnType<typeof setInterval> | null = null
@@ -768,8 +769,10 @@ export class KiloConnectionService {
 
     this.viewedSending = true
     this.viewedDirty = false
+    this.viewedSequence += 1
+    const seq = this.viewedSequence
     void this.client.session
-      .viewed({ viewer: { id: this.viewerId, active: this.active }, attached: [...attached], visible: [...visible] })
+      .viewed({ viewer: { id: this.viewerId, active: this.active, sequence: seq }, attached: [...attached], visible: [...visible] })
       .catch((err) => console.warn("[Kilo New] ConnectionService: viewed flush failed:", err))
       .finally(() => {
         this.viewedSending = false
@@ -811,8 +814,10 @@ export class KiloConnectionService {
     this.deferredSessionList.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
+      this.viewedSequence += 1
+      const seq = this.viewedSequence
       void this.client.session
-        .viewed({ viewer: { id: this.viewerId, active: false }, attached: [], visible: [] })
+        .viewed({ viewer: { id: this.viewerId, active: false, sequence: seq }, attached: [], visible: [] })
         .catch(() => {})
     }
     this.attached.clear()

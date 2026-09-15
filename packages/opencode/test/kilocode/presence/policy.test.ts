@@ -53,11 +53,11 @@ describe("dedupe", () => {
 describe("validateSnapshot", () => {
   test("accepts a well-formed snapshot and dedupes arrays", () => {
     const r = validateSnapshot({
-      viewer: { id: UUID, active: true },
+      viewer: { id: UUID, active: true, sequence: 1 },
       attached: ["ses_s1", "ses_s1", "ses_s2"],
       visible: ["ses_v1", "ses_v1"],
     })
-    expect(r).toEqual({ ok: true, viewer: { id: UUID, active: true }, attached: ["ses_s1", "ses_s2"], visible: ["ses_v1"] })
+    expect(r).toEqual({ ok: true, viewer: { id: UUID, active: true, sequence: 1 }, attached: ["ses_s1", "ses_s2"], visible: ["ses_v1"] })
   })
 
   test("missing viewer yields missing_viewer", () => {
@@ -66,19 +66,39 @@ describe("validateSnapshot", () => {
   })
 
   test("non-UUID viewer id yields bad_viewer_id", () => {
-    expect(validateSnapshot({ viewer: { id: "not-a-uuid" } })).toEqual({ ok: false, error: { kind: "bad_viewer_id" } })
-    expect(validateSnapshot({ viewer: { id: "" } })).toEqual({ ok: false, error: { kind: "bad_viewer_id" } })
+    expect(validateSnapshot({ viewer: { id: "not-a-uuid", sequence: 1 } })).toEqual({ ok: false, error: { kind: "bad_viewer_id" } })
+    expect(validateSnapshot({ viewer: { id: "", sequence: 1 } })).toEqual({ ok: false, error: { kind: "bad_viewer_id" } })
   })
 
   test("UUID with an invalid variant nibble yields bad_viewer_id", () => {
-    expect(validateSnapshot({ viewer: { id: "11111111-1111-1111-1111-111111111111" } })).toEqual({
+    expect(validateSnapshot({ viewer: { id: "11111111-1111-1111-1111-111111111111", sequence: 1 } })).toEqual({
       ok: false,
       error: { kind: "bad_viewer_id" },
     })
   })
 
+  test("missing sequence yields missing_sequence", () => {
+    expect(validateSnapshot({ viewer: { id: UUID } })).toEqual({ ok: false, error: { kind: "missing_sequence" } })
+    expect(validateSnapshot({ viewer: { id: UUID, active: true } })).toEqual({ ok: false, error: { kind: "missing_sequence" } })
+  })
+
+  test("non-integer or negative sequence yields bad_sequence", () => {
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: -1 } })).toEqual({ ok: false, error: { kind: "bad_sequence" } })
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: 1.5 } })).toEqual({ ok: false, error: { kind: "bad_sequence" } })
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: "1" } })).toEqual({ ok: false, error: { kind: "bad_sequence" } })
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: Number.MAX_SAFE_INTEGER + 1 } })).toEqual({
+      ok: false,
+      error: { kind: "bad_sequence" },
+    })
+  })
+
+  test("zero sequence is accepted", () => {
+    const r = validateSnapshot({ viewer: { id: UUID, sequence: 0 }, attached: [], visible: [] })
+    expect(r).toEqual({ ok: true, viewer: { id: UUID, active: false, sequence: 0 }, attached: [], visible: [] })
+  })
+
   test("session id missing the ses prefix yields bad_session_id", () => {
-    expect(validateSnapshot({ viewer: { id: UUID }, attached: ["no-prefix"] })).toEqual({
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: 1 }, attached: ["no-prefix"] })).toEqual({
       ok: false,
       error: { kind: "bad_session_id", id: "no-prefix" },
     })
@@ -86,7 +106,7 @@ describe("validateSnapshot", () => {
 
   test("attached over the per-viewer cap yields attached_too_many", () => {
     const attached = Array.from({ length: 1001 }, (_, i) => `ses_${i}`)
-    expect(validateSnapshot({ viewer: { id: UUID }, attached })).toEqual({
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: 1 }, attached })).toEqual({
       ok: false,
       error: { kind: "attached_too_many" },
     })
@@ -94,7 +114,7 @@ describe("validateSnapshot", () => {
 
   test("visible over the per-viewer cap yields visible_too_many", () => {
     const visible = Array.from({ length: 200 }, (_, i) => `ses_${i}`)
-    expect(validateSnapshot({ viewer: { id: UUID }, visible })).toEqual({
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: 1 }, visible })).toEqual({
       ok: false,
       error: { kind: "visible_too_many" },
     })
@@ -102,23 +122,23 @@ describe("validateSnapshot", () => {
 
   test("oversized session id yields bad_session_id with the offending id", () => {
     const long = "ses_" + "x".repeat(231)
-    expect(validateSnapshot({ viewer: { id: UUID }, attached: [long] })).toEqual({
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: 1 }, attached: [long] })).toEqual({
       ok: false,
       error: { kind: "bad_session_id", id: long },
     })
   })
 
   test("active is coerced strictly to a boolean", () => {
-    const t = validateSnapshot({ viewer: { id: UUID, active: true }, attached: [], visible: [] })
+    const t = validateSnapshot({ viewer: { id: UUID, active: true, sequence: 1 }, attached: [], visible: [] })
     expect(t.ok && t.viewer.active).toBe(true)
-    const str = validateSnapshot({ viewer: { id: UUID, active: "true" }, attached: [], visible: [] })
+    const str = validateSnapshot({ viewer: { id: UUID, active: "true", sequence: 1 }, attached: [], visible: [] })
     expect(str.ok && str.viewer.active).toBe(false)
   })
 
   test("non-array attached and visible coerce to empty arrays", () => {
-    expect(validateSnapshot({ viewer: { id: UUID }, attached: null, visible: 42 })).toEqual({
+    expect(validateSnapshot({ viewer: { id: UUID, sequence: 2 }, attached: null, visible: 42 })).toEqual({
       ok: true,
-      viewer: { id: UUID, active: false },
+      viewer: { id: UUID, active: false, sequence: 2 },
       attached: [],
       visible: [],
     })
@@ -128,8 +148,8 @@ describe("validateSnapshot", () => {
 describe("attachedUnion", () => {
   test("unions attached across viewers including inactive ones", () => {
     const viewers: ViewerState[] = [
-      { id: "u1", active: true, attached: ["a", "b"], visible: [], lastSeen: 0 },
-      { id: "u2", active: false, attached: ["b", "c"], visible: [], lastSeen: 0 },
+      { id: "u1", active: true, sequence: 1, attached: ["a", "b"], visible: [], lastSeen: 0 },
+      { id: "u2", active: false, sequence: 1, attached: ["b", "c"], visible: [], lastSeen: 0 },
     ]
     expect(attachedUnion(viewers)).toEqual(["a", "b", "c"])
   })
@@ -139,8 +159,8 @@ describe("visibleUnion", () => {
   test("only active viewers contribute, deduped and capped at 199", () => {
     const ids = Array.from({ length: 201 }, (_, i) => `s${String(i).padStart(4, "0")}`)
     const viewers: ViewerState[] = [
-      { id: "u1", active: true, attached: [], visible: ids, lastSeen: 0 },
-      { id: "u2", active: false, attached: [], visible: ["z_hidden"], lastSeen: 0 },
+      { id: "u1", active: true, sequence: 1, attached: [], visible: ids, lastSeen: 0 },
+      { id: "u2", active: false, sequence: 1, attached: [], visible: ["z_hidden"], lastSeen: 0 },
     ]
     const r = visibleUnion(viewers)
     expect(r.ids.length).toBe(199)
@@ -155,8 +175,8 @@ describe("expiredViewerIds", () => {
   test("expires at exactly lastSeen + TTL and not one ms earlier", () => {
     const now = 1_000_000
     const viewers: ViewerState[] = [
-      { id: "expired", active: true, attached: [], visible: [], lastSeen: now - 120_000 },
-      { id: "alive", active: true, attached: [], visible: [], lastSeen: now - 119_999 },
+      { id: "expired", active: true, sequence: 1, attached: [], visible: [], lastSeen: now - 120_000 },
+      { id: "alive", active: true, sequence: 1, attached: [], visible: [], lastSeen: now - 119_999 },
     ]
     expect(expiredViewerIds(viewers, now)).toEqual(["expired"])
   })
@@ -166,8 +186,8 @@ describe("nextExpiryDeadline", () => {
   test("returns the earliest future deadline", () => {
     const now = 1_000_000
     const viewers: ViewerState[] = [
-      { id: "a", active: true, attached: [], visible: [], lastSeen: now - 50_000 },
-      { id: "b", active: true, attached: [], visible: [], lastSeen: now - 10_000 },
+      { id: "a", active: true, sequence: 1, attached: [], visible: [], lastSeen: now - 50_000 },
+      { id: "b", active: true, sequence: 1, attached: [], visible: [], lastSeen: now - 10_000 },
     ]
     expect(nextExpiryDeadline(viewers, now)).toBe(now + 70_000)
   })
@@ -175,7 +195,7 @@ describe("nextExpiryDeadline", () => {
   test("returns undefined when all viewers are expired", () => {
     const now = 1_000_000
     const viewers: ViewerState[] = [
-      { id: "a", active: true, attached: [], visible: [], lastSeen: now - 120_000 },
+      { id: "a", active: true, sequence: 1, attached: [], visible: [], lastSeen: now - 120_000 },
     ]
     expect(nextExpiryDeadline(viewers, now)).toBeUndefined()
   })

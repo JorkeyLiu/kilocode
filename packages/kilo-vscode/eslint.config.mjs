@@ -172,7 +172,15 @@ export default [
     // (peer method plus thin owner delegation) remain inline.
     // connection-service.ts measures 3813 lines, so 3813 is the smallest
     // passing cap.
-    rules: { "max-lines": ["error", 3813] },
+    // Raised 3813 → 3818 for the `session/viewed` monotonic-ordering unit:
+    // the producer-owned strictly increasing per-viewer `sequence` (one
+    // viewer UUID per service lifetime, incremented per emitted snapshot
+    // including the dispose detach) must live alongside the existing
+    // flush/coalesce branches. Ordering enforcement lives in the CLI
+    // `KiloViewers.update`; only the counter and its two emission points
+    // remain inline. connection-service.ts measures 3818 lines, so 3818
+    // is the smallest passing cap.
+    rules: { "max-lines": ["error", 3818] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

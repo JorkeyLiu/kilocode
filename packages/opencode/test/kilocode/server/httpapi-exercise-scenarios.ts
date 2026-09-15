@@ -463,7 +463,7 @@ export const kiloScenarios: Scenario[] = [
       path: "/session/viewed",
       headers: ctx.headers(),
       body: {
-        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true },
+        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true, sequence: 1 },
         attached: [],
         visible: [],
       },
@@ -479,7 +479,7 @@ export const kiloScenarios: Scenario[] = [
       path: "/session/viewed",
       headers: ctx.headers(),
       body: {
-        viewer: { id: "not-a-uuid", active: true },
+        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true },
         attached: [],
         visible: [],
       },
@@ -491,7 +491,31 @@ export const kiloScenarios: Scenario[] = [
       path: "/session/viewed",
       headers: ctx.headers(),
       body: {
-        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true },
+        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true, sequence: -1 },
+        attached: [],
+        visible: [],
+      },
+    }))
+    .status(400),
+  http.protected
+    .post("/session/viewed", "session.viewed")
+    .at((ctx) => ({
+      path: "/session/viewed",
+      headers: ctx.headers(),
+      body: {
+        viewer: { id: "not-a-uuid", active: true, sequence: 1 },
+        attached: [],
+        visible: [],
+      },
+    }))
+    .status(400),
+  http.protected
+    .post("/session/viewed", "session.viewed")
+    .at((ctx) => ({
+      path: "/session/viewed",
+      headers: ctx.headers(),
+      body: {
+        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true, sequence: 1 },
         attached: ["ses_" + "x".repeat(231)],
         visible: [],
       },
@@ -503,7 +527,7 @@ export const kiloScenarios: Scenario[] = [
       path: "/session/viewed",
       headers: ctx.headers(),
       body: {
-        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true },
+        viewer: { id: "11111111-1111-4111-8111-111111111111", active: true, sequence: 1 },
         attached: Array.from({ length: 1001 }, () => "ses_1"),
         visible: [],
       },

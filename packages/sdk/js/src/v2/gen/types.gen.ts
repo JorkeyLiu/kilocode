@@ -9515,6 +9515,7 @@ export type SessionViewedData = {
     viewer: {
       id: string
       active: boolean
+      sequence: number
     }
     attached: Array<string>
     visible: Array<string>

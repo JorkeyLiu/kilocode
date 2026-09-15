@@ -77,6 +77,7 @@ export function useSessionEffects(deps: {
 }) {
   const pty = process.env.KILO_PTY_ID
   const viewerId = crypto.randomUUID()
+  let seq = 0
   const renderer = useRenderer()
   const session = createMemo(() => (deps.route.data.type === "session" ? deps.route.data.sessionID : undefined))
   let active = true
@@ -85,7 +86,8 @@ export function useSessionEffects(deps: {
   function send() {
     const id = session()
     const ids = id ? [id] : []
-    deps.sdk.client.session.viewed({ viewer: { id: viewerId, active }, attached: ids, visible: ids }).catch(() => {})
+    seq += 1
+    deps.sdk.client.session.viewed({ viewer: { id: viewerId, active, sequence: seq }, attached: ids, visible: ids }).catch(() => {})
   }
 
   createEffect(() => send())
@@ -138,8 +140,9 @@ export function useSessionEffects(deps: {
     offConnected()
     clearInterval(timer)
     active = false
+    seq += 1
     deps.sdk.client.session
-      .viewed({ viewer: { id: viewerId, active: false }, attached: [], visible: [] })
+      .viewed({ viewer: { id: viewerId, active: false, sequence: seq }, attached: [], visible: [] })
       .catch(() => {})
   })
 }

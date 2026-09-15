@@ -95,7 +95,7 @@ const uid = "11111111-1111-4111-8111-111111111111"
 
 function run(body: (viewers: {
   update: (s: {
-    viewer: { id: string; active: boolean }
+    viewer: { id: string; active: boolean; sequence: number }
     attached: readonly string[]
     visible: readonly string[]
   }) => Effect.Effect<void>
@@ -120,7 +120,7 @@ describe("KiloViewers.Service presence contexts", () => {
     attachedCalls.length = 0
     current = new FakeClient()
     await run((v) =>
-      v.update({ viewer: { id: uid, active: true }, attached: ["ses_a"], visible: ["ses_a"] }),
+      v.update({ viewer: { id: uid, active: true, sequence: 1 }, attached: ["ses_a"], visible: ["ses_a"] }),
     )
     const subs = subscribeCalls()
     expect(subs.length).toBe(1)
@@ -133,7 +133,7 @@ describe("KiloViewers.Service presence contexts", () => {
     attachedCalls.length = 0
     current = new FakeClient()
     await run((v) =>
-      v.update({ viewer: { id: uid, active: false }, attached: ["ses_a"], visible: ["ses_a"] }),
+      v.update({ viewer: { id: uid, active: false, sequence: 1 }, attached: ["ses_a"], visible: ["ses_a"] }),
     )
     expect(subscribeCalls().length).toBe(0)
     expect(current.calls.some((c) => c.type === "connect")).toBe(false)
@@ -147,8 +147,8 @@ describe("KiloViewers.Service presence contexts", () => {
     const next = Array.from({ length: 199 }, (_, i) => `ses_new_${i}`)
     await run((v) =>
       Effect.gen(function* () {
-        yield* v.update({ viewer: { id: uid, active: true }, attached: olds, visible: olds })
-        yield* v.update({ viewer: { id: uid, active: true }, attached: next, visible: next })
+        yield* v.update({ viewer: { id: uid, active: true, sequence: 1 }, attached: olds, visible: olds })
+        yield* v.update({ viewer: { id: uid, active: true, sequence: 2 }, attached: next, visible: next })
       }),
     )
     const order = current.calls.filter((c) => c.type === "subscribe" || c.type === "unsubscribe")
@@ -171,7 +171,7 @@ describe("KiloViewers.Service presence contexts", () => {
     process.env.KILO_DISABLE_PRESENCE = "1"
     try {
       await run((v) =>
-        v.update({ viewer: { id: uid, active: true }, attached: ["ses_a"], visible: ["ses_a"] }),
+        v.update({ viewer: { id: uid, active: true, sequence: 1 }, attached: ["ses_a"], visible: ["ses_a"] }),
       )
       expect(subscribeCalls().length).toBe(0)
       expect(current.calls.some((c) => c.type === "connect")).toBe(false)
@@ -194,11 +194,11 @@ describe("KiloViewers.Service viewer lifecycle", () => {
       setSystemTime(base)
       await run((v) =>
         Effect.gen(function* () {
-          yield* v.update({ viewer: { id: uid, active: true }, attached: ["ses_a"], visible: ["ses_a"] })
+          yield* v.update({ viewer: { id: uid, active: true, sequence: 1 }, attached: ["ses_a"], visible: ["ses_a"] })
           setSystemTime(base + 119_999)
-          yield* v.update({ viewer: { id: uidB, active: true }, attached: ["ses_b"], visible: ["ses_b"] })
+          yield* v.update({ viewer: { id: uidB, active: true, sequence: 1 }, attached: ["ses_b"], visible: ["ses_b"] })
           setSystemTime(base + 120_000)
-          yield* v.update({ viewer: { id: uidB, active: true }, attached: ["ses_b"], visible: ["ses_b"] })
+          yield* v.update({ viewer: { id: uidB, active: true, sequence: 2 }, attached: ["ses_b"], visible: ["ses_b"] })
         }),
       )
       expect(attachedCalls.length).toBe(4)
@@ -232,12 +232,12 @@ describe("KiloViewers.Service viewer lifecycle", () => {
     await run(
       (v) =>
         Effect.gen(function* () {
-          yield* v.update({ viewer: { id: uid, active: true }, attached: ["ses_a"], visible: ["ses_a"] })
+          yield* v.update({ viewer: { id: uid, active: true, sequence: 1 }, attached: ["ses_a"], visible: ["ses_a"] })
           first = current
           authInfo = { type: "wellknown", key: "wk", token: "tok2" } as unknown as Auth.Info
           yield* v.invalidateAuth()
           second = current
-          yield* v.update({ viewer: { id: uid, active: true }, attached: ["ses_a"], visible: ["ses_a"] })
+          yield* v.update({ viewer: { id: uid, active: true, sequence: 2 }, attached: ["ses_a"], visible: ["ses_a"] })
         }),
       KiloViewers.layer.pipe(Layer.provide(mutableAuthLayer)),
     )
@@ -256,7 +256,7 @@ describe("KiloViewers.Service viewer lifecycle", () => {
     attachedCalls.length = 0
     current = new FakeClient()
     await run((v) =>
-      v.update({ viewer: { id: uid, active: true }, attached: ["ses_a"], visible: ["ses_a"] }),
+      v.update({ viewer: { id: uid, active: true, sequence: 1 }, attached: ["ses_a"], visible: ["ses_a"] }),
     )
     const types = current.calls.map((c) => c.type)
     expect(types).toContain("connect")

@@ -183,9 +183,17 @@ export namespace KiloViewers {
           log.warn("rejected viewer snapshot", { error: result.error.kind })
           return
         }
+        // Process-local monotonic ordering per viewer identity: an older
+        // in-flight snapshot must never overwrite a newer accepted snapshot.
+        // Duplicate/equal or lower sequences are harmless and must not refresh
+        // lastSeen (no TTL extension). No yield between check and set, so the
+        // compare-and-store is atomic within this runtime.
+        const prev = s.viewers.get(result.viewer.id)
+        if (prev !== undefined && result.viewer.sequence <= prev.sequence) return
         s.viewers.set(result.viewer.id, {
           id: result.viewer.id,
           active: result.viewer.active,
+          sequence: result.viewer.sequence,
           attached: dedupe(result.attached),
           visible: dedupe(result.visible),
           lastSeen: Date.now(),

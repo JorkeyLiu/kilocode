@@ -4982,6 +4982,7 @@ export class Session2 extends HeyApiClient {
       viewer?: {
         id: string
         active: boolean
+        sequence: number
       }
       attached?: Array<string>
       visible?: Array<string>

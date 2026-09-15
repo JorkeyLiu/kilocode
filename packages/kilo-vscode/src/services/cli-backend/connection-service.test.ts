@@ -244,7 +244,7 @@ describe("KiloConnectionService SSE dispatch config revision ownership (LOCK-001
 describe("KiloConnectionService viewed sessions", () => {
   test("keeps Agent Manager sessions when sidebar visibility changes during a flush", async () => {
     const service = new KiloConnectionService({} as any)
-    const calls: Array<{ viewer: { id: string; active: boolean }; attached: string[]; visible: string[] }> = []
+    const calls: Array<{ viewer: { id: string; active: boolean; sequence: number }; attached: string[]; visible: string[] }> = []
     let release!: () => void
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -254,7 +254,7 @@ describe("KiloConnectionService viewed sessions", () => {
 
     ;(service as any).client = {
       session: {
-        viewed: async (input: { viewer: { id: string; active: boolean }; attached: string[]; visible: string[] }) => {
+        viewed: async (input: { viewer: { id: string; active: boolean; sequence: number }; attached: string[]; visible: string[] }) => {
           calls.push(input)
           active += 1
           max = Math.max(max, active)
@@ -285,6 +285,11 @@ describe("KiloConnectionService viewed sessions", () => {
     await Bun.sleep(175)
     expect([...calls[2].visible].sort()).toEqual(["am-1"])
     expect([...calls[2].attached].sort()).toEqual(["am-1", "am-2"])
+    expect(calls[0].viewer.sequence).toBe(1)
+    expect(calls[1].viewer.sequence).toBe(2)
+    expect(calls[2].viewer.sequence).toBe(3)
+    expect(calls[0].viewer.id).toBe(calls[1].viewer.id)
+    expect(calls[1].viewer.id).toBe(calls[2].viewer.id)
   })
 
   test("window focus gates viewer.active but not attachment", async () => {
@@ -301,7 +306,7 @@ describe("KiloConnectionService viewed sessions", () => {
 
     try {
       const service = new KiloConnectionService({} as any)
-      const calls: Array<{ viewer: { id: string; active: boolean }; attached: string[]; visible: string[] }> = []
+      const calls: Array<{ viewer: { id: string; active: boolean; sequence: number }; attached: string[]; visible: string[] }> = []
       ;(service as any).client = {
         session: {
           viewed: async (input: (typeof calls)[number]) => {
@@ -322,14 +327,40 @@ describe("KiloConnectionService viewed sessions", () => {
       expect(calls[1].viewer.active).toBe(false)
       expect([...calls[1].visible].sort()).toEqual(["ses-1"])
       expect([...calls[1].attached].sort()).toEqual(["ses-1", "ses-2"])
+      expect(calls[1].viewer.sequence).toBeGreaterThan(calls[0].viewer.sequence)
+      expect(calls[0].viewer.id).toBe(calls[1].viewer.id)
     } finally {
       window.onDidChangeWindowState = original
     }
   })
 
+  test("emits one viewer UUID with strictly increasing sequence", async () => {
+    const service = new KiloConnectionService({} as any)
+    const calls: Array<{ viewer: { id: string; active: boolean; sequence: number }; attached: string[]; visible: string[] }> = []
+    ;(service as any).client = {
+      session: {
+        viewed: async (input: (typeof calls)[number]) => {
+          calls.push(input)
+        },
+      },
+    }
+    service.registerVisible("sidebar", ["ses-1"])
+    await Bun.sleep(175)
+    service.registerVisible("sidebar", ["ses-2"])
+    await Bun.sleep(175)
+    service.registerVisible("sidebar", [])
+    await Bun.sleep(175)
+    expect(calls).toHaveLength(3)
+    const id = calls[0].viewer.id
+    expect(id).toMatch(/^[0-9a-f-]{36}$/i)
+    for (const c of calls) expect(c.viewer.id).toBe(id)
+    const seqs = calls.map((c) => c.viewer.sequence)
+    expect(seqs).toEqual([1, 2, 3])
+  })
+
   test("sends snapshots while remote control is disabled", async () => {
     const service = new KiloConnectionService({} as any)
-    const calls: Array<{ viewer: { id: string; active: boolean }; attached: string[]; visible: string[] }> = []
+    const calls: Array<{ viewer: { id: string; active: boolean; sequence: number }; attached: string[]; visible: string[] }> = []
     ;(service as any).client = {
       session: {
         viewed: async (input: (typeof calls)[number]) => {

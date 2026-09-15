@@ -44,9 +44,16 @@ describe("TUI session presence contract", () => {
     const body = effects()
     expect(body).toContain('deps.route.data.type === "session" ? deps.route.data.sessionID : undefined')
     expect(body).toContain("const ids = id ? [id] : []")
+    expect(body).toContain("seq += 1")
     expect(flat(body)).toContain(
-      "deps.sdk.client.session.viewed({ viewer: { id: viewerId, active }, attached: ids, visible: ids }).catch(() => {})",
+      "deps.sdk.client.session.viewed({ viewer: { id: viewerId, active, sequence: seq }, attached: ids, visible: ids }).catch(() => {})",
     )
+  })
+
+  test("viewer sequence is strictly increasing per producer lifetime", () => {
+    const body = effects()
+    expect(body).toContain("let seq = 0")
+    expect(flat(cleanup())).toContain("seq += 1")
   })
 
   test("focus sets active=true, blur sets active=false, both resend the snapshot", () => {
@@ -73,6 +80,6 @@ describe("TUI session presence contract", () => {
     const tail = cleanup()
     expect(tail).toContain('renderer.off("focus", onFocus)')
     expect(tail).toContain('renderer.off("blur", onBlur)')
-    expect(flat(tail)).toContain(".viewed({ viewer: { id: viewerId, active: false }, attached: [], visible: [] })")
+    expect(flat(tail)).toContain(".viewed({ viewer: { id: viewerId, active: false, sequence: seq }, attached: [], visible: [] })")
   })
 })

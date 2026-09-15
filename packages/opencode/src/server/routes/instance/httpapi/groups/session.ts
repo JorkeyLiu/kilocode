@@ -104,6 +104,7 @@ export const ViewedPayload = Schema.Struct({
   viewer: Schema.Struct({
     id: Schema.String.check(Schema.isUUID()),
     active: Schema.Boolean,
+    sequence: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
   }),
   attached: Schema.Array(PresenceSessionId).check(Schema.isMaxLength(1000)),
   visible: Schema.Array(PresenceSessionId).check(Schema.isMaxLength(199)),

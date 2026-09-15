@@ -9344,11 +9344,17 @@
                       },
                       "active": {
                         "type": "boolean"
+                      },
+                      "sequence": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
                       }
                     },
                     "required": [
                       "id",
-                      "active"
+                      "active",
+                      "sequence"
                     ],
                     "additionalProperties": false
                   },

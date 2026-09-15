@@ -10,7 +10,7 @@ import {
 } from "./context"
 
 export type ViewerSnapshot = {
-  viewer: { id: string; active: boolean }
+  viewer: { id: string; active: boolean; sequence: number }
   attached: readonly string[]
   visible: readonly string[]
 }
@@ -18,6 +18,7 @@ export type ViewerSnapshot = {
 export type ViewerState = {
   id: string
   active: boolean
+  sequence: number
   attached: string[]
   visible: string[]
   lastSeen: number
@@ -26,6 +27,8 @@ export type ViewerState = {
 export type ValidationError =
   | { kind: "missing_viewer" }
   | { kind: "bad_viewer_id" }
+  | { kind: "missing_sequence" }
+  | { kind: "bad_sequence" }
   | { kind: "attached_too_many" }
   | { kind: "visible_too_many" }
   | { kind: "bad_session_id"; id: string }
@@ -49,11 +52,11 @@ export function dedupe(ids: readonly string[]): string[] {
 }
 
 type ValidationResult =
-  | { ok: true; viewer: { id: string; active: boolean }; attached: string[]; visible: string[] }
+  | { ok: true; viewer: { id: string; active: boolean; sequence: number }; attached: string[]; visible: string[] }
   | { ok: false; error: ValidationError }
 
 export function validateSnapshot(input: {
-  viewer?: { id?: unknown; active?: unknown }
+  viewer?: { id?: unknown; active?: unknown; sequence?: unknown }
   attached?: unknown
   visible?: unknown
 }): ValidationResult {
@@ -61,6 +64,10 @@ export function validateSnapshot(input: {
   if (!v || typeof v !== "object") return { ok: false, error: { kind: "missing_viewer" } }
   const id = v.id
   if (typeof id !== "string" || !UUID_RE.test(id)) return { ok: false, error: { kind: "bad_viewer_id" } }
+  const seq = v.sequence
+  if (seq === undefined || seq === null) return { ok: false, error: { kind: "missing_sequence" } }
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0)
+    return { ok: false, error: { kind: "bad_sequence" } }
 
   const rawAttached: readonly unknown[] = Array.isArray(input.attached) ? input.attached : []
   const rawVisible: readonly unknown[] = Array.isArray(input.visible) ? input.visible : []
@@ -82,7 +89,7 @@ export function validateSnapshot(input: {
 
   return {
     ok: true,
-    viewer: { id, active: v.active === true },
+    viewer: { id, active: v.active === true, sequence: v.sequence as number },
     attached: dedupe(rawAttached as readonly string[]),
     visible: dedupe(rawVisible as readonly string[]),
   }
