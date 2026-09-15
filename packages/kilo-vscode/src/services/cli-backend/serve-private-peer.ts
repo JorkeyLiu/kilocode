@@ -86,6 +86,17 @@ import type {
   ServePrivateRemoteToggleResult,
 } from "./serve-private-remote-toggle"
 import {
+  makeSandboxSetCancel,
+  PrivateSandboxSetValidationError,
+  requestSandboxSetOutcome,
+  validateSandboxSetRequest,
+} from "./serve-private-sandbox-set"
+import type {
+  PrivateSandboxSetWireOutcome,
+  ServePrivateSandboxSetRequest,
+  ServePrivateSandboxSetResult,
+} from "./serve-private-sandbox-set"
+import {
   makeAuthRemoveCancel,
   PrivateAuthRemoveValidationError,
   requestAuthRemoveOutcome,
@@ -3433,6 +3444,57 @@ export class ServePrivatePeer {
     const promise = (async (): Promise<ServePrivateRemoteToggleResult> => {
       const wire = await outcome.promise
       if (wire.kind === "invalid") throw new PrivateRemoteToggleValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
+  privateSandboxSetOutcomeWithHandle(req: ServePrivateSandboxSetRequest): {
+    id: number
+    promise: Promise<PrivateSandboxSetWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSandboxSetRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(req.op)) throw new Error(`Private peer missing ${req.op} capability`)
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const op = req.op
+    return requestSandboxSetOutcome(
+      peerAtCall as unknown as import("./serve-private-sandbox-set").SandboxSetRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeSandboxSetCancel(
+          id,
+          {
+            isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+            tryCancel: (msg) => this.tryCancelPending(id, msg),
+            invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+          },
+          op,
+        ),
+      req,
+    )
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid sandbox-set results; invalid wire rejects
+   * with PrivateSandboxSetValidationError and never resolves as a normal result.
+   */
+  privateSandboxSetWithHandle(req: ServePrivateSandboxSetRequest): {
+    id: number
+    promise: Promise<ServePrivateSandboxSetResult>
+    cancel: (msg?: string) => boolean
+  } {
+    const outcome = this.privateSandboxSetOutcomeWithHandle(req)
+    const promise = (async (): Promise<ServePrivateSandboxSetResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivateSandboxSetValidationError(wire.detail)
       return wire.result
     })()
     return { id: outcome.id, promise, cancel: outcome.cancel }

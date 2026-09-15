@@ -25,6 +25,10 @@ export const SandboxSupport = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 
+export const SandboxSetPayload = Schema.Struct({
+  enabled: Schema.Boolean,
+})
+
 export const SandboxApi = HttpApi.make("sandbox")
   .add(
     HttpApiGroup.make("sandbox")
@@ -61,6 +65,19 @@ export const SandboxApi = HttpApi.make("sandbox")
             identifier: "sandbox.toggle",
             summary: "Toggle session sandbox",
             description: "Toggle and persist the sandbox state for one session.",
+          }),
+        ),
+        HttpApiEndpoint.post("set", `${root}/set`, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SandboxSetPayload,
+          success: described(SandboxStatus, "Updated session sandbox status"),
+          error: ApiNotFoundError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "sandbox.set",
+            summary: "Set session sandbox",
+            description: "Set and persist the sandbox state for one session idempotently.",
           }),
         ),
       )

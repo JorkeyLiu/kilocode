@@ -67,6 +67,7 @@ export const FD_CAPABILITIES = [
   "pty/update",
   "pty/remove",
   "session/viewed",
+  "sandbox/set",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",

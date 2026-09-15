@@ -289,6 +289,8 @@ import type {
   RemoteEnableResponses,
   RemoteStatusErrors,
   RemoteStatusResponses,
+  SandboxSetErrors,
+  SandboxSetResponses,
   SandboxStatusErrors,
   SandboxStatusResponses,
   SandboxSupportErrors,
@@ -7878,6 +7880,45 @@ export class Sandbox extends HeyApiClient {
       url: "/session/{sessionID}/sandbox/toggle",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Set session sandbox
+   *
+   * Set and persist the sandbox state for one session idempotently.
+   */
+  public set<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SandboxSetResponses, SandboxSetErrors, ThrowOnError>({
+      url: "/session/{sessionID}/sandbox/set",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }

@@ -55,5 +55,36 @@ export const sandboxHandlers = HttpApiBuilder.group(InstanceHttpApi, "sandbox", 
             exists(ctx.params.sessionID).pipe(Effect.andThen(inactive(ctx.params.sessionID, family))),
         ),
       )
+      .handle("set", (ctx: { params: { sessionID: SessionID }; payload: { enabled: boolean } }) =>
+        exists(ctx.params.sessionID).pipe(
+          Effect.andThen(
+            SandboxPolicy.setGuarded(
+              ctx.params.sessionID,
+              ctx.payload.enabled,
+              (enabling, family) =>
+                exists(ctx.params.sessionID).pipe(
+                  Effect.andThen(
+                    enabling
+                      ? Effect.gen(function* () {
+                          yield* inactive(ctx.params.sessionID, family)
+                          yield* Effect.all(
+                            [
+                              Effect.promise(() => BackgroundProcess.stopSession(ctx.params.sessionID)),
+                              Effect.promise(() => InteractiveTerminal.stopSession(ctx.params.sessionID)),
+                              notebook.cancelSession(ctx.params.sessionID),
+                            ],
+                            { discard: true },
+                          )
+                        })
+                      : Effect.void,
+                  ),
+                ),
+              SandboxActivation.family(ctx.params.sessionID),
+              (family) =>
+                exists(ctx.params.sessionID).pipe(Effect.andThen(inactive(ctx.params.sessionID, family))),
+            ),
+          ),
+        ),
+      )
   }),
 )

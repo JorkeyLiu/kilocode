@@ -242,6 +242,7 @@ export const networkRestricted = Effect.fn("SandboxPolicy.networkRestricted")(fu
 
 function change<E, R, F = never, Q = never, P = never, S = never>(
   sessionID: SessionID,
+  desired: boolean | undefined,
   guard:
     | Effect.Effect<unknown, E, R>
     | ((enabling: boolean, family: readonly Target[]) => Effect.Effect<unknown, E, R>),
@@ -263,7 +264,8 @@ function change<E, R, F = never, Q = never, P = never, S = never>(
           reason: support.reason,
           version: current.version,
         }
-        const enabling = !current.enabled
+        const enabling = desired ?? !current.enabled
+        if (desired !== undefined && current.enabled === desired) return status
         if (enabling && !status.available) return status
         const targets = enabling && family ? yield* family : [{ id: sessionID, directory }]
         const sessions = targets.map((target) => target.id)
@@ -307,7 +309,13 @@ function change<E, R, F = never, Q = never, P = never, S = never>(
   })
 }
 
-export const toggle = Effect.fn("SandboxPolicy.toggle")((sessionID: SessionID) => change(sessionID, Effect.void))
+export const toggle = Effect.fn("SandboxPolicy.toggle")((sessionID: SessionID) =>
+  change(sessionID, undefined, Effect.void),
+)
+
+export const set = Effect.fn("SandboxPolicy.set")((sessionID: SessionID, enabled: boolean) =>
+  change(sessionID, enabled, Effect.void),
+)
 
 /** Stored confinement for a session in an explicit directory, without seeding from config. */
 export const peek = Effect.fn("SandboxPolicy.peek")(function* (directory: string, sessionID: SessionID) {
@@ -394,7 +402,19 @@ export function toggleGuarded<E, R, F = never, Q = never, P = never, S = never>(
   family?: Effect.Effect<readonly Target[], F, Q>,
   preflight?: (family: readonly Target[]) => Effect.Effect<unknown, P, S>,
 ) {
-  return change(sessionID, guard, family, preflight)
+  return change(sessionID, undefined, guard, family, preflight)
+}
+
+export function setGuarded<E, R, F = never, Q = never, P = never, S = never>(
+  sessionID: SessionID,
+  enabled: boolean,
+  guard:
+    | Effect.Effect<unknown, E, R>
+    | ((enabling: boolean, family: readonly Target[]) => Effect.Effect<unknown, E, R>),
+  family?: Effect.Effect<readonly Target[], F, Q>,
+  preflight?: (family: readonly Target[]) => Effect.Effect<unknown, P, S>,
+) {
+  return change(sessionID, enabled, guard, family, preflight)
 }
 
 export function retire<A, E, R>(

@@ -218,6 +218,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       type: "toggleSandbox",
       sessionID,
       requestID,
+      enabled: !sandboxEnabled(),
       agentManagerContext: ctx(),
     })
   }

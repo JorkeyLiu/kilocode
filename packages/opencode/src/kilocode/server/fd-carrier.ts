@@ -221,6 +221,13 @@ import {
   fallbackSessionViewedIds,
   sessionViewedPrivate,
 } from "@/kilocode/presence/session-viewed-private"
+import {
+  INTERNAL_MESSAGE as SANDBOX_SET_INTERNAL_MESSAGE,
+  OP as SANDBOX_SET_OP,
+  VERSION as SANDBOX_SET_VERSION,
+  fallbackSandboxSetIds,
+  setSandboxPrivate,
+} from "@/kilocode/sandbox-set-private"
 
 export interface FdCarrierHandle {
   peer: Peer
@@ -5676,6 +5683,57 @@ export function createFdCarrier(
             const out = yield* removePtyPrivate(params).pipe(
               Effect.catch(() => Effect.succeed(failed())),
               Effect.catchDefect(() => Effect.succeed(failed())),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === SANDBOX_SET_OP || method === "sandbox/set") {
+        // Idempotent per-session `sandbox/set`: same `SandboxPolicy.setGuarded`
+        // owner as `POST /session/:sessionID/sandbox/set` (same per-session
+        // locks, execution gate, existence/idle guards, enabling cleanup,
+        // inheritance, preference update, store write, Changed event).
+        // Directory/session routing follows production sandbox ownership via
+        // canonical directory + drain-control + InstanceRef lane. No second
+        // layer/store, durable row, journal, or config fence.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* setSandboxPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: SANDBOX_SET_VERSION,
+                  requestId: fallbackSandboxSetIds(params).requestId,
+                  opId: fallbackSandboxSetIds(params).opId,
+                  op: SANDBOX_SET_OP,
+                  idempotencyKey: fallbackSandboxSetIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SANDBOX_SET_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SANDBOX_SET_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: SANDBOX_SET_VERSION,
+                  requestId: fallbackSandboxSetIds(params).requestId,
+                  opId: fallbackSandboxSetIds(params).opId,
+                  op: SANDBOX_SET_OP,
+                  idempotencyKey: fallbackSandboxSetIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SANDBOX_SET_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SANDBOX_SET_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
             )
             return out
           }),

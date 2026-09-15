@@ -692,6 +692,7 @@ export interface ToggleSandboxMessage {
   type: "toggleSandbox"
   sessionID: string
   requestID: string
+  enabled: boolean
   agentManagerContext?: string
   contextDirectory?: string
 }

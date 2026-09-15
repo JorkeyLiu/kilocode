@@ -152,6 +152,15 @@ function createClient(options?: {
           }
         )
       },
+      set: async (params: Record<string, unknown>) => {
+        sandboxed.push(params)
+        options?.sandboxStarted?.resolve(undefined)
+        return (
+          options?.sandboxDeferred?.promise ?? {
+            data: { directory: "/repo", enabled: true, available: true, version: 1 },
+          }
+        )
+      },
     },
     backgroundProcess: {
       stopSession: async (params: { sessionID: string; directory?: string }) => {
@@ -199,6 +208,10 @@ function createConnection(client: ReturnType<typeof createClient>) {
     onEventFiltered: () => () => undefined,
     onStateChange: (_l: (s: State) => void) => () => undefined,
     onLanguageChanged: () => () => undefined,
+    isPrivateAvailable: () => false,
+    privateSandboxSetOutcomeWithHandle: () => {
+      throw new Error("Private peer unavailable")
+    },
     onProfileChanged: () => () => undefined,
     onFavoritesChanged: () => () => undefined,
     onModelSelectorExpandedChanged: () => () => undefined,
@@ -243,7 +256,7 @@ type ProviderInternals = {
   handleSendMessage: (text: string, messageID?: string, sessionID?: string, draftID?: string) => Promise<void>
   fetchAndSendSandboxDefault: (directory?: string, requestID?: string) => Promise<void>
   handleSetSandboxDefault: (enabled: boolean, requestID: string, directory?: string) => Promise<void>
-  handleToggleSandbox: (input: { sessionID: string; requestID: string }) => Promise<void>
+  handleToggleSandbox: (input: { sessionID: string; requestID: string; enabled: boolean }) => Promise<void>
   handleLoadMessages: (sid: string, opts?: { mode?: string; before?: string; limit?: number }) => Promise<void>
   handleDeleteSession: (sid: string) => Promise<void>
 }
@@ -509,12 +522,13 @@ describe("KiloProvider sandbox toggle", () => {
     const { internal } = makeProvider(client)
     internal.currentSession = mkSession()
 
-    const toggle = internal.handleToggleSandbox({ sessionID: "ses_s1", requestID: "sandbox-1" })
+    const toggle = internal.handleToggleSandbox({ sessionID: "ses_s1", requestID: "sandbox-1", enabled: false })
     sandbox.resolve({ data: { directory: "/repo", enabled: false, available: true, version: 2 } })
     await toggle
 
     expect(notice).toHaveBeenCalledTimes(1)
     expect(notice).toHaveBeenCalledWith("Sandbox disabled")
+    expect(client.sandboxed).toEqual([{ sessionID: "ses_s1", directory: "/repo", enabled: false }])
     notice.mockRestore()
   })
 

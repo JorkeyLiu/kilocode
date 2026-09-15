@@ -71,6 +71,7 @@ import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
+import { setSandboxPrivateFirst } from "./kilo-provider/sandbox-set-privatefirst"
 import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
 import { revertSessionPrivateFirst, unrevertSessionPrivateFirst } from "./kilo-provider/session-revert"
 import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
@@ -4853,6 +4854,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     sessionID?: string
     draftID?: string
     requestID: string
+    enabled?: boolean
     agentManagerContext?: string
     contextDirectory?: string
   }): Promise<void> {
@@ -4875,6 +4877,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       sessionID?: string
       draftID?: string
       requestID: string
+      enabled?: boolean
       agentManagerContext?: string
       contextDirectory?: string
     },
@@ -4886,10 +4889,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.postSandboxError("", error, revision, input.requestID)
       throw error
     }
+    if (typeof input.enabled !== "boolean") {
+      const error = new Error("Sandbox target state is required")
+      this.postSandboxError(input.sessionID ?? "", error, revision, input.requestID)
+      throw error
+    }
+    const target = input.enabled
     const generation = this.connectionGeneration
     const client = this.client
     const sandbox = client?.sandbox
-    if (!sandbox?.toggle || this.connectionState !== "connected") {
+    const canSet = typeof (sandbox as { set?: unknown } | undefined)?.set === "function"
+    if (!canSet || this.connectionState !== "connected") {
       const error = new Error("Not connected to CLI backend")
       this.postSandboxError(input.sessionID ?? "", error, revision, input.requestID)
       throw error
@@ -4914,10 +4924,20 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       throw new Error("Sandbox connection changed")
     }
     try {
-      const { data } = await sandbox.toggle(
-        { sessionID: resolved.sid, directory: resolved.dir },
-        { throwOnError: true },
-      )
+      const outcome = await setSandboxPrivateFirst({
+        connection: this.connectionService as never,
+        client: client as never,
+        sessionId: resolved.sid,
+        directory: resolved.dir,
+        enabled: target,
+      })
+      if (outcome.kind === "terminal") {
+        throw new Error(outcome.code ?? "Sandbox update rejected")
+      }
+      if (outcome.kind !== "ok") {
+        throw new Error("Sandbox backend is unavailable")
+      }
+      const data = outcome.status
       if (this.connectionState !== "connected" || this.connectionGeneration !== generation || this.client !== client) {
         throw new Error("Sandbox connection changed")
       }

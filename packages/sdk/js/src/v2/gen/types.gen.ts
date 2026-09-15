@@ -12235,6 +12235,48 @@ export type SandboxToggleResponses = {
 
 export type SandboxToggleResponse = SandboxToggleResponses[keyof SandboxToggleResponses]
 
+export type SandboxSetData = {
+  body?: {
+    enabled: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/sandbox/set"
+}
+
+export type SandboxSetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SandboxSetError = SandboxSetErrors[keyof SandboxSetErrors]
+
+export type SandboxSetResponses = {
+  /**
+   * Updated session sandbox status
+   */
+  200: {
+    directory: string
+    enabled: boolean
+    available: boolean
+    reason?: string
+    version: number
+  }
+}
+
+export type SandboxSetResponse = SandboxSetResponses[keyof SandboxSetResponses]
+
 export type KilocodeSessionImportProjectData = {
   body?: {
     id: string
