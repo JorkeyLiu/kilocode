@@ -21,6 +21,13 @@
  * New generations observe the persisted rules through the cache-key refresh.
  *
  * Cold keys include provider-coupled fields and all unclassified config fields.
+ *
+ * `fallback_model` (LOCK-007) is hot like `model`: it is a lazy
+ * model-preference field consumed via config.get() at request time. No
+ * provider/instance resource owns it, so updating the active fallback
+ * selection never triggers a runtime swap. In-flight generations keep their
+ * pinned snapshot; sticky session takeovers are session-owned and never
+ * re-read the global selection mid-turn.
  */
 
 /** Keys that are safe to update without disposing provider/session instances. */
@@ -33,6 +40,7 @@ const HOT_KEYS = new Set([
   "subagent_model",
   "subagent_variant",
   "subagent_variant_overrides",
+  "fallback_model", // LOCK-007: lazy fallback-channel preference, consumed at request time like model
   // per-agent overrides are lazy derived state (LOCK-001)
   "agent", // Agent.state cacheKey includes agent; no runtime owns it
   "default_agent", // Agent.state cacheKey includes default_agent

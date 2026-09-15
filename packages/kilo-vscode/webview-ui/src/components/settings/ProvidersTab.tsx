@@ -175,6 +175,22 @@ const ProvidersTab: Component = () => {
     showToast({ title: language.t("common.requestFailed"), description: CUSTOM_ONLY_UNSUPPORTED })
   }
 
+  function clearFallback() {
+    const stamp = provider.stamp?.()
+    if (!stamp) return
+    action.send(
+      { type: "clearFallbackProvider", stamp },
+      {
+        onFallbackChanged: () => {
+          showToast({ variant: "success", icon: "circle-check", title: "Fallback channel cleared" })
+        },
+        onFallbackError: (message) => {
+          showToast({ title: language.t("common.requestFailed"), description: message.message })
+        },
+      },
+    )
+  }
+
   // ── Control policy predicates ──────────────────────────────────────────
   function showEditButton(item: ProviderView): boolean {
     return isCustomConfigured(item, config().provider)
@@ -254,6 +270,28 @@ const ProvidersTab: Component = () => {
       >
         {CUSTOM_ONLY_UNSUPPORTED}
       </div>
+      {/* Single active custom-fallback channel (additive; never the default model) */}
+      <Show when={canonicalMode() && provider.fallback?.()}>
+        {(sel) => (
+          <div
+            style={{
+              display: "flex",
+              "align-items": "center",
+              gap: "8px",
+              padding: "8px 0",
+              "font-size": "var(--kilo-font-size-12)",
+              color: "var(--vscode-foreground)",
+            }}
+          >
+            <span>
+              Active fallback: {sel().providerID}/{sel().modelID}
+            </span>
+            <Button variant="ghost" size="small" onClick={clearFallback}>
+              Clear
+            </Button>
+          </div>
+        )}
+      </Show>
       {/* Configured providers (custom-only) */}
       <h4 style={{ "margin-top": "16px", "margin-bottom": "8px" }}>
         {language.t("settings.providers.section.configured")}

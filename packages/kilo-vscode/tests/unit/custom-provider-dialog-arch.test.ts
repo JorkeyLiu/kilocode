@@ -60,14 +60,14 @@ describe("CustomProviderDialog — layout sizing (LOCK-001/LOCK-002)", () => {
     expect(DIALOG_SRC).toContain('class="cpd-form"')
   })
 
-  it("has cpd-section wrappers for Models and Headers", () => {
+  it("has cpd-section wrappers for Models, Fallback, and Headers", () => {
     const sectionMatches = DIALOG_SRC.match(/class="cpd-section"/g) ?? []
-    expect(sectionMatches.length).toBe(2)
+    expect(sectionMatches.length).toBe(3)
   })
 
   it("has cpd-divider between sections (hr elements)", () => {
     const dividerMatches = DIALOG_SRC.match(/class="cpd-divider"/g) ?? []
-    expect(dividerMatches.length).toBe(2)
+    expect(dividerMatches.length).toBe(3)
   })
 
   it("has cpd-footer wrapper around submit button", () => {

@@ -297,6 +297,7 @@ export type CanonicalConfigPayload = Partial<{
   subagent_model: string | null
   subagent_variant: string | null
   subagent_variant_overrides: { readonly [key: string]: string | null } | null
+  fallback_model: string | null
   default_agent: string | null
   provider: { readonly [id: string]: CanonicalProviderPayload }
   mcp: { readonly [name: string]: CanonicalMcpPayload }
@@ -434,7 +435,7 @@ function isCanonicalMcpPayload(v: unknown): v is CanonicalMcpPayload {
   return isValidCanonicalMcpEntry(v)
 }
 
-const CANONICAL_KEYS = new Set(["model", "model_variant", "model_variant_overrides", "subagent_model", "subagent_variant", "subagent_variant_overrides", "default_agent", "provider", "mcp", "permission", "instructions", "terminal_command_display", "auto_collapse_reasoning"])
+const CANONICAL_KEYS = new Set(["model", "model_variant", "model_variant_overrides", "subagent_model", "subagent_variant", "subagent_variant_overrides", "fallback_model", "default_agent", "provider", "mcp", "permission", "instructions", "terminal_command_display", "auto_collapse_reasoning"])
 
 /**
  * Validate and narrow a plain object into a CanonicalConfigPayload.
@@ -463,6 +464,7 @@ function canonicalField(key: string, value: unknown): CanonicalConfigPayload | u
     ["default_agent", (item) => typeof item === "string" || item === null ? { default_agent: item } : undefined],
     ["model_variant_overrides", (item) => item === null || isStringMap(item) ? { model_variant_overrides: item } : undefined],
     ["subagent_variant_overrides", (item) => item === null || isStringMap(item) ? { subagent_variant_overrides: item } : undefined],
+    ["fallback_model", (item) => typeof item === "string" || item === null ? { fallback_model: item } : undefined],
     ["provider", (item) => isProviderMap(item) ? { provider: item } : undefined],
     ["mcp", (item) => isMcpMap(item) ? { mcp: item } : undefined],
     ["permission", (item) => isConfigValueMap(item) ? { permission: item } : undefined],

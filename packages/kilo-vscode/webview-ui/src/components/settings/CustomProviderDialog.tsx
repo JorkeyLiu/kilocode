@@ -188,6 +188,95 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
   })
   const [apiTouched, setApiTouched] = createSignal(false)
 
+  // ── Fallback channel state ──────────────────────────────────────────
+  // Identity only: the credential never crosses into the webview. The
+  // availability probe runs host-side on explicit action; nothing polls.
+
+  const fallbackOptions = createMemo(() => form.models.map((m) => m.id.trim()).filter(Boolean))
+  const [fallbackModel, setFallbackModel] = createSignal("")
+  const fallbackPick = () => {
+    const opts = fallbackOptions()
+    const cur = fallbackModel()
+    return cur && opts.includes(cur) ? cur : (opts[0] ?? "")
+  }
+  const [probeState, setProbeState] = createSignal<"idle" | "checking" | "usable" | "unavailable">("idle")
+  const [probeText, setProbeText] = createSignal<string>()
+  const activeFallback = () => provider.fallback?.()
+  const activeForProvider = () => {
+    const f = activeFallback()
+    const pid = form.providerID.trim()
+    return !!f && !!pid && f.providerID === pid ? f : undefined
+  }
+  const isActivePick = () => {
+    const f = activeForProvider()
+    return !!f && f.modelID === fallbackPick()
+  }
+
+  const unsubProbe = vscode.onMessage((msg: ExtensionMessage) => {
+    if (msg.type !== "fallbackProbeResult") return
+    if (msg.providerID !== form.providerID.trim()) return
+    if (msg.modelID !== fallbackPick()) return
+    if (msg.usable) {
+      setProbeState("usable")
+      setProbeText("Available as a fallback channel")
+    } else {
+      setProbeState("unavailable")
+      setProbeText(msg.message ?? "Unavailable as a fallback channel")
+    }
+  })
+  onCleanup(unsubProbe)
+
+  function checkFallback() {
+    const pid = form.providerID.trim()
+    const mid = fallbackPick()
+    if (!pid || !mid) return
+    setProbeState("checking")
+    setProbeText(undefined)
+    vscode.postMessage({ type: "probeFallbackProvider", requestId: crypto.randomUUID(), providerID: pid, modelID: mid })
+  }
+
+  function setActiveFallback() {
+    const stamp = provider.stamp?.()
+    const pid = form.providerID.trim()
+    const mid = fallbackPick()
+    if (!stamp || !pid || !mid) return
+    action.send(
+      { type: "setFallbackProvider", providerID: pid, modelID: mid, stamp },
+      {
+        onFallbackChanged: () => {
+          setProbeState("checking")
+          setProbeText(undefined)
+          showToast({
+            variant: "success",
+            icon: "circle-check",
+            title: "Fallback channel active",
+            description: `${pid}/${mid} takes over sessions on rate limits`,
+          })
+        },
+        onFallbackError: (message) => {
+          showToast({ title: language.t("common.requestFailed"), description: message.message })
+        },
+      },
+    )
+  }
+
+  function clearActiveFallback() {
+    const stamp = provider.stamp?.()
+    if (!stamp) return
+    action.send(
+      { type: "clearFallbackProvider", stamp },
+      {
+        onFallbackChanged: () => {
+          setProbeState("idle")
+          setProbeText(undefined)
+        },
+        onFallbackError: (message) => {
+          showToast({ title: language.t("common.requestFailed"), description: message.message })
+        },
+      },
+    )
+  }
+
   // ── Fetch models state ──────────────────────────────────────────────
 
   const [fetching, setFetching] = createSignal(false)
@@ -858,6 +947,112 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
             )}
           </Show>
         </div>
+
+        {/* Fallback channel section (canonical, saved providers only) */}
+        <Show when={isCanonical() && editing()}>
+          <div class="cpd-section">
+            <hr class="cpd-divider" />
+            <div class="cpd-section-label">
+              <span>Fallback channel</span>
+              <Show when={probeState() === "checking"}>
+                <Spinner style={{ width: "12px", height: "12px" }} />
+              </Show>
+            </div>
+            <div
+              style={{
+                "font-size": "var(--kilo-font-size-12)",
+                color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
+                "margin-bottom": "8px",
+              }}
+            >
+              One custom channel can stay armed as the session fallback for rate limits. Other providers keep working as
+              ordinary models; this choice never changes the default model.
+            </div>
+            <Show
+              when={fallbackOptions().length > 0}
+              fallback={
+                <div
+                  style={{
+                    "font-size": "var(--kilo-font-size-12)",
+                    color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
+                  }}
+                >
+                  Add a model above to arm this provider as a fallback.
+                </div>
+              }
+            >
+              <div style={{ display: "flex", gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
+                <Select
+                  options={fallbackOptions().map((id) => ({ value: id, label: id }))}
+                  current={fallbackOptions()
+                    .map((id) => ({ value: id, label: id }))
+                    .find((option) => option.value === fallbackPick())}
+                  value={(option) => option.value}
+                  label={(option) => option.label}
+                  onSelect={(option) => {
+                    if (!option) return
+                    setFallbackModel(option.value)
+                  }}
+                  variant="secondary"
+                  triggerVariant="settings"
+                />
+                <Button
+                  type="button"
+                  size="small"
+                  variant="ghost"
+                  onClick={checkFallback}
+                  disabled={probeState() === "checking" || !fallbackPick()}
+                >
+                  Check availability
+                </Button>
+              </div>
+              <Show when={probeState() !== "idle" && probeText()}>
+                {(text) => (
+                  <span
+                    style={{
+                      "font-size": "var(--kilo-font-size-12)",
+                      color:
+                        probeState() === "usable"
+                          ? "var(--vscode-testing-iconPassed, #73c991)"
+                          : probeState() === "checking"
+                            ? "var(--text-weak-base, var(--vscode-descriptionForeground))"
+                            : "var(--vscode-errorForeground, #f14c4c)",
+                    }}
+                  >
+                    {probeState() === "checking" ? "Checking availability…" : text()}
+                  </span>
+                )}
+              </Show>
+              <Show when={activeForProvider()}>
+                {(f) => (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      "align-items": "center",
+                      "margin-top": "8px",
+                      "font-size": "var(--kilo-font-size-12)",
+                    }}
+                  >
+                    <span>
+                      Active fallback: {f().providerID}/{f().modelID}
+                    </span>
+                    <Button type="button" size="small" variant="ghost" onClick={clearActiveFallback}>
+                      Clear
+                    </Button>
+                  </div>
+                )}
+              </Show>
+              <Show when={!isActivePick() && !!fallbackPick()}>
+                <div style={{ "margin-top": "8px" }}>
+                  <Button type="button" size="small" variant="primary" onClick={setActiveFallback}>
+                    Set as active fallback
+                  </Button>
+                </div>
+              </Show>
+            </Show>
+          </div>
+        </Show>
 
         {/* Headers section */}
         <Show when={!isCanonical()}>

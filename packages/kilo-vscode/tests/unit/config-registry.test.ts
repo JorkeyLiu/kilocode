@@ -4,9 +4,10 @@
  * Verifies the closed registry: known keys, unknown key rejection,
  * scope validation, composition operators, and cross-scope conflict.
  *
- * The exact closed set of 14 JSONC fields:
+ * The exact closed set of 15 JSONC fields:
  *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
+ *   fallback_model,
  *   default_agent, provider, mcp, permission, instructions,
  *   terminal_command_display, auto_collapse_reasoning
  */
@@ -80,10 +81,11 @@ describe("registry", () => {
   describe("getAllEntries", () => {
     it("returns all registry entries", () => {
       const entries = getAllEntries()
-      expect(entries.length).toBe(14)
+      expect(entries.length).toBe(15)
       // Check some representative entries exist
       const keys = entries.map((e) => e.key)
       expect(keys).toContain("model")
+      expect(keys).toContain("fallback_model")
       expect(keys).toContain("provider")
       expect(keys).toContain("mcp")
       expect(keys).toContain("permission")
@@ -94,17 +96,19 @@ describe("registry", () => {
     it("returns global-scope keys", () => {
       const keys = keysForScope("global")
       expect(keys).toContain("model")
+      expect(keys).toContain("fallback_model")
       expect(keys).toContain("instructions")
-      // All 14 fields are valid in both scopes
-      expect(keys.length).toBe(14)
+      // All 15 fields are valid in both scopes
+      expect(keys.length).toBe(15)
     })
 
     it("returns project-scope keys", () => {
       const keys = keysForScope("project")
       expect(keys).toContain("model")
+      expect(keys).toContain("fallback_model")
       expect(keys).toContain("permission")
-      // All 14 fields are valid in both scopes
-      expect(keys.length).toBe(14)
+      // All 15 fields are valid in both scopes
+      expect(keys.length).toBe(15)
     })
   })
 
@@ -154,11 +158,12 @@ describe("registry", () => {
     it("returns keys included in snapshots", () => {
       const keys = snapshotKeys()
       expect(keys).toContain("model")
+      expect(keys).toContain("fallback_model")
       expect(keys).toContain("permission")
       expect(keys).toContain("terminal_command_display")
       expect(keys).toContain("auto_collapse_reasoning")
-      // The 13 snapshot fields appear; the $schema meta-key is excluded
-      expect(keys.length).toBe(13)
+      // The 14 snapshot fields appear; the $schema meta-key is excluded
+      expect(keys.length).toBe(14)
       expect(keys).not.toContain("$schema")
     })
   })

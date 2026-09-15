@@ -33,6 +33,8 @@ interface ProviderDiagnostics {
   }
 }
 
+export type FallbackSelection = { providerID: string; modelID: string }
+
 interface ProviderContextValue {
   providers: Accessor<Record<string, ProviderView>>
   connected: Accessor<string[]>
@@ -46,6 +48,8 @@ interface ProviderContextValue {
   canonical?: Accessor<boolean>
   canonicalMode?: Accessor<boolean>
   stamp?: Accessor<CanonicalStamp | undefined>
+  /** Single active custom-fallback channel; undefined means no active fallback. */
+  fallback?: Accessor<FallbackSelection | undefined>
   isModelValid: (selection: ModelSelection | null) => boolean
   retryProviderCleanup?: (retry: {
     type: "retryProviderCleanup"
@@ -75,6 +79,7 @@ export const ProviderProvider: ParentComponent = (props) => {
   const [stamp, setStamp] = createSignal<CanonicalStamp>()
   const [canonical, setCanonical] = createSignal(false)
   const [canonicalMode, setCanonicalMode] = createSignal(false)
+  const [fallbackSel, setFallbackSel] = createSignal<FallbackSelection | undefined>()
 
   const models = createMemo<EnrichedModel[]>(() => flattenModels(providers()))
 
@@ -144,6 +149,13 @@ export const ProviderProvider: ParentComponent = (props) => {
       if ("stamp" in message) setStamp(message.stamp)
       return
     }
+    if (message.type === "fallbackProviderLoaded" || message.type === "fallbackProviderChanged") {
+      if (message.providerID && message.modelID)
+        setFallbackSel({ providerID: message.providerID, modelID: message.modelID })
+      else setFallbackSel(undefined)
+      if ("stamp" in message && message.stamp) setStamp(message.stamp)
+      return
+    }
     if (message.type !== "providersLoaded") return
     handleProvidersLoaded(message)
   })
@@ -159,6 +171,8 @@ export const ProviderProvider: ParentComponent = (props) => {
   const fallback = setTimeout(() => {
     if (Object.keys(providers()).length === 0) {
       vscode.postMessage({ type: "requestProviders" })
+      // Active fallback selection is pushed on canonical changes and on demand here.
+      vscode.postMessage({ type: "requestFallbackProvider" })
     }
   }, 3000)
 
@@ -194,6 +208,7 @@ export const ProviderProvider: ParentComponent = (props) => {
     canonical,
     canonicalMode,
     stamp,
+    fallback: fallbackSel,
     isModelValid,
     retryProviderCleanup,
     clearDiagnostics,

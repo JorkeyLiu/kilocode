@@ -13,6 +13,12 @@ import type {
   ProviderDisconnectedMessage,
   CanonicalProviderDisconnectedMessage,
   SaveCustomProviderMessage,
+  SetFallbackProviderMessage,
+  ClearFallbackProviderMessage,
+  ProbeFallbackProviderMessage,
+  FallbackProviderChangedMessage,
+  FallbackProviderErrorMessage,
+  FallbackProbeResultMessage,
   WebviewMessage,
 } from "../types/messages"
 
@@ -21,12 +27,18 @@ type ProviderRequest =
   | DisconnectProviderMessage
   | DeleteCustomProviderMessage
   | SaveCustomProviderMessage
+  | SetFallbackProviderMessage
+  | ClearFallbackProviderMessage
+  | ProbeFallbackProviderMessage
 
 type ProviderRequestInput =
   | Omit<CanonicalConnectProviderMessage, "requestId">
   | Omit<DisconnectProviderMessage, "requestId">
   | Omit<CanonicalDeleteCustomProviderMessage, "requestId">
   | Omit<SaveCustomProviderMessage, "requestId">
+  | Omit<SetFallbackProviderMessage, "requestId">
+  | Omit<ClearFallbackProviderMessage, "requestId">
+  | Omit<ProbeFallbackProviderMessage, "requestId">
 
 type Transport = {
   postMessage: (message: WebviewMessage) => void
@@ -40,6 +52,9 @@ type Handlers = {
   onError?: (
     message: ProviderActionErrorMessage | import("../types/messages").CanonicalProviderActionErrorMessage,
   ) => void
+  onFallbackChanged?: (message: FallbackProviderChangedMessage) => void
+  onFallbackError?: (message: FallbackProviderErrorMessage) => void
+  onProbeResult?: (message: FallbackProbeResultMessage) => void
 }
 
 export function createProviderAction(vscode: Transport) {
@@ -70,6 +85,21 @@ export function createProviderAction(vscode: Transport) {
 
     if (message.type === "providerActionError") {
       item.onError?.(message)
+      return
+    }
+
+    if (message.type === "fallbackProviderChanged") {
+      item.onFallbackChanged?.(message)
+      return
+    }
+
+    if (message.type === "fallbackProviderError") {
+      item.onFallbackError?.(message)
+      return
+    }
+
+    if (message.type === "fallbackProbeResult") {
+      item.onProbeResult?.(message)
     }
   })
 

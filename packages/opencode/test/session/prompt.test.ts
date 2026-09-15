@@ -40,6 +40,7 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
+import { SessionRetry } from "../../src/session/retry" // kilocode_change - fallback tests mock backoff
 import { SessionPrompt, UNKNOWN_FINISH_CONTINUE_INSTRUCTION } from "../../src/session/prompt"
 import { CONTINUE_FROM_KEY } from "../../src/session/prompt/auto-continue" // kilocode_change - LOCK-005 marker key for the bounded continuation tests
 import { GenerationGate } from "../../src/kilocode/server/generation-gate" // kilocode_change - admission required by withGenerationAdmission
@@ -3366,3 +3367,217 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+// kilocode_change start - production-path custom-fallback takeover. Real
+// SessionPrompt -> SessionProcessor -> getModel wiring with no injected
+// resolver, mock-server transport, and unset/explicit retry limits.
+const fallbackKiloRef = {
+  providerID: ProviderV2.ID.make("kilo"),
+  modelID: ModelV2.ID.make("kilo-model"),
+}
+
+const fallbackEntry = (id: string) => ({
+  id,
+  name: id,
+  attachment: false,
+  reasoning: false,
+  temperature: false,
+  tool_call: true,
+  release_date: "2025-01-01",
+  limit: { context: 100000, output: 10000 },
+  cost: { input: 0, output: 0 },
+  options: {},
+})
+
+const fallbackCfg = (url: string) => ({
+  fallback_model: "fb/fb-model",
+  provider: {
+    kilo: {
+      name: "Kilo",
+      id: "kilo",
+      env: [],
+      npm: "@ai-sdk/openai-compatible",
+      models: { "kilo-model": fallbackEntry("kilo-model") },
+      options: { apiKey: "test-key", baseURL: url },
+    },
+    fb: {
+      name: "Fallback",
+      id: "fb",
+      env: [],
+      npm: "@ai-sdk/openai-compatible",
+      models: { "fb-model": fallbackEntry("fb-model") },
+      options: { apiKey: "test-key", baseURL: url },
+    },
+  },
+})
+
+const rateLimitBody = { type: "error", error: { type: "too_many_requests" } }
+
+const nonTitleHits = Effect.fn("test.nonTitleHits")(function* () {
+  const llm = yield* TestLLMServer
+  const hits = yield* llm.hits
+  return hits.filter((hit) => !JSON.stringify(hit.body).includes("Generate a title"))
+})
+
+const hitModels = (hits: { body: Record<string, unknown> }[]) => hits.map((hit) => String(hit.body.model ?? ""))
+
+const assistantTexts = (result: SessionV1.WithParts) =>
+  result.parts.filter((p) => p.type === "text").map((p) => (p as { text: string }).text)
+
+const withUnsetLimit = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const prev = process.env.KILO_SESSION_RETRY_LIMIT
+    delete process.env.KILO_SESSION_RETRY_LIMIT
+    try {
+      return yield* self
+    } finally {
+      if (prev === undefined) delete process.env.KILO_SESSION_RETRY_LIMIT
+      else process.env.KILO_SESSION_RETRY_LIMIT = prev
+    }
+  })
+
+it.instance(
+  "initial 429 without prior success retries the same channel without fallback",
+  () =>
+    withUnsetLimit(
+      Effect.gen(function* () {
+        const { llm } = yield* useServerConfig(fallbackCfg)
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const chat = yield* sessions.create({
+          title: "Pinned",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: fallbackKiloRef,
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        yield* llm.error(429, rateLimitBody)
+        yield* llm.text("recovered")
+        const delay = spyOn(SessionRetry, "delay").mockReturnValue(0)
+        try {
+          const result = yield* prompt.loop({ sessionID: chat.id })
+          expect(assistantTexts(result)).toContain("recovered")
+          // Old behavior kept: one same-channel retry, then success, no takeover.
+          const hits = yield* nonTitleHits()
+          expect(hits).toHaveLength(2)
+          expect(hitModels(hits)).toEqual(["kilo-model", "kilo-model"])
+          expect((yield* sessions.get(chat.id)).fallback).toBeUndefined()
+        } finally {
+          delay.mockRestore()
+        }
+      }),
+    ),
+  30_000,
+)
+
+it.instance(
+  "eligible mid-session 429 retries once then takes over sticky through production wiring",
+  () =>
+    withUnsetLimit(
+      Effect.gen(function* () {
+        const { llm } = yield* useServerConfig(fallbackCfg)
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const chat = yield* sessions.create({
+          title: "Pinned",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: fallbackKiloRef,
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        yield* llm.text("first answer")
+        const first = yield* prompt.loop({ sessionID: chat.id })
+        expect(assistantTexts(first)).toContain("first answer")
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: fallbackKiloRef,
+          noReply: true,
+          parts: [{ type: "text", text: "again" }],
+        })
+        yield* llm.error(429, rateLimitBody)
+        yield* llm.error(429, rateLimitBody)
+        yield* llm.text("via fallback")
+        const delay = spyOn(SessionRetry, "delay").mockReturnValue(0)
+        try {
+          const second = yield* prompt.loop({ sessionID: chat.id })
+          expect(assistantTexts(second)).toContain("via fallback")
+          // One normal same-channel retry chance, then the fallback channel.
+          const hits = yield* nonTitleHits()
+          expect(hits).toHaveLength(4)
+          expect(hitModels(hits)).toEqual(["kilo-model", "kilo-model", "kilo-model", "fb-model"])
+          expect((yield* sessions.get(chat.id)).fallback).toEqual({ providerID: "fb", modelID: "fb-model" })
+        } finally {
+          delay.mockRestore()
+        }
+      }),
+    ),
+  30_000,
+)
+
+it.instance(
+  "explicit retry limit governs exhaustion before takeover",
+  () =>
+    Effect.gen(function* () {
+      const prev = process.env.KILO_SESSION_RETRY_LIMIT
+      // A limit larger than the armed default proves the explicit value
+      // governs: three same-channel attempts, then takeover. ("0" is not a
+      // valid limit and reads back as unset.)
+      process.env.KILO_SESSION_RETRY_LIMIT = "2"
+      try {
+        const { llm } = yield* useServerConfig(fallbackCfg)
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const chat = yield* sessions.create({
+          title: "Pinned",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: fallbackKiloRef,
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        yield* llm.text("first answer")
+        const first = yield* prompt.loop({ sessionID: chat.id })
+        expect(assistantTexts(first)).toContain("first answer")
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: fallbackKiloRef,
+          noReply: true,
+          parts: [{ type: "text", text: "again" }],
+        })
+        yield* llm.error(429, rateLimitBody)
+        yield* llm.error(429, rateLimitBody)
+        yield* llm.error(429, rateLimitBody)
+        yield* llm.text("via fallback")
+        const delay = spyOn(SessionRetry, "delay").mockReturnValue(0)
+        try {
+          const second = yield* prompt.loop({ sessionID: chat.id })
+          expect(assistantTexts(second)).toContain("via fallback")
+          // Explicit limit honored: two same-channel retries, then takeover.
+          const hits = yield* nonTitleHits()
+          expect(hits).toHaveLength(5)
+          expect(hitModels(hits)).toEqual(["kilo-model", "kilo-model", "kilo-model", "kilo-model", "fb-model"])
+          expect((yield* sessions.get(chat.id)).fallback).toEqual({ providerID: "fb", modelID: "fb-model" })
+        } finally {
+          delay.mockRestore()
+        }
+      } finally {
+        if (prev === undefined) delete process.env.KILO_SESSION_RETRY_LIMIT
+        else process.env.KILO_SESSION_RETRY_LIMIT = prev
+      }
+    }),
+  30_000,
+)
+// kilocode_change end

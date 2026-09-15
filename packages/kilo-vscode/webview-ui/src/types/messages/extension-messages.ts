@@ -908,6 +908,44 @@ export interface CustomProviderModelsFetchedMessage {
   auth?: boolean
 }
 
+/**
+ * Single active custom-fallback channel. Identity only — secrets never
+ * cross. Absent providerID/modelID means no active fallback.
+ */
+export interface FallbackProviderLoadedMessage {
+  type: "fallbackProviderLoaded"
+  providerID?: string
+  modelID?: string
+  stamp: CanonicalStamp
+}
+
+export interface FallbackProviderChangedMessage {
+  type: "fallbackProviderChanged"
+  requestId: string
+  providerID?: string
+  modelID?: string
+  stamp: CanonicalStamp
+}
+
+export interface FallbackProviderErrorMessage {
+  type: "fallbackProviderError"
+  requestId: string
+  message: string
+  kind?: string
+  stamp?: CanonicalStamp
+}
+
+/** Fixed redacted probe outcome — never carries response bodies or secrets. */
+export interface FallbackProbeResultMessage {
+  type: "fallbackProbeResult"
+  requestId: string
+  providerID: string
+  modelID: string
+  usable: boolean
+  reason?: "auth" | "rate-limit" | "invalid-model" | "invalid-config" | "network" | "upstream"
+  message?: string
+}
+
 export interface McpStatusEntry {
   status: "connected" | "disabled" | "failed" | "needs_auth" | "needs_client_registration"
   error?: string
@@ -1073,6 +1111,10 @@ export type ExtensionMessage =
   | CanonicalConfigErrorMessage
   | AnacondaDesktopExtensionMessage
   | CustomProviderModelsFetchedMessage
+  | FallbackProviderLoadedMessage
+  | FallbackProviderChangedMessage
+  | FallbackProviderErrorMessage
+  | FallbackProbeResultMessage
   | RecentsLoadedMessage
   | ModelSelectorExpandedLoadedMessage
   | FavoritesLoadedMessage

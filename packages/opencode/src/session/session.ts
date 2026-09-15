@@ -136,6 +136,12 @@ export function fromRow(row: SessionRow): Info {
           variant: row.model.variant,
         }
       : undefined,
+    fallback: row.fallback
+      ? {
+          providerID: row.fallback.providerID,
+          modelID: row.fallback.modelID,
+        }
+      : undefined,
     version: row.version,
     summary,
     cost: row.cost,
@@ -173,6 +179,7 @@ export function toRow(info: Info) {
     title: info.title,
     agent: info.agent,
     model: info.model,
+    fallback: info.fallback ?? null, // kilocode_change - sticky custom-fallback takeover target
     version: info.version,
     share_url: info.share?.url,
     summary_additions: info.summary?.additions,
@@ -242,6 +249,15 @@ const Model = Schema.Struct({
   variant: optionalOmitUndefined(Schema.String),
 })
 
+// kilocode_change - session-level sticky custom-fallback takeover target.
+// Persisted when an in-flight Kilo turn is taken over by the active custom
+// fallback channel. From then on the session routes to this target instead
+// of Kilo. Only provider/model identity; no timestamps or reasons.
+const Fallback = Schema.Struct({
+  providerID: Schema.String,
+  modelID: Schema.String,
+})
+
 export const Metadata = Schema.Record(Schema.String, Schema.Any)
 
 export const Info = Schema.Struct({
@@ -259,6 +275,7 @@ export const Info = Schema.Struct({
   title: Schema.String,
   agent: optionalOmitUndefined(Schema.String),
   model: optionalOmitUndefined(Model),
+  fallback: optionalOmitUndefined(Fallback), // kilocode_change - sticky custom-fallback takeover target
   version: Schema.String,
   metadata: optionalOmitUndefined(Metadata),
   time: Time,
@@ -563,6 +580,8 @@ export interface Interface {
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
   readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  // kilocode_change - persist the sticky custom-fallback takeover target (session-owned routing)
+  readonly setFallback: (input: { sessionID: SessionID; fallback: Info["fallback"] }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
@@ -1856,6 +1875,25 @@ export const layer: Layer.Layer<
       )
     })
 
+    // kilocode_change - sticky custom-fallback takeover is backend/session-owned.
+    // Direct row write like the sandbox store: the takeover target is routing
+    // state, not message content, so it bypasses the message event projection.
+    const setFallback = Effect.fn("Session.setFallback")(function* (input: {
+      sessionID: SessionID
+      fallback: Info["fallback"]
+    }) {
+      yield* db
+        .update(SessionTable)
+        .set({ fallback: input.fallback ?? null })
+        .where(eq(SessionTable.id, input.sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(SessionV1.Event.Updated, {
+        sessionID: input.sessionID,
+        info: yield* get(input.sessionID).pipe(Effect.orDie),
+      })
+    })
+
     const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
       void sessionID
       return [] as Snapshot.FileDiff[]
@@ -1958,6 +1996,7 @@ export const layer: Layer.Layer<
       setSummary,
       setShare,
       setWorkspace,
+      setFallback, // kilocode_change
       diff,
       messages,
       children,

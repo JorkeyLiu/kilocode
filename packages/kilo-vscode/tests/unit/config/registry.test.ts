@@ -2,7 +2,7 @@
  * P4.1 Config Foundation — Registry tests.
  *
  * Covers audit triggers:
- * - Closed field set enforcement (exact 14 JSONC fields incl. the $schema meta-key)
+ * - Closed field set enforcement (exact 15 JSONC fields incl. the $schema meta-key)
  * - Rejected fields (server, console, share, enterprise, tools, etc.)
  * - Agent/command as asset-only (never JSONC records)
  * - Credential reference handling (secret-ref entries)
@@ -24,9 +24,9 @@ import {
 } from "../../../src/config/registry"
 
 describe("closed JSONC field set", () => {
-  it("contains exactly 14 fields", () => {
+  it("contains exactly 15 fields", () => {
     const entries = getAllEntries()
-    expect(entries.length).toBe(14)
+    expect(entries.length).toBe(15)
   })
 
   it("matches the CLOSED_JSONC_FIELDS constant", () => {
@@ -51,6 +51,7 @@ describe("closed JSONC field set", () => {
       "subagent_model",
       "subagent_variant",
       "subagent_variant_overrides",
+      "fallback_model",
       "default_agent",
       "provider",
       "mcp",
@@ -107,6 +108,15 @@ describe("model fields", () => {
     expect(entry!.composition).toBe("single")
     expect(entry!.scopes).toEqual(["global", "project"])
   })
+
+  it("fallback_model is single, global+project, crossScopeConflict, secretless", () => {
+    const entry = getEntry("fallback_model")
+    expect(entry).toBeDefined()
+    expect(entry!.composition).toBe("single")
+    expect(entry!.scopes).toEqual(["global", "project"])
+    expect(entry!.crossScopeConflict).toBe(true)
+    expect(entry!.secret).toBe("none")
+  })
 })
 
 describe("keyed record fields", () => {
@@ -144,12 +154,12 @@ describe("policy fields", () => {
 describe("scope validation", () => {
   it("all fields valid in global scope", () => {
     const globalKeys = keysForScope("global")
-    expect(globalKeys.length).toBe(14)
+    expect(globalKeys.length).toBe(15)
   })
 
   it("all fields valid in project scope", () => {
     const projectKeys = keysForScope("project")
-    expect(projectKeys.length).toBe(14)
+    expect(projectKeys.length).toBe(15)
   })
 })
 
@@ -159,6 +169,7 @@ describe("composition operators", () => {
     expect(singles.map((e) => e.key).sort()).toEqual([
       "auto_collapse_reasoning",
       "default_agent",
+      "fallback_model",
       "model",
       "model_variant",
       "subagent_model",
@@ -194,9 +205,15 @@ describe("composition operators", () => {
 })
 
 describe("cross-scope conflict", () => {
-  it("includes model, provider, subagent_model, and mcp", () => {
+  it("includes model, provider, subagent_model, fallback_model, and mcp", () => {
     const crossScope = keysWithCrossScopeConflict()
-    expect(crossScope.map((e) => e.key).sort()).toEqual(["mcp", "model", "provider", "subagent_model"])
+    expect(crossScope.map((e) => e.key).sort()).toEqual([
+      "fallback_model",
+      "mcp",
+      "model",
+      "provider",
+      "subagent_model",
+    ])
   })
 })
 
@@ -207,9 +224,10 @@ describe("secret-ref keys", () => {
 
 describe("snapshot keys", () => {
   const snapshots = snapshotKeys()
-  expect(snapshots.length).toBe(13)
+  expect(snapshots.length).toBe(14)
   // The $schema meta-key never appears in snapshots
   expect(snapshots).not.toContain("$schema")
+  expect(snapshots).toContain("fallback_model")
 })
 
 describe("validateRegistryKeys", () => {

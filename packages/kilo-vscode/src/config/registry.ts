@@ -17,6 +17,7 @@
  * The exact closed set of JSONC field classes:
  *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
+ *   fallback_model,
  *   default_agent, provider, mcp, permission, instructions,
  *   terminal_command_display, auto_collapse_reasoning
  *
@@ -123,6 +124,19 @@ const entries: RegistryEntry[] = [
     snapshot: true,
     provenance: "file",
     removal: "remove",
+  },
+  {
+    key: "fallback_model",
+    description: "Single active custom-provider fallback channel in provider/model format; additive only, never changes the ordinary primary model selector",
+    scopes: ["global", "project"],
+    persistence: "jsonc",
+    owner: "extension",
+    composition: "single",
+    secret: "none",
+    snapshot: true,
+    provenance: "file",
+    removal: "remove",
+    crossScopeConflict: true,
   },
 
   // ── Agent default ────────────────────────────────────────────────
@@ -300,7 +314,7 @@ export function validateRegistryKeys(
 
 // ── Closed set constant (for external verification) ──────────────────
 
-/** The exact 14 accepted JSONC top-level field names. */
+/** The exact 15 accepted JSONC top-level field names. */
 export const CLOSED_JSONC_FIELDS = [
   "$schema",
   "model",
@@ -309,6 +323,7 @@ export const CLOSED_JSONC_FIELDS = [
   "subagent_model",
   "subagent_variant",
   "subagent_variant_overrides",
+  "fallback_model",
   "default_agent",
   "provider",
   "mcp",

@@ -25037,6 +25037,9 @@
               "type": "string"
             }
           },
+          "fallback_model": {
+            "type": "string"
+          },
           "default_agent": {
             "type": "string"
           },
@@ -26107,6 +26110,22 @@
             "required": [
               "id",
               "providerID"
+            ],
+            "additionalProperties": false
+          },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
             ],
             "additionalProperties": false
           },
@@ -28103,6 +28122,22 @@
             ],
             "additionalProperties": false
           },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
+            ],
+            "additionalProperties": false
+          },
           "version": {
             "type": "string"
           },
@@ -28299,6 +28334,22 @@
             "required": [
               "id",
               "providerID"
+            ],
+            "additionalProperties": false
+          },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
             ],
             "additionalProperties": false
           },
@@ -28550,6 +28601,22 @@
             ],
             "additionalProperties": false
           },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
+            ],
+            "additionalProperties": false
+          },
           "version": {
             "type": "string"
           },
@@ -28764,6 +28831,22 @@
             ],
             "additionalProperties": false
           },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
+            ],
+            "additionalProperties": false
+          },
           "version": {
             "type": "string"
           },
@@ -28960,6 +29043,22 @@
             "required": [
               "id",
               "providerID"
+            ],
+            "additionalProperties": false
+          },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
             ],
             "additionalProperties": false
           },
@@ -29162,6 +29261,22 @@
             ],
             "additionalProperties": false
           },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
+            ],
+            "additionalProperties": false
+          },
           "version": {
             "type": "string"
           },
@@ -29358,6 +29473,22 @@
             "required": [
               "id",
               "providerID"
+            ],
+            "additionalProperties": false
+          },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
             ],
             "additionalProperties": false
           },
@@ -29760,6 +29891,22 @@
             ],
             "additionalProperties": false
           },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
+            ],
+            "additionalProperties": false
+          },
           "version": {
             "type": "string"
           },
@@ -29956,6 +30103,22 @@
             "required": [
               "id",
               "providerID"
+            ],
+            "additionalProperties": false
+          },
+          "fallback": {
+            "type": "object",
+            "properties": {
+              "providerID": {
+                "type": "string"
+              },
+              "modelID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
             ],
             "additionalProperties": false
           },

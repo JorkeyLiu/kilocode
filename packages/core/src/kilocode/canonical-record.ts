@@ -155,4 +155,29 @@ export type CanonicalProviderPayload = {
   readonly credential?: string
 }
 
+const FALLBACK_PROVIDER_PATTERN = /^[a-z0-9][a-z0-9-_]*$/i
+
+export type FallbackModelRef = {
+  readonly providerID: string
+  readonly modelID: string
+}
+
+/**
+ * Parse a single active-fallback selection in "provider/model" format.
+ * Additive preference only: callers never route the ordinary primary model
+ * selector through this value. Returns undefined for absent/malformed input.
+ */
+export function parseFallbackModelRef(v: unknown): FallbackModelRef | undefined {
+  if (typeof v !== "string") return undefined
+  const text = v.trim()
+  if (!text || text.length > 256) return undefined
+  const slash = text.indexOf("/")
+  if (slash <= 0 || slash === text.length - 1) return undefined
+  const providerID = text.slice(0, slash)
+  const modelID = text.slice(slash + 1)
+  if (!FALLBACK_PROVIDER_PATTERN.test(providerID)) return undefined
+  if (!modelID || /[\s\0]/.test(modelID)) return undefined
+  return { providerID, modelID }
+}
+
 export * as CanonicalRecord from "./canonical-record"

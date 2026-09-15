@@ -200,15 +200,23 @@ export namespace KiloSessionProcessor {
    * The `abort` signal is used by the offline handler to cancel the network
    * reconnection wait when the session is interrupted.
    */
+  export const FALLBACK_ARMED_RETRY_BUDGET = 1
+
   export function retryOpts(input: {
     sessionID: SessionID
     abort: AbortSignal
     set: (sessionID: SessionID, status: SessionStatus.Info) => Effect.Effect<void>
     used?: number
+    // kilocode_change - takeover-armed turns get a bounded same-channel
+    // outer retry budget when the global flag is unset, so takeover stays
+    // reachable while keeping a normal retry/failover chance. An explicit
+    // flag is always honored; unarmed turns keep existing behavior.
+    fallbackArmed?: boolean
   }) {
-    const limit = Flag.KILO_SESSION_RETRY_LIMIT
+    const flag = Flag.KILO_SESSION_RETRY_LIMIT
+    const budget = input.fallbackArmed === true && flag === undefined ? FALLBACK_ARMED_RETRY_BUDGET : flag
     return {
-      limit: limit === undefined ? undefined : Math.max(0, limit - (input.used ?? 0)),
+      limit: budget === undefined ? undefined : Math.max(0, budget - (input.used ?? 0)),
       offline: (info: { error: unknown; message: string }) =>
         handleOffline({
           error: info.error,

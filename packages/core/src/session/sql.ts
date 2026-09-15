@@ -54,6 +54,10 @@ export const SessionTable = sqliteTable(
       providerID: string
       variant?: string
     }>(),
+    fallback: text({ mode: "json" }).$type<{
+      providerID: string
+      modelID: string
+    }>(),
     revision: integer().notNull().default(0),
     ...Timestamps,
     time_compacting: integer(),

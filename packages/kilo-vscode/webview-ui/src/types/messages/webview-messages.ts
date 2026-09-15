@@ -785,6 +785,35 @@ export interface CanonicalFetchCustomProviderModelsMessage {
   stamp: CanonicalStamp
 }
 
+/**
+ * Single active custom-fallback channel selection (webview → extension).
+ * Identity only — the credential stays host-owned and is never sent.
+ */
+export interface SetFallbackProviderMessage {
+  type: "setFallbackProvider"
+  requestId: string
+  providerID: string
+  modelID: string
+  stamp: CanonicalStamp
+}
+
+export interface ClearFallbackProviderMessage {
+  type: "clearFallbackProvider"
+  requestId: string
+  stamp: CanonicalStamp
+}
+
+export interface ProbeFallbackProviderMessage {
+  type: "probeFallbackProvider"
+  requestId: string
+  providerID: string
+  modelID: string
+}
+
+export interface RequestFallbackProviderMessage {
+  type: "requestFallbackProvider"
+}
+
 export interface PersistRecentsRequest {
   type: "persistRecents"
   recents: ModelSelection[]
@@ -961,6 +990,10 @@ export type WebviewMessage =
   | DeleteCustomProviderMessage
   | FetchCustomProviderModelsMessage
   | CanonicalFetchCustomProviderModelsMessage
+  | SetFallbackProviderMessage
+  | ClearFallbackProviderMessage
+  | ProbeFallbackProviderMessage
+  | RequestFallbackProviderMessage
   | PersistRecentsRequest
   | RequestRecentsMessage
   | PersistModelSelectorExpandedRequest

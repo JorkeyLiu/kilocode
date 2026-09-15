@@ -150,6 +150,10 @@ export const Info = Schema.Struct({
     description:
       "Model-specific variant overrides for task-tool subagents, keyed by provider/model. Valid overrides take precedence over saved, agent-specific, and inherited variants.",
   }),
+  fallback_model: Schema.optional(Schema.NullOr(Schema.String)).annotate({
+    description:
+      "Single active custom-provider fallback channel in provider/model format. Additive only: it never changes the ordinary primary model selector or default model. Used only for session rate-limit takeover and availability probing.",
+  }),
   default_agent: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
       "Default agent to use when none is specified. Must be a primary agent. Falls back to 'code' if not set or if the specified agent is invalid.",

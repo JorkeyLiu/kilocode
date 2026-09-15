@@ -8,6 +8,7 @@ import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue" // kilo
 import { KiloSession } from "@/kilocode/session" // kilocode_change
 import { KiloCostPropagation } from "@/kilocode/session/cost-propagation" // kilocode_change
 import { KiloSessionProcessor } from "@/kilocode/session/processor" // kilocode_change
+import { KiloSessionFallback } from "@/kilocode/session/fallback" // kilocode_change - sticky custom-fallback routing
 import { KiloSessionOverflow } from "@/kilocode/session/overflow" // kilocode_change
 import { KiloReference } from "@/kilocode/reference/contains" // kilocode_change
 import { KiloReadObject } from "@/kilocode/tool/read-object" // kilocode_change
@@ -1809,7 +1810,27 @@ export const layer = Layer.effect(
             history: msgs,
           }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+        // kilocode_change - sticky custom-fallback routing: a session taken over
+        // previously always uses its persisted target, even when the request
+        // still names Kilo. A removed target fails explicitly instead of
+        // routing back to Kilo; a changed global selection never alters it.
+        const sticky = (yield* sessions.get(sessionID).pipe(Effect.orDie)).fallback
+        const model = yield* KiloSessionFallback.turn({
+          sticky,
+          requested: { providerID: lastUser.model.providerID, modelID: lastUser.model.modelID },
+          resolve: (providerID, modelID) => getModel(providerID, modelID, sessionID),
+        }).pipe(
+          Effect.catchTag("KiloSessionFallbackStaleTarget", (err) =>
+            Effect.gen(function* () {
+              const message = KiloSessionFallback.removed({ providerID: err.providerID, modelID: err.modelID })
+              yield* events.publish(Session.Event.Error, {
+                sessionID,
+                error: new NamedError.Unknown({ message }).toObject(),
+              })
+              return yield* Effect.die(new Error(message))
+            }),
+          ),
+        )
         const task = tasks.pop()
 
         if (task?.type === "subtask") {
@@ -1908,6 +1929,11 @@ export const layer = Layer.effect(
             model,
             telemetry, // kilocode_change
             snapshotInitialization: input.snapshotInitialization, // kilocode_change
+            // kilocode_change - wire the canonical-first session-aware
+            // resolver so exhausted Kilo turns can take over to the active
+            // custom fallback. Compaction creates its processor without this
+            // and keeps existing failure behavior.
+            resolveModel: (providerID, modelID) => getModel(providerID, modelID, sessionID),
           })
           .pipe(Effect.onInterrupt(() => finalize))
 

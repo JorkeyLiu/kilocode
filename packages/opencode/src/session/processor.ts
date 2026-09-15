@@ -1,7 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Context, Option, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -21,6 +21,7 @@ import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 // kilocode_change start
 import { KiloSessionProcessor, type ReviewTelemetry } from "@/kilocode/session/processor"
+import { KiloSessionFallback } from "@/kilocode/session/fallback" // kilocode_change - sticky custom-fallback takeover
 import { KiloSessionOverflow } from "@/kilocode/session/overflow"
 import { KiloRoutedModel } from "@/kilocode/session/routed-model"
 import { Suggestion } from "@/kilocode/suggestion"
@@ -80,6 +81,10 @@ type Input = {
   // kilocode_change start
   telemetry?: ReviewTelemetry
   snapshotInitialization?: "wait"
+  // Resolve a provider/model pair for custom-fallback takeover. Wired by the
+  // prompt loop to the canonical-first getModel; absent in tests/callers that
+  // never take over, which then preserve existing failure behavior.
+  resolveModel?: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Provider.Model, never>
   // kilocode_change end
 }
 
@@ -1236,6 +1241,39 @@ export const layer = Layer.effect(
         return yield* Effect.gen(function* () {
           // kilocode_change start - publish retry state consistently for provider and empty-response retries
           const retries = { provider: 0 }
+          // kilocode_change - pre-turn takeover arming. Only turns that
+          // could take over (Kilo primary, prior Kilo success, no sticky
+          // routing, active resolvable fallback) get a bounded same-channel
+          // budget when the global flag is unset; everything else keeps the
+          // existing retry policy including the unlimited default.
+          const priorKilo: () => Effect.Effect<boolean, never> = Effect.fn("SessionProcessor.priorKiloSuccess")(
+            function* () {
+              const msgs = yield* MessageV2.stream(ctx.sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              return KiloSessionFallback.prior(msgs, ctx.assistantMessage.id)
+            },
+          )
+          const takeoverArmed: () => Effect.Effect<boolean, never> = Effect.fn("SessionProcessor.fallbackArmed")(
+            function* () {
+              if (!input.resolveModel) return false
+              if (!KiloSessionFallback.kilo(input.model.providerID)) return false
+              const cfg = yield* config.get()
+              const active = KiloSessionFallback.active({ fallback_model: cfg.fallback_model ?? undefined })
+              if (!active) return false
+              const sticky = yield* session.get(ctx.sessionID).pipe(
+                Effect.map((info) => info.fallback),
+                Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
+              )
+              if (sticky) return false
+              if (!(yield* priorKilo())) return false
+              const resolved = yield* input
+                .resolveModel(ProviderV2.ID.make(active.providerID), ModelV2.ID.make(active.modelID))
+                .pipe(Effect.exit)
+              return Exit.isSuccess(resolved)
+            },
+          )
+          const fallbackArmed = yield* takeoverArmed()
           const setRetry = (info: {
             attempt: number
             message: string
@@ -1267,7 +1305,10 @@ export const layer = Layer.effect(
             )
           }
 
-          const request = () =>
+          // kilocode_change - attemptOnce is the single provider invocation;
+          // request() wraps it in the same-channel retry schedule while
+          // fallback takeover runs it directly exactly once.
+          const attemptOnce = (model?: Provider.Model) =>
             Effect.gen(function* () {
               ctx.currentText = undefined
               ctx.currentTextID = undefined
@@ -1330,6 +1371,7 @@ export const layer = Layer.effect(
                 const streamEffect = Effect.gen(function* () {
                   const stream = llm.stream({
                     ...streamInput,
+                    ...(model ? { model } : {}),
                     preflight: !ctx.assistantMessage.summary,
                   })
                   yield* stream.pipe(
@@ -1416,7 +1458,10 @@ export const layer = Layer.effect(
                 ),
               )
               yield* Admission.run(admissionWork, inner)
-            }).pipe(
+            })
+
+          const request = (model?: Provider.Model) =>
+            attemptOnce(model).pipe(
               Effect.retry(
                 SessionRetry.policy({
                   provider: input.model.providerID,
@@ -1426,6 +1471,7 @@ export const layer = Layer.effect(
                     abort: ac.signal,
                     set: status.set,
                     used: retries.provider,
+                    fallbackArmed, // kilocode_change
                   }),
                   set: (info) => {
                     if (info.attempt > 0) retries.provider += 1
@@ -1488,7 +1534,91 @@ export const layer = Layer.effect(
             })
           }
 
-          yield* recover().pipe(Effect.catch(halt), Effect.ensuring(cleanup()))
+          // kilocode_change start - sticky custom-fallback takeover. Runs only
+          // after the same-channel retry schedule terminates, before the
+          // assistant error is finalized. Returns true when the turn was taken
+          // over and completed through the fallback channel; false preserves
+          // the existing failure behavior with the original error.
+          // priorKilo/takeoverArmed live above next to request(); takeover
+          // reuses them here.
+          const takeover: (cause: Cause.Cause<unknown>) => Effect.Effect<boolean, never> = Effect.fn(
+            "SessionProcessor.fallbackTakeover",
+          )(function* (cause: Cause.Cause<unknown>) {
+            if (!input.resolveModel) return false
+            const squashed: unknown = (() => {
+              try {
+                return Cause.squash(cause)
+              } catch {
+                return cause
+              }
+            })()
+            if (squashed instanceof KiloSessionOverflow.PreflightError) return false
+            const exposed =
+              attempt.text || attempt.reasoning || attempt.tool || ctx.step.text || ctx.step.reasoning || ctx.step.tool
+            if (exposed) return false
+            const parsed = parse(squashed)
+            const cfg = yield* config.get()
+            const target = KiloSessionFallback.check({
+              primaryProviderID: input.model.providerID,
+              active: KiloSessionFallback.active({ fallback_model: cfg.fallback_model ?? undefined }),
+              error: parsed,
+              priorKilo: yield* priorKilo(),
+              exposed,
+            })
+            if (!target) return false
+            const resolved = yield* input
+              .resolveModel(ProviderV2.ID.make(target.providerID), ModelV2.ID.make(target.modelID))
+              .pipe(Effect.exit)
+            // No active valid custom fallback: preserve existing failure behavior.
+            if (Exit.isFailure(resolved)) return false
+            const fallbackModel = resolved.value
+            // Attribute the attempt to the actual fallback model before it
+            // starts so usage/cost/telemetry never credit the Kilo primary.
+            ctx.model = fallbackModel
+            ctx.assistantMessage.modelID = fallbackModel.id
+            ctx.assistantMessage.providerID = fallbackModel.providerID
+            if (
+              ctx.assistantMessage.variant &&
+              !(fallbackModel.variants && ctx.assistantMessage.variant in fallbackModel.variants)
+            ) {
+              ctx.assistantMessage.variant = undefined
+            }
+            // Fresh provider operation identity for the fallback attempt.
+            retries.provider += 1
+            attempt = KiloSessionProcessor.attempt()
+            const outcome = yield* attemptOnce(ctx.model).pipe(Effect.exit)
+            if (Exit.isFailure(outcome)) return false
+            yield* session.setFallback({
+              sessionID: ctx.sessionID,
+              fallback: { providerID: target.providerID, modelID: target.modelID },
+            })
+            return true
+          })
+          // kilocode_change end
+
+          const settle = Effect.fn("SessionProcessor.settlePrimary")(function* (cause: Cause.Cause<unknown>) {
+            // Interrupts and defects keep their original propagation; only
+            // concrete failures are eligible for takeover or halt.
+            const interrupted = (() => {
+              try {
+                return Cause.hasInterruptsOnly(cause)
+              } catch {
+                return false
+              }
+            })()
+            if (interrupted) return yield* Effect.interrupt
+            const found = Cause.findErrorOption(cause)
+            if (Option.isNone(found)) return yield* Effect.die(cause)
+            const taken: boolean = yield* takeover(cause)
+            if (taken) return yield* Effect.void
+            const hb: Effect.Effect<void, never> = halt(found.value)
+            yield* hb
+          })
+
+          yield* Effect.gen(function* () {
+            const outcome = yield* recover().pipe(Effect.exit)
+            if (Exit.isFailure(outcome)) yield* settle(outcome.cause)
+          }).pipe(Effect.ensuring(cleanup()))
           // kilocode_change end
 
           if (ctx.needsCompaction) return "compact"

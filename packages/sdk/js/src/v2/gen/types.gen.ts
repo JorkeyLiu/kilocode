@@ -1482,6 +1482,7 @@ export type Config = {
   subagent_variant_overrides?: {
     [key: string]: string
   }
+  fallback_model?: string
   default_agent?: string
   username?: string
   mode?: {
@@ -1782,6 +1783,10 @@ export type GlobalSession = {
     id: string
     providerID: string
     variant?: string
+  }
+  fallback?: {
+    providerID: string
+    modelID: string
   }
   version: string
   metadata?: {
@@ -2298,6 +2303,10 @@ export type Session1 = {
     providerID: string
     variant?: string
   }
+  fallback?: {
+    providerID: string
+    modelID: string
+  }
   version: string
   metadata?: {
     [key: string]: unknown
@@ -2350,6 +2359,10 @@ export type Session2 = {
     id: string
     providerID: string
     variant?: string
+  }
+  fallback?: {
+    providerID: string
+    modelID: string
   }
   version: string
   metadata?: {
@@ -2426,6 +2439,10 @@ export type Session3 = {
     providerID: string
     variant?: string
   }
+  fallback?: {
+    providerID: string
+    modelID: string
+  }
   version: string
   metadata?: {
     [key: string]: unknown
@@ -2483,6 +2500,10 @@ export type Session4 = {
     providerID: string
     variant?: string
   }
+  fallback?: {
+    providerID: string
+    modelID: string
+  }
   version: string
   metadata?: {
     [key: string]: unknown
@@ -2535,6 +2556,10 @@ export type Session5 = {
     id: string
     providerID: string
     variant?: string
+  }
+  fallback?: {
+    providerID: string
+    modelID: string
   }
   version: string
   metadata?: {
@@ -2589,6 +2614,10 @@ export type Session6 = {
     providerID: string
     variant?: string
   }
+  fallback?: {
+    providerID: string
+    modelID: string
+  }
   version: string
   metadata?: {
     [key: string]: unknown
@@ -2641,6 +2670,10 @@ export type Session7 = {
     id: string
     providerID: string
     variant?: string
+  }
+  fallback?: {
+    providerID: string
+    modelID: string
   }
   version: string
   metadata?: {
@@ -2749,6 +2782,10 @@ export type Session8 = {
     providerID: string
     variant?: string
   }
+  fallback?: {
+    providerID: string
+    modelID: string
+  }
   version: string
   metadata?: {
     [key: string]: unknown
@@ -2801,6 +2838,10 @@ export type Session9 = {
     id: string
     providerID: string
     variant?: string
+  }
+  fallback?: {
+    providerID: string
+    modelID: string
   }
   version: string
   metadata?: {

@@ -80,6 +80,7 @@ const fieldSchemas: Record<CanonicalField, z.ZodTypeAny> = {
   subagent_model: modelSchema,
   subagent_variant: variantSchema,
   subagent_variant_overrides: variantOverridesSchema,
+  fallback_model: modelSchema,
   default_agent: defaultAgentSchema,
   provider: z.record(z.string(), providerConfigSchema),
   mcp: mcpConfigSchema,

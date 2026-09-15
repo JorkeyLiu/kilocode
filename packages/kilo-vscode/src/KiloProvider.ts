@@ -169,6 +169,11 @@ import {
 import { KILO_PROVIDER_ID, PROVIDER_ID_PATTERN } from "./shared/provider-model"
 import { parseSecretKey } from "./config/secret-adapter"
 import { CLOSED_JSONC_FIELDS, isGuiField } from "./config/registry"
+import {
+  probeFallbackProvider,
+  effectiveFallbackSelection,
+  type FallbackProbeResult,
+} from "./kilo-provider/fallback-probe"
 import { composeScopePatch } from "./util/config-patch"
 import { mapProviderIndexToWebviewProviders } from "./config/selectors"
 
@@ -599,6 +604,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.sendCanonicalConfig("configUpdated")
       void this.sendCanonicalProviders()
       void this.sendCanonicalAgents()
+      this.sendFallbackProvider()
     }
   }
 
@@ -611,6 +617,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.sendCanonicalConfig(event.source === "gui" ? "configUpdated" : "configLoaded", event)
     void this.sendCanonicalProviders(event)
     void this.sendCanonicalAgents(event)
+    this.sendFallbackProvider()
     // External canonical asset edits converge locally via the agent snapshot
     // above; skills/commands have no canonical snapshot and would stay stale,
     // so a successful external materialization refreshes their existing
@@ -2115,6 +2122,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.handleFetchCustomProviderModels(message).catch((e) =>
             console.error("[Kilo New] fetchCustomProviderModels failed:", e),
           )
+          break
+        case "setFallbackProvider":
+        case "clearFallbackProvider":
+        case "probeFallbackProvider":
+        case "requestFallbackProvider":
+          await this.handleFallbackProviderAction(message)
           break
         case "requestAgents":
           this.fetchAndSendAgents().catch((e) => console.error("[Kilo New] fetchAndSendAgents failed:", e))
@@ -3870,6 +3883,208 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         auth: isProviderModelsAuthError(out.cause),
       })
     }
+  }
+
+  /**
+   * Single active custom-fallback channel (additive selection over the
+   * canonical custom-provider records). The global `fallback_model`
+   * preference never changes the ordinary primary model selector; it only
+   * feeds session rate-limit takeover and the explicit availability probe.
+   * Secrets stay host-owned: the webview carries provider/model identity
+   * only, and probe results carry fixed redacted messages.
+   */
+  private readFallbackSelection(): { providerID: string; modelID: string } | undefined {
+    const service = this.canonicalConfig
+    if (!service) return undefined
+    return effectiveFallbackSelection(
+      service.getScopeConfig("project").fallback_model,
+      service.getScopeConfig("global").fallback_model,
+    )
+  }
+
+  private fallbackRecord(id: string): { record: CanonicalProviderPayload } | undefined {
+    const service = this.canonicalConfig
+    if (!service) return undefined
+    for (const scope of ["project", "global"] as const) {
+      const parsed = parseCanonicalProviderRecord(service.getScopeConfig(scope).provider)
+      const record = parsed?.[id]
+      if (record) return { record }
+    }
+    return undefined
+  }
+
+  private sendFallbackProvider(): void {
+    const service = this.canonicalConfig
+    if (!service || !this.canonicalReady) return
+    const sel = this.readFallbackSelection()
+    this.postMessage({
+      type: "fallbackProviderLoaded",
+      ...(sel ? { providerID: sel.providerID, modelID: sel.modelID } : {}),
+      stamp: service.stamp,
+    })
+  }
+
+  private async probeFallbackRecord(
+    providerID: string,
+    modelID: string,
+  ): Promise<FallbackProbeResult> {
+    const service = this.canonicalConfig
+    const found = this.fallbackRecord(providerID)
+    if (!service || !found) {
+      return { usable: false, reason: "invalid-config", message: "Provider is not configured" }
+    }
+    if (!isCanonicalCustomEntry(found.record)) {
+      return { usable: false, reason: "invalid-config", message: CUSTOM_ONLY_PROVIDER_MESSAGE }
+    }
+    const models = found.record.models
+    if (!models || typeof models !== "object" || !(modelID in models)) {
+      return { usable: false, reason: "invalid-model", message: "Model is not configured for this provider" }
+    }
+    const ref = typeof found.record.credential === "string" ? found.record.credential : undefined
+    // Exact owned ref only — never reconstruct a derived key as fallback.
+    const secret = ref ? await service.resolveSecret(ref) : undefined
+    if (!secret) {
+      return { usable: false, reason: "auth", message: "No stored credential for this provider" }
+    }
+    return probeFallbackProvider({
+      endpoint: found.record.endpoint,
+      protocol: found.record.protocol,
+      modelID,
+      secret,
+    })
+  }
+
+  private async handleFallbackProviderAction(msg: Record<string, unknown>): Promise<void> {
+    const service = this.canonicalConfig
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : ""
+    if (!requestId) return
+    if (!service || !this.canonicalReady) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: "Canonical provider authority is not ready",
+        kind: "not-ready",
+        stamp: service?.stamp,
+      })
+      return
+    }
+    if (msg.type === "requestFallbackProvider") {
+      this.sendFallbackProvider()
+      return
+    }
+    if (msg.type === "probeFallbackProvider") {
+      const providerID = typeof msg.providerID === "string" ? msg.providerID : ""
+      const modelID = typeof msg.modelID === "string" ? msg.modelID : ""
+      if (!providerID || !modelID) {
+        this.postMessage({
+          type: "fallbackProviderError",
+          requestId,
+          message: "Fallback probe request is incomplete",
+          kind: "invalid",
+          stamp: service.stamp,
+        })
+        return
+      }
+      const result = await this.probeFallbackRecord(providerID, modelID)
+      this.postMessage({ type: "fallbackProbeResult", requestId, providerID, modelID, ...result })
+      return
+    }
+    const stamp = isCanonicalStamp(msg.stamp) ? msg.stamp : undefined
+    const expected = stamp?.globalHash
+    if (!stamp || expected === undefined || stamp.assetHash !== null || !sameStamp(stamp, service.stamp)) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: "Provider draft stamp is stale or incomplete",
+        kind: "stale",
+        stamp: service.stamp,
+      })
+      return
+    }
+    if (msg.type === "clearFallbackProvider") {
+      const result = await service.writeConfig("global", { fallback_model: null }, expected ?? "absent")
+      if (!result.ok) {
+        this.postMessage({
+          type: "fallbackProviderError",
+          requestId,
+          message: result.message,
+          kind: result.kind,
+          stamp: service.stamp,
+        })
+        return
+      }
+      this.postMessage({ type: "fallbackProviderChanged", requestId, stamp: service.stamp })
+      this.sendFallbackProvider()
+      return
+    }
+    if (msg.type !== "setFallbackProvider") return
+    const providerID = typeof msg.providerID === "string" ? msg.providerID : ""
+    const modelID = typeof msg.modelID === "string" ? msg.modelID : ""
+    // Custom-only product boundary: only configured custom entries with a
+    // configured model and a stored credential can become the active channel.
+    if (!isCustomIDSyntax(providerID)) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: CUSTOM_ONLY_PROVIDER_MESSAGE,
+        kind: "unsupported",
+        stamp: service.stamp,
+      })
+      return
+    }
+    const found = this.fallbackRecord(providerID)
+    if (!found || !isCanonicalCustomEntry(found.record)) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: CUSTOM_ONLY_PROVIDER_MESSAGE,
+        kind: "unsupported",
+        stamp: service.stamp,
+      })
+      return
+    }
+    const models = found.record.models
+    if (!models || typeof models !== "object" || !(modelID in models)) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: "Model is not configured for this provider",
+        kind: "invalid",
+        stamp: service.stamp,
+      })
+      return
+    }
+    if (typeof found.record.credential !== "string" || !found.record.credential) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: "Provider has no stored credential",
+        kind: "invalid",
+        stamp: service.stamp,
+      })
+      return
+    }
+    const result = await service.writeConfig(
+      "global",
+      { fallback_model: `${providerID}/${modelID}` },
+      expected ?? "absent",
+    )
+    if (!result.ok) {
+      this.postMessage({
+        type: "fallbackProviderError",
+        requestId,
+        message: result.message,
+        kind: result.kind,
+        stamp: service.stamp,
+      })
+      return
+    }
+    this.postMessage({ type: "fallbackProviderChanged", requestId, providerID, modelID, stamp: service.stamp })
+    this.sendFallbackProvider()
+    // Single activation probe: one bounded token spend for immediate
+    // usable/unavailable feedback. Never polled; Check re-probes explicitly.
+    const probe = await this.probeFallbackRecord(providerID, modelID)
+    this.postMessage({ type: "fallbackProbeResult", requestId, providerID, modelID, ...probe })
   }
 
   /**
