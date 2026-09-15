@@ -11,5 +11,6 @@
     "packages/kilo-vscode/out": true,
     "packages/kilo-vscode/dist": true
   },
-  "typescript.tsc.autoDetect": "off"
+  "typescript.tsc.autoDetect": "off",
+  "biome.enabled": false
 }
