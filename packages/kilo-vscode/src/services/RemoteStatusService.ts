@@ -71,20 +71,6 @@ export class RemoteStatusService implements vscode.Disposable {
   async refresh(): Promise<void> {
     if (!this.client) return
     const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (!this.privConn || !dir) {
-      const res = await this.client.remote.status().catch((err: unknown) => {
-        console.warn("[Kilo] remote status refresh failed:", err)
-        return undefined
-      })
-      if (!res?.data) return
-      const data = res.data as Partial<RemoteState>
-      if (typeof data.enabled !== "boolean" || typeof data.connected !== "boolean") {
-        console.warn("[Kilo] remote status refresh failed:", { op: "remote/status", invalid: true })
-        return
-      }
-      this.update({ enabled: data.enabled, connected: data.connected })
-      return
-    }
     const out = await fetchRemoteStatusPrivateFirst({
       connection: this.privConn,
       client: this.client as never,
@@ -105,12 +91,6 @@ export class RemoteStatusService implements vscode.Disposable {
   async toggle(): Promise<void> {
     if (!this.client) return
     const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (!this.privConn || !dir) {
-      const { data } = await this.client.remote.status(undefined, { throwOnError: true })
-      if (!data) return
-      await this.setEnabled(!data.enabled)
-      return
-    }
     const out = await fetchRemoteStatusPrivateFirst({
       connection: this.privConn,
       client: this.client as never,
@@ -128,18 +108,6 @@ export class RemoteStatusService implements vscode.Disposable {
   async setEnabled(enabled: boolean): Promise<void> {
     if (!this.client) return
     const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (!this.privConn || !dir) {
-      const res = enabled
-        ? await this.client.remote.enable(undefined, { throwOnError: true })
-        : await this.client.remote.disable(undefined, { throwOnError: true })
-      const data = res?.data as Partial<RemoteState> | undefined
-      if (data && typeof data.enabled === "boolean" && typeof data.connected === "boolean") {
-        this.update({ enabled: data.enabled, connected: data.connected })
-        return
-      }
-      this.update({ enabled, connected: false })
-      return
-    }
     const out = await fetchRemoteTogglePrivateFirst({
       connection: this.privConn,
       client: this.client as never,

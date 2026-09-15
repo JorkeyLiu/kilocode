@@ -1,4 +1,5 @@
 import { describe, it, expect, spyOn } from "bun:test"
+import * as vscode from "vscode"
 import { RemoteStatusService, type RemoteState } from "../../src/services/RemoteStatusService"
 
 type StatusResponse = { enabled: boolean; connected: boolean }
@@ -700,6 +701,343 @@ describe("RemoteStatusService", () => {
       expect(svc.getState()).toEqual({ enabled: true, connected: false })
       svc.updateFromEvent({ enabled: true, connected: true })
       expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      svc.dispose()
+    })
+  })
+
+  describe("private-first wiring (null connection / no directory / ambiguous)", () => {
+    function ambiguousConn(seen?: { status: number; toggle: number }) {
+      return {
+        isPrivateAvailable: () => true,
+        privateRemoteStatusOutcomeWithHandle: (req: {
+          requestId: string
+          opId: string
+          idempotencyKey: string
+        }) => {
+          if (seen) seen.status += 1
+          return {
+            id: 1,
+            promise: Promise.resolve({
+              kind: "valid",
+              result: {
+                v: 1,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: "remote/status",
+                idempotencyKey: req.idempotencyKey,
+                status: "ambiguous",
+                outcome: { type: "ambiguous", time: 1 },
+                accepted: false,
+                transportUnknown: true,
+              },
+            }),
+            cancel: () => true,
+          }
+        },
+        privateRemoteToggleOutcomeWithHandle: (req: {
+          requestId: string
+          opId: string
+          idempotencyKey: string
+          op: string
+        }) => {
+          if (seen) seen.toggle += 1
+          return {
+            id: 2,
+            promise: Promise.resolve({
+              kind: "valid",
+              result: {
+                v: 1,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: req.op,
+                idempotencyKey: req.idempotencyKey,
+                status: "ambiguous",
+                outcome: { type: "ambiguous", time: 1 },
+                accepted: false,
+                transportUnknown: true,
+              },
+            }),
+            cancel: () => true,
+          }
+        },
+      }
+    }
+
+    function countingSdk(status: RemoteState, seen: { status: number; enable: number; disable: number; args: unknown[] }) {
+      return {
+        remote: {
+          status: async (params?: unknown) => {
+            seen.status += 1
+            seen.args.push(params)
+            return { data: status }
+          },
+          enable: async (params?: unknown) => {
+            seen.enable += 1
+            seen.args.push(params)
+            return { data: { enabled: true, connected: false } }
+          },
+          disable: async (params?: unknown) => {
+            seen.disable += 1
+            seen.args.push(params)
+            return { data: { enabled: false, connected: false } }
+          },
+        },
+      }
+    }
+
+    function withoutDirectory<T>(fn: () => Promise<T>): Promise<T> {
+      const ws = vscode.workspace as unknown as Record<string, unknown>
+      const orig = ws.workspaceFolders
+      ws.workspaceFolders = undefined as never
+      const out = fn()
+      return out.finally(() => {
+        ws.workspaceFolders = orig as never
+      })
+    }
+
+    it("refresh with null connection takes exactly one SDK fallback and notifies", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: true, connected: true }, sdk) as never)
+      const states: RemoteState[] = []
+      svc.onChange((s) => states.push(s))
+      await svc.refresh()
+      expect(sdk.status).toBe(1)
+      expect(sdk.args).toEqual([{ directory: "/repo" }])
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      expect(states).toEqual([{ enabled: true, connected: true }])
+      svc.dispose()
+    })
+
+    it("refresh with no directory skips private and takes exactly one SDK fallback", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: true, connected: false }, sdk) as never)
+      const priv = { n: 0 }
+      svc.setPrivateConnection({
+        isPrivateAvailable: () => {
+          priv.n += 1
+          return true
+        },
+        privateRemoteStatusOutcomeWithHandle: () => {
+          priv.n += 1
+          throw new Error("must not be called without directory")
+        },
+        privateRemoteToggleOutcomeWithHandle: () => {
+          throw new Error("must not be called")
+        },
+      } as never)
+      await withoutDirectory(() => svc.refresh())
+      expect(priv.n).toBe(0)
+      expect(sdk.status).toBe(1)
+      expect(sdk.args).toEqual([undefined])
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      svc.dispose()
+    })
+
+    it("refresh with ambiguous private outcome takes exactly one SDK fallback", async () => {
+      const svc = service()
+      const seen = { status: 0, toggle: 0 }
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: true, connected: true }, sdk) as never)
+      svc.setPrivateConnection(ambiguousConn(seen) as never)
+      await svc.refresh()
+      expect(seen.status).toBe(1)
+      expect(sdk.status).toBe(1)
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      svc.dispose()
+    })
+
+    it("toggle with null connection uses SDK status plus one SDK mutation", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: false, connected: false }, sdk) as never)
+      await svc.toggle()
+      expect(sdk.status).toBe(1)
+      expect(sdk.enable).toBe(1)
+      expect(sdk.disable).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      svc.dispose()
+    })
+
+    it("toggle with no directory uses SDK fallbacks with undefined routing", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: false, connected: false }, sdk) as never)
+      await withoutDirectory(() => svc.toggle())
+      expect(sdk.status).toBe(1)
+      expect(sdk.enable).toBe(1)
+      expect(sdk.args).toEqual([undefined, undefined])
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      svc.dispose()
+    })
+
+    it("toggle with ambiguous private outcome falls back to SDK without duplicate reads", async () => {
+      const svc = service()
+      const seen = { status: 0, toggle: 0 }
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: false, connected: false }, sdk) as never)
+      svc.setPrivateConnection(ambiguousConn(seen) as never)
+      await svc.toggle()
+      expect(seen.status).toBe(1)
+      expect(sdk.status).toBe(1)
+      expect(seen.toggle).toBe(1)
+      expect(sdk.enable).toBe(1)
+      expect(sdk.disable).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      svc.dispose()
+    })
+
+    it("setEnabled with null connection takes exactly one SDK fallback and notifies", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: false, connected: false }, sdk) as never)
+      const states: RemoteState[] = []
+      svc.onChange((s) => states.push(s))
+      await svc.setEnabled(true)
+      expect(sdk.enable).toBe(1)
+      expect(sdk.args).toEqual([{ directory: "/repo" }])
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      expect(states).toEqual([{ enabled: true, connected: false }])
+      svc.dispose()
+    })
+
+    it("setEnabled with no directory skips private and takes exactly one SDK fallback", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: false, connected: false }, sdk) as never)
+      svc.setPrivateConnection(ambiguousConn() as never)
+      await withoutDirectory(() => svc.setEnabled(false))
+      expect(sdk.disable).toBe(1)
+      expect(sdk.args).toEqual([undefined])
+      expect(svc.getState()).toEqual({ enabled: false, connected: false })
+      svc.dispose()
+    })
+
+    it("setEnabled with ambiguous private outcome takes exactly one same-action SDK fallback", async () => {
+      const svc = service()
+      const seen = { status: 0, toggle: 0 }
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient(countingSdk({ enabled: false, connected: false }, sdk) as never)
+      svc.setPrivateConnection(ambiguousConn(seen) as never)
+      await svc.setEnabled(true)
+      expect(seen.toggle).toBe(1)
+      expect(sdk.enable).toBe(1)
+      expect(sdk.disable).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: true, connected: false })
+      svc.dispose()
+    })
+
+    it("refresh with malformed SDK status keeps prior state with warn-only behavior", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient({
+        remote: {
+          status: async (params?: unknown) => {
+            sdk.status += 1
+            sdk.args.push(params)
+            return { data: { enabled: "yes" } }
+          },
+          enable: async (params?: unknown) => {
+            sdk.enable += 1
+            sdk.args.push(params)
+            return { data: { enabled: true, connected: false } }
+          },
+          disable: async (params?: unknown) => {
+            sdk.disable += 1
+            sdk.args.push(params)
+            return { data: { enabled: false, connected: false } }
+          },
+        },
+      } as never)
+      svc.updateFromEvent({ enabled: true, connected: true })
+      const states: RemoteState[] = []
+      svc.onChange((s) => states.push(s))
+      const warns: unknown[][] = []
+      const orig = console.warn
+      console.warn = (...args: unknown[]) => {
+        warns.push(args)
+      }
+      try {
+        await svc.refresh()
+      } finally {
+        console.warn = orig
+      }
+      expect(sdk.status).toBe(1)
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      expect(states).toEqual([])
+      expect(warns.length).toBeGreaterThan(0)
+      svc.dispose()
+    })
+
+    it("toggle with malformed SDK status rejects and keeps prior state", async () => {
+      const svc = service()
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient({
+        remote: {
+          status: async (params?: unknown) => {
+            sdk.status += 1
+            sdk.args.push(params)
+            return { data: { enabled: "yes" } }
+          },
+          enable: async (params?: unknown) => {
+            sdk.enable += 1
+            sdk.args.push(params)
+            return { data: { enabled: true, connected: false } }
+          },
+          disable: async (params?: unknown) => {
+            sdk.disable += 1
+            sdk.args.push(params)
+            return { data: { enabled: false, connected: false } }
+          },
+        },
+      } as never)
+      svc.updateFromEvent({ enabled: true, connected: true })
+      const states: RemoteState[] = []
+      svc.onChange((s) => states.push(s))
+      await expect(svc.toggle()).rejects.toThrow("remote status unavailable")
+      expect(sdk.status).toBe(1)
+      expect(sdk.enable).toBe(0)
+      expect(sdk.disable).toBe(0)
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      expect(states).toEqual([])
+      svc.dispose()
+    })
+
+    it("setEnabled with malformed SDK mutation rejects and keeps prior state", async () => {
+      const svc = service()
+      const seen = { status: 0, toggle: 0 }
+      const sdk = { status: 0, enable: 0, disable: 0, args: [] as unknown[] }
+      svc.setClient({
+        remote: {
+          status: async (params?: unknown) => {
+            sdk.status += 1
+            sdk.args.push(params)
+            return { data: { enabled: true, connected: true } }
+          },
+          enable: async (params?: unknown) => {
+            sdk.enable += 1
+            sdk.args.push(params)
+            return { data: { enabled: true, connected: false } }
+          },
+          disable: async (params?: unknown) => {
+            sdk.disable += 1
+            sdk.args.push(params)
+            return { data: { enabled: "yes" } }
+          },
+        },
+      } as never)
+      svc.setPrivateConnection(ambiguousConn(seen) as never)
+      svc.updateFromEvent({ enabled: true, connected: true })
+      const states: RemoteState[] = []
+      svc.onChange((s) => states.push(s))
+      await expect(withoutDirectory(() => svc.setEnabled(false))).rejects.toThrow("remote disable unavailable")
+      expect(seen.toggle).toBe(0)
+      expect(sdk.disable).toBe(1)
+      expect(sdk.enable).toBe(0)
+      expect(sdk.args).toEqual([undefined])
+      expect(svc.getState()).toEqual({ enabled: true, connected: true })
+      expect(states).toEqual([])
       svc.dispose()
     })
   })
