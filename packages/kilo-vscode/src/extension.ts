@@ -733,7 +733,7 @@ export function activate(context: vscode.ExtensionContext) {
       browserAutomationService.dispose()
       notebookBridge.dispose()
       sseTimeline.dispose()
-      connectionService.dispose()
+      void connectionService.dispose()
     },
   })
 

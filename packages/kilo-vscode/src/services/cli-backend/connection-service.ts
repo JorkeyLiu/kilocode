@@ -100,6 +100,7 @@ import { questionRejectHandle, questionReplyHandle } from "./serve-private-quest
 import { notebookListHandle, notebookRejectHandle, notebookReplyHandle } from "./serve-private-notebook-connection"
 import { suggestionAcceptHandle, suggestionDismissHandle } from "./serve-private-suggestion-connection"
 import { wrapEpochHandle } from "./serve-private-epoch"
+import { collectViewedSnapshot, emitDisposeDetach, emitViewedOnce } from "../../kilo-provider/session-viewed-privatefirst"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 /**
@@ -761,33 +762,41 @@ export class KiloConnectionService {
       return
     }
     if (!this.client) return
-
-    const visible = new Set<string>()
-    for (const ids of this.visible.values()) for (const id of ids) visible.add(id)
-    const attached = new Set<string>(visible)
-    for (const ids of this.attached.values()) for (const id of ids) attached.add(id)
-
     this.viewedSending = true
     this.viewedDirty = false
     this.viewedSequence += 1
-    const seq = this.viewedSequence
-    void this.client.session
-      .viewed({ viewer: { id: this.viewerId, active: this.active, sequence: seq }, attached: [...attached], visible: [...visible] })
-      .catch((err) => console.warn("[Kilo New] ConnectionService: viewed flush failed:", err))
-      .finally(() => {
+    const snap = collectViewedSnapshot(this.viewerId, this.active, this.viewedSequence, this.attached, this.visible)
+    const dir = this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0]
+    const client = this.client
+    void (async () => {
+      try {
+        await emitViewedOnce({ connection: this, client, directory: dir, snap })
+      } catch (err) {
+        console.warn("[Kilo New] ConnectionService: viewed flush failed:", err)
+      } finally {
         this.viewedSending = false
         if (this.viewedDirty) this.sendViewed()
-      })
+      }
+    })()
   }
 
-  /**
-   * Clean up everything: kill server, close SSE, clear listeners.
-   */
-  dispose(): void {
+  // Async so the bounded fail-soft final detach (3 s exact-cancel private
+  // attempt plus at most one same-snapshot SDK fallback) settles before
+  // peer teardown. No retry, no new owner, no delivery-after-death claim.
+  async dispose(): Promise<void> {
     if (this.isDisposed) return
     this.isDisposed = true
     this.connectGeneration += 1
     this.connectPromise = null
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer)
+      this.debounceTimer = null
+    }
+    this.viewedDirty = false
+    this.viewedSequence += 1
+    try {
+      await emitDisposeDetach({ viewerId: this.viewerId, seq: this.viewedSequence, directory: this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0], peer: this.privatePeer, live: this.privateAvailable, client: this.client })
+    } catch {}
     // Invalidate any pending connect continuations before resource installation
     this.sseClient?.dispose()
     this.disposePrivatePeer()
@@ -813,19 +822,8 @@ export class KiloConnectionService {
     this.deferredRemoteStatus.clearAll()
     this.deferredSessionList.clearAll()
     this.lastSessionUpdateIdentities?.clear()
-    if (this.client?.session?.viewed) {
-      this.viewedSequence += 1
-      const seq = this.viewedSequence
-      void this.client.session
-        .viewed({ viewer: { id: this.viewerId, active: false, sequence: seq }, attached: [], visible: [] })
-        .catch(() => {})
-    }
     this.attached.clear()
     this.visible.clear()
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer)
-      this.debounceTimer = null
-    }
     if (this.checkinTimer) {
       clearInterval(this.checkinTimer)
       this.checkinTimer = null

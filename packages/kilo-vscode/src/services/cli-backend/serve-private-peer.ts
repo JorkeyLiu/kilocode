@@ -432,6 +432,18 @@ import type {
   ProviderModelsDiscoverWireOutcome,
 } from "./serve-private-provider-models-discover-contract"
 import {
+  isSettledSessionViewedResult,
+  makeSessionViewedAmbiguous,
+  normalizePrivateSessionViewedWire,
+  SessionViewedValidationError,
+  validateSessionViewedContractRequest,
+} from "./serve-private-session-viewed-contract"
+import type {
+  SessionViewedContractRequest,
+  SessionViewedResult,
+  SessionViewedWireOutcome,
+} from "./serve-private-session-viewed-contract"
+import {
   isSettledConfigUiDefaultsResult,
   makeConfigUiDefaultsAmbiguous,
   normalizePrivateConfigUiDefaultsWire,
@@ -4897,6 +4909,81 @@ export class ServePrivatePeer {
       if (isSettledAgentListResult(wire.result, req)) return wire
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeAgentListAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  // Generic/non-closed transport rejection for `session/viewed` is
+  // unresolved (`retryable: true`), never a validated terminal: only a
+  // validated server `failed` with `retryable === false` may close with
+  // zero SDK. The retryable synthesis forces exactly one same-snapshot SDK
+  // fallback via the private-first emission path.
+  private failedSessionViewed(req: SessionViewedContractRequest, code: string, msg: string): SessionViewedResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "session/viewed",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: true } },
+      accepted: false,
+      failure: { code, message: msg, retryable: true },
+    }
+  }
+
+  async privateSessionViewed(req: SessionViewedContractRequest): Promise<SessionViewedResult> {
+    const handle = this.privateSessionViewedOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new SessionViewedValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /**
+   * Internal normalized handle for the idempotent `session/viewed`
+   * presence write. Resolves the discriminated wire outcome so invalid wire
+   * is an explicit `{ kind: "invalid" }` value consumed before any SDK
+   * fallback, never a normal result. Request identity is `requestId` only;
+   * semantic identity is `(viewer.id, sequence)` with server monotonic
+   * ordering.
+   *
+   * Settle-first stale semantics: the raw result is normalized/validated
+   * first, then a validated settled outcome (success or
+   * `retryable === false` terminal) is preserved across post-response
+   * stale/epoch drift. Only unresolved wire (invalid, ambiguous, or
+   * retryable failure) maps drift to ambiguous `transportUnknown`.
+   */
+  privateSessionViewedOutcomeWithHandle(req: SessionViewedContractRequest): {
+    id: number
+    promise: Promise<SessionViewedWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSessionViewedContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/viewed")) {
+      throw new Error("Private peer missing session/viewed capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/viewed", req)
+    const promise = (async (): Promise<SessionViewedWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeSessionViewedAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedSessionViewed(req, code, msg) }
+      }
+      const wire = normalizePrivateSessionViewedWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledSessionViewedResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeSessionViewedAmbiguous(req, true) }
       return wire
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)

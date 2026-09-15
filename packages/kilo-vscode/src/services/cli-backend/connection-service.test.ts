@@ -90,13 +90,13 @@ describe("KiloConnectionService config revision coordinator (LOCK-005)", () => {
     expect(calls).toBe(1)
   })
 
-  test("dispose clears revision listeners", () => {
+  test("dispose clears revision listeners", async () => {
     const service = new KiloConnectionService({} as any)
     let calls = 0
     service.onConfigRevision(() => {
       calls += 1
     })
-    service.dispose()
+    await service.dispose()
     service.advanceConfigRevision()
     expect(calls).toBe(0)
   })

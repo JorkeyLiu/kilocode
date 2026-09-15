@@ -214,6 +214,13 @@ import {
   removePtyPrivate,
   updatePtyPrivate,
 } from "@/kilocode/pty-private"
+import {
+  INTERNAL_MESSAGE as SESSION_VIEWED_INTERNAL_MESSAGE,
+  OP as SESSION_VIEWED_OP,
+  VERSION as SESSION_VIEWED_VERSION,
+  fallbackSessionViewedIds,
+  sessionViewedPrivate,
+} from "@/kilocode/presence/session-viewed-private"
 
 export interface FdCarrierHandle {
   peer: Peer
@@ -5669,6 +5676,57 @@ export function createFdCarrier(
             const out = yield* removePtyPrivate(params).pipe(
               Effect.catch(() => Effect.succeed(failed())),
               Effect.catchDefect(() => Effect.succeed(failed())),
+            )
+            return out
+          }),
+        )
+        return result
+      }
+      if (method === SESSION_VIEWED_OP || method === "session/viewed") {
+        // Process-global idempotent presence write to the canonical
+        // `KiloViewers.Service.update` owner (same owner as
+        // `POST /session/viewed`). No `InstanceRef`, no drain-control lane,
+        // no config fence, no journal, no persistent row, no second
+        // KiloViewers layer. `directory`/`workspace` are routing identity
+        // only. Request identity is `requestId` only; semantic identity is
+        // `(viewer.id, viewer.sequence)` with server monotonic ordering, so
+        // an ambiguous repeat is harmless and never refreshes TTL.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* sessionViewedPrivate(params).pipe(
+              // Carrier-level synthesis is unresolved (`retryable: true`),
+              // never a validated terminal: the extension must take exactly
+              // one same-snapshot SDK fallback rather than close.
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: SESSION_VIEWED_VERSION,
+                  requestId: fallbackSessionViewedIds(params).requestId,
+                  op: SESSION_VIEWED_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SESSION_VIEWED_INTERNAL_MESSAGE, retryable: true },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SESSION_VIEWED_INTERNAL_MESSAGE, retryable: true },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: SESSION_VIEWED_VERSION,
+                  requestId: fallbackSessionViewedIds(params).requestId,
+                  op: SESSION_VIEWED_OP,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SESSION_VIEWED_INTERNAL_MESSAGE, retryable: true },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SESSION_VIEWED_INTERNAL_MESSAGE, retryable: true },
+                }),
+              ),
             )
             return out
           }),
