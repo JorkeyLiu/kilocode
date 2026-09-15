@@ -170,7 +170,6 @@ const AgentManagerContent: Component = () => {
   const [durableHydrated, setDurableHydrated] = createSignal(false)
   let latestCatalog: Set<string> | undefined
   let latestDurable: AgentManagerStateMessage | undefined
-  let catalogHasMore: boolean | undefined
   let catalogPreserve: string[] | undefined
   // Real sessionCreated IDs that have not yet appeared in the authoritative catalog.
   // Protects the first real session from a stale empty catalog that races after creation.
@@ -182,9 +181,8 @@ const AgentManagerContent: Component = () => {
   // sessionCreated arrives for an already-local ID, we promote exactly that
   // ID to recentRealIds — strict existing replay remains unprotected.
   const creationOrigin = new Set<string>()
-  // Deletion barrier within current catalog collection cycle.
-  // Tombstoned IDs are filtered from subsequent append pages and final
-  // effective catalog until a fresh append=false refresh clears the cycle.
+  // Deletion barrier for races between a complete snapshot drain and a
+  // backend delete. Tombstoned IDs are filtered from the snapshot.
   const deletedIds = new Set<string>()
   // Phase 1B: per-context session tab registry (source of truth for tab strip).
   const tabMgr = createSessionTabManager()
@@ -320,7 +318,6 @@ const AgentManagerContent: Component = () => {
           }
         | undefined,
       catalog: latestCatalog,
-      hasMore: catalogHasMore,
       preserveSessionIds: combinedPreserve,
       LOCAL,
       isFresh,
@@ -776,21 +773,20 @@ const AgentManagerContent: Component = () => {
       if (focus) session.selectSession(created.session.id)
     })
 
-    // Catalog readiness: retain latest backend catalog and reconcile independent of message order
+    // Catalog readiness: complete inventory snapshot replaces the catalog.
+    // Tombstoned deletes filter stale drain races; converged omissions drop
+    // their tombstone so the set stays bounded.
     const unsubSessions = vscode.onMessage((msg) => {
       if (msg.type === "sessionsLoaded") {
         if (!sessionsLoaded()) setSessionsLoaded(true)
         const m = msg as {
           sessions?: Array<{ id: string }>
-          append?: boolean
-          hasMore?: boolean
           preserveSessionIds?: string[]
         }
-        if (m.append !== true) deletedIds.clear()
+        const rawIds = new Set((m.sessions ?? []).map((s) => s.id))
+        for (const del of [...deletedIds]) if (!rawIds.has(del)) deletedIds.delete(del)
         const filtered = (m.sessions ?? []).filter((s) => !deletedIds.has(s.id))
-        latestCatalog = accumulateCatalog(latestCatalog, filtered, m.append)
-        for (const del of deletedIds) latestCatalog?.delete(del)
-        catalogHasMore = m.hasMore
+        latestCatalog = accumulateCatalog(latestCatalog, filtered)
         catalogPreserve = m.preserveSessionIds?.filter((id) => !deletedIds.has(id))
         applyReconciliation()
       }

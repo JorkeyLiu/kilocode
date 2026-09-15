@@ -196,56 +196,50 @@ describe("KiloProvider pending session refresh", () => {
     expect(ctx.cursor).toBeNull()
   })
 
-  it("load-more appends the next page, forwards the cursor, and reports hasMore", async () => {
-    // Replaces the "omits preserveSessionIds when all directories succeed" case.
-    // The new analogue is the paging append path: a cursor request uses
-    // SESSION_LOAD_MORE_LIMIT, appends, and surfaces the next cursor.
+  it("drains two pages and publishes one complete snapshot", async () => {
+    // Complete inventory: transport stays paged but the webview receives one
+    // coherent snapshot (append false, hasMore false).
     const next = opaqueCursor(40, "ses_next")
-    const prev = opaqueCursor(20, "ses_prev")
-    const { calls, fn } = recordingList([session("ses_page2", "project", "/repo", 3)], next)
-    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 20, cursor: prev })
+    const calls: ListInput[] = []
+    const fn = async (input: ListInput) => {
+      calls.push(input)
+      if (input.cursor === undefined) return { sessions: [session("ses_a", "project", "/repo", 3)] as never, cursor: next }
+      return { sessions: [session("ses_b", "project", "/repo", 2)] as never, cursor: null }
+    }
+    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 0, cursor: null })
 
-    await loadSessions(ctx, prev)
+    await loadSessions(ctx)
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0]!.limit).toBe(SESSION_LOAD_MORE_LIMIT)
-    expect(calls[0]!.cursor).toBe(prev)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.limit).toBe(SESSION_INITIAL_LIMIT)
+    expect(calls[0]!.cursor).toBeUndefined()
+    expect(calls[1]!.limit).toBe(SESSION_LOAD_MORE_LIMIT)
+    expect(calls[1]!.cursor).toBe(next)
     const msg = ctx.sent[0] as {
       append: boolean
       nextCursor: string | null
       hasMore: boolean
       sessions: { id: string }[]
     }
-    expect(msg.append).toBe(true)
-    expect(msg.nextCursor).toBe(next)
-    expect(msg.hasMore).toBe(true)
-    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_page2"])
-    expect(ctx.loadedCount).toBe(21) // previous 20 + this page's 1
-    expect(ctx.cursor).toBe(next)
+    expect(msg.append).toBe(false)
+    expect(msg.nextCursor).toBeNull()
+    expect(msg.hasMore).toBe(false)
+    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_a", "ses_b"])
+    expect(ctx.loadedCount).toBe(2)
+    expect(ctx.cursor).toBeNull()
   })
 
   it("never emits preserveSessionIds on the sessionsLoaded message", async () => {
     // The preserveSessionIds contract was removed with the fan-out; guard that
-    // it does not reappear on either a refresh or a load-more.
+    // it does not reappear on a complete snapshot.
     const refresh = createContext({
       connectionState: "connected",
       listSessions: recordingList([session("ses_root", "project", "/repo", 1)]).fn,
     })
     await loadSessions(refresh)
-    const moreCursor = opaqueCursor(20, "ses_prev")
-    const moreNext = opaqueCursor(40, "ses_next")
-    const more = createContext({
-      connectionState: "connected",
-      loadedCount: 20,
-      cursor: moreCursor,
-      listSessions: recordingList([session("ses_page2", "project", "/repo", 2)], moreNext).fn,
-    })
-    await loadSessions(more, moreCursor)
 
-    for (const ctx of [refresh, more]) {
-      expect(ctx.sent).toHaveLength(1)
-      expect(ctx.sent[0] as object).not.toHaveProperty("preserveSessionIds")
-    }
+    expect(refresh.sent).toHaveLength(1)
+    expect(refresh.sent[0] as object).not.toHaveProperty("preserveSessionIds")
   })
 
   it("flushes deferred refresh via flushPendingSessionRefresh", async () => {

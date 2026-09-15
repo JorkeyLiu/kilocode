@@ -160,38 +160,45 @@ describe("KiloProvider private-first session list paging", () => {
     expect((privateSvc as unknown as { dispose: { mock: { calls: unknown[] } } }).dispose.mock.calls).toHaveLength(0)
   })
 
-  it("private load-more forwards cursor/limit/directory and handles nextCursor/hasMore", async () => {
-    const next = opaque(40, "ses_next")
-    const prev = opaque(20, "ses_prev")
+  it("private multi-page drain accumulates and publishes one complete snapshot", async () => {
+    const first = opaque(40, "ses_first")
     const privateSvc = createPrivateMock({
-      listImpl: () => ({
-        v: "1.0",
-        entries: [{ id: "ses_page2", title: "p2", parentID: null, directory: "/repo", projectID: "proj_ro", createdAt: 1, updatedAt: 3 }],
-        nextCursor: next,
-      }),
+      listImpl: (input: { cursor?: string }) => {
+        if (input.cursor === undefined) {
+          return {
+            v: "1.0",
+            entries: [{ id: "ses_page1", title: "p1", parentID: null, directory: "/repo", projectID: "proj_ro", createdAt: 1, updatedAt: 3 }],
+            nextCursor: first,
+          }
+        }
+        return {
+          v: "1.0",
+          entries: [{ id: "ses_page2", title: "p2", parentID: null, directory: "/repo", projectID: "proj_ro", createdAt: 1, updatedAt: 2 }],
+        }
+      },
     })
     const client = createClient()
     const connection = createConnection(client)
     const provider = new KiloProvider({} as never, connection as never, undefined, { privateSessionList: privateSvc as unknown as never })
     const internal = provider as unknown as ProviderInternals & { sessionCursor: string | null; sessionCount: number }
-    internal.sessionCount = 20
-    internal.sessionCursor = prev
     const sent: unknown[] = []
     internal.webview = { postMessage: async (msg: unknown) => { sent.push(msg); return {} } }
     internal.connectionState = "connected"
-    await internal.handleLoadSessions(prev)
-    expect(privateSvc._calls).toHaveLength(1)
-    expect(privateSvc._calls[0]!.limit).toBe(300)
-    expect(privateSvc._calls[0]!.cursor).toBe(prev)
-    expect(privateSvc._calls[0]!.directory).toBe("/repo")
-    const msg = sent.find((m) => (m as { append?: boolean }).append === true) as { append: boolean; nextCursor: string | null; hasMore: boolean; sessions: Array<{ id: string }> } | undefined
-    expect(msg).toBeDefined()
-    expect(msg!.append).toBe(true)
-    expect(msg!.nextCursor).toBe(next)
-    expect(msg!.hasMore).toBe(true)
-    expect(msg!.sessions[0]!.id).toBe("ses_page2")
-    expect(internal.sessionCount).toBe(21)
-    expect(internal.sessionCursor).toBe(next)
+    await internal.handleLoadSessions()
+    expect(privateSvc._calls).toHaveLength(2)
+    expect(privateSvc._calls[0]!.limit).toBe(500)
+    expect(privateSvc._calls[0]!.cursor).toBeUndefined()
+    expect(privateSvc._calls[1]!.limit).toBe(300)
+    expect(privateSvc._calls[1]!.cursor).toBe(first)
+    expect(privateSvc._calls[1]!.directory).toBe("/repo")
+    const msgs = sent.filter((m) => (m as { type?: string }).type === "sessionsLoaded") as Array<{ append: boolean; nextCursor: string | null; hasMore: boolean; sessions: Array<{ id: string }> }>
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]!.append).toBe(false)
+    expect(msgs[0]!.nextCursor).toBeNull()
+    expect(msgs[0]!.hasMore).toBe(false)
+    expect(msgs[0]!.sessions.map((s) => s.id)).toEqual(["ses_page1", "ses_page2"])
+    expect(internal.sessionCount).toBe(2)
+    expect(internal.sessionCursor).toBeNull()
     expect(client._calls).toHaveLength(0)
   })
 
@@ -388,14 +395,22 @@ describe("KiloProvider private-first session list paging", () => {
     }
   })
 
-  it("valid private nextCursor and normalize regression: valid cursor remains accepted", async () => {
+  it("valid private nextCursor drains to a complete snapshot and normalize regression holds", async () => {
     const valid = opaque(100, "ses_valid")
     const privateSvc = createPrivateMock({
-      listImpl: () => ({
-        v: "1.0",
-        entries: [{ id: "ses_a", title: "a", parentID: null, directory: "/repo", projectID: "proj_a", createdAt: 1, updatedAt: 2 }],
-        nextCursor: valid,
-      }),
+      listImpl: (input: { cursor?: string }) => {
+        if (input.cursor === undefined) {
+          return {
+            v: "1.0",
+            entries: [{ id: "ses_a", title: "a", parentID: null, directory: "/repo", projectID: "proj_a", createdAt: 1, updatedAt: 2 }],
+            nextCursor: valid,
+          }
+        }
+        return {
+          v: "1.0",
+          entries: [{ id: "ses_b", title: "b", parentID: null, directory: "/repo", projectID: "proj_a", createdAt: 1, updatedAt: 1 }],
+        }
+      },
     })
     const client = createClient()
     const connection = createConnection(client)
@@ -405,10 +420,13 @@ describe("KiloProvider private-first session list paging", () => {
     internal.webview = { postMessage: async (msg: unknown) => { sent.push(msg); return {} } }
     internal.connectionState = "connected"
     await internal.handleLoadSessions()
-    expect(privateSvc._calls).toHaveLength(1)
+    expect(privateSvc._calls).toHaveLength(2)
     expect(client._calls).toHaveLength(0)
-    const msg = sent.find((m) => (m as { type?: string }).type === "sessionsLoaded") as { nextCursor: string | null } | undefined
-    expect(msg!.nextCursor).toBe(valid)
+    const msgs = sent.filter((m) => (m as { type?: string }).type === "sessionsLoaded") as Array<{ nextCursor: string | null; hasMore: boolean; sessions: Array<{ id: string }> }>
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]!.nextCursor).toBeNull()
+    expect(msgs[0]!.hasMore).toBe(false)
+    expect(msgs[0]!.sessions.map((s) => s.id)).toEqual(["ses_a", "ses_b"])
     expect(normalizeSessionListNextCursor(valid)).toBe(valid)
     // invalid remains null
     expect(normalizeSessionListNextCursor("bad")).toBeNull()

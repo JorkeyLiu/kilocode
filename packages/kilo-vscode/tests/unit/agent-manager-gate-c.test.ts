@@ -67,14 +67,13 @@ function prov(store: Store = fakeStore()): Prov {
   return m
 }
 
-// Helper to simulate App's recent/origin/deleted + catalog handling
+// Helper to simulate App's recent/origin/deleted + catalog handling (complete snapshots)
 function createAppHarness() {
   let latestCatalog: Set<string> | undefined
   const recentRealIds = new Set<string>()
   const creationOrigin = new Set<string>()
   const deletedIds = new Set<string>()
   let catalogPreserve: string[] | undefined
-  let catalogHasMore: boolean | undefined
 
   const apply = (localIds: string[], tabOrder: string[] | undefined, active: string | undefined, durable: { sessions: { id: string }[] } | undefined, isFresh: boolean, durableHydrated: boolean) => {
     const combinedPreserve = (() => {
@@ -91,7 +90,6 @@ function createAppHarness() {
       active,
       durable: durable as never,
       catalog: latestCatalog,
-      hasMore: catalogHasMore,
       preserveSessionIds: combinedPreserve,
       LOCAL,
       isFresh,
@@ -99,13 +97,11 @@ function createAppHarness() {
     })
   }
 
-  const onSessionsLoaded = (sessions: { id: string }[], append?: boolean, hasMore?: boolean, preserve?: string[]) => {
-    if (append !== true) deletedIds.clear()
+  const onSessionsLoaded = (sessions: { id: string }[], _append?: boolean, _hasMore?: boolean, preserve?: string[]) => {
+    const rawIds = new Set(sessions.map((s) => s.id))
+    for (const del of [...deletedIds]) if (!rawIds.has(del)) deletedIds.delete(del)
     const filtered = sessions.filter((s) => !deletedIds.has(s.id))
-    if (latestCatalog) for (const del of deletedIds) latestCatalog.delete(del)
-    latestCatalog = accumulateCatalog(latestCatalog, filtered, append)
-    for (const del of deletedIds) latestCatalog?.delete(del)
-    catalogHasMore = hasMore
+    latestCatalog = accumulateCatalog(latestCatalog, filtered)
     catalogPreserve = preserve?.filter((id) => !deletedIds.has(id))
   }
 
@@ -205,15 +201,15 @@ describe("Gate C — fork/tool origin protection (App)", () => {
   })
 })
 
-describe("Gate C — deletion barrier (Provider)", () => {
-  it("deletion then late append containing ID does not re-add managed/order/active", async () => {
+describe("Gate C — deletion barrier (Provider, complete snapshots)", () => {
+  it("deletion then stale snapshot containing ID does not re-add managed/order/active", async () => {
     const p = prov()
     p.managedSessions.set("a", { id: "a" })
     p.managedSessions.set("b", { id: "b" })
     p.tabOrder["local"] = ["a", "b"]
     p.activeSessionId = "b"
-    // First page a, hasMore true
-    p.onCatalogUpdate({ ids: ["a"], append: false, hasMore: true })
+    // Complete snapshot with both
+    p.onCatalogUpdate({ ids: ["a", "b"], append: false, hasMore: false })
     expect([...p.managedSessions.keys()].sort()).toEqual(["a", "b"])
     // Delete b
     p.onSessionDeleted({ properties: { sessionID: "b" } } as unknown)
@@ -221,14 +217,17 @@ describe("Gate C — deletion barrier (Provider)", () => {
     expect(p.catalogTombstone.has("b")).toBe(true)
     expect(p.tabOrder["local"]).toEqual(["a"])
     expect(p.activeSessionId).toBe("a")
-    // Late append containing b (stale page) should be filtered
-    p.onCatalogUpdate({ ids: ["b"], append: true, hasMore: false })
+    // Stale snapshot still containing b (drain race) stays filtered
+    p.onCatalogUpdate({ ids: ["a", "b"], append: false, hasMore: false })
     expect(p.managedSessions.has("b")).toBe(false)
     expect(p.tabOrder["local"]).toEqual(["a"])
     expect(p.accumulatedCatalog?.has("b")).toBe(false)
+    // Converged snapshot omitting b keeps it pruned
+    p.onCatalogUpdate({ ids: ["a"], append: false, hasMore: false })
+    expect(p.managedSessions.has("b")).toBe(false)
   })
 
-  it("append=false fresh refresh clears tombstone and allows re-created ID via new catalog", async () => {
+  it("re-created ID returns via explicit addSession while tombstone filters stale snapshots", async () => {
     const p = prov()
     p.managedSessions.set("a", { id: "a" })
     p.tabOrder["local"] = ["a"]
@@ -236,18 +235,17 @@ describe("Gate C — deletion barrier (Provider)", () => {
     p.onSessionDeleted({ properties: { sessionID: "a" } } as unknown)
     expect(p.catalogTombstone.has("a")).toBe(true)
     expect(p.managedSessions.has("a")).toBe(false)
-    // Fresh full refresh containing a (genuine re-create) should clear tombstone and accumulate
+    // Stale snapshot containing a stays filtered (tombstone persists)
     p.onCatalogUpdate({ ids: ["a"], append: false, hasMore: false })
-    expect(p.catalogTombstone.has("a")).toBe(false)
-    expect(p.accumulatedCatalog?.has("a")).toBe(true)
+    expect(p.managedSessions.has("a")).toBe(false)
+    expect(p.accumulatedCatalog?.has("a")).toBe(false)
     // Re-create via addSession (new session with same ID)
     p.addSession("a", { recent: true })
     expect(p.managedSessions.has("a")).toBe(true)
     expect(p.recentSessions.has("a")).toBe(true)
-    // Next fresh catalog includes a, so recent consumed but id kept
+    // Next snapshot still filtered at catalog level, but recent keeps managed
     p.onCatalogUpdate({ ids: ["a"], append: false, hasMore: false })
     expect(p.managedSessions.has("a")).toBe(true)
-    expect(p.recentSessions.has("a")).toBe(false)
   })
 
   it("pending/tool/fork recent protections are consumed when catalog confirms", async () => {
@@ -272,8 +270,8 @@ describe("Gate C — deletion barrier (Provider)", () => {
   })
 })
 
-describe("Gate C — deletion barrier (App webview)", () => {
-  it("deletion then late append containing ID does not re-add local", () => {
+describe("Gate C — deletion barrier (App webview, complete snapshots)", () => {
+  it("deletion then stale snapshot containing ID does not re-add local", () => {
     const h = createAppHarness()
     const id = "ses_del_app"
     // establish initial catalog with "other" and id
@@ -283,27 +281,30 @@ describe("Gate C — deletion barrier (App webview)", () => {
     h.onSessionDeleted(id)
     localIds = localIds.filter((x) => x !== id)
     expect(h.deletedIds.has(id)).toBe(true)
-    // Late append containing deleted ID (should be filtered, keeps "other")
-    h.onSessionsLoaded([{ id }], true, false)
+    // Stale complete snapshot still containing deleted ID stays filtered
+    h.onSessionsLoaded([{ id: "other" }, { id }], false, false)
     expect(h.latestCatalog()?.has(id)).toBe(false)
     expect(h.latestCatalog()?.has("other")).toBe(true)
     const out = h.apply(localIds, localIds, "other", { sessions: [{ id: "other" }] }, false, true)
     expect(out.nextIds).toBeUndefined() // other kept, deleted not re-added (local already without id)
     // Ensure local stays without deleted
     expect(localIds.includes(id)).toBe(false)
+    // Converged snapshot omitting the ID drops its tombstone
+    h.onSessionsLoaded([{ id: "other" }], false, false)
+    expect(h.deletedIds.has(id)).toBe(false)
   })
 
-  it("append=false fresh refresh clears tombstone and allows re-created ID in catalog", () => {
+  it("tombstone persists across stale snapshots and converges when omitted", () => {
     const h = createAppHarness()
     const id = "ses_recreate_app"
     h.onSessionDeleted(id)
     expect(h.deletedIds.has(id)).toBe(true)
-    h.onSessionsLoaded([{ id }], true, false)
-    expect(h.latestCatalog()?.has(id)).toBe(false)
-    // Fresh refresh
     h.onSessionsLoaded([{ id }], false, false)
+    expect(h.latestCatalog()?.has(id)).toBe(false)
+    expect(h.deletedIds.has(id)).toBe(true)
+    // Converged snapshot omits the ID
+    h.onSessionsLoaded([], false, false)
     expect(h.deletedIds.has(id)).toBe(false)
-    expect(h.latestCatalog()?.has(id)).toBe(true)
   })
 
   it("fork protection consumed when catalog confirms, then prune without preserve", () => {

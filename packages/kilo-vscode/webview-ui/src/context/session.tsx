@@ -155,11 +155,8 @@ interface SessionContextValue {
   currentSession: Accessor<SessionInfo | undefined>
   setCurrentSessionID: (id: string | undefined) => void
 
-  // All sessions (sorted most recent first)
+  // All sessions (sorted most recent first, complete inventory)
   sessions: Accessor<SessionInfo[]>
-
-  // Whether more session pages are available via loadMoreSessions()
-  sessionsHasMore: Accessor<boolean>
 
   // Session status
   status: Accessor<SessionStatus>
@@ -356,7 +353,6 @@ interface SessionContextValue {
   createSession: () => void
   clearCurrentSession: () => void
   loadSessions: () => void
-  loadMoreSessions: () => void
   loadOlderMessages: () => void
   selectSession: (id: string) => void
   deleteSession: (id: string) => void
@@ -426,14 +422,6 @@ export const SessionProvider: ParentComponent = (props) => {
   const [loading, setLoading] = createSignal(false)
   const [loaded, setLoaded] = createSignal<Set<string>>(new Set())
   const [pages, setPages] = createStore<Record<string, MessagePageState>>({})
-
-  // Cursor-based "load more" pagination for the session list. Pages append to
-  // the store instead of replacing it; hasMore/cursor come from sessionsLoaded.
-  const [sessionsHasMore, setSessionsHasMore] = createSignal(false)
-  const [sessionsCursor, setSessionsCursor] = createSignal<string | null>(null)
-  // In-flight guard: a load-more request does not update the cursor until its
-  // response arrives, so a rapid double-click would post the same cursor twice.
-  const [loadingMore, setLoadingMore] = createSignal(false)
 
   // Parts stash: holds parts from messagesLoaded outside the reactive store
   // until a TranscriptRowView is rendered by the virtualizer and calls
@@ -1369,9 +1357,6 @@ export const SessionProvider: ParentComponent = (props) => {
   function handleError(message: Extract<ExtensionMessage, { type: "error" }>) {
     if (!message.sessionID || message.sessionID === currentSessionID()) setLoading(false)
     if (message.sessionID) patchPage(message.sessionID, { loadingInitial: false, loadingOlder: false })
-    // A load-more request that errors never delivers an append page, so clear
-    // any stuck in-flight load-more state here as a safety net.
-    setLoadingMore(false)
   }
 
   function toggleFavorite(providerID: string, modelID: string) {
@@ -2339,24 +2324,12 @@ export const SessionProvider: ParentComponent = (props) => {
   function handleSessionsLoaded(
     loaded: SessionInfo[],
     preserve?: string[],
-    append?: boolean,
-    cursor?: string | null,
-    more?: boolean,
+    _append?: boolean,
+    _cursor?: string | null,
+    _more?: boolean,
   ) {
-    // Belt-and-suspenders: any sessionsLoaded (full refresh or append) clears
-    // in-flight load-more state so a failed load-more request can never leave
-    // loadingMore stuck true and permanently disable further load-more.
-    setLoadingMore(false)
-    setSessionsCursor(cursor ?? null)
-    setSessionsHasMore(more ?? false)
-    // Append path: upsert only. The store is id-keyed so it dedups; skip the
-    // reconcile-delete so earlier pages stay in the store.
-    if (append) {
-      batch(() => {
-        for (const s of loaded) setStore("sessions", s.id, s)
-      })
-      return
-    }
+    // Complete inventory: every sessionsLoaded is an authoritative snapshot.
+    // Deprecated append/cursor/hasMore wire fields are ignored.
     const ids = new Set(loaded.map((s) => s.id))
     for (const id of ids) freshSessions.delete(id)
     const kept = new Set([...(preserve ?? []), ...freshSessions])
@@ -2831,15 +2804,6 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "loadSessions" })
   }
 
-  function loadMoreSessions() {
-    if (!server.isConnected()) return
-    if (loadingMore()) return
-    const cursor = sessionsCursor()
-    if (!sessionsHasMore() || cursor === null) return
-    setLoadingMore(true)
-    vscode.postMessage({ type: "loadSessions", cursor })
-  }
-
   function loadOlderMessages() {
     const id = currentSessionID()
     if (!id || !server.isConnected()) return
@@ -3179,7 +3143,6 @@ export const SessionProvider: ParentComponent = (props) => {
     currentSession,
     setCurrentSessionID,
     sessions,
-    sessionsHasMore,
     status,
     statusInfo,
     closeReason,
@@ -3291,7 +3254,6 @@ export const SessionProvider: ParentComponent = (props) => {
     createSession,
     clearCurrentSession,
     loadSessions,
-    loadMoreSessions,
     loadOlderMessages,
     selectSession,
     deleteSession,

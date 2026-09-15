@@ -278,15 +278,6 @@ const SessionList: Component<SessionListProps> = (props) => {
           return (rank[a.category] ?? 99) - (rank[b.category] ?? 99)
         }}
         itemWrapper={wrapItem}
-        footer={
-          <Show when={session.sessionsHasMore()}>
-            <div class="session-load-more">
-              <button class="session-load-more-btn" onClick={() => session.loadMoreSessions()}>
-                {language.t("common.loadMore") ?? "Load more"}
-              </button>
-            </div>
-          </Show>
-        }
       >
         {(item) => (
           <>

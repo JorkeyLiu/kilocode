@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { KiloProvider } from "./KiloProvider"
 import type { KiloConnectionService } from "./services/cli-backend/connection-service"
-import { loadSessions, normalizeSessionListNextCursor, type SessionRefreshContext } from "./kilo-provider-utils"
+import {
+  loadSessions,
+  normalizeSessionListNextCursor,
+  MAX_SESSION_LIST_PAGES,
+  type SessionRefreshContext,
+} from "./kilo-provider-utils"
 import { encodeSessionListCursor } from "./services/cli-backend/serve-private-session-list-contract"
 
 const OPAQUE = (updated = 7, id = "ses_abc"): string => encodeSessionListCursor(updated, id)
@@ -21,7 +26,11 @@ function ctxWith(
   }
 }
 
-describe("session-list paging header gate and terminal append", () => {
+function webviewSession(id: string, updated = 2) {
+  return { id, directory: "/tmp", title: "t", time: { created: 1, updated }, projectID: "p1" }
+}
+
+describe("session-list complete inventory drain", () => {
   test("malformed and legacy x-next-cursor headers never become usable state", () => {
     expect(normalizeSessionListNextCursor(OPAQUE(7, "ses_abc"))).toBe(OPAQUE(7, "ses_abc"))
     expect(normalizeSessionListNextCursor(null)).toBeNull()
@@ -42,50 +51,88 @@ describe("session-list paging header gate and terminal append", () => {
     expect(normalizeSessionListNextCursor(badVer)).toBeNull()
   })
 
-  test("empty terminal append clears hasMore and cursor", async () => {
+  test("empty inventory publishes one complete snapshot", async () => {
     const posted: unknown[] = []
-    const ctx = ctxWith(async () => ({ sessions: [], cursor: null }), {
-      loadedCount: 2,
-      cursor: OPAQUE(9, "ses_x"),
-      postMessage: (m: unknown) => posted.push(m),
-    })
-    await loadSessions(ctx, OPAQUE(9, "ses_x"))
+    const calls: unknown[] = []
+    const ctx = ctxWith(
+      (async (input: { limit: number; cursor?: string }) => {
+        calls.push(input)
+        return { sessions: [], cursor: null }
+      }) as unknown as SessionRefreshContext["listSessions"],
+      { loadedCount: 2, cursor: OPAQUE(9, "ses_x"), postMessage: (m: unknown) => posted.push(m) },
+    )
+    await loadSessions(ctx)
     expect(ctx.cursor).toBeNull()
-    expect(ctx.loadedCount).toBe(2)
+    expect(ctx.loadedCount).toBe(0)
+    expect(calls).toHaveLength(1)
     expect(posted).toHaveLength(1)
     const msg = posted[0] as Record<string, unknown>
-    expect(msg.append).toBe(true)
+    expect(msg.append).toBe(false)
     expect(msg.hasMore).toBe(false)
     expect(msg.nextCursor).toBeNull()
     expect(msg.sessions).toEqual([])
   })
 
-  test("append with terminal null cursor accumulates count without hasMore", async () => {
+  test("multi-page drain accumulates and publishes once with complete snapshot", async () => {
     const posted: unknown[] = []
-    const session = {
-      id: "ses_a",
-      directory: "/tmp",
-      title: "t",
-      time: { created: 1, updated: 2 },
-      projectID: "p1",
-    }
-    const ctx = ctxWith(null, {
-      loadedCount: 2,
-      cursor: OPAQUE(9, "ses_x"),
-      postMessage: (m: unknown) => posted.push(m),
-    })
-    // Rebind with a correctly typed single-session page to avoid generic drift.
-    ctx.listSessions = (async () => ({
-      sessions: [session],
-      cursor: null,
-    })) as unknown as SessionRefreshContext["listSessions"]
-    await loadSessions(ctx, OPAQUE(9, "ses_x"))
+    const calls: Array<{ limit: number; cursor?: string }> = []
+    const c1 = OPAQUE(20, "ses_page1")
+    const list = (async (input: { limit: number; cursor?: string }) => {
+      calls.push(input)
+      if (input.cursor === undefined) return { sessions: [webviewSession("ses_a")], cursor: c1 }
+      return { sessions: [webviewSession("ses_b")], cursor: null }
+    }) as unknown as SessionRefreshContext["listSessions"]
+    const ctx = ctxWith(list, { postMessage: (m: unknown) => posted.push(m) })
+    await loadSessions(ctx)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.cursor).toBeUndefined()
+    expect(calls[1]!.cursor).toBe(c1)
     expect(ctx.cursor).toBeNull()
-    expect(ctx.loadedCount).toBe(3)
-    const msg = posted[0] as Record<string, unknown>
-    expect(msg.append).toBe(true)
+    expect(ctx.loadedCount).toBe(2)
+    expect(posted).toHaveLength(1)
+    const msg = posted[0] as { append: boolean; hasMore: boolean; nextCursor: string | null; sessions: { id: string }[] }
+    expect(msg.append).toBe(false)
     expect(msg.hasMore).toBe(false)
+    expect(msg.nextCursor).toBeNull()
+    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_a", "ses_b"])
   })
+
+  test("deprecated cursor argument is ignored and still drains from the start", async () => {
+    const posted: unknown[] = []
+    const calls: Array<{ limit: number; cursor?: string }> = []
+    const list = (async (input: { limit: number; cursor?: string }) => {
+      calls.push(input)
+      return { sessions: [webviewSession("ses_a")], cursor: null }
+    }) as unknown as SessionRefreshContext["listSessions"]
+    const ctx = ctxWith(list, { postMessage: (m: unknown) => posted.push(m) })
+    await loadSessions(ctx, OPAQUE(9, "ses_x"))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.cursor).toBeUndefined()
+    expect(posted).toHaveLength(1)
+    expect((posted[0] as { append: boolean }).append).toBe(false)
+  })
+
+  test("repeating cursor throws without publishing a false complete inventory", async () => {
+    const posted: unknown[] = []
+    const c1 = OPAQUE(20, "ses_loop")
+    const list = (async () => ({ sessions: [webviewSession("ses_a")], cursor: c1 })) as unknown as SessionRefreshContext["listSessions"]
+    const ctx = ctxWith(list, { postMessage: (m: unknown) => posted.push(m) })
+    await expect(loadSessions(ctx)).rejects.toThrow("session list cursor stalled")
+    expect(posted).toHaveLength(0)
+  })
+
+  test("non-exhausting cursor chain throws after the page bound", async () => {
+    const posted: unknown[] = []
+    let n = 0
+    const list = (async () => {
+      n++
+      return { sessions: [webviewSession(`ses_${n}`)], cursor: OPAQUE(n, `ses_${n}`) }
+    }) as unknown as SessionRefreshContext["listSessions"]
+    const ctx = ctxWith(list, { postMessage: (m: unknown) => posted.push(m) })
+    await expect(loadSessions(ctx)).rejects.toThrow("session list did not exhaust")
+    expect(n).toBe(MAX_SESSION_LIST_PAGES)
+    expect(posted).toHaveLength(0)
+  }, 15000)
 
   test("private-first list SDK fallback issues exactly one SDK read with no second private request", async () => {
     const parity: unknown[] = []

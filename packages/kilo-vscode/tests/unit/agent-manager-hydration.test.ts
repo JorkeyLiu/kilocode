@@ -57,16 +57,16 @@ describe("hydration — deferred pending + order independent", () => {
     expect(seqCatalogThenState.nextOrder).toEqual(["b", "a"])
   })
 
-  it("first page only one id with hasMore true does not prune second; append page adds second/final yields two", () => {
-    // existing local case
+  it("complete snapshot replaces: no prefix gating, deprecated hasMore ignored", () => {
+    // Complete inventory is always authoritative; deprecated hasMore/append
+    // flags are ignored.
     const localIds = ["a", "b"]
     const tabOrder = ["b", "a"]
     const durable = { sessions: [{ id: "a" }, { id: "b" }], tabOrder: { [LOCAL]: ["b", "a"] }, activeSessionId: "b" }
-    let catalog: Set<string> | undefined = undefined
 
-    // first page: only a, hasMore true
-    catalog = accumulateCatalog(catalog, [{ id: "a" }], false)
-    let out = reconcile({
+    // Complete snapshot with both ids: no prune even with deprecated hasMore true.
+    const catalog = accumulateCatalog(undefined, [{ id: "a" }, { id: "b" }], false)
+    const out = reconcile({
       localIds,
       tabOrder,
       active: "b",
@@ -79,53 +79,27 @@ describe("hydration — deferred pending + order independent", () => {
     })
     expect(out.nextIds).toBeUndefined()
     expect(out.nextOrder).toBeUndefined()
-
-    // append page: b
-    catalog = accumulateCatalog(catalog, [{ id: "b" }], true)
-    out = reconcile({
-      localIds,
-      tabOrder,
-      active: "b",
-      durable,
-      catalog,
-      hasMore: false,
-      LOCAL,
-      isFresh: false,
-      durableHydrated: true,
-    })
-    expect(out.nextIds).toBeUndefined()
-    // already both present, no prune
     expect(catalog).toEqual(catalogOf("a", "b"))
 
-    // fresh pagination case: durable a,b but first page only a hasMore true => no hydration yet
-    const freshOut1 = reconcile({
-      localIds: [],
-      tabOrder: undefined,
-      active: undefined,
-      durable,
-      catalog: catalogOf("a"),
-      hasMore: true,
-      LOCAL,
-      isFresh: true,
-      durableHydrated: false,
-    })
-    expect(freshOut1.nextIds).toBeUndefined()
-    expect(freshOut1.markHydrated).toBe(false)
-    expect(freshOut1.needsPending).toBe(false)
-
-    const freshOut2 = reconcile({
+    // Fresh hydration from a complete snapshot hydrates even with hasMore true.
+    const freshOut = reconcile({
       localIds: [],
       tabOrder: undefined,
       active: undefined,
       durable,
       catalog: catalogOf("a", "b"),
-      hasMore: false,
+      hasMore: true,
       LOCAL,
       isFresh: true,
       durableHydrated: false,
     })
-    expect(freshOut2.nextIds).toEqual(["b", "a"])
-    expect(freshOut2.nextActive).toBe("b")
+    expect(freshOut.nextIds).toEqual(["b", "a"])
+    expect(freshOut.nextActive).toBe("b")
+    expect(freshOut.markHydrated).toBe(true)
+
+    // accumulateCatalog replaces: second snapshot drops absent ids.
+    const replaced = accumulateCatalog(catalog, [{ id: "a" }], true)
+    expect(replaced).toEqual(catalogOf("a"))
   })
 
   it("preserveSessionIds protects target across partial refresh", () => {
@@ -784,19 +758,19 @@ describe("hydration — deferred pending + order independent", () => {
     })
     expect(noDurable.nextIds).toBeUndefined()
     expect(noDurable.markHydrated).toBe(false)
-    // hasMore true -> not authoritative -> no change
-    const notAuth = reconcile({
+    // Deprecated hasMore true is ignored: complete snapshot still hydrates.
+    const complete = reconcile({
       localIds: staleIds,
       tabOrder: ["ghost", "a", "pending:1"],
       active: "a",
       durable,
-      catalog: catalogOf("a"),
+      catalog: catalogOf("a", "b"),
       hasMore: true,
       LOCAL,
       isFresh: true,
       durableHydrated: false,
     })
-    expect(notAuth.nextIds).toBeUndefined()
-    expect(notAuth.markHydrated).toBe(false)
+    expect(complete.nextIds).toEqual(["pending:1", "b", "a"])
+    expect(complete.markHydrated).toBe(true)
   })
 })

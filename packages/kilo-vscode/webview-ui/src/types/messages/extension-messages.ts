@@ -197,11 +197,11 @@ export interface SessionsLoadedMessage {
   type: "sessionsLoaded"
   sessions: SessionInfo[]
   preserveSessionIds?: string[]
-  /** True when sessions are a load-more page to append; false/absent for a full refresh. */
+  /** Deprecated: complete inventory always publishes append false. Ignored by the webview. */
   append?: boolean
-  /** Opaque cursor for the next page, or null when there are no more sessions. */
+  /** Deprecated: complete inventory always publishes null. Ignored by the webview. */
   nextCursor?: string | null
-  /** True when another page can be requested via loadSessions cursor. */
+  /** Deprecated: complete inventory always publishes false. Ignored by the webview. */
   hasMore?: boolean
 }
 

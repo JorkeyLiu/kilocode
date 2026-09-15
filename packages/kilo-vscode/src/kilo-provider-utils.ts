@@ -263,10 +263,15 @@ export function resolveServedDefaultAgent(index: Pick<AgentIndex, "defaultId" | 
   return (visible[0] ?? served[0])?.id ?? ""
 }
 
-/** Page size for the initial session load / full refresh. */
+/** Page size for the first page of a complete session inventory drain. */
 export const SESSION_INITIAL_LIMIT = 500
-/** Page size for incremental load-more pages. */
+/** Page size for subsequent pages while draining to exhaustion. */
 export const SESSION_LOAD_MORE_LIMIT = 300
+/**
+ * Bound on pages drained for one complete inventory. Malformed or repeating
+ * cursors must fail rather than loop forever; this bound is the final guard.
+ */
+export const MAX_SESSION_LIST_PAGES = 50
 
 /**
  * Canonical `x-next-cursor` response-header gate (LOCK-002).
@@ -315,9 +320,9 @@ export interface SessionRefreshContext {
   listSessions:
     | ((input: { limit: number; cursor?: string }) => Promise<{ sessions: Session[]; cursor: string | null }>)
     | null
-  /** Number of sessions currently loaded in the webview list. Updated by loadSessions. */
+  /** Total sessions in the last complete inventory. Sizes the first drain page. Updated by loadSessions. */
   loadedCount: number
-  /** Next-page opaque composite cursor from the last load, or null when exhausted. Updated by loadSessions. */
+  /** Always null after a complete drain. Retained for wire compat. Updated by loadSessions. */
   cursor: string | null
   /** Workspace root directory; used to pin the canonical projectID to the root session. */
   root?: string
@@ -325,13 +330,22 @@ export interface SessionRefreshContext {
 }
 
 /**
- * Load one page of sessions via the experimental directory-aware list endpoint.
- * Without a cursor this is a full refresh (page 1) that re-fetches everything
- * loaded so far; with a cursor it appends the next page.
- * Sets pendingSessionRefresh when the HTTP client isn't ready yet.
+ * Load the complete session-summary inventory by draining list pages to
+ * exhaustion through the existing private-first list boundary.
+ *
+ * Transport is still paged (first page SESSION_INITIAL_LIMIT, subsequent
+ * pages SESSION_LOAD_MORE_LIMIT) and only lightweight summaries accumulate.
+ * Exactly one coherent `sessionsLoaded` snapshot is published, so the webview
+ * never renders intermediate incomplete Topic facts. The optional cursor
+ * argument is deprecated and ignored: every call drains from the start.
+ *
+ * Cursor-stall protection: repeating cursors or exceeding
+ * MAX_SESSION_LIST_PAGES throws without publishing, preserving the previous
+ * complete inventory. Per-page private-first fallback semantics live inside
+ * `listSessions` and are preserved.
  * Returns the resolved projectID (if any) so the caller can update its own state.
  */
-export async function loadSessions(ctx: SessionRefreshContext, cursor?: string): Promise<string | undefined> {
+export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string): Promise<string | undefined> {
   const list = ctx.listSessions
   if (!list) {
     ctx.pendingSessionRefresh = true
@@ -343,33 +357,43 @@ export async function loadSessions(ctx: SessionRefreshContext, cursor?: string):
 
   ctx.pendingSessionRefresh = false
 
-  const append = cursor !== undefined
-  const limit = append ? SESSION_LOAD_MORE_LIMIT : Math.max(SESSION_INITIAL_LIMIT, ctx.loadedCount)
-  let page: { sessions: Session[]; cursor: string | null }
-  try {
-    page = await list({ limit, cursor })
-  } catch (error) {
-    if (ctx.connectionState !== "connected") ctx.pendingSessionRefresh = true
-    throw error
+  const all: Session[] = []
+  const seen = new Set<string>()
+  let cursor: string | undefined = undefined
+  for (let pageIndex = 0; pageIndex < MAX_SESSION_LIST_PAGES; pageIndex++) {
+    const limit = pageIndex === 0 ? Math.max(SESSION_INITIAL_LIMIT, ctx.loadedCount) : SESSION_LOAD_MORE_LIMIT
+    let page: { sessions: Session[]; cursor: string | null }
+    try {
+      page = await list({ limit, cursor })
+    } catch (error) {
+      if (ctx.connectionState !== "connected") ctx.pendingSessionRefresh = true
+      throw error
+    }
+    for (const s of page.sessions) all.push(s)
+    const next = page.cursor
+    if (next === null) {
+      ctx.cursor = null
+      ctx.loadedCount = all.length
+      ctx.postMessage({
+        type: "sessionsLoaded",
+        sessions: all.map((s) => sessionToWebview(s)),
+        append: false,
+        nextCursor: null,
+        hasMore: false,
+      })
+      // Pin the canonical projectID to the workspace-root session. all[0]
+      // is the most-recently-updated session across the whole family, so its
+      // projectID may belong to a session in another directory rather than the
+      // root — KiloProvider filters SSE events by this ID, so a non-root ID would
+      // drop root-project events. Fall back to all[0] only when no root match.
+      const root = ctx.root ? all.find((s) => sameDirectory(s.directory, ctx.root!))?.projectID : undefined
+      return root ?? all[0]?.projectID
+    }
+    if (seen.has(next)) throw new Error("session list cursor stalled")
+    seen.add(next)
+    cursor = next
   }
-  ctx.cursor = page.cursor
-  ctx.loadedCount = append ? ctx.loadedCount + page.sessions.length : page.sessions.length
-
-  ctx.postMessage({
-    type: "sessionsLoaded",
-    sessions: page.sessions.map((s) => sessionToWebview(s)),
-    append,
-    nextCursor: page.cursor,
-    hasMore: page.cursor !== null,
-  })
-
-  // Pin the canonical projectID to the workspace-root session. sessions[0]
-  // is the most-recently-updated session across the whole family, so its
-  // projectID may belong to a session in another directory rather than the
-  // root — KiloProvider filters SSE events by this ID, so a non-root ID would
-  // drop root-project events. Fall back to sessions[0] only when no root match.
-  const root = ctx.root ? page.sessions.find((s) => sameDirectory(s.directory, ctx.root!))?.projectID : undefined
-  return root ?? page.sessions[0]?.projectID
+  throw new Error("session list did not exhaust")
 }
 
 /**

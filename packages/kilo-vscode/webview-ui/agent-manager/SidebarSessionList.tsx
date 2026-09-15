@@ -467,20 +467,6 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
           </For>
         </>
       ))}
-      <Show when={session.sessionsHasMore()}>
-        <div class="session-load-more">
-          <button
-            class="session-load-more-btn"
-            onClick={() => {
-              // No pre-capture needed — the container-owned tracker already
-              // maintains the latest visible anchor from scroll events.
-              session.loadMoreSessions()
-            }}
-          >
-            {lang.t("common.loadMore") ?? "Load more"}
-          </button>
-        </div>
-      </Show>
     </Show>
   )
 }

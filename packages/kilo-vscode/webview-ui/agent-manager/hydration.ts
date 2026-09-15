@@ -63,21 +63,16 @@ export function deriveDurableIds(durable: DurableState, LOCAL: string): { ids: s
   return { ids: ordered, active }
 }
 
+/**
+ * Build the catalog set from a complete session inventory snapshot.
+ * The deprecated append flag is ignored: every snapshot replaces.
+ */
 export function accumulateCatalog(
-  prev: Set<string> | undefined,
+  _prev: Set<string> | undefined,
   sessions: { id: string }[],
-  append?: boolean,
+  _append?: boolean,
 ): Set<string> {
-  if (append && prev) {
-    const next = new Set(prev)
-    for (const s of sessions) next.add(s.id)
-    return next
-  }
   return new Set(sessions.map((s) => s.id))
-}
-
-export function isAuthoritative(hasMore?: boolean): boolean {
-  return hasMore !== true
 }
 
 function buildEffective(catalog: Set<string> | undefined, preserve?: string[]): Set<string> | undefined {
@@ -104,6 +99,7 @@ export interface ReconcileInput {
   active: string | undefined
   durable: DurableState | undefined
   catalog: Set<string> | undefined
+  /** Deprecated: complete inventory is always authoritative, ignored. */
   hasMore?: boolean
   preserveSessionIds?: string[]
   LOCAL: string
@@ -121,9 +117,8 @@ export interface ReconcileOutput {
 }
 
 function reconcileFresh(input: ReconcileInput): ReconcileOutput {
-  const { localIds, active, durable, catalog, hasMore, preserveSessionIds, LOCAL } = input
+  const { localIds, active, durable, catalog, preserveSessionIds, LOCAL } = input
   if (!durable || !catalog) return noChange()
-  if (!isAuthoritative(hasMore)) return noChange()
   const effective = buildEffective(catalog, preserveSessionIds)!
   const pendingIds = dedupe(localIds.filter(isPending))
   if (durable.sessions.length > 0) {
@@ -164,9 +159,8 @@ function reconcileFresh(input: ReconcileInput): ReconcileOutput {
 }
 
 function reconcileExisting(input: ReconcileInput): ReconcileOutput {
-  const { localIds, tabOrder, active, catalog, hasMore, preserveSessionIds } = input
+  const { localIds, tabOrder, active, catalog, preserveSessionIds } = input
   if (!catalog) return noChange()
-  if (!isAuthoritative(hasMore)) return noChange()
   const effective = buildEffective(catalog, preserveSessionIds)!
   const pruned = pruneIds(localIds, effective)
   const orderPruned = pruneOrder(tabOrder, effective)

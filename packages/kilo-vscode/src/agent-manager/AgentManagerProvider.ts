@@ -80,10 +80,8 @@ export class AgentManagerProvider implements Disposable {
   // the webview's persist adds it to durable state and the next catalog includes it.
   private recentSessions = new Set<string>()
   private accumulatedCatalog: Set<string> | undefined
-  private accumulatedHasMore: boolean | undefined
-  // Deletion barrier within current catalog collection cycle.
-  // On real session.deleted, the ID is tombstoned and filtered from subsequent
-  // append pages and final effective catalog until a fresh append=false refresh.
+  // Deletion barrier for races between a complete snapshot drain and a
+  // backend delete. Tombstoned IDs are filtered from the snapshot.
   private catalogTombstone = new Set<string>()
   private visiblePresence = new AgentManagerVisiblePresence(
     (ids) => this.connectionService.registerVisible("agent-manager", ids),
@@ -354,7 +352,6 @@ export class AgentManagerProvider implements Disposable {
       this.catalogUnsub = undefined
     }
     this.accumulatedCatalog = undefined
-    this.accumulatedHasMore = undefined
     if (!this.catalogTombstone) this.catalogTombstone = new Set<string>()
     this.catalogTombstone.clear()
     if (ctx.sessions.onCatalog) {
@@ -510,21 +507,14 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private onCatalogUpdate(update: { ids: string[]; append?: boolean; hasMore?: boolean }): void {
-    const { ids, append, hasMore } = update
+    const { ids } = update
     if (!this.catalogTombstone) this.catalogTombstone = new Set<string>()
-    if (append !== true) this.catalogTombstone.clear()
+    // Complete snapshot: filter tombstoned deletes (stale drain race).
+    // Tombstones persist until panel reattach; session IDs are unique so a
+    // deleted ID never legitimately returns. Converged omissions stay pruned
+    // by reconcile; no clear-on-snapshot that would resurrect a race.
     const filtered = ids.filter((id) => !this.catalogTombstone.has(id))
-    if (append === true && this.accumulatedCatalog) {
-      for (const id of filtered) this.accumulatedCatalog.add(id)
-    } else if (append === true && !this.accumulatedCatalog) {
-      this.accumulatedCatalog = new Set(filtered)
-    } else {
-      this.accumulatedCatalog = new Set(filtered)
-    }
-    // Ensure tombstoned IDs never linger in accumulated across appends
-    for (const del of this.catalogTombstone) this.accumulatedCatalog?.delete(del)
-    this.accumulatedHasMore = hasMore
-    if (hasMore === true) return
+    this.accumulatedCatalog = new Set(filtered)
     const effective = [...(this.accumulatedCatalog ?? new Set<string>())]
     this.reconcile(effective)
   }

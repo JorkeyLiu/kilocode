@@ -500,8 +500,6 @@ function TopicListFixture(props: TopicListFixtureProps) {
     ...mockSessionValue(),
     sessions: () => sessions(),
     currentSessionID: () => activeId(),
-    sessionsHasMore: () => false,
-    loadMoreSessions: () => {},
     renameSession: (id: string, title: string) => {
       setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)))
     },

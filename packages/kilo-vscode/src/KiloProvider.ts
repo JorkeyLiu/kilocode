@@ -478,8 +478,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private detailGeneration = 0 // Monotonic detail/load generation; superseding transitions bump to invalidate pending detail/message loads.
   private lastReconciledAt = new Map<string, number>() // Per-session focus-mode reconcile timestamp.
   private pendingSessionRefresh = false // Refresh requested before the client is ready.
-  private sessionCursor: string | null = null // Next-page opaque composite cursor for session list pagination.
-  private sessionCount = 0 // Sessions loaded so far; sizes the re-fetch on full refresh.
+  private sessionCursor: string | null = null // Always null: complete inventory drain exhausts paging.
+  private sessionCount = 0 // Total sessions in the last complete inventory snapshot.
   private readonly streams = new SessionStreamScheduler((msg) => this.postMessage(msg))
   private readonly visibleTaskStreams = new VisibleTaskStreams((id, visible) => this.streams.setVisible(id, visible))
   private readonly confirmations = new MessageConfirmation()
@@ -2013,7 +2013,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           )
           break
         case "loadSessions":
-          this.handleLoadSessions(message.cursor).catch((e) =>
+          this.handleLoadSessions().catch((e) =>
             console.error("[Kilo New] handleLoadSessions failed:", e),
           )
           break
@@ -3354,17 +3354,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Handle loading sessions. Without a cursor this is a full refresh;
-   * with a cursor it appends the next page ("load more").
+   * Handle loading sessions. Always drains the complete inventory; any
+   * incoming cursor is ignored (deprecated load-more path).
    */
-  private handleLoadSessions(cursor?: string): Promise<void> {
-    return this.enqueueSessionLoad(() => this.runLoadSessions(cursor))
+  private handleLoadSessions(_cursor?: string): Promise<void> {
+    return this.enqueueSessionLoad(() => this.runLoadSessions())
   }
 
-  private async runLoadSessions(cursor?: string): Promise<void> {
+  private async runLoadSessions(): Promise<void> {
     const ctx = this.sessionRefreshContext
     try {
-      const resolved = await loadSessionsUtil(ctx, cursor)
+      const resolved = await loadSessionsUtil(ctx)
       if (resolved) this.projectID = resolved
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to load sessions:", error)
