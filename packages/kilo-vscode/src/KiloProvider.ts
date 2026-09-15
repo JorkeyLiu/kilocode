@@ -72,6 +72,7 @@ import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
 import { setSandboxPrivateFirst } from "./kilo-provider/sandbox-set-privatefirst"
+import { fetchSandboxStatusPrivateFirst } from "./kilo-provider/sandbox-status-privatefirst"
 import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
 import { revertSessionPrivateFirst, unrevertSessionPrivateFirst } from "./kilo-provider/session-revert"
 import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
@@ -4824,9 +4825,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     try {
       const directory = this.getWorkspaceDirectory(sessionID)
-      const { data } = await sandbox.status({ sessionID, directory }, { throwOnError: true })
+      const outcome = await fetchSandboxStatusPrivateFirst({
+        connection: this.connectionService as never,
+        client: client as never,
+        sessionId: sessionID,
+        directory,
+      })
       if (this.connectionState !== "connected" || this.connectionGeneration !== generation || this.client !== client)
         return
+      if (outcome.kind === "terminal") {
+        this.postSandboxError(sessionID, outcome.code ?? "Sandbox update rejected", revision, requestID)
+        return
+      }
+      if (outcome.kind !== "ok") {
+        this.postSandboxError(sessionID, outcome.cause ?? "Sandbox backend is unavailable", revision, requestID)
+        return
+      }
+      const data = outcome.status
       if (!sameDirectory(data.directory, this.getWorkspaceDirectory(sessionID))) {
         if (requestID) void this.fetchAndSendSandboxStatus(sessionID, requestID)
         return

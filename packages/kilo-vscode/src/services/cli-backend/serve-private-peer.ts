@@ -407,6 +407,18 @@ import type {
   AgentListWireOutcome,
 } from "./serve-private-agent-list-contract"
 import {
+  isSettledSandboxStatusResult,
+  makeSandboxStatusAmbiguous,
+  normalizePrivateSandboxStatusWire,
+  SandboxStatusValidationError,
+  validateSandboxStatusContractRequest,
+} from "./serve-private-sandbox-status-contract"
+import type {
+  SandboxStatusContractRequest,
+  SandboxStatusResult,
+  SandboxStatusWireOutcome,
+} from "./serve-private-sandbox-status-contract"
+import {
   isSettledProviderCatalogResult,
   makeProviderCatalogAmbiguous,
   normalizePrivateProviderCatalogWire,
@@ -4971,6 +4983,78 @@ export class ServePrivatePeer {
       if (isSettledAgentListResult(wire.result, req)) return wire
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeAgentListAmbiguous(req, true) }
+      return wire
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  private failedSandboxStatus(req: SandboxStatusContractRequest, code: string, msg: string): SandboxStatusResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      op: "sandbox/status",
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  async privateSandboxStatus(req: SandboxStatusContractRequest): Promise<SandboxStatusResult> {
+    const handle = this.privateSandboxStatusOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new SandboxStatusValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /**
+   * Internal normalized handle for the read-only `sandbox/status`
+   * private-first observation. Resolves the discriminated wire outcome so
+   * invalid wire is an explicit `{ kind: "invalid" }` value consumed before
+   * any SDK fallback, never a normal result. Observation identity is
+   * `requestId` only.
+   *
+   * Settle-first stale semantics (this op only; other ops keep the generic
+   * stale-first path): the raw result is normalized/validated first, then a
+   * validated settled outcome (success or `retryable === false` terminal) is
+   * preserved across post-response stale/epoch drift. Only unresolved wire
+   * (invalid, ambiguous, or retryable failure) maps drift to ambiguous
+   * `transportUnknown`. Generic rejection (unknown failure code) fails closed
+   * validation and stays fallback-eligible; only validated domain terminals
+   * (`validation.failed`/`scope_mismatch`/`session.not_found`) close.
+   */
+  privateSandboxStatusOutcomeWithHandle(req: SandboxStatusContractRequest): {
+    id: number
+    promise: Promise<SandboxStatusWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSandboxStatusContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("sandbox/status")) {
+      throw new Error("Private peer missing sandbox/status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("sandbox/status", req)
+    const promise = (async (): Promise<SandboxStatusWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeSandboxStatusAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedSandboxStatus(req, code, msg) }
+      }
+      const wire = normalizePrivateSandboxStatusWire(raw, req)
+      if (wire.kind === "invalid") return wire
+      if (isSettledSandboxStatusResult(wire.result, req)) return wire
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeSandboxStatusAmbiguous(req, true) }
       return wire
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.requestId, peerAtCall, currentEpoch)
