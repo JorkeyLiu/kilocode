@@ -12,6 +12,7 @@ import { Truncate } from "@/tool/truncate"
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
+import { AgentCapability } from "@/agent/capability" // kilocode_change
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { Effect } from "effect"
 import { MessageV2 } from "./message-v2"
@@ -89,6 +90,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     family: input.model.family, // kilocode_change
     agent: input.agent,
   })) {
+    // kilocode_change start - capability presentation derives from enforcement
+    if (AgentCapability.isDisabled(input.agent, item.id)) continue
+    // kilocode_change end
     // kilocode_change start - SWE-Pruner (experimental): advertise the focus parameter on prunable tools
     const pruner = swe && SwePruner.prunable(item.id)
     const base = ToolJsonSchema.fromTool(item)
@@ -101,6 +105,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         return run.promise(
           Effect.gen(function* () {
             const ctx = context(args, options)
+            // kilocode_change start - capability gate before hooks/sandbox/ask/execute
+            yield* AgentCapability.assert(input.agent, item.id)
+            // kilocode_change end
             // P0: actual tool execution span. A p0.end is emitted only when the
             // effect completes normally; a failed/interrupted effect leaves an
             // unmatched p0.start (the instrument contract's failure signal).
@@ -146,7 +153,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   }
 
   const mcpTools = (yield* SandboxPolicy.networkRestricted(input.session.id)) ? {} : yield* mcp.tools() // kilocode_change
-  for (const [key, item] of Object.entries(mcpTools)) { // kilocode_change
+  for (const [key, item] of Object.entries(AgentCapability.filterTools(input.agent, mcpTools))) { // kilocode_change - capability presentation derives from enforcement
     const execute = item.execute
     if (!execute) continue
 
@@ -157,6 +164,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       run.promise(
         Effect.gen(function* () {
           const ctx = context(args, opts)
+          // kilocode_change start - capability gate before hooks/ask/MCP call
+          yield* AgentCapability.assert(input.agent, key)
+          // kilocode_change end
           const timer = P0Perf.span("tool_execute", {
             id: ctx.sessionID,
             meta: { tool: key, callID: opts.toolCallId, messageID: input.processor.message.id },

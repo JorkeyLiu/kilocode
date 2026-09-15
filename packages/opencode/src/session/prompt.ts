@@ -87,6 +87,7 @@ import { MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { AgentCapability } from "@/agent/capability" // kilocode_change
 import { LLMEvent } from "@opencode-ai/llm"
 import { withGenerationAdmission } from "@/kilocode/session/generation-admission" // kilocode_change
 import {
@@ -403,6 +404,36 @@ export const layer = Layer.effect(
         subagent_type: task.agent,
         command: task.command,
       }
+      // kilocode_change start - capability gate before hooks/side effects; system intake stays outside
+      const callerForCap = session.agent
+        ? yield* agents.get(session.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        : undefined
+      if (callerForCap) {
+        const gate = yield* AgentCapability.assert(callerForCap, TaskTool.id).pipe(Effect.exit)
+        if (gate._tag === "Failure") {
+          const defect = Cause.squash(gate.cause)
+          const message = defect instanceof Error ? defect.message : String(defect)
+          log.error("subtask capability disabled", { error: message, agent: callerForCap.name })
+          assistantMessage.finish = "tool-calls"
+          assistantMessage.time.completed = Date.now()
+          yield* sessions.updateMessage(assistantMessage)
+          yield* sessions.updatePart({
+            ...part,
+            state: {
+              status: "error",
+              error: message,
+              time: {
+                start: part.state.status === "running" ? part.state.time.start : Date.now(),
+                end: Date.now(),
+              },
+              metadata: part.state.status === "pending" ? undefined : part.state.metadata,
+              input: part.state.input,
+            },
+          } satisfies SessionV1.ToolPart)
+          return
+        }
+      }
+      // kilocode_change end
       yield* plugin.trigger(
         "tool.execute.before",
         { tool: TaskTool.id, sessionID, callID: part.id },
@@ -428,7 +459,7 @@ export const layer = Layer.effect(
       // kilocode_change end
       const result = yield* taskTool
         .execute(taskArgs, {
-          agent: task.agent,
+          agent: session.agent ?? task.agent,
           messageID: assistantMessage.id,
           sessionID,
           abort: taskAbort.signal,

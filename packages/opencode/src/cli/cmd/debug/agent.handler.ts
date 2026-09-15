@@ -10,6 +10,7 @@ import type { MessageV2 } from "../../../session/message-v2"
 import { MessageID, PartID } from "../../../session/schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Permission } from "../../../permission"
+import { AgentCapability } from "../../../agent/capability" // kilocode_change
 import * as Evaluator from "../../../permission/evaluator"
 import { iife } from "../../../util/iife"
 import { fail } from "../../effect-cmd"
@@ -118,6 +119,13 @@ const run = Effect.fn("Cli.debug.agent.body")(function* (
       process.stderr.write(`Tool ${toolID} is disabled for agent ${agentName}` + EOL)
       return yield* fail("", 1)
     }
+    // kilocode_change start - shared capability assertion before direct debug side effects
+    const gate = yield* AgentCapability.assert(agent, toolID).pipe(Effect.exit)
+    if (gate._tag === "Failure") {
+      process.stderr.write(`Tool ${toolID} is disabled for agent ${agentName}` + EOL)
+      return yield* fail("", 1)
+    }
+    // kilocode_change end
     const params = parseToolParams(args.params)
     const toolCtx = yield* createToolContext(agent, ctx)
     const result = yield* tool.execute(params, toolCtx)
@@ -153,14 +161,16 @@ const getAvailableTools = Effect.fn("Cli.debug.agent.getAvailableTools")(functio
   return yield* registry.tools({ ...model, agent })
 })
 
-function resolveTools(agent: Agent.Info, availableTools: { id: string }[]) {
+export function resolveTools(agent: Agent.Info, availableTools: { id: string }[]) {
   const disabled = Permission.disabled(
     availableTools.map((tool) => tool.id),
     agent.permission,
   )
   const resolved: Record<string, boolean> = {}
   for (const tool of availableTools) {
-    resolved[tool.id] = !disabled.has(tool.id)
+    // kilocode_change start - presentation derives from capability enforcement
+    resolved[tool.id] = !disabled.has(tool.id) && !AgentCapability.isDisabled(agent, tool.id)
+    // kilocode_change end
   }
   return resolved
 }

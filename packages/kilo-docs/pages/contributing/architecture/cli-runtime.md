@@ -168,13 +168,28 @@ Remote HTTP proxy responses can include sync fence metadata. Router waits for ma
 
 | Subsystem | Purpose |
 |---|---|
-| Agent runtime | Orchestrates messages, model calls, permissions, questions, and multi-step execution |
-| Tool registry | Loads built-in, Kilo-specific, and MCP tools |
+| Agent runtime | Orchestrates messages, model calls, permissions, questions, and multi-step execution; per-agent tool disables are an independent capability gate (not permission rules) |
+| Tool registry | Loads built-in, Kilo-specific, and MCP tools; model tool lists are filtered by the agent capability set |
 | LSP client | Provides diagnostics and language intelligence |
 | Config service | Merges global, project, organization, managed, and runtime inputs |
 | Instance store | Caches normalized directory-scoped runtime contexts |
 | SQLite and storage services | Persist structured records and remaining JSON-owned data |
 | Snapshot service | Tracks git-backed file baselines for diffs and revert flows; Snapshot v2 journal adds queryable durable file-mutation capture for edit/write/apply_patch plus bounded CAS for complete revert/unrevert (incomplete stays whole old Snapshot) |
+
+### Agent tool capability gate
+
+Authored per-agent `tools: {tool: false}` is runtime capability enforcement, not allow/ask/deny rules. The explicit disabled set survives on `Agent.Info` as `disabledTools`/`enabledTools` from config decoding through merge, cache, and custom agent paths; the existing permission-deny encoding remains for compatibility/presentation only and `Permission.disabled()` stays a presentation predicate.
+
+| Aspect | Behavior |
+|---|---|
+| Merge | Restrictive: base disables survive overlays unless the same authored definition explicitly re-enables the same tool; explicit wildcard enable never clears specific disables; `write`/`edit`/`patch`/`apply_patch` expand as one edit group; `"*": false` disables all except explicitly re-enabled tools |
+| Enforcement | One shared `AgentCapability.assert` (`AgentToolDisabledError`, distinct from permission denied/rejected) runs before any plugin hook, sandbox, permission ask, MCP call, builtin/plugin execute, or direct task/subtask/debug side effect |
+| Coverage | Normal AI SDK and native/canonical paths converge through `SessionTools.resolve`; `LLMRequestPrep.resolveTools` and debug visibility filter from the same set, so presentation derives from enforcement |
+| Non-reopenable | Presets, `agent.permission` allow rules, session approvals, and allowEverything cannot re-enable a disabled tool; enabled tools and ordinary deny/ask behavior are unchanged |
+| Repair | Unknown/replayed calls still route to `invalid` (unless `invalid` itself is disabled) with deterministic tool-result errors and no side effects |
+| Exclusion | Direct file-attachment intake reads are system intake, not model-selected tool calls, and stay outside this rule |
+
+Evidence: `packages/opencode/test/agent/capability.test.ts`.
 | Provider router | Resolves direct providers, Kilo Gateway, custom endpoints, and credentials |
 | HTTP server | Publishes REST, WebSocket, and SSE surfaces |
 

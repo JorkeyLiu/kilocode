@@ -31,6 +31,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Reference } from "@/reference/reference" // kilocode_change
 import { ConfigReference } from "@/config/reference" // kilocode_change
 import * as AgentRequirements from "@/kilocode/agent-requirements" // kilocode_change
+import { AgentCapability } from "@/agent/capability" // kilocode_change
 import { MCP } from "@/mcp" // kilocode_change
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -50,6 +51,8 @@ export const Info = Schema.Struct({
   temperature: Schema.optional(Schema.Finite),
   color: Schema.optional(Schema.String),
   permission: PermissionV1.Ruleset,
+  disabledTools: Schema.optional(Schema.Array(Schema.String)), // kilocode_change - independent capability gate
+  enabledTools: Schema.optional(Schema.Array(Schema.String)), // kilocode_change - wildcard punch-through
   model: Schema.optional(
     Schema.Struct({
       modelID: ModelV2.ID,
@@ -348,6 +351,11 @@ export const layer = Layer.effect(
           // kilocode_change end
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
+          // kilocode_change start - independent capability gate from authored tools:false
+          const merged = AgentCapability.merge(item.disabledTools, item.enabledTools, value.tools as Record<string, boolean> | undefined)
+          item.disabledTools = merged.disabled
+          item.enabledTools = merged.enabled
+          // kilocode_change end
           KiloAgent.processConfigItem(item) // kilocode_change - populate displayName from options
         }
 

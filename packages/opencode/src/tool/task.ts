@@ -22,6 +22,7 @@ import { KiloTaskRetry } from "../kilocode/tool/task-retry" // kilocode_change
 import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { AgentCapability } from "@/agent/capability" // kilocode_change
 import * as SandboxPolicy from "@/kilocode/sandbox/policy" // kilocode_change
 import { Database } from "@opencode-ai/core/database/database"
 
@@ -117,6 +118,10 @@ export const TaskTool = Tool.define(
       ctx: Tool.Context,
     ) {
       const cfg = yield* config.get()
+      // kilocode_change start - caller capability gate before ask/side effects; bypassAgentCheck never bypasses it
+      const caller = yield* agent.get(ctx.agent)
+      if (caller) yield* AgentCapability.assert(caller, id)
+      // kilocode_change end
       const runInBackground = params.background === true
       if (runInBackground && !flags.experimentalBackgroundSubagents) {
         return yield* Effect.fail(new Error("Background subagents require KILO_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"))
@@ -158,7 +163,6 @@ export const TaskTool = Tool.define(
         ? yield* agent.get(parent.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
       // kilocode_change start — inherit edit/bash/MCP restrictions from calling agent
-      const caller = yield* agent.get(ctx.agent)
       const rules = KiloTask.inherited({ caller, session: parent, mcp: cfg.mcp })
       // kilocode_change end
       // kilocode_change start - refresh current parent restrictions when resuming an existing task session

@@ -84,6 +84,10 @@ export type Event =
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
+  | EventPtyCreated
+  | EventPtyUpdated
+  | EventPtyExited
+  | EventPtyDeleted
   | EventPermissionAsked
   | EventPermissionReplied
   | EventTodoUpdated
@@ -103,10 +107,6 @@ export type Event =
   | EventAccountSwitched
   | EventPermissionV2Asked
   | EventPermissionV2Replied
-  | EventPtyCreated
-  | EventPtyUpdated
-  | EventPtyExited
-  | EventPtyDeleted
   | EventQuestionV2Asked
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
@@ -1039,6 +1039,10 @@ export type GlobalEvent = {
     | EventSessionError
     | EventInstallationUpdated
     | EventInstallationUpdateAvailable
+    | EventPtyCreated
+    | EventPtyUpdated
+    | EventPtyExited
+    | EventPtyDeleted
     | EventPermissionAsked
     | EventPermissionReplied
     | EventTodoUpdated
@@ -1058,10 +1062,6 @@ export type GlobalEvent = {
     | EventAccountSwitched
     | EventPermissionV2Asked
     | EventPermissionV2Replied
-    | EventPtyCreated
-    | EventPtyUpdated
-    | EventPtyExited
-    | EventPtyDeleted
     | EventQuestionV2Asked
     | EventQuestionV2Replied
     | EventQuestionV2Rejected
@@ -1917,6 +1917,8 @@ export type Agent = {
   temperature?: number
   color?: string
   permission: PermissionRuleset
+  disabledTools?: Array<string>
+  enabledTools?: Array<string>
   model?: {
     modelID: string
     providerID: string
@@ -4336,6 +4338,39 @@ export type EventInstallationUpdateAvailable = {
   }
 }
 
+export type EventPtyCreated = {
+  id: string
+  type: "pty.created"
+  properties: {
+    info: Pty
+  }
+}
+
+export type EventPtyUpdated = {
+  id: string
+  type: "pty.updated"
+  properties: {
+    info: Pty
+  }
+}
+
+export type EventPtyExited = {
+  id: string
+  type: "pty.exited"
+  properties: {
+    id: string
+    exitCode: number
+  }
+}
+
+export type EventPtyDeleted = {
+  id: string
+  type: "pty.deleted"
+  properties: {
+    id: string
+  }
+}
+
 export type EventPermissionAsked = {
   id: string
   type: "permission.asked"
@@ -4584,39 +4619,6 @@ export type EventPermissionV2Replied = {
     sessionID: string
     requestID: string
     reply: PermissionV2Reply
-  }
-}
-
-export type EventPtyCreated = {
-  id: string
-  type: "pty.created"
-  properties: {
-    info: Pty
-  }
-}
-
-export type EventPtyUpdated = {
-  id: string
-  type: "pty.updated"
-  properties: {
-    info: Pty
-  }
-}
-
-export type EventPtyExited = {
-  id: string
-  type: "pty.exited"
-  properties: {
-    id: string
-    exitCode: number
-  }
-}
-
-export type EventPtyDeleted = {
-  id: string
-  type: "pty.deleted"
-  properties: {
-    id: string
   }
 }
 

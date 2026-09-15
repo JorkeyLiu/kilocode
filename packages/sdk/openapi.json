@@ -20120,6 +20120,18 @@
             "$ref": "#/components/schemas/EventInstallationUpdate-available"
           },
           {
+            "$ref": "#/components/schemas/EventPtyCreated"
+          },
+          {
+            "$ref": "#/components/schemas/EventPtyUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/EventPtyExited"
+          },
+          {
+            "$ref": "#/components/schemas/EventPtyDeleted"
+          },
+          {
             "$ref": "#/components/schemas/EventPermissionAsked"
           },
           {
@@ -20175,18 +20187,6 @@
           },
           {
             "$ref": "#/components/schemas/EventPermissionV2Replied"
-          },
-          {
-            "$ref": "#/components/schemas/EventPtyCreated"
-          },
-          {
-            "$ref": "#/components/schemas/EventPtyUpdated"
-          },
-          {
-            "$ref": "#/components/schemas/EventPtyExited"
-          },
-          {
-            "$ref": "#/components/schemas/EventPtyDeleted"
           },
           {
             "$ref": "#/components/schemas/EventQuestionV2Asked"
@@ -23654,6 +23654,18 @@
                 "$ref": "#/components/schemas/EventInstallationUpdate-available"
               },
               {
+                "$ref": "#/components/schemas/EventPtyCreated"
+              },
+              {
+                "$ref": "#/components/schemas/EventPtyUpdated"
+              },
+              {
+                "$ref": "#/components/schemas/EventPtyExited"
+              },
+              {
+                "$ref": "#/components/schemas/EventPtyDeleted"
+              },
+              {
                 "$ref": "#/components/schemas/EventPermissionAsked"
               },
               {
@@ -23709,18 +23721,6 @@
               },
               {
                 "$ref": "#/components/schemas/EventPermissionV2Replied"
-              },
-              {
-                "$ref": "#/components/schemas/EventPtyCreated"
-              },
-              {
-                "$ref": "#/components/schemas/EventPtyUpdated"
-              },
-              {
-                "$ref": "#/components/schemas/EventPtyExited"
-              },
-              {
-                "$ref": "#/components/schemas/EventPtyDeleted"
               },
               {
                 "$ref": "#/components/schemas/EventQuestionV2Asked"
@@ -26507,6 +26507,18 @@
           },
           "permission": {
             "$ref": "#/components/schemas/PermissionRuleset"
+          },
+          "disabledTools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enabledTools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "model": {
             "type": "object",
@@ -35876,6 +35888,141 @@
         ],
         "additionalProperties": false
       },
+      "EventPtyCreated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "pty.created"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "info": {
+                "$ref": "#/components/schemas/Pty"
+              }
+            },
+            "required": [
+              "info"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventPtyUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "pty.updated"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "info": {
+                "$ref": "#/components/schemas/Pty"
+              }
+            },
+            "required": [
+              "info"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventPtyExited": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "pty.exited"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^pty"
+              },
+              "exitCode": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "EventPtyDeleted": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "pty.deleted"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^pty"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
       "EventPermissionAsked": {
         "type": "object",
         "properties": {
@@ -36821,141 +36968,6 @@
               "sessionID",
               "requestID",
               "reply"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "type",
-          "properties"
-        ],
-        "additionalProperties": false
-      },
-      "EventPtyCreated": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "pty.created"
-            ]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "info": {
-                "$ref": "#/components/schemas/Pty"
-              }
-            },
-            "required": [
-              "info"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "type",
-          "properties"
-        ],
-        "additionalProperties": false
-      },
-      "EventPtyUpdated": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "pty.updated"
-            ]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "info": {
-                "$ref": "#/components/schemas/Pty"
-              }
-            },
-            "required": [
-              "info"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "type",
-          "properties"
-        ],
-        "additionalProperties": false
-      },
-      "EventPtyExited": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "pty.exited"
-            ]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "pattern": "^pty"
-              },
-              "exitCode": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "id",
-              "exitCode"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "type",
-          "properties"
-        ],
-        "additionalProperties": false
-      },
-      "EventPtyDeleted": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "pty.deleted"
-            ]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "pattern": "^pty"
-              }
-            },
-            "required": [
-              "id"
             ],
             "additionalProperties": false
           }
