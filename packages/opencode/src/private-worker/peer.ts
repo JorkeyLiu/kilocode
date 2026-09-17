@@ -487,6 +487,26 @@ export class JsonRpcPeer {
     }
     this.incoming.clear()
   }
+
+  /**
+   * Quarantine abort: reject/abort all active incoming handlers without
+   * unbinding, closing, or touching pending/outgoing/decoder state. The
+   * transport stays bound solely for health recovery and late-frame
+   * drainage. Returns the aborted count.
+   */
+  abortIncomingForQuarantine(): number {
+    const count = this.incoming.size
+    if (count === 0) return 0
+    for (const [, ctrl] of this.incoming) {
+      try {
+        ctrl.abort()
+      } catch {
+        // Abort must never break quarantine path
+      }
+    }
+    this.incoming.clear()
+    return count
+  }
 }
 
 function isResponse(obj: unknown): boolean {

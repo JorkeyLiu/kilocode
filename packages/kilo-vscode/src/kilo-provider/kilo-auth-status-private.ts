@@ -38,10 +38,30 @@ export interface KiloAuthStatusPrivateConnection {
   getPrivatePeer?: () => ServePrivatePeer | null
   getPrivateEpoch?: () => number | null
   invalidatePrivatePeerOnObserverTimeout?: (reason: string) => void
+  ensurePrivateRecovered?: (timeoutMs?: number) => Promise<boolean>
   privateKiloAuthStatusOutcomeWithHandle?: (req: KiloAuthStatusContractRequest) => {
     id: number
     promise: Promise<unknown>
     cancel?: (msg?: string) => boolean | "stale"
+  }
+}
+
+async function recoverIfQuarantined(conn: KiloAuthStatusPrivateConnection, ms: number): Promise<void> {
+  const typed = conn as unknown as {
+    ensurePrivateRecovered?: (timeoutMs?: number) => Promise<boolean>
+    getPrivatePeer?: () => ServePrivatePeer | null
+  }
+  try {
+    if (typeof typed.ensurePrivateRecovered === "function") {
+      await typed.ensurePrivateRecovered(ms)
+      return
+    }
+    const peer = typed.getPrivatePeer?.() ?? null
+    if (peer && typeof (peer as unknown as { ensureRecovered?: (t?: number) => Promise<boolean> }).ensureRecovered === "function") {
+      await (peer as unknown as { ensureRecovered: (t?: number) => Promise<boolean> }).ensureRecovered(ms)
+    }
+  } catch {
+    // Recovery failure stays unavailable; never throws
   }
 }
 
@@ -128,7 +148,10 @@ export async function attemptKiloAuthStatusPrivate(
   const conn = connection as KiloAuthStatusPrivateConnection | null | undefined
   if (!conn) return { kind: "unavailable", reason: "unavailable" }
   try {
-    if (!conn.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
+    if (!conn.isPrivateAvailable()) {
+      await recoverIfQuarantined(conn, ms)
+      if (!conn.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
+    }
   } catch {
     return { kind: "unavailable", reason: "unavailable" }
   }

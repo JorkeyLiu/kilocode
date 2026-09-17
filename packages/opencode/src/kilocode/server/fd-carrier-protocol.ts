@@ -73,6 +73,7 @@ export const FD_CAPABILITIES = [
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",
+  "transport/health",
 ] as const
 
 export const FD_REVERSE_CAPABILITY_MAX_LENGTH = 128

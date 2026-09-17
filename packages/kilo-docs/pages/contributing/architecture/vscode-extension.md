@@ -939,6 +939,8 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | E2E harness | `packages/kilo-vscode/script/e2e-probe.ts` (probe), `packages/kilo-vscode/script/e2e-probe-restart.ts` (restart phases), `packages/kilo-vscode/tests/e2e/runner.ts` (Extension Host runner) |
 | Build entries | `packages/kilo-vscode/esbuild.js` |
 
+| Private quarantine + single-flight recovery | `packages/kilo-vscode/src/services/cli-backend/serve-private-peer.ts` (`available`/`quarantined`/`disposed`/`closed`, same peer/ids/decoder, reverse abort/reject, `transport/health` probe single-flight, timeout single cancel, triggering op never retried) {% linebreak /%}`packages/kilo-vscode/src/services/cli-backend/serve-private-quarantine.ts` + `connection-service.ts` (`ensurePrivateRecovered`, listeners fire once) {% linebreak /%}`packages/kilo-vscode/src/kilo-provider/mcp-status-private.ts` + `kilo-auth-status-private.ts` + `find-files-private.ts` (lazy recovery, zero SDK) {% linebreak /%}Evidence: `serve-private-quarantine-recovery.test.ts` + `serve-private-authority-recovery.test.ts` + `serve-private-transport-health-contract.test.ts` |
+
 ## Related pages
 
 - [Architecture Overview](/docs/contributing/architecture) - local and hosted execution map

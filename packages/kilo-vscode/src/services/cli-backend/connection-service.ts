@@ -100,6 +100,7 @@ import { questionRejectHandle, questionReplyHandle } from "./serve-private-quest
 import { notebookListHandle, notebookRejectHandle, notebookReplyHandle } from "./serve-private-notebook-connection"
 import { suggestionAcceptHandle, suggestionDismissHandle } from "./serve-private-suggestion-connection"
 import { wrapEpochHandle } from "./serve-private-epoch"
+import { quarantinePeerOnTimeout } from "./serve-private-quarantine"
 import { collectViewedSnapshot, emitDisposeDetach, emitViewedOnce } from "../../kilo-provider/session-viewed-privatefirst"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
@@ -1041,92 +1042,53 @@ export class KiloConnectionService {
     return this.privatePeer?.tryCancelPending(id, message) ?? false
   }
 
-  /** Owner invalidation after observer timeout; fail-closed until reset. SDK stays authoritative. */
+  /**
+   * Owner quarantine after observer timeout: preserve the same
+   * `ServePrivatePeer`/streams/epoch (monotonic ids, decoder state) and
+   * retain deferred/private-available listeners for lazy recovery. The
+   * triggering operation completes as today with no retry; later authority
+   * reads probe health before performing their own operation.
+   */
   invalidatePrivatePeerOnObserverTimeout(reason: string): void {
     const peer = this.privatePeer
     if (!peer) return
-    const childrenSafe = reason.startsWith("children ")
-    const remoteSafe = reason.startsWith("remote-status ")
-    const pathSafe = reason.startsWith("path ")
-    const warningsSafe = reason.startsWith("config-warnings ")
-    const projectSafe = reason.startsWith("project-current ")
-    const findSafe = reason.startsWith("find-files ")
-    const messagesSafe = [
-      "observer timeout cancel throw",
-      "observer timeout exact cancel miss",
-      "messages observer timeout",
-    ].includes(reason)
-    if (childrenSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "session/children", invalidated: true })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "session/children", invalidateFailed: true })
-      }
-    } else if (remoteSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "remote/status", invalidated: true })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "remote/status", invalidateFailed: true })
-      }
-    } else if (pathSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "path/get", invalidated: true })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "path/get", invalidateFailed: true })
-      }
-    } else if (warningsSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "config/warnings", invalidated: true })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "config/warnings", invalidateFailed: true })
-      }
-    } else if (projectSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "project/current", invalidated: true })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "project/current", invalidateFailed: true })
-      }
-    } else if (findSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "find/files", invalidated: true })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "find/files", invalidateFailed: true })
-      }
-    } else if (messagesSafe) {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
-        op: "session/messages",
-        epoch: this.privateEpoch,
-      })
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "session/messages", invalidateFailed: true })
-      }
-    } else {
-      console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch ${String(this.privateEpoch)}: ${reason}`)
-      try {
-        peer.invalidateOnObserverTimeout(reason)
-      } catch (e) {
-        console.warn("[Kilo] invalidateOnObserverTimeout failed:", String(e))
-      }
-    }
-    this.privatePeer = null
+    quarantinePeerOnTimeout(peer, reason, this.privateEpoch)
     this.privateAvailable = false
-    this.privateEpoch = null
-    this.privatePid = undefined
-    this.privateFailedGetEpoch = null
-    this.privateAvailableListeners.clear()
-    this.clearAllDeferredGetObservers()
-    this.clearAllDeferredMessagesObservers()
-    this.deferredChildren.clearAll()
-    this.deferredRemoteStatus.clearAll()
-    this.deferredSessionList.clearAll()
+  }
+
+  isPrivateQuarantined(): boolean {
+    try {
+      return !!this.privatePeer && this.privatePeer.isQuarantined()
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Single-flight lazy recovery for quarantined peers. Concurrent callers
+   * share the peer's one health probe; on strict success with unchanged
+   * peer+epoch/open, restores available and notifies deferred listeners
+   * exactly once. On failure/timeout/invalid stays quarantined with no
+   * ordinary request performed. One probe per call, no auto-loop.
+   */
+  async ensurePrivateRecovered(timeoutMs = 3000): Promise<boolean> {
+    const peer = this.privatePeer
+    const epoch = this.privateEpoch
+    if (!peer || epoch === null) return false
+    if (this.isPrivateAvailable()) return true
+    let ok = false
+    try {
+      ok = await peer.ensureRecovered(timeoutMs)
+    } catch {
+      ok = false
+    }
+    if (!ok) return false
+    if (this.privatePeer !== peer || this.privateEpoch !== epoch) return false
+    if (!peer.isAvailable()) return false
+    if (this.privateAvailable) return true
+    this.privateAvailable = true
+    this.notifyPrivateAvailable()
+    return true
   }
 
   /**

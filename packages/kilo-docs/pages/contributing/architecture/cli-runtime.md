@@ -936,6 +936,8 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | Provider auth lifecycle | `packages/opencode/src/kilocode/server/provider-auth-lifecycle.ts` |
 | Custom provider lifecycle | `packages/opencode/src/kilocode/custom-provider.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/custom-provider-save.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/custom-provider-delete.ts` |
 
+| Private transport health + quarantine | `packages/opencode/src/kilocode/transport-health-private.ts` (pure requestId-only `transport/health`, exact `{ok:true}`, fixed `validation.failed`/`internal`, no lane/fence/network/secret) {% linebreak /%}`packages/opencode/src/kilocode/server/fd-carrier-protocol.ts` (`FD_CAPABILITIES` adds `transport/health`) {% linebreak /%}`packages/opencode/src/kilocode/server/fd-carrier.ts` (pure branch, no drain/`InstanceRef`) {% linebreak /%}Evidence: `packages/opencode/test/kilocode/server/fd-transport-health.test.ts` |
+
 ## Related pages
 
 - [Architecture Overview](/docs/contributing/architecture) - local and hosted execution map

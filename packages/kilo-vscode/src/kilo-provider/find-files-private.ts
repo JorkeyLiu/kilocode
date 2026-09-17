@@ -44,10 +44,31 @@ import {
  */
 export interface FindFilesPrivateConnection {
   isPrivateAvailable(): boolean
+  getPrivatePeer?: () => { ensureRecovered?: (timeoutMs?: number) => Promise<boolean> } | null
+  ensurePrivateRecovered?: (timeoutMs?: number) => Promise<boolean>
   privateFindFilesOutcomeWithHandle(req: FindFilesContractRequest): {
     id: number
     promise: Promise<unknown>
     cancel?: (msg?: string) => boolean | "stale"
+  }
+}
+
+async function recoverIfQuarantined(conn: FindFilesPrivateConnection, ms: number): Promise<void> {
+  const typed = conn as unknown as {
+    ensurePrivateRecovered?: (timeoutMs?: number) => Promise<boolean>
+    getPrivatePeer?: () => { ensureRecovered?: (t?: number) => Promise<boolean> } | null
+  }
+  try {
+    if (typeof typed.ensurePrivateRecovered === "function") {
+      await typed.ensurePrivateRecovered(ms)
+      return
+    }
+    const peer = typed.getPrivatePeer?.() ?? null
+    if (peer && typeof peer.ensureRecovered === "function") {
+      await peer.ensureRecovered(ms)
+    }
+  } catch {
+    // Recovery failure stays unavailable; never throws
   }
 }
 
@@ -139,7 +160,10 @@ export async function attemptFindFilesPrivate(
 ): Promise<FindFilesAttempt> {
   if (!connection) return { kind: "unavailable", reason: "unavailable" }
   try {
-    if (!connection.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
+    if (!connection.isPrivateAvailable()) {
+      await recoverIfQuarantined(connection, ms)
+      if (!connection.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
+    }
   } catch {
     return { kind: "unavailable", reason: "unavailable" }
   }

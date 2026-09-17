@@ -52,11 +52,13 @@ describe("ServePrivatePeer timeout ownership — update/cancelQueued no pending 
     expect((res as unknown as { transportUnknown?: boolean }).transportUnknown).toBeTrue()
     expect(peer.getPendingCount()).toBe(0)
 
-    // second exact cancel miss must invalidate peer (terminal semantics, no auto-recovery)
+    // second exact cancel miss quarantines same peer (bounded recovery, no rebuild)
     const second = handle.cancel("private parity timeout opId=sessionUpdate:ses_aaa:tok1")
     expect(second).toBeFalse()
     expect(peer.isAvailable()).toBeFalse()
-    expect(peer.isDisposed()).toBeTrue()
+    expect(peer.isQuarantined()).toBeTrue()
+    expect(peer.isDisposed()).toBeFalse()
+    expect(peer.getLifecycleState()).toBe("quarantined")
 
     peer.dispose()
     backendPeer.dispose()

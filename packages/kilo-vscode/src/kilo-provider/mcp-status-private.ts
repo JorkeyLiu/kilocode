@@ -66,7 +66,27 @@ type Handle = { id: number; promise: Promise<unknown>; cancel?: (msg?: string) =
 
 type Conn = Pick<KiloConnectionService, "isPrivateAvailable" | "getPrivatePeer" | "getPrivateEpoch"> & {
   invalidatePrivatePeerOnObserverTimeout?: (reason: string) => void
+  ensurePrivateRecovered?: (timeoutMs?: number) => Promise<boolean>
   privateMcpStatusOutcomeWithHandle?: (req: McpStatusContractRequest) => Handle
+}
+
+async function recoverIfQuarantined(conn: Conn, ms: number): Promise<void> {
+  const typed = conn as unknown as {
+    ensurePrivateRecovered?: (timeoutMs?: number) => Promise<boolean>
+    getPrivatePeer?: () => ServePrivatePeer | null
+  }
+  try {
+    if (typeof typed.ensurePrivateRecovered === "function") {
+      await typed.ensurePrivateRecovered(ms)
+      return
+    }
+    const peer = typed.getPrivatePeer?.() ?? null
+    if (peer && typeof (peer as unknown as { ensureRecovered?: (t?: number) => Promise<boolean> }).ensureRecovered === "function") {
+      await (peer as unknown as { ensureRecovered: (t?: number) => Promise<boolean> }).ensureRecovered(ms)
+    }
+  } catch {
+    // Recovery failure stays unavailable; never throws
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -106,7 +126,10 @@ export async function attemptMcpStatusPrivate(
   const conn = connection as Conn | null | undefined
   if (!conn) return { kind: "unavailable", reason: "unavailable" }
   try {
-    if (!conn.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
+    if (!conn.isPrivateAvailable()) {
+      await recoverIfQuarantined(conn, ms)
+      if (!conn.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
+    }
   } catch {
     return { kind: "unavailable", reason: "unavailable" }
   }

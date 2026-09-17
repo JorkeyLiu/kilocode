@@ -535,6 +535,12 @@ import type {
   PermissionAllowEverythingTerminal,
   PermissionAllowEverythingTerminalFailure,
 } from "./serve-private-permission-allow-everything-contract"
+import * as crypto from "crypto"
+import {
+  isTransportHealthSuccess,
+  validateTransportHealthContractRequest,
+} from "./serve-private-transport-health-contract"
+import type { TransportHealthContractRequest } from "./serve-private-transport-health-contract"
 
 export {
   canonicalGetOpId,
@@ -2731,16 +2737,47 @@ export function normalizeReverseCapabilities(raw: unknown): string[] {
 
 const invalidatedTransports = new WeakSet<object>()
 
+export type ServePrivateLifecycleState = "available" | "quarantined" | "disposed" | "closed"
+
+export const TRANSPORT_HEALTH_OP = "transport/health" as const
+export const TRANSPORT_HEALTH_TIMEOUT_MS = 3000
+
+/**
+ * Precise stale-ownership predicate: matches only reasons constructed for
+ * genuine stale ownership (captured peer/epoch drift). OpId/sessionId text
+ * containing `stale` must never skip quarantine, so substring matching is
+ * forbidden here: `stale` prefixes/suffixes only.
+ */
+export function isStaleOwnershipReason(reason: string): boolean {
+  if (typeof reason !== "string") return false
+  if (reason === "stale observer timeout") return true
+  if (reason.startsWith("stale observer timeout ")) return true
+  const suffixes = [" stale observer timeout", " stale private read timeout"]
+  for (const suffix of suffixes) {
+    if (reason.endsWith(suffix)) {
+      const prefix = reason.slice(0, -suffix.length)
+      if (prefix.length === 0) return false
+      if (prefix.includes(" ") || prefix.includes("=") || prefix.includes(":")) return false
+      return true
+    }
+  }
+  return false
+}
+
 export class ServePrivatePeer {
   private peer: JsonRpcPeer | null = null
   private available = false
   private disposed = false
   private invalidated = false
+  private quarantined = false
   private capabilities: Record<string, unknown> | unknown[] | null = null
   private initRaw: unknown | null = null
   private initEpoch: number | null = null
   private initializing: Promise<boolean> | null = null
   private initSeq = 0
+  private healthInFlight: Promise<boolean> | null = null
+  private healthPeer: JsonRpcPeer | null = null
+  private healthEpoch: number | null = null
 
   constructor(private readonly opts: ServePrivatePeerOptions) {}
 
@@ -2753,7 +2790,19 @@ export class ServePrivatePeer {
   }
 
   isAvailable(): boolean {
-    return this.available && !this.disposed && this.peer?.getState() === "open"
+    return this.available && !this.disposed && !this.quarantined && this.peer?.getState() === "open"
+  }
+
+  isQuarantined(): boolean {
+    return this.quarantined && !this.disposed && this.peer?.getState() === "open"
+  }
+
+  getLifecycleState(): ServePrivateLifecycleState {
+    if (this.disposed) return "disposed"
+    if (!this.peer || this.peer.getState() !== "open") return "closed"
+    if (this.quarantined) return "quarantined"
+    if (this.available) return "available"
+    return "closed"
   }
 
   isDisposed(): boolean {
@@ -2770,6 +2819,7 @@ export class ServePrivatePeer {
 
   async initialize(timeoutMs = 5000): Promise<boolean> {
     if (this.disposed) return false
+    if (this.quarantined) return false
     if (this.invalidated) return false
     if (this.opts.reader && invalidatedTransports.has(this.opts.reader as object)) return false
     if (this.opts.writer && invalidatedTransports.has(this.opts.writer as object)) return false
@@ -2800,7 +2850,17 @@ export class ServePrivatePeer {
     const onRequest =
       httpDeps && canHttp
         ? async (method: string, params: unknown, ctx: import("../../private-worker/peer").RequestContext) => {
+            if (this.quarantined) {
+              const err = new Error(`Method not found: ${method}`) as Error & { code?: number }
+              err.code = -32601
+              throw err
+            }
             if (method === PROVIDER_HTTP_EXECUTE_METHOD && httpDeps && canHttp) {
+              if (ctx.signal.aborted) {
+                const err = new Error("Request cancelled") as Error & { code?: number }
+                err.code = -32603
+                throw err
+              }
               return handleProviderHttpExecute(params, httpDeps, ctx)
             }
             const err = new Error(`Method not found: ${method}`) as Error & { code?: number }
@@ -2919,6 +2979,7 @@ export class ServePrivatePeer {
       let hasPath = false
       let hasCommandList = false
       let hasFindFiles = false
+      let hasHealth = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -2935,6 +2996,7 @@ export class ServePrivatePeer {
         hasPath = caps.includes("path/get")
         hasCommandList = caps.includes("command/list")
         hasFindFiles = caps.includes("find/files")
+        hasHealth = caps.includes("transport/health")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -3022,6 +3084,7 @@ export class ServePrivatePeer {
         if ((c as Record<string, unknown>)["path/get"]) hasPath = true
         if ((c as Record<string, unknown>)["command/list"]) hasCommandList = true
         if ((c as Record<string, unknown>)["find/files"]) hasFindFiles = true
+        if ((c as Record<string, unknown>)["transport/health"]) hasHealth = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -3041,6 +3104,7 @@ export class ServePrivatePeer {
         }
       }
 
+      void hasHealth
       if (
         !hasCancelQueued &&
         !hasSessionUpdate &&
@@ -4003,6 +4067,7 @@ export class ServePrivatePeer {
       if (cap === "permission/allow-everything" && c["permission/allow-everything"]) return true
       if (cap === "skill/remove" && c["skill/remove"]) return true
       if (cap === "background-process/stop-session" && c["background-process/stop-session"]) return true
+      if (cap === "transport/health" && c["transport/health"]) return true
     }
     return false
   }
@@ -6649,10 +6714,123 @@ export class ServePrivatePeer {
     if (this.disposed) return
     this.disposed = true
     this.available = false
+    this.quarantined = false
+    this.healthInFlight = null
+    this.healthPeer = null
+    this.healthEpoch = null
     this.initSeq += 1
     this.initializing = null
     bestEffortDispose(this.peer, "dispose")
     this.peer = null
+  }
+
+  /**
+   * Bounded quarantine: preserve the same `ServePrivatePeer` and underlying
+   * `JsonRpcPeer` (monotonic ids, decoder state) across logical
+   * timeout/cancel ownership failure. Makes `isAvailable()` false and fails
+   * ordinary outbound methods without allocating ids. Aborts active inbound
+   * reverse handlers and rejects new reverse work while keeping the
+   * transport bound for health recovery and late-frame drainage.
+   */
+  enterQuarantine(reason: string): void {
+    if (this.disposed) return
+    const peer = this.peer
+    if (!peer || peer.getState() !== "open") return
+    if (this.quarantined) return
+    this.quarantined = true
+    this.available = false
+    try {
+      peer.abortIncomingForQuarantine()
+    } catch {
+      // Abort must never break quarantine entry
+    }
+    console.warn(`[Kilo PrivatePeer] quarantined epoch ${this.opts.epoch}: ${reason}`)
+  }
+
+  /**
+   * Single-flight health probe on the quarantined same peer through a
+   * narrow bypass (capability-gated, no directory/opId). Timeout uses local
+   * `tryCancelPending` once and never invalidates/disposes; late responses
+   * are ignored. Real close/dispose/epoch replacement still destroys
+   * ownership via existing teardown. On strict success with unchanged
+   * peer+epoch/open, restores available.
+   */
+  probeTransportHealth(timeoutMs = TRANSPORT_HEALTH_TIMEOUT_MS): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false)
+    const peer = this.peer
+    const epoch = this.opts.epoch
+    if (!peer || peer.getState() !== "open") return Promise.resolve(false)
+    if (!this.hasCapability(TRANSPORT_HEALTH_OP)) return Promise.resolve(false)
+    if (this.healthInFlight && this.healthPeer === peer && this.healthEpoch === epoch) {
+      return this.healthInFlight
+    }
+    const requestId = crypto.randomUUID()
+    const req: TransportHealthContractRequest = {
+      v: 1,
+      requestId,
+      op: TRANSPORT_HEALTH_OP,
+      context: {},
+      payload: {},
+    }
+    try {
+      validateTransportHealthContractRequest(req)
+    } catch {
+      return Promise.resolve(false)
+    }
+    const probe = (async (): Promise<boolean> => {
+      let id: unknown = -1
+      let rawPromise: Promise<unknown> | null = null
+      try {
+        const handle = peer.requestWithId(TRANSPORT_HEALTH_OP, req)
+        id = handle.id
+        rawPromise = handle.promise
+      } catch {
+        return false
+      }
+      let timer: ReturnType<typeof setTimeout> | null = null
+      try {
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("transport health timeout")), timeoutMs)
+          ;(timer as unknown as { unref?: () => void })?.unref?.()
+        })
+        const raw = (await Promise.race([rawPromise, timeout])) as unknown
+        if (timer) clearTimeout(timer)
+        if (this.disposed) return false
+        if (this.peer !== peer || this.opts.epoch !== epoch || peer.getState() !== "open") return false
+        if (!isTransportHealthSuccess(raw, req)) return false
+        if (this.peer === peer && this.opts.epoch === epoch && peer.getState() === "open") {
+          this.quarantined = false
+          this.available = true
+          return true
+        }
+        return false
+      } catch {
+        if (timer) clearTimeout(timer)
+        try {
+          peer.tryCancelPending(id as never, "transport health timeout")
+        } catch {
+          // Single local cancel only; never recurse into invalidate/dispose
+        }
+        return false
+      } finally {
+        if (this.healthPeer === peer && this.healthEpoch === epoch) {
+          this.healthInFlight = null
+          this.healthPeer = null
+          this.healthEpoch = null
+        }
+      }
+    })()
+    this.healthInFlight = probe
+    this.healthPeer = peer
+    this.healthEpoch = epoch
+    return this.healthInFlight
+  }
+
+  /** Lazy recovery gate for quarantined peers: one shared probe, no auto-loop. */
+  ensureRecovered(timeoutMs = TRANSPORT_HEALTH_TIMEOUT_MS): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false)
+    if (!this.quarantined) return Promise.resolve(this.isAvailable())
+    return this.probeTransportHealth(timeoutMs)
   }
 
   private markTransportInvalidated(): void {
@@ -6697,11 +6875,11 @@ export class ServePrivatePeer {
   }
 
   /**
-   * Private observer timeout invalidates this private peer epoch; thereafter
-   * private parity remains disabled (fail-closed) until the next full backend
-   * connection/server reset (no automatic retry/reconnect, no detached work).
-   * The owner (KiloConnectionService) disposes and nulls this peer and will
-   * re-negotiate only on next connect/reconnect.
+   * Private observer timeout quarantines this peer epoch: the same
+   * `ServePrivatePeer`/`JsonRpcPeer` is preserved (monotonic ids, decoder
+   * state) and ordinary outbound methods fail unavailable without new ids.
+   * Stale completions never quarantine the replacement. Definitive teardown
+   * (real close/dispose/reset/exit) still disposes via existing paths.
    */
   private invalidateSafeBranch(reason: string): boolean {
     const branch =
@@ -6710,29 +6888,22 @@ export class ServePrivatePeer {
       projectCurrentObserverTimeoutBranch(reason) ??
       findFilesObserverTimeoutBranch(reason)
     if (!branch) return false
-    if (branch.op === "session/messages") {
-      console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: branch.op, epoch: this.opts.epoch })
-    } else {
-      console.warn(`[Kilo PrivatePeer] observer timeout invalidates:`, {
-        op: branch.op,
-        invalidated: true,
-      })
-    }
+    if (isStaleOwnershipReason(reason)) return true
     try {
-      this.dispose()
+      this.enterQuarantine(reason)
     } catch {
-      console.warn("[Kilo PrivatePeer] invalidate dispose failed:", { op: branch.op, invalidateFailed: true })
+      console.warn("[Kilo PrivatePeer] quarantine failed:", { op: branch.op, invalidateFailed: true })
     }
     return true
   }
 
   invalidateOnObserverTimeout(reason: string): void {
     if (this.invalidateSafeBranch(reason)) return
-    console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch ${this.opts.epoch}: ${reason}`)
+    if (isStaleOwnershipReason(reason)) return
     try {
-      this.dispose()
+      this.enterQuarantine(reason)
     } catch (e) {
-      console.warn("[Kilo PrivatePeer] invalidate dispose failed:", String(e))
+      console.warn("[Kilo PrivatePeer] quarantine failed:", String(e))
     }
   }
 

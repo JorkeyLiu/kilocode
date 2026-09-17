@@ -242,6 +242,13 @@ import {
   fallbackSandboxSupportIds,
   supportSandboxPrivate,
 } from "@/kilocode/sandbox-support-private"
+import {
+  INTERNAL_MESSAGE as TRANSPORT_HEALTH_INTERNAL_MESSAGE,
+  OP as TRANSPORT_HEALTH_OP,
+  VERSION as TRANSPORT_HEALTH_VERSION,
+  fallbackTransportHealthIds,
+  validateTransportHealthRequest,
+} from "@/kilocode/transport-health-private"
 
 export interface FdCarrierHandle {
   peer: Peer
@@ -6574,6 +6581,57 @@ export function createFdCarrier(
               ? ErrorCode.InvalidParams
               : ErrorCode.InternalError
           throw err
+        }
+      }
+      if (method === TRANSPORT_HEALTH_OP || method === "transport/health") {
+        // Pure transport health: requestId-only strict validation, no
+        // directory/workspace/opId/idempotencyKey, no drain-control lane, no
+        // InstanceRef, no fence, no network/secret/cache/persistence/mutation.
+        // Proves liveness while a config generation fence would fail.
+        let req: { requestId: string }
+        try {
+          req = validateTransportHealthRequest(params)
+        } catch {
+          const ids = fallbackTransportHealthIds(params)
+          return {
+            v: TRANSPORT_HEALTH_VERSION,
+            requestId: ids.requestId,
+            op: TRANSPORT_HEALTH_OP,
+            status: "failed" as const,
+            outcome: {
+              type: "failed" as const,
+              time: Date.now(),
+              failure: { code: "validation.failed", message: "invalid transport-health request", retryable: false },
+            },
+            accepted: false as const,
+            failure: { code: "validation.failed", message: "invalid transport-health request", retryable: false },
+          }
+        }
+        try {
+          return {
+            v: TRANSPORT_HEALTH_VERSION,
+            requestId: req.requestId,
+            op: TRANSPORT_HEALTH_OP,
+            status: "succeeded" as const,
+            outcome: { type: "succeeded" as const, time: Date.now() },
+            accepted: true as const,
+            data: { ok: true as const },
+          }
+        } catch {
+          const ids = fallbackTransportHealthIds(params)
+          return {
+            v: TRANSPORT_HEALTH_VERSION,
+            requestId: ids.requestId,
+            op: TRANSPORT_HEALTH_OP,
+            status: "failed" as const,
+            outcome: {
+              type: "failed" as const,
+              time: Date.now(),
+              failure: { code: "internal", message: TRANSPORT_HEALTH_INTERNAL_MESSAGE, retryable: false },
+            },
+            accepted: false as const,
+            failure: { code: "internal", message: TRANSPORT_HEALTH_INTERNAL_MESSAGE, retryable: false },
+          }
         }
       }
       const err = new Error(`Method not found: ${method}`) as Error & { code: number }
