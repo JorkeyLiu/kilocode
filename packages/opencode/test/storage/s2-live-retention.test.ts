@@ -157,6 +157,8 @@ describe("S2 live retention file-backed (G3)", () => {
             const dbLayer = Database.layerFromPath(file)
             const base = makeFileBaseWithMaintenance(dbLayer, hysteresis)
             yield* Effect.gen(function* () {
+              // Bounded startup: the worker waits for start before replay/boot.
+              yield* (yield* Maintenance.Service).start
               yield* pollWithTimeout(
                 Effect.gen(function* () {
                   const c = yield* Ref.get(bootCalls)
@@ -378,6 +380,8 @@ describe("S2 live retention file-backed (G3)", () => {
             const dbLayer = Database.layerFromPath(file)
             const base = makeFileBaseWithMaintenance(dbLayer, hyst)
             yield* Effect.gen(function* () {
+              // Bounded startup: the worker waits for start before replay/boot.
+              yield* (yield* Maintenance.Service).start
               yield* pollWithTimeout(
                 Effect.gen(function* () {
                   const c = yield* Ref.get(bootCalls)
@@ -503,6 +507,8 @@ describe("S2 live retention file-backed (G3)", () => {
             const dbLayer = Database.layerFromPath(file)
             const base = makeFileBaseWithMaintenance(dbLayer, stuckAccounting)
             yield* Effect.gen(function* () {
+              // Bounded startup: the worker waits for start before replay/boot.
+              yield* (yield* Maintenance.Service).start
               yield* pollWithTimeout(
                 Effect.gen(function* () {
                   const c = yield* Ref.get(bootCalls)

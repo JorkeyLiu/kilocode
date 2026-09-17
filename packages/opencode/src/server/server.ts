@@ -15,6 +15,7 @@ import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "./cors"
 import { lazy } from "@/util/lazy"
 import * as KiloListener from "@/kilocode/server/listener" // kilocode_change
+import * as RetentionMaintenance from "@/retention/maintenance" // kilocode_change - bounded startup boot gate
 import type { AppLayer } from "@/effect/app-runtime" // kilocode_change
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
@@ -122,8 +123,8 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 function listenerLayer(opts: ListenOptions, port: number) {
   // kilocode_change start - standalone listener topology: fresh transport,
   // canonical app outside. `createListenerRoutesUnprovided` intentionally
-  // carries NO AppLayer so `KiloListener.build` can apply
-  // `Layer.fresh(transport).pipe(Layer.provide(app))` with the correct order:
+  // carries NO AppLayer so `KiloListener.build` can build the selected app
+  // once and satisfy the fresh transport from its already-built context:
   // router/middleware/WebSocketTracker/Node server/ConfigProvider stay fresh
   // per listener, while the selected app (canonical `AppLayer` by default,
   // custom `opts.appLayer` for deterministic tests) is shared through the
@@ -160,12 +161,23 @@ function startListener(opts: ListenOptions, port: number) {
     // kilocode_change
     Effect.provide(HttpApiApp.context),
     Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
-    Effect.map(
-      (ctx): ListenerState => ({
-        scope,
-        server: Context.get(ctx, HttpServer.HttpServer),
-        http: Context.get(ctx, ListenerServerService),
-        websockets: Context.get(ctx, WebSocketTracker.Service),
+    Effect.flatMap(({ ctx, appCtx }) =>
+      Effect.gen(function* () {
+        // kilocode_change - bounded startup: TCP is bound and the address is
+        // known once the layer graph (including the memoMap-shared app) is
+        // built, so release the retention boot gate here. start() is an
+        // idempotent near-constant-time gate release: it never awaits replay
+        // or boot cleanup, so listen() stays bounded while retention boots in
+        // its owned worker. Listeners sharing AppLayer release the same
+        // canonical gate once; custom app layers carry an isolated instance.
+        const gated = Context.getOption(appCtx, RetentionMaintenance.Service)
+        if (gated._tag === "Some") yield* gated.value.start
+        return {
+          scope,
+          server: Context.get(ctx, HttpServer.HttpServer),
+          http: Context.get(ctx, ListenerServerService),
+          websockets: Context.get(ctx, WebSocketTracker.Service),
+        } satisfies ListenerState
       }),
     ),
   )

@@ -250,6 +250,8 @@ describe("S2 production wiring", () => {
       )
       const simpleBase = makeBaseWithMaintenance(hysteresisAccounting)
       return yield* Effect.gen(function* () {
+        // Bounded startup: the worker waits for start before replay/boot.
+        yield* (yield* Maintenance.Service).start
         yield* pollWithTimeout(
           Effect.gen(function* () {
             const c = yield* Ref.get(bootCalls)
@@ -370,6 +372,8 @@ describe("S2 production wiring", () => {
       )
       const base = makeBaseWithMaintenance(accounting)
       return yield* Effect.gen(function* () {
+        // Bounded startup: the worker waits for start before replay/boot.
+        yield* (yield* Maintenance.Service).start
         yield* pollWithTimeout(
           Effect.gen(function* () {
             const c = yield* Ref.get(bootCalls)
@@ -512,6 +516,8 @@ describe("S2 production wiring", () => {
         )
         const maintenanceBase = makeFileBaseWithMaintenance(dbLayer, accounting)
         yield* Effect.gen(function* () {
+          // Bounded startup: the worker waits for start before replay/boot.
+          yield* (yield* Maintenance.Service).start
           const { db } = yield* Database.Service
           const storage = yield* Storage.Service
           // Wait for replay + boot to finish deterministically
@@ -592,6 +598,8 @@ describe("S2 production wiring", () => {
       )
       const base = makeBaseWithMaintenance(accounting)
       return yield* Effect.gen(function* () {
+        // Bounded startup: the worker waits for start before replay/boot.
+        yield* (yield* Maintenance.Service).start
         const { db } = yield* Database.Service
         const session = yield* SessionV2.Service
         const storage = yield* Storage.Service

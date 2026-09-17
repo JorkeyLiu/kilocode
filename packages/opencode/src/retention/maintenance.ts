@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, Layer, Queue } from "effect"
+import { Cause, Context, Deferred, Effect, Fiber, Layer, Queue } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -11,6 +11,7 @@ import { Global } from "@opencode-ai/core/global"
 import { existsSync, statSync } from "fs"
 import * as Artifact from "@opencode-ai/core/retention/artifact"
 import { RetentionObligationTable } from "@opencode-ai/core/retention/sql"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 span for deferred boot
 
 function safeSize(p: string): number {
   try {
@@ -27,6 +28,14 @@ export interface Maintenance {
   readonly schedule: (trigger: string) => Effect.Effect<void>
   readonly runOnce: (trigger: string) => Effect.Effect<Diagnostics>
   readonly replay: () => Effect.Effect<void>
+  /**
+   * Release the boot gate. Idempotent: releasing an already-released gate is a
+   * no-op. Near-constant-time: it never awaits replay or boot cleanup; the
+   * owned worker performs those after release. The listener path calls this
+   * only after the TCP bind/address is known so `Server.listen()` stays
+   * bounded while retention boots in the background.
+   */
+  readonly start: Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Maintenance>()("@opencode/RetentionMaintenance") {}
@@ -278,22 +287,52 @@ export const layer = Layer.effect(
       yield* Retention.replayObligations(db, deleter)
     })
 
-    // Owned scoped worker with coalescing via queue
+    // Bounded startup: construction performs no retention DB/storage I/O. It may
+    // only create the queue, boot gate, fibers, and event subscription below.
+    // Schedules made before start (including event-driven ones) buffer in the
+    // queue and no runOnce executes. The owned scoped worker waits for start,
+    // then replays obligations exactly once before the first queued runOnce,
+    // coalesces the boot check with buffered triggers, and continues the
+    // existing coalescing worker loop. No detached work: the worker is
+    // forkScoped and interrupted/joined by the layer finalizer.
     const queue = yield* Queue.unbounded<string>()
+    const started = yield* Deferred.make<void>()
+    const start = Deferred.succeed(started, void 0).pipe(Effect.asVoid)
     const worker = yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.gen(function* () {
-          const first = yield* Queue.take(queue)
-          let coalesced = 1
-          while (true) {
-            const polled = yield* Queue.poll(queue)
-            if (polled._tag === "None") break
-            coalesced += 1
-          }
-          const trig = coalesced > 1 ? `${first}+${coalesced - 1} coalesced` : first
-          yield* runOnce(trig).pipe(Effect.catchCause(() => Effect.void))
-        }),
-      ).pipe(Effect.catchCause(() => Effect.void)),
+      Effect.gen(function* () {
+        yield* Deferred.await(started)
+        const timer = P0Perf.span("retention_boot")
+        // Preserve replay failure tolerance, but let interruption propagate so
+        // scope close during a slow replay still cleans the worker promptly.
+        yield* replay().pipe(
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            () => Effect.void,
+          ),
+        )
+        yield* Queue.offer(queue, "boot")
+        timer.end()
+        yield* Effect.forever(
+          Effect.gen(function* () {
+            const first = yield* Queue.take(queue)
+            let coalesced = 1
+            while (true) {
+              const polled = yield* Queue.poll(queue)
+              if (polled._tag === "None") break
+              coalesced += 1
+            }
+            const trig = coalesced > 1 ? `${first}+${coalesced - 1} coalesced` : first
+            // Preserve interruption like the replay gate above so scope close
+            // during a slow runOnce still cleans the worker promptly.
+            yield* runOnce(trig).pipe(
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterrupts(cause),
+                () => Effect.void,
+              ),
+            )
+          }),
+        )
+      }).pipe(Effect.catchCause(() => Effect.void)),
     )
     yield* Effect.addFinalizer(() =>
       Fiber.interrupt(worker).pipe(
@@ -317,13 +356,10 @@ export const layer = Layer.effect(
       yield* Effect.addFinalizer(() => unsub)
     }
 
-    // Boot: replay durable obligations before any retention run, then schedule boot check
-    yield* replay().pipe(Effect.catchCause(() => Effect.void))
-
-    // Schedule initial boot check off hot path (after replay completes)
-    yield* schedule("boot")
-
-    return Service.of({ schedule, runOnce, replay })
+    // Boot replay and the initial boot check are deferred to the worker after
+    // start (triggered by the listener path once TCP bind/address is known),
+    // so layer construction never blocks `Server.listen()` on retention I/O.
+    return Service.of({ schedule, runOnce, replay, start })
   }),
 )
 
