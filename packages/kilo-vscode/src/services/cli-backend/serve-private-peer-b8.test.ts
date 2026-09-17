@@ -820,11 +820,12 @@ describe("B8 session/children private peer", () => {
     expect(listeners.size).toBe(2)
   })
 
-  test("fixture backendSnapshot attaches exactly-one detached observer per session without changing output", async () => {
+  test("fixture backendSnapshot reads children private-first with zero SDK on success", async () => {
     const { AgentManagerProvider } = await import("../../agent-manager/AgentManagerProvider")
     const OTHER = "ses_other00000000000000001"
     const sdkKid = kid(KID_A)
     const observed: string[] = []
+    let sdkChildrenCalls = 0
     const fakeClient = {
       session: {
         list: async () => ({
@@ -835,16 +836,13 @@ describe("B8 session/children private peer", () => {
         }),
         status: async () => ({ data: {} }),
         messages: async () => ({ data: [] }),
-        children: async (args: { sessionID: string }) => {
-          if (args.sessionID === PARENT) return { data: [sdkKid], response: { status: 200 } }
-          const gone = new Error("gone") as Error & { status: number; response: { status: number } }
-          gone.status = 404
-          gone.response = { status: 404 }
-          throw gone
+        children: async () => {
+          sdkChildrenCalls += 1
+          return { data: [] }
         },
       },
       app: { agents: async () => ({ data: [] }) },
-      provider: { list: async () => ({ data: { connected: [] } }) },
+      provider: { catalog: async () => ({ data: { connected: [] } }) },
       mcp: { status: async () => ({ data: {} }) },
       permission: { list: async () => ({ data: [] }) },
       question: { list: async () => ({ data: [] }) },
@@ -890,10 +888,12 @@ describe("B8 session/children private peer", () => {
     provider.outputChannel = { appendLine: () => {} }
     const snap = await provider.backendSnapshotForFixture()
     await new Promise((r) => setTimeout(r, 50))
-    // SDK stays authoritative: success maps ids, failure maps empty, catch preserved.
+    // Private-first: valid private success maps ids with zero SDK, validated
+    // terminal fails closed to empty with zero SDK. No detached observer.
     expect(snap.children?.[PARENT]).toEqual([KID_A])
     expect(snap.children?.[OTHER]).toEqual([])
-    // Detached observer ran exactly once per session, after the SDK outcome.
+    // One private attempt per session, no SDK children fallback on either.
+    expect(sdkChildrenCalls).toBe(0)
     expect(observed.length).toBe(2)
     expect(observed.filter((op) => op.startsWith(`children:${PARENT}:`)).length).toBe(1)
     expect(observed.filter((op) => op.startsWith(`children:${OTHER}:`)).length).toBe(1)

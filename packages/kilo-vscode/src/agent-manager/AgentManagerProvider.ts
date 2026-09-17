@@ -14,7 +14,7 @@ import {
 import type { KiloConnectionService } from "../services/cli-backend"
 import type { ConnectionState } from "../services/cli-backend/connection-service"
 import { getErrorMessage } from "../kilo-provider-utils"
-import { observeSessionChildrenParityDetached } from "../kilo-provider/session-children-parity"
+import { fetchSessionChildrenPrivateFirst } from "../kilo-provider/session-children-privatefirst"
 import { fetchMcpStatusPrivateFirst } from "../kilo-provider/mcp-status-privatefirst"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
@@ -1383,35 +1383,23 @@ export class AgentManagerProvider implements Disposable {
         })
       if (!messagesOk) unreadableMessages[s.id] = false
       messages[s.id] = rows.map(summarizeMessage)
-      // SDK-first detached warn-only children parity (B8): the SDK result
-      // below stays the sole authority for the fixture snapshot. The private
-      // observation never mutates state, never retries/replays the SDK, and
-      // never changes this output or control flow.
-      let sdkKids: { data?: unknown; error?: unknown; response?: unknown } | unknown = null
-      const kids = await client.session
-        .children({ sessionID: s.id, directory: root })
-        .then((r) => {
-          sdkKids = r as { data?: unknown; error?: unknown; response?: unknown }
-          return r.data ?? []
-        })
-        .catch((e: unknown) => {
-          sdkKids = e
+      // Private-first children read: one private attempt plus at most one
+      // same-parent/directory SDK fallback per session. Valid private success
+      // and SDK fallback produce the same fixture `children` id list; terminal
+      // and unavailable close fail-soft to empty with the existing log label.
+      // `compareChildrenParity` stays as pure diagnostic/test evidence only.
+      const kids = await fetchSessionChildrenPrivateFirst({
+        connection: this.connectionService as unknown as Parameters<typeof fetchSessionChildrenPrivateFirst>[0]["connection"],
+        client: client as unknown as Parameters<typeof fetchSessionChildrenPrivateFirst>[0]["client"],
+        parentSessionId: s.id,
+        directory: root,
+      })
+        .then((outcome) => (outcome.kind === "ok" ? outcome.children : empty(`session.children(${s.id})`)))
+        .catch((err: unknown) => {
+          this.log(`fixture backendSnapshot: session.children(${s.id}) failed:`, err)
           return empty(`session.children(${s.id})`)
         })
       children[s.id] = kids.map((kid) => (kid as { id?: string }).id ?? "").filter((id) => id.length > 0)
-      try {
-        observeSessionChildrenParityDetached(
-          this.connectionService,
-          sdkKids as { data?: unknown; error?: unknown; response?: unknown },
-          s.id,
-          root,
-        )
-      } catch {
-        console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
-          op: "session/children",
-          observationFailed: true,
-        })
-      }
     }
     const mcp = await fetchMcpStatusPrivateFirst({ connection: this.connectionService, client, directory: root })
       .then((outcome) => (outcome.kind === "ok" ? summarizeMcp(outcome.status) : undefined))
