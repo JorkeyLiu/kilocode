@@ -97,6 +97,9 @@ background, and every session stays a full agent with its complete harness.
   runtime waits, with its own explicit state and reason.
 - Nothing outside the approved target above carries a default compatibility
   promise. Legacy behavior is handled when implementation reaches it.
+- The terminal UI is removal-bound and outside the target surface. It carries
+  no compatibility promise, must not constrain new architecture, and receives
+  no new compatibility investment.
 - Performance is a target-level objective, not a numeric gate. Structural
   simplification must truly remove the removed surface from startup and runtime
   participation; no performance claim is accepted without runtime evidence. No

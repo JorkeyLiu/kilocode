@@ -83,6 +83,12 @@ export function resolveNetworkOptionsNoConfig(args: NetworkOptions, config?: Con
   const configCors = config?.server?.cors ?? []
   const argsCors = Array.isArray(args.cors) ? args.cors : args.cors ? [args.cors] : []
   const cors = [...configCors, ...argsCors]
+  // kilocode_change start - omitted-port compatibility: only an omitted CLI
+  // port with no configured server port may prefer 4096 then fall back to an
+  // OS-assigned ephemeral port on bind conflict. An explicit `--port 0` (or
+  // any configured/explicit nonzero port) binds exactly once with no retry.
+  const fallback = !portExplicitlySet && config?.server?.port === undefined && port === 0
+  // kilocode_change end
 
-  return { hostname, port, mdns, mdnsDomain, cors }
+  return { hostname, port, mdns, mdnsDomain, cors, fallback }
 }

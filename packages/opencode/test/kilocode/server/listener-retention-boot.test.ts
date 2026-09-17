@@ -13,7 +13,7 @@ import * as Lease from "../../../src/retention/lease"
 import * as Accounting from "../../../src/retention/accounting"
 import { Storage } from "../../../src/storage/storage"
 import { withTimeout } from "../../../src/util/timeout"
-import { tmpdir, disposeAllInstances } from "../../fixture/fixture"
+import { tmpdir } from "../../fixture/fixture"
 import { resetDatabase } from "../../fixture/db"
 import { pollWithTimeout } from "../../lib/effect"
 
@@ -53,9 +53,11 @@ function pollRowGone(root: string, label: string) {
 }
 
 // Explicit ports keep each `Server.listen` to a single `startListener`
-// attempt. Port `0` falls back (4096, then 0), and a fallback retry would
-// construct the fresh maintenance node once per attempt, which would read
-// as a second worker and blur the single-build assertion below.
+// attempt. Direct port `0` binds one OS ephemeral port with no retry; only
+// the omitted-port compatibility branch (`fallback: true`) retries
+// (4096, then 0), and that retry would construct the fresh maintenance node
+// once per attempt, which would read as a second worker and blur the
+// single-build assertion below.
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer()
@@ -74,7 +76,6 @@ function freePort(): Promise<number> {
 
 describe("Server.listen bounded retention boot", () => {
   afterEach(async () => {
-    await disposeAllInstances()
     await resetDatabase()
   })
 

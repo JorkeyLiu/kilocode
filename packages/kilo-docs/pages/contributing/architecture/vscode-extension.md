@@ -41,7 +41,7 @@ flowchart LR
 |---|---|
 | Startup | Lazy on client demand; the speech-to-text capture prewarm is the only retention that can touch server-side capture during activation (historical baseline) |
 | Binary | Uses extension `bin/kilo`, or `bin/kilo.exe` on Windows |
-| Port | Starts `kilo serve --port 0`; CLI server prefers `4096`, then asks OS for free port |
+| Port | Starts `kilo serve --port 0`; explicit `0` binds one OS-assigned ephemeral port directly (single app/transport build). An omitted CLI port with no configured server port prefers `4096`, then falls back to ephemeral only on bind conflict |
 | Authentication | Generates random 32-byte hex password per spawn and passes it as `KILO_SERVER_PASSWORD`; username defaults to `kilo` |
 | Reuse | Editor tabs, panels, Agent Manager, and host services share active server |
 | Exit | `ServerManager` clears dead child; connection service clears SDK/SSE state and enters error state |

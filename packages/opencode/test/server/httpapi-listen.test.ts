@@ -311,17 +311,20 @@ describe("HttpApi Server.listen", () => {
     expect(output).not.toContain("Sent HTTP response")
   })
 
-  test("port 0 prefers 4096 when free", async () => {
+  test("direct port 0 binds OS ephemeral without preferring 4096", async () => {
+    // Direct `Server.listen({ port: 0 })` is one OS-assigned ephemeral bind:
+    // it never prefers 4096, even when 4096 is free.
     if (!(await isPortFree(4096))) return
     const listener = await startListener()
     try {
-      expect(listener.port).toBe(4096)
+      expect(listener.port).not.toBe(4096)
+      expect(listener.port).toBeGreaterThan(0)
     } finally {
-      await stop(listener, "timed out cleaning up port-0 prefers-4096 listener")
+      await stop(listener, "timed out cleaning up direct port-0 listener")
     }
   })
 
-  test("port 0 falls back when 4096 is taken", async () => {
+  test("direct port 0 binds ephemeral when 4096 is taken", async () => {
     const blocker = await occupyPort(4096)
     if (!blocker) return
     try {
@@ -336,6 +339,65 @@ describe("HttpApi Server.listen", () => {
       await new Promise<void>((resolve) => blocker.close(() => resolve()))
     }
   })
+
+  test("fallback port 0 prefers 4096 when free", async () => {
+    if (!(await isPortFree(4096))) return
+    Flag.KILO_SERVER_PASSWORD = auth.password
+    Flag.KILO_SERVER_USERNAME = auth.username
+    process.env.KILO_SERVER_PASSWORD = auth.password
+    process.env.KILO_SERVER_USERNAME = auth.username
+    const listener = await Server.listen({ hostname: "127.0.0.1", port: 0, fallback: true })
+    try {
+      expect(listener.port).toBe(4096)
+    } finally {
+      await stop(listener, "timed out cleaning up fallback prefers-4096 listener")
+    }
+  })
+
+  test("fallback port 0 falls back to ephemeral when 4096 is taken", async () => {
+    const blocker = await occupyPort(4096)
+    if (!blocker) return
+    try {
+      Flag.KILO_SERVER_PASSWORD = auth.password
+      Flag.KILO_SERVER_USERNAME = auth.username
+      process.env.KILO_SERVER_PASSWORD = auth.password
+      process.env.KILO_SERVER_USERNAME = auth.username
+      const listener = await Server.listen({ hostname: "127.0.0.1", port: 0, fallback: true })
+      try {
+        expect(listener.port).not.toBe(4096)
+        expect(listener.port).toBeGreaterThan(0)
+      } finally {
+        await stop(listener, "timed out cleaning up fallback ephemeral listener")
+      }
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
+  })
+
+  test(
+    "explicit nonzero port rejects on conflict",
+    async () => {
+    const blocker = await occupyPort(0)
+    if (!blocker) return
+    const address = blocker.address()
+    const taken = typeof address === "object" && address !== null ? address.port : undefined
+    if (!taken) {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+      return
+    }
+    try {
+      Flag.KILO_SERVER_PASSWORD = auth.password
+      Flag.KILO_SERVER_USERNAME = auth.username
+      process.env.KILO_SERVER_PASSWORD = auth.password
+      process.env.KILO_SERVER_USERNAME = auth.username
+      await expect(Server.listen({ hostname: "127.0.0.1", port: taken })).rejects.toThrow()
+      await expect(Server.listen({ hostname: "127.0.0.1", port: taken, fallback: true })).rejects.toThrow()
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
+    },
+    { timeout: 60_000 },
+  )
 
   testPty("rejects unsafe PTY ticket mint and connect requests", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })

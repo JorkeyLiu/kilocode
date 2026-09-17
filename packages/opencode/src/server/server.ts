@@ -48,6 +48,11 @@ type ListenOptions = CorsOptions & {
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  // kilocode_change start - omitted-port compatibility: opt-in 4096-first
+  // fallback for an omitted CLI port with no configured server port.
+  // Absent/false keeps `port: 0` as one direct OS-assigned ephemeral bind.
+  fallback?: boolean
+  // kilocode_change end
   // kilocode_change start - deterministic listener tests can replace AppLayer services
   appLayer?: AppLayer
   // kilocode_change end
@@ -150,9 +155,31 @@ function listenerLayer(opts: ListenOptions, port: number) {
 
 function startWithPortFallback(opts: ListenOptions) {
   if (opts.port !== 0) return startListener(opts, opts.port)
-  // Match the legacy listener port-resolution behavior: explicit `0` prefers
-  // 4096 first, then any free port.
-  return startListener(opts, 4096).pipe(Effect.catch(() => startListener(opts, 0)))
+  if (opts.fallback !== true) return startListener(opts, 0)
+  // kilocode_change - omitted-port compatibility only: prefer 4096, then fall
+  // back to one OS-assigned ephemeral bind solely on bind-address-in-use.
+  // Any other startup failure rejects without a retry so arbitrary errors
+  // are never masked. Explicit `0` never takes this branch (one build).
+  return startListener(opts, 4096).pipe(Effect.catchIf(isBindConflict, () => startListener(opts, 0)))
+}
+
+// kilocode_change - narrow bind-conflict classification over the real
+// Effect/Node error shape: a failed bind surfaces as `ServeError` whose
+// `cause` chain carries the structured Node `code: "EADDRINUSE"` (verified
+// against a live occupied-port probe). Walk `cause`/`error`/`defect` links;
+// anything without that code is not a bind conflict and must reject.
+function isBindConflict(err: unknown): boolean {
+  let cur: unknown = err
+  const seen = new Set<unknown>()
+  while (cur !== null && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur)
+    const rec = cur as { code?: unknown; cause?: unknown; error?: unknown; defect?: unknown }
+    if (rec.code === "EADDRINUSE") return true
+    const next = rec.cause ?? rec.error ?? rec.defect
+    if (next === null || next === undefined || typeof next !== "object") return false
+    cur = next
+  }
+  return false
 }
 
 function startListener(opts: ListenOptions, port: number) {
