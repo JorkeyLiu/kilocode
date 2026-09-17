@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "กำลังโหลดเซสชันล่าสุด…",
+  "agentManager.catalog.previewStatus": "กำลังโหลดเซสชัน…",
+  "agentManager.catalog.retry": "ลองใหม่",
   "agentManager.local": "ในเครื่อง",
   "agentManager.sidebar.collapse": "ย่อแถบด้านข้าง",
   "agentManager.sidebar.expand": "แสดงแถบด้านข้าง",

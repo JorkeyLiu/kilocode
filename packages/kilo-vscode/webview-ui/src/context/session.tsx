@@ -495,7 +495,13 @@ export const SessionProvider: ParentComponent = (props) => {
     getIdentity: (name) => {
       const item = allAgents().find((agent) => agent.name === name)
       if (!item?.scope || !item.assetHash) return undefined
-      return { scope: item.scope, assetHash: item.assetHash, native: item.native, frontmatter: item.frontmatter, body: item.body }
+      return {
+        scope: item.scope,
+        assetHash: item.assetHash,
+        native: item.native,
+        frontmatter: item.frontmatter,
+        body: item.body,
+      }
     },
     exists: (name) => allAgents().some((agent) => agent.name === name),
     makeId: () => crypto.randomUUID(),
@@ -1503,6 +1509,11 @@ export const SessionProvider: ParentComponent = (props) => {
           message.nextCursor,
           message.hasMore,
         )
+        break
+
+      case "sessionsProgress":
+        // Non-authoritative catalog preview: never enters the ordinary
+        // session store, never drives Topics/reconciliation/readiness.
         break
 
       case "sessionUpdated":

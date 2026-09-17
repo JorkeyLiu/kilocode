@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "Chargement des sessions récentes…",
+  "agentManager.catalog.previewStatus": "Chargement des sessions…",
+  "agentManager.catalog.retry": "Réessayer",
   "agentManager.local": "local",
   "agentManager.sidebar.collapse": "Réduire la barre latérale",
   "agentManager.sidebar.expand": "Afficher la barre latérale",

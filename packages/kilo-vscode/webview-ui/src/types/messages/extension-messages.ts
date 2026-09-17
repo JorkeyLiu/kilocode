@@ -75,6 +75,7 @@ export interface ErrorMessage {
   message: string
   code?: string
   sessionID?: string
+  refreshId?: number
 }
 
 export interface SendMessageFailedMessage {
@@ -197,12 +198,25 @@ export interface SessionsLoadedMessage {
   type: "sessionsLoaded"
   sessions: SessionInfo[]
   preserveSessionIds?: string[]
+  refreshId?: number
   /** Deprecated: complete inventory always publishes append false. Ignored by the webview. */
   append?: boolean
   /** Deprecated: complete inventory always publishes null. Ignored by the webview. */
   nextCursor?: string | null
   /** Deprecated: complete inventory always publishes false. Ignored by the webview. */
   hasMore?: boolean
+}
+
+/**
+ * Non-authoritative page delta during a full catalog drain.
+ * The webview accumulates/deduplicates by id for the latest refreshId and
+ * sorts updatedAt-desc for rendering. Never enters the ordinary session
+ * store and never drives Topics/reconciliation/readiness.
+ */
+export interface SessionsProgressMessage {
+  type: "sessionsProgress"
+  refreshId: number
+  sessions: SessionInfo[]
 }
 
 export interface SelectKiloModelMessage {
@@ -1018,6 +1032,7 @@ export type ExtensionMessage =
   | SessionModelUsageChangedMessage
   | MessageCreatedMessage
   | SessionsLoadedMessage
+  | SessionsProgressMessage
   | ActionMessage
   | ProfileDataMessage
   | DeviceAuthFailedMessage

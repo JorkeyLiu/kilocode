@@ -7,11 +7,7 @@ import type { AgentIndex } from "./config/selectors"
 import type { PartRemove } from "./shared/stream-messages"
 import * as path from "path"
 
-export {
-  SessionStreamScheduler,
-  snapshotPartKey,
-  updateSnapshotKey,
-} from "./kilo-provider/session-stream-scheduler"
+export { SessionStreamScheduler, snapshotPartKey, updateSnapshotKey } from "./kilo-provider/session-stream-scheduler"
 
 type SyncEventMessageUpdated = Extract<SyncPayload, { name: "message.updated.1" }>
 type SyncEventMessageRemoved = Extract<SyncPayload, { name: "message.removed.1" }>
@@ -310,6 +306,9 @@ export function normalizeSessionListNextCursor(raw: unknown): string | null {
   }
 }
 
+/** Scoped catalog-drain failure code. Only this code is retryable as a catalog refresh. */
+export const SESSION_CATALOG_LOAD_FAILED = "sessionCatalogLoadFailed"
+
 /**
  * Shared interface for the subset of KiloProvider state needed by session-refresh helpers.
  * Extracted here so the logic can be tested without importing KiloProvider (and vscode).
@@ -326,6 +325,8 @@ export interface SessionRefreshContext {
   cursor: string | null
   /** Workspace root directory; used to pin the canonical projectID to the root session. */
   root?: string
+  /** Monotonic refresh id owned by KiloProvider. When present, page deltas and the final snapshot carry it. */
+  refreshId?: number
   postMessage(message: unknown): void
 }
 
@@ -339,6 +340,14 @@ export interface SessionRefreshContext {
  * never renders intermediate incomplete Topic facts. The optional cursor
  * argument is deprecated and ignored: every call drains from the start.
  *
+ * When `ctx.refreshId` is present (provider-threaded monotonic id), a
+ * non-authoritative `sessionsProgress` page delta is posted after each
+ * successfully fetched page, the final `sessionsLoaded` carries the same id,
+ * and any tail failure posts a scoped `{code: sessionCatalogLoadFailed}`
+ * error with that id and no final. Progress never touches notifyCatalog or
+ * authoritative reconciliation. When absent, behavior is legacy-silent for
+ * backward-compatible callers/fixtures.
+ *
  * Cursor-stall protection: repeating cursors or exceeding
  * MAX_SESSION_LIST_PAGES throws without publishing, preserving the previous
  * complete inventory. Per-page private-first fallback semantics live inside
@@ -347,10 +356,16 @@ export interface SessionRefreshContext {
  */
 export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string): Promise<string | undefined> {
   const list = ctx.listSessions
+  const id = ctx.refreshId
+  const fail = (message: string) => {
+    if (id === undefined) return
+    ctx.postMessage({ type: "error", code: SESSION_CATALOG_LOAD_FAILED, refreshId: id, message })
+  }
   if (!list) {
     ctx.pendingSessionRefresh = true
     if (ctx.connectionState !== "connecting") {
-      ctx.postMessage({ type: "error", message: "Not connected to CLI backend" })
+      if (id === undefined) ctx.postMessage({ type: "error", message: "Not connected to CLI backend" })
+      else fail("Not connected to CLI backend")
     }
     return
   }
@@ -367,9 +382,17 @@ export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string)
       page = await list({ limit, cursor })
     } catch (error) {
       if (ctx.connectionState !== "connected") ctx.pendingSessionRefresh = true
+      fail(getErrorMessage(error) || "Failed to load sessions")
       throw error
     }
     for (const s of page.sessions) all.push(s)
+    if (id !== undefined) {
+      ctx.postMessage({
+        type: "sessionsProgress",
+        refreshId: id,
+        sessions: page.sessions.map((s) => sessionToWebview(s)),
+      })
+    }
     const next = page.cursor
     if (next === null) {
       ctx.cursor = null
@@ -380,6 +403,7 @@ export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string)
         append: false,
         nextCursor: null,
         hasMore: false,
+        ...(id === undefined ? {} : { refreshId: id }),
       })
       // Pin the canonical projectID to the workspace-root session. all[0]
       // is the most-recently-updated session across the whole family, so its
@@ -389,10 +413,14 @@ export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string)
       const root = ctx.root ? all.find((s) => sameDirectory(s.directory, ctx.root!))?.projectID : undefined
       return root ?? all[0]?.projectID
     }
-    if (seen.has(next)) throw new Error("session list cursor stalled")
+    if (seen.has(next)) {
+      fail("session list cursor stalled")
+      throw new Error("session list cursor stalled")
+    }
     seen.add(next)
     cursor = next
   }
+  fail("session list did not exhaust")
   throw new Error("session list did not exhaust")
 }
 
@@ -404,7 +432,14 @@ export async function flushPendingSessionRefresh(ctx: SessionRefreshContext): Pr
 
   if (!ctx.listSessions) {
     if (ctx.connectionState === "connecting") return
-    ctx.postMessage({ type: "error", message: "Not connected to CLI backend" })
+    if (ctx.refreshId === undefined) ctx.postMessage({ type: "error", message: "Not connected to CLI backend" })
+    else
+      ctx.postMessage({
+        type: "error",
+        code: SESSION_CATALOG_LOAD_FAILED,
+        refreshId: ctx.refreshId,
+        message: "Not connected to CLI backend",
+      })
     return
   }
 

@@ -105,6 +105,7 @@ import { tracker } from "./telemetry"
 import { createSessionTabManager } from "./session-tab-manager"
 import { openSession, openChildSession, type OpenChildSessionDeps, type OpenSessionDeps } from "./open-session"
 import { accumulateCatalog, reconcile } from "./hydration"
+import { mergePreview } from "./SidebarSessionList"
 import { resolveCoverBottomPage, shouldClearBottomPage } from "./cover-bottom-page"
 import "./agent-manager.css"
 
@@ -159,6 +160,17 @@ const AgentManagerContent: Component = () => {
   const [sessionsLoaded, setSessionsLoaded] = createSignal(false)
   const [isGitRepo, setIsGitRepo] = createSignal(true)
   const [managedSessions, setManagedSessions] = createSignal<{ id: string }[]>([])
+  // Non-authoritative preview: flat read-only rows from page deltas. Never
+  // enters the session store, Topics, pruning, tombstones, or readiness.
+  const [preview, setPreview] = createSignal<SessionInfo[]>([])
+  const [previewId, setPreviewId] = createSignal<number | undefined>(undefined)
+  const [catalogFailed, setCatalogFailed] = createSignal(false)
+  let catalogFailId: number | undefined
+  const retryCatalog = () => {
+    catalogFailId = undefined
+    setCatalogFailed(false)
+    vscode.postMessage({ type: "loadSessions" })
+  }
 
   const DEFAULT_SIDEBAR_WIDTH = 260
   const MIN_SIDEBAR_WIDTH = 200
@@ -775,20 +787,62 @@ const AgentManagerContent: Component = () => {
 
     // Catalog readiness: complete inventory snapshot replaces the catalog.
     // Tombstoned deletes filter stale drain races; converged omissions drop
-    // their tombstone so the set stays bounded.
+    // their tombstone so the set stays bounded. sessionsLoaded (with optional
+    // backward-compatible missing refreshId) is the sole authoritative event.
     const unsubSessions = vscode.onMessage((msg) => {
+      if (msg.type === "sessionsProgress") {
+        // Non-authoritative preview only before the first complete catalog.
+        // Later background refreshes keep existing Topics visible.
+        if (sessionsLoaded()) return
+        const m = msg as { refreshId?: unknown; sessions?: SessionInfo[] }
+        if (typeof m.refreshId !== "number" || !Array.isArray(m.sessions)) return
+        const cur = previewId()
+        if (cur !== undefined && m.refreshId < cur) return
+        if (cur === undefined || m.refreshId > cur) {
+          setPreviewId(m.refreshId)
+          setPreview(mergePreview([], m.sessions ?? []))
+          if (catalogFailId !== undefined && m.refreshId > catalogFailId) {
+            catalogFailId = undefined
+            setCatalogFailed(false)
+          }
+        } else {
+          setPreview((prev) => mergePreview(prev, m.sessions ?? []))
+        }
+        return
+      }
       if (msg.type === "sessionsLoaded") {
-        if (!sessionsLoaded()) setSessionsLoaded(true)
         const m = msg as {
           sessions?: Array<{ id: string }>
           preserveSessionIds?: string[]
+          refreshId?: unknown
         }
+        // Drop stale finals from superseded refreshes; missing id stays
+        // authoritative for backward-compatible fixtures/manual messages.
+        const cur = previewId()
+        if (typeof m.refreshId === "number" && cur !== undefined && m.refreshId < cur && !sessionsLoaded()) return
+        if (!sessionsLoaded()) setSessionsLoaded(true)
+        setPreview([])
+        setPreviewId(undefined)
+        catalogFailId = undefined
+        setCatalogFailed(false)
         const rawIds = new Set((m.sessions ?? []).map((s) => s.id))
         for (const del of [...deletedIds]) if (!rawIds.has(del)) deletedIds.delete(del)
         const filtered = (m.sessions ?? []).filter((s) => !deletedIds.has(s.id))
         latestCatalog = accumulateCatalog(latestCatalog, filtered)
         catalogPreserve = m.preserveSessionIds?.filter((id) => !deletedIds.has(id))
         applyReconciliation()
+        return
+      }
+      if (msg.type === "error") {
+        // Scoped catalog retry state only; generic errors never arm Retry.
+        const m = msg as { code?: unknown; refreshId?: unknown }
+        if (m.code !== "sessionCatalogLoadFailed" || typeof m.refreshId !== "number") return
+        if (sessionsLoaded()) return
+        const cur = previewId()
+        if (cur !== undefined && m.refreshId < cur) return
+        if (catalogFailId !== undefined && m.refreshId <= catalogFailId) return
+        catalogFailId = m.refreshId
+        setCatalogFailed(true)
       }
     })
 
@@ -1275,41 +1329,28 @@ const AgentManagerContent: Component = () => {
             </div>
           </div>
           <div class="am-list" ref={listEl}>
-            <Show
-              when={sessionsLoaded()}
-              fallback={
-                <div class="am-skeleton-list">
-                  <div class="am-skeleton-session">
-                    <div class="am-skeleton-session-title" style={{ width: "70%" }} />
-                    <div class="am-skeleton-session-time" />
-                  </div>
-                  <div class="am-skeleton-session">
-                    <div class="am-skeleton-session-title" style={{ width: "55%" }} />
-                    <div class="am-skeleton-session-time" />
-                  </div>
-                </div>
-              }
-            >
-              <Show when={!isGitRepo()}>
-                <div class="am-not-git-notice">
-                  <Icon name="warning" size="small" />
-                  <span>{t("agentManager.notGitRepo")}</span>
-                </div>
-              </Show>
-              <SidebarSessionList
-                listContainer={() => listEl}
-                sessions={session.sessions()}
-                sessionsLoaded={sessionsLoaded()}
-                currentSelection={session.currentSessionID() ?? null}
-                onSelectSession={(id) => {
-                  handleOpenSession(id)
-                }}
-                untitledLabel={t("agentManager.session.untitled")}
-                t={t}
-                expanded={expanded}
-                setExpanded={setExpanded}
-              />
+            <Show when={sessionsLoaded() && !isGitRepo()}>
+              <div class="am-not-git-notice">
+                <Icon name="warning" size="small" />
+                <span>{t("agentManager.notGitRepo")}</span>
+              </div>
             </Show>
+            <SidebarSessionList
+              listContainer={() => listEl}
+              sessions={session.sessions()}
+              sessionsLoaded={sessionsLoaded()}
+              preview={preview()}
+              previewFailed={catalogFailed()}
+              onRetryPreview={retryCatalog}
+              currentSelection={session.currentSessionID() ?? null}
+              onSelectSession={(id) => {
+                handleOpenSession(id)
+              }}
+              untitledLabel={t("agentManager.session.untitled")}
+              t={t}
+              expanded={expanded}
+              setExpanded={setExpanded}
+            />
           </div>
         </div>
       </div>

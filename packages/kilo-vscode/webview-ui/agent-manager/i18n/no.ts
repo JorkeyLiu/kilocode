@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "Laster nylige økter…",
+  "agentManager.catalog.previewStatus": "Laster økter…",
+  "agentManager.catalog.retry": "Prøv igjen",
   "agentManager.local": "lokal",
   "agentManager.sidebar.collapse": "Skjul sidefelt",
   "agentManager.sidebar.expand": "Vis sidefelt",

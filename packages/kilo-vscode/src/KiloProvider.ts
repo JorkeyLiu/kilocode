@@ -58,7 +58,11 @@ import {
   buildMcpDisconnectReq,
   mcpConnectionFailureMessage,
 } from "./kilo-provider/mcp-connection-privatefirst"
-import { attemptSkillRemovePrivate, buildSkillRemoveReq, skillRemoveFailureMessage } from "./kilo-provider/skill-remove-privatefirst"
+import {
+  attemptSkillRemovePrivate,
+  buildSkillRemoveReq,
+  skillRemoveFailureMessage,
+} from "./kilo-provider/skill-remove-privatefirst"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 import { resolveProjectDirectory } from "./project-directory"
@@ -113,11 +117,7 @@ import { canonicalDirectory } from "./private-worker/canonical-directory"
 import { decodeGlobalListCursor } from "./private-worker/session-cursor"
 import { hasGit } from "./kilo-provider/git-status"
 import { LifecycleRefreshCoordinator } from "./kilo-provider/lifecycle-refresh-coordinator"
-import {
-  RELOAD_CONFLICT_WARNING,
-  RELOAD_FAILED_ERROR,
-  requestInstanceReload,
-} from "./kilo-provider/instance-reload"
+import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, requestInstanceReload } from "./kilo-provider/instance-reload"
 import {
   handlePermissionResponse,
   fetchAndSendPendingPermissions,
@@ -263,8 +263,7 @@ const CREDENTIAL_KEY = /^(?:api[_-]?key|authorization|token|password|secret|cook
 // collision is handled if and when it arises.
 const CUSTOM_ONLY_PROVIDER_MESSAGE =
   "Built-in provider configuration is temporarily unavailable (custom providers only)"
-const CUSTOM_ONLY_AUTH_MESSAGE =
-  "Sign-in and account management are temporarily unavailable (custom providers only)"
+const CUSTOM_ONLY_AUTH_MESSAGE = "Sign-in and account management are temporarily unavailable (custom providers only)"
 
 function isCanonicalCustomEntry(value: unknown): boolean {
   if (!isRecord(value)) return false
@@ -488,6 +487,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private pendingSessionRefresh = false // Refresh requested before the client is ready.
   private sessionCursor: string | null = null // Always null: complete inventory drain exhausts paging.
   private sessionCount = 0 // Total sessions in the last complete inventory snapshot.
+  private catalogSeq = 0 // Monotonic catalog refresh id threaded through each serialized load run.
   private readonly streams = new SessionStreamScheduler((msg) => this.postMessage(msg))
   private readonly visibleTaskStreams = new VisibleTaskStreams((id, visible) => this.streams.setVisible(id, visible))
   private readonly confirmations = new MessageConfirmation()
@@ -2137,9 +2137,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           )
           break
         case "loadSessions":
-          this.handleLoadSessions().catch((e) =>
-            console.error("[Kilo New] handleLoadSessions failed:", e),
-          )
+          this.handleLoadSessions().catch((e) => console.error("[Kilo New] handleLoadSessions failed:", e))
           break
         case "requestSessionModelUsage":
           void this.fetchAndSendSessionModelUsage(message.sessionID, message.requestID)
@@ -2321,9 +2319,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendMcpStatus().catch((e) => console.error("[Kilo New] fetchAndSendMcpStatus failed:", e))
           break
         case "connectMcp": {
-          this.handleMcpConnect(message.name).catch((e) =>
-            console.error("[Kilo New] handleMcpConnect failed:", e),
-          )
+          this.handleMcpConnect(message.name).catch((e) => console.error("[Kilo New] handleMcpConnect failed:", e))
           break
         }
         case "disconnectMcp": {
@@ -2824,7 +2820,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const workspaceDir = this.getContextDirectory()
     let metadata: Record<string, unknown> | undefined
     try {
-      metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, workspaceDir, this.connectionService)
+      metadata = await sandboxSessionMetadata(
+        this.connectionService.sandboxPreference,
+        this.client!,
+        workspaceDir,
+        this.connectionService,
+      )
     } catch (e) {
       console.warn("[Kilo New] KiloProvider: sandbox metadata lookup failed, using empty", String(e))
       metadata = undefined
@@ -2884,7 +2885,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     void (async () => {
       try {
         const result = await fetchSessionStatusesPrivateFirst({
-          connection: this.connectionService as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["connection"],
+          connection: this.connectionService as unknown as Parameters<
+            typeof fetchSessionStatusesPrivateFirst
+          >[0]["connection"],
           client: client as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["client"],
           directory: dir,
         })
@@ -3469,6 +3472,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async runFlushPendingSessionRefresh(reason: string): Promise<void> {
     console.log("[Kilo New] KiloProvider: 🔄 Flushing deferred sessions refresh", { reason })
     const ctx = this.sessionRefreshContext
+    ctx.refreshId = ++this.catalogSeq
     try {
       const resolved = await flushPendingSessionRefreshUtil(ctx)
       if (resolved) this.projectID = resolved
@@ -3488,15 +3492,20 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private async runLoadSessions(): Promise<void> {
     const ctx = this.sessionRefreshContext
+    ctx.refreshId = ++this.catalogSeq
     try {
       const resolved = await loadSessionsUtil(ctx)
       if (resolved) this.projectID = resolved
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to load sessions:", error)
-      this.postMessage({
-        type: "error",
-        message: getErrorMessage(error) || "Failed to load sessions",
-      })
+      // Scoped catalog errors are already posted by loadSessions with the
+      // run's refreshId; only legacy runs without an id need a generic error.
+      if (ctx.refreshId === undefined) {
+        this.postMessage({
+          type: "error",
+          message: getErrorMessage(error) || "Failed to load sessions",
+        })
+      }
     }
     this.syncSessionPaging(ctx)
   }
@@ -4111,8 +4120,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.requirements.clear()
       return true
     }
-    if (attempt.kind === "closed")
-      console.error("[Kilo New] removeSkill closed without mutation:", attempt.reason)
+    if (attempt.kind === "closed") console.error("[Kilo New] removeSkill closed without mutation:", attempt.reason)
     if (attempt.kind === "failed")
       console.error("[Kilo New] removeSkill failed:", skillRemoveFailureMessage(attempt.code))
     this.cachedSkillsMessage = null
@@ -5164,7 +5172,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (pending) return pending
       if (draftID) this.creatingDrafts.add(draftID)
       const creation = (async () => {
-        const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, dir, this.connectionService)
+        const metadata = await sandboxSessionMetadata(
+          this.connectionService.sandboxPreference,
+          this.client!,
+          dir,
+          this.connectionService,
+        )
         const session = await createSessionPrivateFirst({
           client: this.client!,
           connection: this.connectionService,
@@ -5612,7 +5625,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const dir = this.getWorkspaceDirectory(sessionID)
     let data: Session
     try {
-      data = await revertSessionPrivateFirst({ client: this.client, connection: this.connectionService, sessionId: sessionID, directory: dir, messageId: messageID, partId: partID })
+      data = await revertSessionPrivateFirst({
+        client: this.client,
+        connection: this.connectionService,
+        sessionId: sessionID,
+        directory: dir,
+        messageId: messageID,
+        partId: partID,
+      })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to revert session:", error)
       this.postMessage({ type: "error", message: "Failed to revert session", sessionID })
@@ -5629,7 +5649,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const dir = this.getWorkspaceDirectory(sessionID)
     let data: Session
     try {
-      data = await unrevertSessionPrivateFirst({ client: this.client, connection: this.connectionService, sessionId: sessionID, directory: dir })
+      data = await unrevertSessionPrivateFirst({
+        client: this.client,
+        connection: this.connectionService,
+        sessionId: sessionID,
+        directory: dir,
+      })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to unrevert session:", error)
       this.postMessage({ type: "error", message: "Failed to redo session", sessionID })
@@ -5642,19 +5667,19 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-    * Cancel a single queued (not-yet-started) message. Private-first authoritative:
-    * exactly one private `session/cancelQueued` attempt with the canonical
-    * `cancelQueued:session:message` opId and `legacy:session:message` idempotencyKey
-    * plus 3 s exact cancellation/cleanup. A valid `succeeded`+`accepted` result
-    * returns with zero SDK mutation (the backend emits `message.removed`, which the
-    * webview handles to drop the row and update the queued shimmer/counter); a
-    * validated terminal `failed` (`retryable === false`) closes with zero SDK;
-    * only a validated `failed` with `retryable === true`
-    * (`InstanceUnavailableDuringConfigRebuild`) takes exactly one SDK fallback
-    * with the same operation identity. Unavailable/invalid/ambiguous/transport/
-    * timeout/closed outcomes never run a second heterogeneous cancel and surface
-    * as an explicit native notification.
-    */
+   * Cancel a single queued (not-yet-started) message. Private-first authoritative:
+   * exactly one private `session/cancelQueued` attempt with the canonical
+   * `cancelQueued:session:message` opId and `legacy:session:message` idempotencyKey
+   * plus 3 s exact cancellation/cleanup. A valid `succeeded`+`accepted` result
+   * returns with zero SDK mutation (the backend emits `message.removed`, which the
+   * webview handles to drop the row and update the queued shimmer/counter); a
+   * validated terminal `failed` (`retryable === false`) closes with zero SDK;
+   * only a validated `failed` with `retryable === true`
+   * (`InstanceUnavailableDuringConfigRebuild`) takes exactly one SDK fallback
+   * with the same operation identity. Unavailable/invalid/ambiguous/transport/
+   * timeout/closed outcomes never run a second heterogeneous cancel and surface
+   * as an explicit native notification.
+   */
   private async handleCancelQueued(sessionID: string, messageID: string): Promise<void> {
     const client = this.client
     if (!client) return
@@ -5950,7 +5975,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.sendNotificationSettings()
     this.sendTimelineSetting()
     this.sendWorkStyle()
-    await ModelState.reset(this.client, (msg) => this.postMessage(msg), this.variantCache(), undefined, this.canonicalMode)
+    await ModelState.reset(
+      this.client,
+      (msg) => this.postMessage(msg),
+      this.variantCache(),
+      undefined,
+      this.canonicalMode,
+    )
 
     // Re-send globalState items to the webview
     this.postMessage({ type: "recentsLoaded", recents: [] })

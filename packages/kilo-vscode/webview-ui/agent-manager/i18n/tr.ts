@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "Son oturumlar yükleniyor…",
+  "agentManager.catalog.previewStatus": "Oturumlar yükleniyor…",
+  "agentManager.catalog.retry": "Tekrar dene",
   "agentManager.local": "yerel",
   "agentManager.sidebar.collapse": "Kenar çubuğunu daralt",
   "agentManager.sidebar.expand": "Kenar çubuğunu göster",

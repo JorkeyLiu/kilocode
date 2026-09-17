@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "正在載入最近對話…",
+  "agentManager.catalog.previewStatus": "正在載入對話…",
+  "agentManager.catalog.retry": "重試",
   "agentManager.local": "本機",
   "agentManager.sidebar.collapse": "收合側邊欄",
   "agentManager.sidebar.expand": "顯示側邊欄",

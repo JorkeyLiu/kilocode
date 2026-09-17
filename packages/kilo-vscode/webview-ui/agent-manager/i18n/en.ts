@@ -9,6 +9,9 @@ export const dict = {
   "agentManager.session.untitled": "Untitled",
   "agentManager.session.newSession": "New Session",
   "agentManager.session.noSessions": "No sessions open",
+  "agentManager.catalog.previewTitle": "Loading recent sessions…",
+  "agentManager.catalog.previewStatus": "Loading sessions…",
+  "agentManager.catalog.retry": "Retry",
 
   "agentManager.tab.close": "Close",
   "agentManager.tab.closeOthers": "Close Others",

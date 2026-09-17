@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "最近のセッションを読み込み中…",
+  "agentManager.catalog.previewStatus": "セッションを読み込み中…",
+  "agentManager.catalog.retry": "再試行",
   "agentManager.local": "ローカル",
   "agentManager.sidebar.collapse": "サイドバーを折りたたむ",
   "agentManager.sidebar.expand": "サイドバーを表示",

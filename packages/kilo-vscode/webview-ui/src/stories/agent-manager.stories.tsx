@@ -435,6 +435,9 @@ const storyT = (key: string): string =>
     "time.thisWeek": "This Week",
     "time.thisMonth": "This Month",
     "time.older": "Older",
+    "agentManager.catalog.previewTitle": "Loading recent sessions…",
+    "agentManager.catalog.previewStatus": "Loading sessions…",
+    "agentManager.catalog.retry": "Retry",
   })[key] ?? key
 
 const now = Date.now()
@@ -606,4 +609,67 @@ export const TopicListAutoExpand: Story = {
       </>
     )
   },
+}
+
+// ---------------------------------------------------------------------------
+// Non-authoritative catalog preview — flat read-only rows while the full
+// drain is in flight. Preview never derives Topics and offers no
+// select/rename/delete/expand actions; tail failure keeps rows and Retry
+// starts a new full refresh via the existing loadSessions request.
+// ---------------------------------------------------------------------------
+
+const previewSessions: SessionInfo[] = [
+  { id: "preview-recent", title: "Refactor agent manager sidebar", createdAt: agoMin(300), updatedAt: agoMin(1) },
+  { id: "preview-mid", title: "Investigate provider routing", createdAt: agoHours(5), updatedAt: agoMin(30) },
+  { id: "preview-old", title: "", createdAt: agoHours(30), updatedAt: agoHours(26) },
+]
+
+function PreviewFixture(props: { failed?: boolean }) {
+  const session = {
+    ...mockSessionValue(),
+    currentSessionID: () => undefined,
+  }
+  let listEl: HTMLDivElement | undefined
+  return (
+    <StoryProviders noPadding>
+      <SessionContext.Provider value={session as any}>
+        <div style={{ "max-height": "420px", overflow: "auto", background: "var(--surface-base)" }}>
+          <div class="am-list" ref={listEl}>
+            <SidebarSessionList
+              listContainer={() => listEl}
+              sessions={[]}
+              sessionsLoaded={false}
+              preview={previewSessions}
+              previewFailed={props.failed}
+              onRetryPreview={() => {
+                const out = document.querySelector<HTMLElement>('[data-testid="preview-retry"]')
+                if (out) out.textContent = "retry"
+              }}
+              currentSelection={null}
+              onSelectSession={() => {}}
+              untitledLabel="Untitled"
+              t={storyT}
+            />
+          </div>
+        </div>
+      </SessionContext.Provider>
+    </StoryProviders>
+  )
+}
+
+export const CatalogPreviewLoading: Story = {
+  name: "Catalog preview — loading recent sessions",
+  parameters: { layout: "fullscreen" },
+  render: () => <PreviewFixture />,
+}
+
+export const CatalogPreviewFailed: Story = {
+  name: "Catalog preview — failed with retry",
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <>
+      <output class="sr-only" data-testid="preview-retry" aria-label="Preview retry" />
+      <PreviewFixture failed />
+    </>
+  ),
 }

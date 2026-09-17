@@ -202,7 +202,10 @@ describe("Agent Manager Provider Messages", () => {
     expect(run, "runInitialization must push current panel state via pushState").toContain("this.pushState()")
     // Both the dirty-fallback early-return and the authoritative-load fallthrough must push guarded by panel
     const guarded = [...run.matchAll(/if\s*\(\s*this\.panel\s*\)\s*this\.pushState\(\)/g)]
-    expect(guarded.length, "runInitialization must have guarded pushState on dirty fallback + authoritative path").toBeGreaterThanOrEqual(2)
+    expect(
+      guarded.length,
+      "runInitialization must have guarded pushState on dirty fallback + authoritative path",
+    ).toBeGreaterThanOrEqual(2)
     // Ensure pushes are not arbitrary file-wide but owned by runInitialization
     const pushes = [...run.matchAll(/this\.pushState\(\)/g)]
     expect(pushes.length, "runInitialization must own at least two pushState calls").toBeGreaterThanOrEqual(2)
@@ -404,19 +407,94 @@ describe("Agent Manager Webview — catalog readiness contract", () => {
   it("sessionsLoaded handler is the sole setter of catalog readiness", () => {
     const start = tsx.indexOf('"sessionsLoaded"')
     expect(start, "sessionsLoaded handler must exist").toBeGreaterThan(-1)
-    const snippet = tsx.slice(start, start + 800)
+    const snippet = tsx.slice(start, start + 1400)
     expect(snippet, "sessionsLoaded handler must set catalog readiness").toContain("setSessionsLoaded(true)")
     expect(snippet, "sessionsLoaded handler must accumulate catalog").toContain("accumulateCatalog")
     expect(snippet, "sessionsLoaded handler must trigger reconciliation").toContain("applyReconciliation")
   })
 
+  it("sessionsProgress preview never drives authoritative readiness or reconciliation", () => {
+    const start = tsx.indexOf('"sessionsProgress"')
+    expect(start, "sessionsProgress preview handler must exist").toBeGreaterThan(-1)
+    const snippet = tsx.slice(start, start + 1400)
+    expect(snippet, "preview must not set catalog readiness").not.toContain("setSessionsLoaded")
+    expect(snippet, "preview must not accumulate the authoritative catalog").not.toContain("accumulateCatalog")
+    expect(snippet, "preview must not trigger reconciliation").not.toContain("applyReconciliation")
+    expect(snippet, "preview must clear scoped failure on newer refresh").toContain("setCatalogFailed(false)")
+  })
+
   it("preserves non-git behavior via isGitRepo signal without conflating with catalog readiness", () => {
     expect(tsx, "non-git notice must still exist").toContain("am-not-git-notice")
     expect(tsx, "non-git notice must be gated by isGitRepo signal").toContain("!isGitRepo()")
-    const skeletonIdx = tsx.indexOf("when={sessionsLoaded()}")
-    const noticeIdx = tsx.indexOf("am-not-git-notice")
-    expect(skeletonIdx, "skeleton must gate on sessionsLoaded").toBeGreaterThan(-1)
-    expect(noticeIdx, "non-git notice must appear after sessionsLoaded gate").toBeGreaterThan(skeletonIdx)
+    // SidebarSessionList owns skeleton/preview/complete rendering; the
+    // skeleton gates on the sessionsLoaded prop. The non-git notice lives in
+    // AgentManagerApp after the catalog is ready and never sets readiness.
+    expect(tsx, "skeleton must gate on sessionsLoaded").toContain("props.sessionsLoaded")
+    const app = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/AgentManagerApp.tsx"), "utf-8")
+    expect(app, "non-git notice must render only after the catalog is ready").toContain(
+      "sessionsLoaded() && !isGitRepo()",
+    )
+  })
+
+  it("preview rows are read-only with retry owned by scoped catalog failure", () => {
+    const sidebar = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/SidebarSessionList.tsx"), "utf-8")
+    const app = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/AgentManagerApp.tsx"), "utf-8")
+
+    // 1. SidebarSessionList failed-preview Button calls props.onRetryPreview?.()
+    const failed = sidebar.indexOf("props.previewFailed")
+    expect(failed, "previewFailed branch must exist in SidebarSessionList").toBeGreaterThan(-1)
+    const btn = sidebar.indexOf("<Button", failed)
+    expect(btn, "failed-preview retry button must exist").toBeGreaterThan(-1)
+    const btnEnd = sidebar.indexOf("</Button>", btn)
+    expect(btnEnd, "retry button must close").toBeGreaterThan(btn)
+    const btnSlice = sidebar.slice(btn, btnEnd + "</Button>".length)
+    expect(btnSlice, "retry button must call props.onRetryPreview?.()").toContain("props.onRetryPreview?.()")
+
+    // 2. Preview row block has data-preview-id + aria-disabled and no onClick, onKeyDown, onSelectSession, rename/delete/expand actions
+    const loop = sidebar.indexOf("<For each={previewRows()}>")
+    expect(loop, "preview rows loop must exist in SidebarSessionList").toBeGreaterThan(-1)
+    const loopEnd = sidebar.indexOf("</For>", loop)
+    expect(loopEnd, "preview rows loop must close").toBeGreaterThan(loop)
+    const rowSlice = sidebar.slice(loop, loopEnd + "</For>".length)
+    expect(rowSlice, "preview row block must have data-preview-id").toContain("data-preview-id")
+    expect(rowSlice, "preview row block must have aria-disabled").toContain('aria-disabled="true"')
+    expect(rowSlice, "preview row block must not bind onClick").not.toContain("onClick")
+    expect(rowSlice, "preview row block must not bind onKeyDown").not.toContain("onKeyDown")
+    expect(rowSlice, "preview row block must not trigger onSelectSession").not.toContain("onSelectSession")
+    expect(rowSlice, "preview row block must not include rename actions").not.toContain("rename")
+    expect(rowSlice, "preview row block must not include delete actions").not.toContain("delete")
+    expect(rowSlice, "preview row block must not include expand actions").not.toMatch(
+      /toggle\(|aria-expanded|isExpanded/,
+    )
+    expect(sidebar, "preview must not derive Topics").not.toMatch(/preview[\s\S]{0,2000}deriveTopics\(/)
+
+    // 3. AgentManagerApp.retryCatalog clears scoped failure and posts {type:"loadSessions"}
+    const retry = app.indexOf("const retryCatalog =")
+    expect(retry, "retryCatalog function must exist in AgentManagerApp").toBeGreaterThan(-1)
+    const retrySlice = app.slice(retry, retry + 200)
+    expect(retrySlice, "retryCatalog must clear scoped failure").toContain("setCatalogFailed(false)")
+    expect(retrySlice, "retryCatalog must post loadSessions message").toMatch(
+      /postMessage\(\s*\{\s*type:\s*["']loadSessions["']\s*\}\s*\)/,
+    )
+
+    // 4. AgentManagerApp passes onRetryPreview={retryCatalog}
+    const usage = app.indexOf("<SidebarSessionList")
+    expect(usage, "<SidebarSessionList usage must exist in AgentManagerApp").toBeGreaterThan(-1)
+    const usageEnd = app.indexOf("/>", usage)
+    expect(usageEnd, "<SidebarSessionList usage must close").toBeGreaterThan(usage)
+    const usageSlice = app.slice(usage, usageEnd + 2)
+    expect(usageSlice, "AgentManagerApp must pass onRetryPreview={retryCatalog}").toContain(
+      "onRetryPreview={retryCatalog}",
+    )
+  })
+
+  it("ordinary session store ignores sessionsProgress; sessionsLoaded stays authoritative", () => {
+    const ctx = fs.readFileSync(path.join(ROOT, "webview-ui/src/context/session.tsx"), "utf-8")
+    const start = ctx.indexOf('"sessionsProgress"')
+    expect(start, "session store must explicitly ignore preview").toBeGreaterThan(-1)
+    const snippet = ctx.slice(start, start + 400)
+    expect(snippet, "preview must never enter the ordinary session store").not.toContain("setStore")
+    expect(snippet, "preview must never call authoritative reconciliation").not.toContain("handleSessionsLoaded")
   })
 })
 

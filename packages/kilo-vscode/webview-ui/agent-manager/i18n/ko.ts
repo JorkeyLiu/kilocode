@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "최근 대화 불러오는 중…",
+  "agentManager.catalog.previewStatus": "대화 불러오는 중…",
+  "agentManager.catalog.retry": "재시도",
   "agentManager.local": "로컬",
   "agentManager.sidebar.collapse": "사이드바 접기",
   "agentManager.sidebar.expand": "사이드바 표시",

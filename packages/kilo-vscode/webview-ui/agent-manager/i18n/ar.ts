@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "جارٍ تحميل الجلسات الأخيرة…",
+  "agentManager.catalog.previewStatus": "جارٍ تحميل الجلسات…",
+  "agentManager.catalog.retry": "إعادة المحاولة",
   "agentManager.local": "محلي",
   "agentManager.sidebar.collapse": "طي الشريط الجانبي",
   "agentManager.sidebar.expand": "إظهار الشريط الجانبي",

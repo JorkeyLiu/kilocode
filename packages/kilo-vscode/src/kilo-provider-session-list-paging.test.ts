@@ -90,7 +90,12 @@ describe("session-list complete inventory drain", () => {
     expect(ctx.cursor).toBeNull()
     expect(ctx.loadedCount).toBe(2)
     expect(posted).toHaveLength(1)
-    const msg = posted[0] as { append: boolean; hasMore: boolean; nextCursor: string | null; sessions: { id: string }[] }
+    const msg = posted[0] as {
+      append: boolean
+      hasMore: boolean
+      nextCursor: string | null
+      sessions: { id: string }[]
+    }
     expect(msg.append).toBe(false)
     expect(msg.hasMore).toBe(false)
     expect(msg.nextCursor).toBeNull()
@@ -115,7 +120,10 @@ describe("session-list complete inventory drain", () => {
   test("repeating cursor throws without publishing a false complete inventory", async () => {
     const posted: unknown[] = []
     const c1 = OPAQUE(20, "ses_loop")
-    const list = (async () => ({ sessions: [webviewSession("ses_a")], cursor: c1 })) as unknown as SessionRefreshContext["listSessions"]
+    const list = (async () => ({
+      sessions: [webviewSession("ses_a")],
+      cursor: c1,
+    })) as unknown as SessionRefreshContext["listSessions"]
     const ctx = ctxWith(list, { postMessage: (m: unknown) => posted.push(m) })
     await expect(loadSessions(ctx)).rejects.toThrow("session list cursor stalled")
     expect(posted).toHaveLength(0)
@@ -133,6 +141,75 @@ describe("session-list complete inventory drain", () => {
     expect(n).toBe(MAX_SESSION_LIST_PAGES)
     expect(posted).toHaveLength(0)
   }, 15000)
+
+  describe("non-authoritative preview protocol (refreshId)", () => {
+    test("page deltas emit in order as sessionsProgress; final stays one complete snapshot", async () => {
+      const posted: Array<Record<string, unknown>> = []
+      const c1 = OPAQUE(20, "ses_page1")
+      const list = (async (input: { limit: number; cursor?: string }) => {
+        if (input.cursor === undefined) return { sessions: [webviewSession("ses_a", 3)], cursor: c1 }
+        return { sessions: [webviewSession("ses_b", 5)], cursor: null }
+      }) as unknown as SessionRefreshContext["listSessions"]
+      const ctx = ctxWith(list, {
+        refreshId: 7,
+        postMessage: (m: unknown) => posted.push(m as Record<string, unknown>),
+      })
+      await loadSessions(ctx)
+      expect(posted.map((m) => m.type)).toEqual(["sessionsProgress", "sessionsProgress", "sessionsLoaded"])
+      const first = posted[0]!
+      expect(first.refreshId).toBe(7)
+      expect((first.sessions as { id: string }[]).map((s) => s.id)).toEqual(["ses_a"])
+      const second = posted[1]!
+      expect(second.refreshId).toBe(7)
+      expect((second.sessions as { id: string }[]).map((s) => s.id)).toEqual(["ses_b"])
+      const finals = posted.filter((m) => m.type === "sessionsLoaded")
+      expect(finals).toHaveLength(1)
+      expect(finals[0]!.refreshId).toBe(7)
+      expect((finals[0]!.sessions as { id: string }[]).map((s) => s.id)).toEqual(["ses_a", "ses_b"])
+      expect(finals[0]!.append).toBe(false)
+      expect(finals[0]!.hasMore).toBe(false)
+    })
+
+    test("tail failure posts scoped sessionCatalogLoadFailed and no final", async () => {
+      const posted: Array<Record<string, unknown>> = []
+      const c1 = OPAQUE(20, "ses_page1")
+      let n = 0
+      const list = (async (input: { limit: number; cursor?: string }) => {
+        n++
+        if (n === 1) return { sessions: [webviewSession("ses_a", 3)], cursor: c1 }
+        throw new Error("backend down")
+      }) as unknown as SessionRefreshContext["listSessions"]
+      const ctx = ctxWith(list, {
+        refreshId: 9,
+        postMessage: (m: unknown) => posted.push(m as Record<string, unknown>),
+      })
+      await expect(loadSessions(ctx)).rejects.toThrow("backend down")
+      expect(posted.map((m) => m.type)).toEqual(["sessionsProgress", "error"])
+      const err = posted[1]!
+      expect(err.code).toBe("sessionCatalogLoadFailed")
+      expect(err.refreshId).toBe(9)
+      expect(posted.some((m) => m.type === "sessionsLoaded")).toBe(false)
+    })
+
+    test("cursor stall with refreshId posts scoped error and no final", async () => {
+      const posted: Array<Record<string, unknown>> = []
+      const c1 = OPAQUE(20, "ses_loop")
+      const list = (async () => ({
+        sessions: [webviewSession("ses_a")],
+        cursor: c1,
+      })) as unknown as SessionRefreshContext["listSessions"]
+      const ctx = ctxWith(list, {
+        refreshId: 11,
+        postMessage: (m: unknown) => posted.push(m as Record<string, unknown>),
+      })
+      await expect(loadSessions(ctx)).rejects.toThrow("session list cursor stalled")
+      const last = posted[posted.length - 1]!
+      expect(last.type).toBe("error")
+      expect(last.code).toBe("sessionCatalogLoadFailed")
+      expect(last.refreshId).toBe(11)
+      expect(posted.some((m) => m.type === "sessionsLoaded")).toBe(false)
+    })
+  })
 
   test("private-first list SDK fallback issues exactly one SDK read with no second private request", async () => {
     const parity: unknown[] = []
@@ -185,7 +262,9 @@ describe("session-list complete inventory drain", () => {
       { fsPath: "/tmp" } as unknown as import("vscode").Uri,
       connectionService,
       undefined,
-      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<typeof KiloProvider>[3],
+      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<
+        typeof KiloProvider
+      >[3],
     )
     Object.defineProperty(provider, "client", { get: () => client })
     Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => "/tmp", configurable: true })

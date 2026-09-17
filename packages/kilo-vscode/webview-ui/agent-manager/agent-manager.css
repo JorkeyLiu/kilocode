@@ -1532,6 +1532,27 @@ button.am-section-toggle:hover .am-section-label {
 .am-skeleton-session:nth-child(3) .am-skeleton-session-time {
   animation-delay: 0.3s;
 }
+/* Non-authoritative catalog preview — flat read-only rows while draining */
+.am-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.am-preview-heading {
+  padding: 8px 10px 4px;
+  font-size: var(--kilo-font-size-12);
+  color: var(--text-weak);
+}
+.am-preview-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px 8px;
+}
+.am-preview-status {
+  font-size: var(--kilo-font-size-12);
+  color: var(--text-weak);
+}
 /* Tab switcher for New/Import tabs in the dialog */
 
 .am-tab-switcher {

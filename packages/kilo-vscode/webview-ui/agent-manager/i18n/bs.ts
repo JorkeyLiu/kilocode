@@ -1,4 +1,7 @@
 export const dict = {
+  "agentManager.catalog.previewTitle": "Učitavanje nedavnih sesija…",
+  "agentManager.catalog.previewStatus": "Učitavanje sesija…",
+  "agentManager.catalog.retry": "Pokušaj ponovo",
   "agentManager.local": "lokalno",
   "agentManager.sidebar.collapse": "Skupi bočnu traku",
   "agentManager.sidebar.expand": "Prikaži bočnu traku",
