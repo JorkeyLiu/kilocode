@@ -1,14 +1,13 @@
 import * as path from "path"
 import * as vscode from "vscode"
-import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { mergeFileSearchResults } from "./file-search-results"
 import { mergeFileSearchItems } from "./file-search-items"
 import {
-  fetchFindFilesTypePrivateFirst,
+  fetchFindFilesTypePrivate,
   FIND_FILES_PRIVATE_LIMIT,
   type FindFilesPrivateConnection,
-  type FindFilesTypePrivateFirstOutcome,
-} from "./find-files-privatefirst"
+  type FindFilesTypePrivateOutcome,
+} from "./find-files-private"
 
 type Message = {
   query: string
@@ -17,7 +16,6 @@ type Message = {
 }
 
 type Input = {
-  client: KiloClient | null
   message: Message
   current?: string
   context?: string
@@ -29,19 +27,16 @@ type Input = {
   timeoutMs?: number
 }
 
-// Private-first `find/files` production consumer: each logical query
-// (`type:file` and `type:directory`, limit 50) runs one private attempt
-// first via the shared helper, falling back to exactly one same-tuple SDK
-// `client.find.files` only on fallback-eligible private outcomes. Valid
-// private success (including empty) and validated terminal close with zero
-// SDK. Merge/dedup/order and fail-soft post behavior are unchanged.
+// Private-authority `find/files` production consumer: each logical query
+// (`type:file` and `type:directory`, limit 50) runs exactly one private
+// attempt via the shared helper with zero SDK. Valid private success
+// (including empty) returns the strict filtered result; validated terminal
+// and unavailable/empty-backend each map to `[]` for that type so one type
+// may succeed while the other fails. Merge/dedup/order, open-tab/active plus
+// local candidate behavior, and the always-post `fileSearchResult` response
+// are unchanged. The HTTP `GET /find/file` endpoint stays for other clients;
+// VS Code issues no `client.find.files` on this path.
 export async function handleFileSearch(input: Input): Promise<void> {
-  const client = input.client
-  if (!client) {
-    input.post({ type: "fileSearchResult", paths: [], items: [], dir: "", requestId: input.message.requestId })
-    return
-  }
-
   const id = input.message.sessionID ?? input.current ?? input.context
   const dir = input.dir(id)
   const open = dir ? await input.open(dir) : new Set<string>()
@@ -49,9 +44,8 @@ export async function handleFileSearch(input: Input): Promise<void> {
   const query = input.message.query
   const limit = FIND_FILES_PRIVATE_LIMIT
   const [fileOut, folderOut] = await Promise.all([
-    fetchFindFilesTypePrivateFirst({
+    fetchFindFilesTypePrivate({
       connection: input.connection ?? null,
-      client: client as never,
       directory: dir,
       query,
       type: "file",
@@ -59,9 +53,8 @@ export async function handleFileSearch(input: Input): Promise<void> {
       workspace: input.workspace,
       timeoutMs: input.timeoutMs,
     }),
-    fetchFindFilesTypePrivateFirst({
+    fetchFindFilesTypePrivate({
       connection: input.connection ?? null,
-      client: client as never,
       directory: dir,
       query,
       type: "directory",
@@ -85,7 +78,7 @@ export async function handleFileSearch(input: Input): Promise<void> {
   input.post({ type: "fileSearchResult", paths: result, items, dir, requestId: input.message.requestId })
 }
 
-function settled(out: FindFilesTypePrivateFirstOutcome, kind: "file" | "folder"): string[] {
+function settled(out: FindFilesTypePrivateOutcome, kind: "file" | "folder"): string[] {
   if (out.kind === "ok") return out.files
   if (out.kind === "terminal") return []
   console.error(`[Kilo New] File search (${kind}) failed:`, { failed: true })

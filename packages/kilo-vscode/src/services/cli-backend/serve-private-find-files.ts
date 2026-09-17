@@ -1,7 +1,7 @@
 import { makeFindFilesAmbiguous, normalizePrivateFindFilesWire } from "./serve-private-find-files-contract"
 import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-private-find-files-contract"
 
-// `find/files` read-only private-first mechanics (bounded search).
+// `find/files` read-only private-authority mechanics (bounded search).
 // Success data is `{files: [{path, type}]}` with relative POSIX-normalized
 // paths and explicit `file|directory` type; absolute paths, URIs, sensitive
 // names, contents, and raw filesystem metadata never cross the boundary.
@@ -30,10 +30,10 @@ interface FindFilesRequestHost {
 }
 
 /**
- * Peer-side normalized outcome handle core for the private-first find/files
+ * Peer-side normalized outcome handle core for the private-authority find/files
  * read. The caller validates the request and checks availability
  * and capability first. A non-closed inner rawPromise rejection carries no
- * trustworthy wire result, so it maps to fallback-eligible ambiguous
+ * trustworthy wire result, so it maps to unavailable-eligible ambiguous
  * transportUnknown (same as closed) rather than validated non-retryable
  * `find.failed`; genuine validated server `failed retryable:false` still
  * flows through `normalizePrivateFindFilesWire` as terminal. Thrown errors

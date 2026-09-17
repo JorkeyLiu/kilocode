@@ -9,7 +9,7 @@ import {
 } from "../services/cli-backend/serve-private-find-files-contract"
 
 /**
- * Private-first `find/files` read for the `handleFileSearch` production
+ * Private-authority `find/files` read for the `handleFileSearch` production
  * consumer.
  *
  * The private fd carrier reads the same `FileSystem.Service.find` source as
@@ -20,20 +20,27 @@ import {
  * cross the private boundary. `directory`/`workspace` are routing identity
  * only; no new owner, no cache, no lifecycle change.
  *
- * Each logical query (`type:file` and `type:directory`, limit 50) runs one
- * private attempt first. Valid private `succeeded`+`accepted` (including
- * empty) is authoritative with zero SDK; validated terminal `failed`
- * (`retryable === false` except `transport`, such as
- * `validation.failed`/`scope_mismatch`/`internal`) closes fail-soft with zero
- * SDK; retryable fence plus unavailable/invalid/ambiguous/transport/closed/
- * timeout takes exactly one same-tuple SDK `client.find.files` fallback with
- * no retry. SDK failure or malformed SDK data returns `unavailable` for the
- * caller to fail soft (`[]` for that type).
+ * Exactly one private attempt per logical query (`type:file` and
+ * `type:directory`, limit 50) with zero SDK, never retried inside the helper.
+ * Valid private `succeeded`+`accepted` (including empty) returns the strict
+ * private filtered result; validated terminal `failed` (`retryable === false`
+ * except `transport`, such as `validation.failed`/`scope_mismatch`/`internal`)
+ * remains terminal; retryable config fence
+ * (`InstanceUnavailableDuringConfigRebuild`), unavailable/missing capability,
+ * invalid shape/wire, ambiguous/epoch drift, transport/closed/timeout map to
+ * explicit unavailable. Invalid input shape fails closed to unavailable with
+ * zero private request and zero SDK, never throws and never falls through to
+ * stale success. No retry, no stale success.
+ *
+ * Timeout (default 3000 ms) exact-cancels the pending by `id` via the owned
+ * transport handle; epoch coherence stays inside the transport (settled
+ * success/terminal across post-response drift is preserved, unresolved drift
+ * maps to ambiguous).
  *
  * `compareFindFilesTypeParity`/`digestFindFilesSet` are intentionally not
- * wired here: with private-first there is at most one private result plus at
- * most one SDK result per type per search, so a comparator would need a third
- * request to add signal. They stay as pure diagnostic/test evidence only.
+ * wired here: with private-authority there is at most one private result per
+ * type per search, so a comparator would need extra requests to add signal.
+ * They stay as pure diagnostic/test evidence only.
  */
 export interface FindFilesPrivateConnection {
   isPrivateAvailable(): boolean
@@ -83,35 +90,35 @@ export function isFindFilesPrivateRequestValid(query: unknown, dir: unknown, lim
 export type FindFilesAttempt =
   | { kind: "ok"; files: FindFilesEntry[] }
   | { kind: "terminal"; code?: string }
-  | { kind: "fallback"; reason: string }
+  | { kind: "unavailable"; reason: string }
 
 export function parseFindFilesResult(result: unknown, req: FindFilesContractRequest): FindFilesAttempt {
   const rec = result as { status?: unknown; accepted?: unknown; transportUnknown?: unknown } | null
-  if (!rec || typeof rec !== "object") return { kind: "fallback", reason: "invalid" }
-  if (rec.transportUnknown === true) return { kind: "fallback", reason: "transportUnknown" }
-  if (rec.status === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (!rec || typeof rec !== "object") return { kind: "unavailable", reason: "invalid" }
+  if (rec.transportUnknown === true) return { kind: "unavailable", reason: "transportUnknown" }
+  if (rec.status === "ambiguous") return { kind: "unavailable", reason: "ambiguous" }
   if (rec.status === "succeeded") {
     try {
       const out = validateFindFilesResult(result, req)
-      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "fallback", reason: "invalid" }
+      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "unavailable", reason: "invalid" }
       return { kind: "ok", files: out.data.files }
     } catch {
-      return { kind: "fallback", reason: "invalid" }
+      return { kind: "unavailable", reason: "invalid" }
     }
   }
   if (rec.status === "failed") {
     try {
       const out = validateFindFilesResult(result, req)
-      if (out.status !== "failed") return { kind: "fallback", reason: "invalid" }
-      if (out.failure.code === "transport") return { kind: "fallback", reason: "transport" }
-      if (out.failure.retryable === true) return { kind: "fallback", reason: out.failure.code }
+      if (out.status !== "failed") return { kind: "unavailable", reason: "invalid" }
+      if (out.failure.code === "transport") return { kind: "unavailable", reason: "transport" }
+      if (out.failure.retryable === true) return { kind: "unavailable", reason: out.failure.code }
       if (out.failure.retryable === false) return { kind: "terminal", code: out.failure.code }
-      return { kind: "fallback", reason: "failed without retryable" }
+      return { kind: "unavailable", reason: "failed without retryable" }
     } catch {
-      return { kind: "fallback", reason: "invalid" }
+      return { kind: "unavailable", reason: "invalid" }
     }
   }
-  return { kind: "fallback", reason: "invalid" }
+  return { kind: "unavailable", reason: "invalid" }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -130,93 +137,64 @@ export async function attemptFindFilesPrivate(
   req: FindFilesContractRequest,
   ms = FIND_FILES_PRIVATE_TIMEOUT_MS,
 ): Promise<FindFilesAttempt> {
-  if (!connection) return { kind: "fallback", reason: "unavailable" }
+  if (!connection) return { kind: "unavailable", reason: "unavailable" }
   try {
-    if (!connection.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
+    if (!connection.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
   } catch {
-    return { kind: "fallback", reason: "unavailable" }
+    return { kind: "unavailable", reason: "unavailable" }
   }
+  if (typeof connection.privateFindFilesOutcomeWithHandle !== "function")
+    return { kind: "unavailable", reason: "missing-capability" }
   let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean | "stale" } | null = null
   try {
     handle = connection.privateFindFilesOutcomeWithHandle(req)
     const outcome = (await withTimeout(handle.promise, ms)) as
       | { kind: "valid"; result: unknown }
       | { kind: "invalid"; detail: string }
-    if (outcome.kind === "invalid") return { kind: "fallback", reason: "invalid" }
+    if (outcome.kind === "invalid") return { kind: "unavailable", reason: "invalid" }
     return parseFindFilesResult(outcome.result, req)
   } catch (e) {
-    if (isFindFilesValidationError(e)) return { kind: "fallback", reason: "invalid" }
+    if (isFindFilesValidationError(e)) return { kind: "unavailable", reason: "invalid" }
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes("private find-files timeout") && handle) {
       try {
         handle.cancel?.(`private find-files timeout opId=${req.opId}`)
       } catch {}
-      return { kind: "fallback", reason: "timeout" }
+      return { kind: "unavailable", reason: "timeout" }
     }
-    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "fallback", reason: "transport" }
-    return { kind: "fallback", reason: msg.slice(0, 120) }
+    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "unavailable", reason: "transport" }
+    return { kind: "unavailable", reason: msg.slice(0, 120) }
   }
 }
 
-type SdkClient = {
-  find: {
-    files: (
-      args: { query: string; directory: string; workspace?: string; type: "file" | "directory"; limit: number },
-      opts?: { throwOnError?: boolean },
-    ) => Promise<{ data?: unknown }>
-  }
-}
-
-export type FindFilesTypePrivateFirstOutcome =
-  | { kind: "ok"; via: "private"; files: string[] }
-  | { kind: "ok"; via: "sdk"; files: string[] }
+export type FindFilesTypePrivateOutcome =
+  | { kind: "ok"; files: string[] }
   | { kind: "terminal"; code?: string }
   | { kind: "unavailable" }
 
-function coerceSdkFiles(data: unknown): string[] | null {
-  if (!Array.isArray(data)) return null
-  for (const item of data) if (typeof item !== "string") return null
-  return [...(data as string[])]
-}
-
-// Shared private-first find/files read for one logical type: valid private
-// returns the projected paths with zero SDK; validated terminal closes with
-// zero SDK; otherwise exactly one same-tuple SDK fallback with no retry; SDK
-// failure or malformed SDK data returns `unavailable` for the caller to fail
-// soft. Invalid request shape skips the private attempt and goes straight to
-// the single SDK fallback so the user-visible tuple never changes.
-export async function fetchFindFilesTypePrivateFirst(opts: {
+// Shared private-authority find/files read for one logical type: valid private
+// returns the projected paths with zero SDK; validated terminal remains
+// terminal with zero SDK; retryable fence plus unavailable/missing
+// capability/invalid/ambiguous/transport/closed/timeout return explicit
+// unavailable with zero SDK and no retry. Invalid input shape fails closed to
+// unavailable with zero private request and zero SDK, never throws. Never
+// falls back to stale data as a new success.
+export async function fetchFindFilesTypePrivate(opts: {
   connection?: FindFilesPrivateConnection | null
-  client: SdkClient | null | undefined
   directory: string
   query: string
   type: "file" | "directory"
   limit?: number
   workspace?: string
   timeoutMs?: number
-}): Promise<FindFilesTypePrivateFirstOutcome> {
+}): Promise<FindFilesTypePrivateOutcome> {
   const limit = opts.limit ?? FIND_FILES_PRIVATE_LIMIT
-  const valid = isFindFilesPrivateRequestValid(opts.query, opts.directory, limit)
-  if (valid) {
-    const req = buildFindFilesReq(opts.directory, opts.query, opts.type, limit, opts.workspace)
-    const attempt = await attemptFindFilesPrivate(opts.connection ?? null, req, opts.timeoutMs ?? 3000)
-    if (attempt.kind === "ok") return { kind: "ok", via: "private", files: attempt.files.map((e) => e.path) }
-    if (attempt.kind === "terminal") return { kind: "terminal", code: attempt.code }
-  }
-  const client = opts.client
-  if (!client?.find?.files) return { kind: "unavailable" }
-  try {
-    const args =
-      opts.workspace === undefined
-        ? { query: opts.query, directory: opts.directory, type: opts.type, limit }
-        : { query: opts.query, directory: opts.directory, workspace: opts.workspace, type: opts.type, limit }
-    const res = await client.find.files(args, { throwOnError: true })
-    const coerced = coerceSdkFiles(res.data)
-    if (!coerced) return { kind: "unavailable" }
-    return { kind: "ok", via: "sdk", files: coerced }
-  } catch {
-    return { kind: "unavailable" }
-  }
+  if (!isFindFilesPrivateRequestValid(opts.query, opts.directory, limit)) return { kind: "unavailable" }
+  const req = buildFindFilesReq(opts.directory, opts.query, opts.type, limit, opts.workspace)
+  const attempt = await attemptFindFilesPrivate(opts.connection ?? null, req, opts.timeoutMs ?? 3000)
+  if (attempt.kind === "ok") return { kind: "ok", files: attempt.files.map((e) => e.path) }
+  if (attempt.kind === "terminal") return { kind: "terminal", code: attempt.code }
+  return { kind: "unavailable" }
 }
 
 function norm(p: string): string {
@@ -241,10 +219,10 @@ export interface FindFilesTypeParity {
   privateDigest: string
 }
 
-// Pure diagnostic only (never wired to production: private-first issues at
-// most one private result plus at most one SDK result per type per search, so
-// a comparator would need a third request to add signal). Compares only
-// per-type `{path,type}` membership; order is ignored.
+// Pure diagnostic only (never wired to production: private-authority issues at
+// most one private result per type per search, so a comparator would need
+// extra requests to add signal). Compares only per-type `{path,type}`
+// membership; order is ignored.
 export function compareFindFilesTypeParity(
   sdkPaths: string[],
   privateEntries: FindFilesEntry[],

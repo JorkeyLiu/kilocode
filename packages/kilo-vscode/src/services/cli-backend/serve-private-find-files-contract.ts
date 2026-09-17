@@ -1,9 +1,9 @@
 // `find/files` bounded-search private carrier contract (Active,
-// private-first `handleFileSearch` only). Strict v1 envelope helpers plus the
-// locked safe `{path,type}` projection. The safe list is consumed
-// private-first via `kilo-provider/find-files-privatefirst.ts` with exactly
-// one same-tuple SDK fallback per logical type; the SDK string array stays
-// the fallback user-visible surface only.
+// private-authority `handleFileSearch` only). Strict v1 envelope helpers plus
+// the locked safe `{path,type}` projection. The safe list is consumed as the
+// sole authority via `kilo-provider/find-files-private.ts` with zero SDK;
+// the HTTP `GET /find/file` endpoint stays for other clients (CLI/TUI) while
+// VS Code issues no `client.find.files` on this path.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /find/file` with `FindFileQuery`
@@ -15,9 +15,11 @@
 //   `findFile` reads `InstanceState.context` directory, calls
 //   `FileSystem.Service.find({query, limit ?? 10, type ?? (dirs === "false" ? "file" : undefined)})`,
 //   and maps each item to `item.path` (string array).
-// - Consumer: `packages/kilo-vscode/src/kilo-provider/file-search.ts`
-//   calls `client.find.files({query, directory: dir, type: "file"|"directory", limit: 50})`
-//   for files and folders separately.
+// - Consumer: `packages/kilo-vscode/src/kilo-provider/file-search.ts` runs
+//   exactly one private `find/files` attempt per logical type (`file` and
+//   `directory`, limit 50) via `fetchFindFilesTypePrivate`; terminal and
+//   unavailable each map to `[]` for that type with local open-tab merge and
+//   always-post `fileSearchResult` unchanged.
 // - Source constraint: existing ripgrep `.gitignore`/`.ignore` behavior remains
 //   a source constraint. `.kilocodeignore` is not claimed or fabricated here.
 //

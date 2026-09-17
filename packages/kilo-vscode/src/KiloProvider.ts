@@ -2264,7 +2264,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         case "requestFileSearch":
           await handleFileSearch({
-            client: this.client,
             message,
             current: this.currentSession?.id,
             context: this.contextSessionID,

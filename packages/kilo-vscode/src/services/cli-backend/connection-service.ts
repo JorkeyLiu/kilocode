@@ -2918,7 +2918,7 @@ export class KiloConnectionService {
     )
   }
 
-  /** Epoch-aware pass-through for the private-first `find/files` bounded-search read. */
+  /** Epoch-aware pass-through for the private-authority `find/files` bounded-search read. */
   privateFindFilesOutcomeWithHandle(req: FindFilesContractRequest): {
     id: number
     promise: Promise<FindFilesWireOutcome>
