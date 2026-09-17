@@ -17,6 +17,10 @@ import { getErrorMessage } from "../kilo-provider-utils"
 import { fetchSessionChildrenPrivateFirst } from "../kilo-provider/session-children-privatefirst"
 import { fetchSessionStatusesPrivateFirst } from "../kilo-provider/session-status-privatefirst"
 import { fetchMcpStatusPrivateFirst } from "../kilo-provider/mcp-status-privatefirst"
+import { fetchAgentsPrivateFirst } from "../kilo-provider/agent-list-privatefirst"
+import { fetchProviderCatalogPrivateFirst } from "../kilo-provider/provider-catalog-privatefirst"
+import { readPermissionsForDir } from "../kilo-provider/permission-privatefirst"
+import { readQuestionsForDir } from "../kilo-provider/question-privatefirst"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
@@ -1334,10 +1338,14 @@ export class AgentManagerProvider implements Disposable {
    * list, per-session transcripts (text + completed tool-part summaries),
    * session statuses, the served agent catalog, the connected provider ids,
    * MCP server statuses, pending permission/question requests, and the
-   * backend-derived child session ids — all fetched through the shared client
-   * against the real `kilo serve` backend. The extension-host runner writes
-   * this to the scratch dir and the harness asserts on it. No production
-   * effect: the command is unregistered when the env var is absent.
+   * backend-derived child session ids. Session list and per-session
+   * transcripts stay direct SDK reads through the shared client against the
+   * real `kilo serve` backend; statuses, children, MCP status, agent list,
+   * provider catalog, permission list, and question list go through their
+   * shared private-first helpers with the same snapshot projections. The
+   * extension-host runner writes this to the scratch dir and the harness
+   * asserts on it. No production effect: the command is unregistered when
+   * the env var is absent.
    */
   public async backendSnapshotForFixture(): Promise<BackendSnapshot> {
     const root = this.getRoot() ?? ""
@@ -1372,13 +1380,19 @@ export class AgentManagerProvider implements Disposable {
       statusReadable = false
       statuses = {}
     }
-    const agents = await client.app
-      .agents({ directory: root })
-      .then((r) => r.data ?? [])
+    const agents = await fetchAgentsPrivateFirst({
+      connection: this.connectionService as unknown as Parameters<typeof fetchAgentsPrivateFirst>[0]["connection"],
+      client: client as unknown as Parameters<typeof fetchAgentsPrivateFirst>[0]["client"],
+      directory: root,
+    })
+      .then((outcome) => (outcome.kind === "ok" ? outcome.agents : empty("app.agents")))
       .catch(() => empty("app.agents"))
-    const connected = await client.provider
-      .catalog({ directory: root })
-      .then((r) => r.data?.connected ?? [])
+    const connected = await fetchProviderCatalogPrivateFirst({
+      connection: this.connectionService as unknown as Parameters<typeof fetchProviderCatalogPrivateFirst>[0]["connection"],
+      client: client as unknown as Parameters<typeof fetchProviderCatalogPrivateFirst>[0]["client"],
+      directory: root,
+    })
+      .then((outcome) => (outcome.kind === "ok" ? (outcome.data.connected ?? []) : empty("provider.catalog")))
       .catch(() => empty("provider.catalog"))
     const messages: Record<string, ReturnType<typeof summarizeMessage>[]> = {}
     const children: Record<string, string[]> = {}
@@ -1419,20 +1433,28 @@ export class AgentManagerProvider implements Disposable {
         return undefined
       })
     const pending = await Promise.all([
-      client.permission
-        .list({ directory: root })
-        .then((r) => summarizePermissions(r.data ?? []))
-        .catch((err) => {
-          this.log("fixture backendSnapshot: permission.list failed:", err)
-          return [] as ReturnType<typeof summarizePermissions>
-        }),
-      client.question
-        .list({ directory: root })
-        .then((r) => summarizeQuestions(r.data ?? []))
-        .catch((err) => {
-          this.log("fixture backendSnapshot: question.list failed:", err)
-          return [] as ReturnType<typeof summarizeQuestions>
-        }),
+      readPermissionsForDir({
+        connection: this.connectionService as unknown as Parameters<typeof readPermissionsForDir>[0]["connection"],
+        client,
+        directory: root,
+      })
+        .then((read) =>
+          read.kind === "ok"
+            ? summarizePermissions(read.perms as unknown as Parameters<typeof summarizePermissions>[0])
+            : (empty("permission.list") as unknown as ReturnType<typeof summarizePermissions>),
+        )
+        .catch(() => empty("permission.list") as unknown as ReturnType<typeof summarizePermissions>),
+      readQuestionsForDir({
+        connection: this.connectionService as unknown as Parameters<typeof readQuestionsForDir>[0]["connection"],
+        client,
+        directory: root,
+      })
+        .then((read) =>
+          read.kind === "ok"
+            ? summarizeQuestions(read.items as unknown as Parameters<typeof summarizeQuestions>[0])
+            : (empty("question.list") as unknown as ReturnType<typeof summarizeQuestions>),
+        )
+        .catch(() => empty("question.list") as unknown as ReturnType<typeof summarizeQuestions>),
     ]).then(([permissions, questions]) => ({ permissions, questions }))
     return {
       requestedAt: new Date().toISOString(),

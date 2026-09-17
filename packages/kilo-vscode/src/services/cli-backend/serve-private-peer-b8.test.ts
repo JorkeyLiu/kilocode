@@ -2079,3 +2079,255 @@ describe("session/children parity diagnostics (bounded)", () => {
     }
   })
 })
+
+describe("fixture backendSnapshot agent/provider/permission/question private-first", () => {
+  function caps() {
+    return {
+      temperature: true, reasoning: false, attachment: false, toolcall: true,
+      input: { text: true, audio: false, image: false, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    }
+  }
+
+  function catalogOk(connected: string[]) {
+    return {
+      all: [{ id: connected[0] ?? "openai", name: "OpenAI", source: "api", env: [], hasCredential: true, models: { "gpt-4": { id: "gpt-4", providerID: connected[0] ?? "openai", api: { id: "gpt-4", url: "https://x", npm: "n" }, name: "GPT-4", capabilities: caps(), cost: { input: 1, output: 2, cache: { read: 0, write: 0 } }, limit: { context: 8, output: 1 }, status: "active", release_date: "2024-01-01" } } }],
+      default: {}, connected: [...connected], failed: [],
+    }
+  }
+
+  function agentEntry(name: string) {
+    return { name, mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "allow" }], options: {} }
+  }
+
+  function permEntry(id: string) {
+    return { id, sessionID: "ses_1", permission: "bash", patterns: ["npm install lodash"], metadata: {}, always: [] as string[], tool: undefined }
+  }
+
+  function questionEntry(id: string) {
+    return {
+      id, sessionID: "ses_1",
+      questions: [{ question: "Proceed?", header: "Go", options: [{ label: "Yes", description: "Go" }] }],
+      blocking: false, tool: undefined,
+    }
+  }
+
+  function statusOk(req: { opId: string; requestId: string; idempotencyKey: string }) {
+    return {
+      id: 1,
+      promise: Promise.resolve({
+        kind: "valid",
+        result: {
+          v: 1, requestId: req.requestId, opId: req.opId, op: "session/status",
+          idempotencyKey: req.idempotencyKey, status: "succeeded",
+          outcome: { type: "succeeded", time: 1 }, accepted: true, data: { statuses: {} },
+        },
+      }),
+    }
+  }
+
+  async function snapshotWith(conn: Record<string, unknown>, client: Record<string, unknown>, dir = "/tmp") {
+    const { AgentManagerProvider } = await import("../../agent-manager/AgentManagerProvider")
+    const provider = Object.create(AgentManagerProvider.prototype) as {
+      backendSnapshotForFixture(): Promise<{
+        agents: string[]
+        connectedProviders: string[]
+        pending?: { permissions: Array<{ id: string }>; questions: Array<{ id: string }> }
+      }>
+    } & Record<string, unknown>
+    provider.host = { workspacePath: () => dir }
+    provider.connectionService = { getClientAsync: async () => client, ...conn }
+    provider.outputChannel = { appendLine: () => {} }
+    return provider.backendSnapshotForFixture()
+  }
+
+  function baseClient(over: Record<string, unknown> = {}) {
+    return {
+      session: {
+        list: async () => ({ data: [] }),
+        status: async () => ({ data: {} }),
+        messages: async () => ({ data: [] }),
+        children: async () => ({ data: [] }),
+      },
+      app: { agents: async () => ({ data: [] }) },
+      provider: { catalog: async () => ({ data: { connected: [] } }) },
+      mcp: { status: async () => ({ data: {} }) },
+      permission: { list: async () => ({ data: [] }) },
+      question: { list: async () => ({ data: [] }) },
+      ...over,
+    }
+  }
+
+  test("combined private success projects with zero SDK calls", async () => {
+    const seen = { agents: 0, catalog: 0, perm: 0, question: 0 }
+    const sdk = { agents: 0, catalog: 0, perm: 0, question: 0 }
+    const conn = {
+      isPrivateAvailable: () => true,
+      getPrivateEpoch: () => 7,
+      privateStatusOutcomeWithHandle: statusOk,
+      privateAgentListOutcomeWithHandle: (req: { requestId: string }) => {
+        seen.agents += 1
+        return {
+          id: 11,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1, requestId: req.requestId, op: "agent/list", status: "succeeded",
+              outcome: { type: "succeeded", time: 1 }, accepted: true,
+              data: { agents: [agentEntry("code"), agentEntry("plan")] },
+            },
+          }),
+        }
+      },
+      privateProviderCatalogOutcomeWithHandle: (req: { requestId: string }) => {
+        seen.catalog += 1
+        return {
+          id: 12,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1, requestId: req.requestId, op: "provider/catalog", status: "succeeded",
+              outcome: { type: "succeeded", time: 1 }, accepted: true, data: catalogOk(["openai"]),
+            },
+          }),
+        }
+      },
+      privatePermissionListOutcomeWithHandle: (req: { requestId: string; opId: string; idempotencyKey: string }) => {
+        seen.perm += 1
+        return {
+          id: 13,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1, requestId: req.requestId, opId: req.opId, op: "permission/list",
+              idempotencyKey: req.idempotencyKey, status: "succeeded",
+              outcome: { type: "succeeded", time: 1 }, accepted: true,
+              data: { permissions: [permEntry("per_ok000000000000000001")] },
+            },
+          }),
+        }
+      },
+      privateQuestionListOutcomeWithHandle: (req: { requestId: string; opId: string; idempotencyKey: string }) => {
+        seen.question += 1
+        return {
+          id: 14,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1, requestId: req.requestId, opId: req.opId, op: "question/list",
+              idempotencyKey: req.idempotencyKey, status: "succeeded",
+              outcome: { type: "succeeded", time: 1 }, accepted: true,
+              data: { questions: [questionEntry("que_ok000000000000000001")] },
+            },
+          }),
+        }
+      },
+    }
+    const client = baseClient({
+      app: { agents: async () => { sdk.agents += 1; return { data: [] } } },
+      provider: { catalog: async () => { sdk.catalog += 1; return { data: { connected: [] } } } },
+      permission: { list: async () => { sdk.perm += 1; return { data: [] } } },
+      question: { list: async () => { sdk.question += 1; return { data: [] } } },
+    })
+    const snap = await snapshotWith(conn, client)
+    expect(snap.agents).toEqual(["code", "plan"])
+    expect(snap.connectedProviders).toEqual(["openai"])
+    expect(snap.pending?.permissions.map((p) => p.id)).toEqual(["per_ok000000000000000001"])
+    expect(snap.pending?.questions.map((q) => q.id)).toEqual(["que_ok000000000000000001"])
+    expect(seen).toEqual({ agents: 1, catalog: 1, perm: 1, question: 1 })
+    expect(sdk).toEqual({ agents: 0, catalog: 0, perm: 0, question: 0 })
+  })
+
+  test("combined terminal fails soft to empty with zero SDK calls", async () => {
+    const seen = { agents: 0, catalog: 0, perm: 0, question: 0 }
+    const sdk = { agents: 0, catalog: 0, perm: 0, question: 0 }
+    const terminalMessage = (op: string): string => {
+      if (op === "agent/list") return "invalid agent-list request"
+      if (op === "provider/catalog") return "invalid provider-catalog request"
+      return "m"
+    }
+    const terminal = (op: string) => (req: { requestId: string; opId?: string; idempotencyKey?: string }) => {
+      const message = terminalMessage(op)
+      return {
+        id: 21,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1, requestId: req.requestId, ...(req.opId ? { opId: req.opId, idempotencyKey: req.idempotencyKey } : {}),
+            op, status: "failed",
+            outcome: { type: "failed", time: 1, failure: { code: "validation.failed", message, retryable: false } },
+            accepted: false, failure: { code: "validation.failed", message, retryable: false },
+          },
+        }),
+      }
+    }
+    const conn = {
+      isPrivateAvailable: () => true,
+      getPrivateEpoch: () => 7,
+      privateStatusOutcomeWithHandle: statusOk,
+      privateAgentListOutcomeWithHandle: (req: never) => { seen.agents += 1; return (terminal("agent/list") as (r: unknown) => unknown)(req) as never },
+      privateProviderCatalogOutcomeWithHandle: (req: never) => { seen.catalog += 1; return (terminal("provider/catalog") as (r: unknown) => unknown)(req) as never },
+      privatePermissionListOutcomeWithHandle: (req: never) => { seen.perm += 1; return (terminal("permission/list") as (r: unknown) => unknown)(req) as never },
+      privateQuestionListOutcomeWithHandle: (req: never) => { seen.question += 1; return (terminal("question/list") as (r: unknown) => unknown)(req) as never },
+    }
+    const client = baseClient({
+      app: { agents: async () => { sdk.agents += 1; return { data: [agentEntry("sdk-agent")] } } },
+      provider: { catalog: async () => { sdk.catalog += 1; return { data: catalogOk(["sdk-provider"]) } } },
+      permission: { list: async () => { sdk.perm += 1; return { data: [permEntry("per_sdk00000000000000001")] } } },
+      question: { list: async () => { sdk.question += 1; return { data: [questionEntry("que_sdk00000000000000001")] } } },
+    })
+    const snap = await snapshotWith(conn, client)
+    expect(snap.agents).toEqual([])
+    expect(snap.connectedProviders).toEqual([])
+    expect(snap.pending?.permissions).toEqual([])
+    expect(snap.pending?.questions).toEqual([])
+    expect(seen).toEqual({ agents: 1, catalog: 1, perm: 1, question: 1 })
+    expect(sdk).toEqual({ agents: 0, catalog: 0, perm: 0, question: 0 })
+  })
+
+  test("combined fallback uses exactly one SDK read per list", async () => {
+    const sdk = { agents: 0, catalog: 0, perm: 0, question: 0 }
+    const conn = {
+      isPrivateAvailable: () => false,
+      getPrivateEpoch: () => 7,
+      privateStatusOutcomeWithHandle: statusOk,
+    }
+    const client = baseClient({
+      app: {
+        agents: async (params: { directory: string }) => {
+          sdk.agents += 1
+          expect(params.directory).toBe("/tmp")
+          return { data: [agentEntry("sdk-agent")] }
+        },
+      },
+      provider: {
+        catalog: async (params: { directory: string }) => {
+          sdk.catalog += 1
+          expect(params.directory).toBe("/tmp")
+          return { data: catalogOk(["sdk-provider"]) }
+        },
+      },
+      permission: {
+        list: async (params: { directory: string }) => {
+          sdk.perm += 1
+          expect(params.directory).toBe("/tmp")
+          return { data: [permEntry("per_sdk00000000000000001")], error: undefined }
+        },
+      },
+      question: {
+        list: async (params: { directory: string }) => {
+          sdk.question += 1
+          expect(params.directory).toBe("/tmp")
+          return { data: [questionEntry("que_sdk00000000000000001")], error: undefined }
+        },
+      },
+    })
+    const snap = await snapshotWith(conn, client)
+    expect(snap.agents).toEqual(["sdk-agent"])
+    expect(snap.connectedProviders).toEqual(["sdk-provider"])
+    expect(snap.pending?.permissions.map((p) => p.id)).toEqual(["per_sdk00000000000000001"])
+    expect(snap.pending?.questions.map((q) => q.id)).toEqual(["que_sdk00000000000000001"])
+    expect(sdk).toEqual({ agents: 1, catalog: 1, perm: 1, question: 1 })
+  })
+})
