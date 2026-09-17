@@ -7,6 +7,7 @@ import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
 import { isP0PerfEnabled, p0Span, p0Stage } from "../../perf/perf-instrument"
+import { createP0StartupObserver, fireHttpReadinessProbe } from "../../perf/p0-startup"
 import {
   ServePrivatePeer,
   type ServePrivateCancelQueuedRequest,
@@ -143,6 +144,8 @@ export class KiloConnectionService {
   private connectPromise: Promise<void> | null = null
   private connectGeneration = 0
   private isDisposed = false
+  /** Diagnostic-only P0 startup observer (default-off, in-memory, first-only per service). */
+  private p0 = createP0StartupObserver()
   private remoteService: import("../RemoteStatusService").RemoteStatusService | null = null
   private canonicalConfigService: import("../../config/service").CanonicalConfigService | null = null
 
@@ -884,6 +887,21 @@ export class KiloConnectionService {
     )
   }
 
+  /**
+   * Parallel diagnostic HTTP-readiness probe (opt-in KILO_P0_PERF only).
+   * Fires one lightweight SDK `session.list(limit: 1)` bypassing the private
+   * channel and records `http.ready` on real REST success. Synchronous
+   * initiation, never awaited, never retried, failures silent, nothing posted
+   * to any webview. When the flag is off no request is issued at all.
+   */
+  private observeHttpReadiness(client: KiloClient, dir: string): void {
+    if (!isP0PerfEnabled()) return
+    if (!dir) return
+    fireHttpReadinessProbe(client as unknown as Parameters<typeof fireHttpReadinessProbe>[0], dir, () => {
+      this.p0.markHttpReady()
+    })
+  }
+
   private async doConnect(workspaceDir: string, generation: number): Promise<void> {
     if (this.isDisposed || this.connectGeneration !== generation) throw new Error("connect superseded before start")
     // Never expose a stale SDK client while its replacement server is starting.
@@ -923,6 +941,12 @@ export class KiloConnectionService {
     }
     this.client = client
     this.sseClient = sse
+
+    // Diagnostic-only P0 HTTP readiness: parallel REST probe fired after the
+    // dynamic port/client exists but BEFORE the SSE connect/wait below, so
+    // http.ready can be ordered against first SSE. Fire-and-forget: never
+    // awaited, never gates connect(), failures silent. Flag-off issues nothing.
+    this.observeHttpReadiness(client, workspaceDir)
 
     // Wait until SSE yields its first server event before resolving connect().
     // Initial stream failures are handled by the adapter reconnect loop.

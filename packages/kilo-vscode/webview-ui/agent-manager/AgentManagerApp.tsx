@@ -45,7 +45,7 @@ import { TooltipKeybind } from "@kilocode/kilo-ui/tooltip"
 import { p0WebviewStage } from "../src/utils/perf"
 import { Popover } from "@kilocode/kilo-ui/popover"
 import { VSCodeProvider, useVSCode } from "../src/context/vscode"
-import { ServerProvider } from "../src/context/server"
+import { ServerProvider, useServer } from "../src/context/server"
 import { ProviderProvider } from "../src/context/provider"
 import { ConfigProvider } from "../src/context/config"
 import { DisplayProvider } from "../src/context/display"
@@ -148,6 +148,7 @@ const AgentManagerContent: Component = () => {
   const { t } = useLanguage()
   const session = useSession()
   const vscode = useVSCode()
+  const server = useServer()
   const dialog = useDialog()
   let sidebarSearchMenu: SidebarSearchMenuRef | undefined
 
@@ -268,6 +269,22 @@ const AgentManagerContent: Component = () => {
 
   const isPending = (id: string) => id.startsWith(PENDING_PREFIX)
   reportRemoteSessions(vscode, localSessionIDs, managedSessions, isPending)
+
+  // P0 startup: first operable render (opt-in KILO_P0_PERF, no-op when off).
+  // Operable = the global prompt-disabled condition lifted
+  // (server.isConnected(), same gate PromptInput uses for isDisabled).
+  // Reported only after the enabled state has painted (double rAF), never on
+  // message receipt alone. Exactly once per webview load.
+  let operableReported = false
+  createEffect(
+    on(server.isConnected, (connected) => {
+      if (!connected || operableReported) return
+      operableReported = true
+      const report = () => p0WebviewStage("agentManager.operable.first")
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(report))
+      else setTimeout(report, 0)
+    }),
+  )
 
   // Drag-and-drop state for tab reordering
   const [draggingTab, setDraggingTab] = createSignal<string | undefined>()

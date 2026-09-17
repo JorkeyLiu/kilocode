@@ -72,6 +72,7 @@ import { normalizeEnhancePromptErrorMessage } from "./enhance-prompt-error"
 import { retry } from "./services/cli-backend/retry"
 import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "./services/cli-backend/sdk-sse-adapter"
 import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
+import { createP0StartupObserver } from "./perf/p0-startup"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
@@ -488,6 +489,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private sessionCursor: string | null = null // Always null: complete inventory drain exhausts paging.
   private sessionCount = 0 // Total sessions in the last complete inventory snapshot.
   private catalogSeq = 0 // Monotonic catalog refresh id threaded through each serialized load run.
+  /** Diagnostic-only P0 startup observer (default-off, in-memory, first-only per instance). */
+  private p0 = createP0StartupObserver()
   private readonly streams = new SessionStreamScheduler((msg) => this.postMessage(msg))
   private readonly visibleTaskStreams = new VisibleTaskStreams((id, visible) => this.streams.setVisible(id, visible))
   private readonly confirmations = new MessageConfirmation()
@@ -2566,7 +2569,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     try {
       const workspaceDir = this.getWorkspaceDirectory()
 
-      // Connect the shared service (no-op if already connected)
+      // Connect the shared service (no-op if already connected).
+      // P0 HTTP readiness is probed inside the connection service itself
+      // (before its SSE connect/wait), so providers add no duplicate probe.
       await this.connectionService.connect(workspaceDir)
       this.flushPendingKiloModel()
 
@@ -3458,6 +3463,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       cursor: this.sessionCursor,
       root: directory,
       postMessage: (msg: unknown) => this.postMessage(msg),
+      p0: {
+        onProgress: (refreshId: number, count: number) => {
+          this.p0.onCatalogProgress(refreshId, count)
+        },
+        onLoaded: (refreshId: number | undefined, count: number) => {
+          this.p0.onCatalogLoaded(refreshId, count)
+        },
+      },
     }
   }
 

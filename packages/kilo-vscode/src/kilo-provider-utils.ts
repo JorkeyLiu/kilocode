@@ -328,6 +328,16 @@ export interface SessionRefreshContext {
   /** Monotonic refresh id owned by KiloProvider. When present, page deltas and the final snapshot carry it. */
   refreshId?: number
   postMessage(message: unknown): void
+  /**
+   * Diagnostic-only P0 startup observer (default-off, never required).
+   * Callbacks are pure observations: they must not post, persist, or mutate
+   * catalog state, and `sessionsProgress` stays non-authoritative regardless.
+   * Absent in legacy-silent callers/fixtures with zero behavior change.
+   */
+  p0?: {
+    onProgress(refreshId: number, count: number): void
+    onLoaded(refreshId: number | undefined, count: number): void
+  }
 }
 
 /**
@@ -347,6 +357,12 @@ export interface SessionRefreshContext {
  * error with that id and no final. Progress never touches notifyCatalog or
  * authoritative reconciliation. When absent, behavior is legacy-silent for
  * backward-compatible callers/fixtures.
+ *
+ * Diagnostic P0 hook: when `ctx.p0` is present, `onProgress` fires right
+ * after each posted page delta and `onLoaded` right after the posted final
+ * snapshot. Both are observations only — they post nothing, persist nothing,
+ * and never alter the drain, so the protocol and its non-authoritative
+ * progress invariant are unchanged.
  *
  * Cursor-stall protection: repeating cursors or exceeding
  * MAX_SESSION_LIST_PAGES throws without publishing, preserving the previous
@@ -392,6 +408,7 @@ export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string)
         refreshId: id,
         sessions: page.sessions.map((s) => sessionToWebview(s)),
       })
+      ctx.p0?.onProgress(id, page.sessions.length)
     }
     const next = page.cursor
     if (next === null) {
@@ -405,6 +422,7 @@ export async function loadSessions(ctx: SessionRefreshContext, _cursor?: string)
         hasMore: false,
         ...(id === undefined ? {} : { refreshId: id }),
       })
+      ctx.p0?.onLoaded(id, all.length)
       // Pin the canonical projectID to the workspace-root session. all[0]
       // is the most-recently-updated session across the whole family, so its
       // projectID may belong to a session in another directory rather than the
