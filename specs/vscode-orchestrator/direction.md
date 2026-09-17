@@ -94,7 +94,9 @@ background, and every session stays a full agent with its complete harness.
   ownership, and no silent replay.
 - Selection UI and runtime readiness are decoupled. Choosing a provider, model,
   or agent never waits on worker startup; only the action that truly needs the
-  runtime waits, with its own explicit state and reason.
+  runtime waits, with its own explicit state and reason. Startup optimizations
+  never manufacture detached work, and telemetry enrichment never gates
+  listener readiness.
 - Nothing outside the approved target above carries a default compatibility
   promise. Legacy behavior is handled when implementation reaches it.
 - The terminal UI is removal-bound and outside the target surface. It carries

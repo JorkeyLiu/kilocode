@@ -36,6 +36,7 @@ import { ensureProcessMetadata } from "@opencode-ai/core/util/opencode-process"
 import { isRecord } from "@/util/record"
 import { KiloCli } from "@/kilocode/cli/setup" // kilocode_change
 import { installFatalHandlers } from "@/kilocode/fatal-handler" // kilocode_change
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -63,6 +64,7 @@ function show(out: string) {
   process.stderr.write(out)
 }
 
+const constructTimer = P0Perf.span("cli_construct") // kilocode_change - P0 instrumentation
 let cli = yargs(args) // kilocode_change
   .parserConfiguration({ "populate--": true })
   .scriptName("kilo") // kilocode_change
@@ -89,17 +91,25 @@ let cli = yargs(args) // kilocode_change
       process.env.KILO_PURE = "1"
     }
 
-    await Log.init({
-      print: process.argv.includes("--print-logs"),
-      dev: Installation.isLocal(),
-      level: (() => {
-        if (opts.logLevel) return opts.logLevel as Log.Level
-        if (Installation.isLocal()) return "DEBUG"
-        return "INFO"
-      })(),
-    })
+    {
+      const timer = P0Perf.span("log_init") // kilocode_change - P0 instrumentation
+      await Log.init({
+        print: process.argv.includes("--print-logs"),
+        dev: Installation.isLocal(),
+        level: (() => {
+          if (opts.logLevel) return opts.logLevel as Log.Level
+          if (Installation.isLocal()) return "DEBUG"
+          return "INFO"
+        })(),
+      })
+      timer.end()
+    }
 
-    Heap.start()
+    {
+      const timer = P0Perf.span("heap_start") // kilocode_change - P0 instrumentation
+      Heap.start()
+      timer.end()
+    }
 
     process.env.AGENT = "1"
     process.env.OPENCODE = "1"
@@ -157,7 +167,9 @@ cli = cli
     process.exit(1)
   })
   .strict()
+constructTimer.end() // kilocode_change - P0 instrumentation
 
+const parseTimer = P0Perf.span("cli_parse") // kilocode_change - P0 instrumentation
 try {
   if (args.includes("-h") || args.includes("--help")) {
     await cli.parse(args, (err: Error | undefined, _argv: unknown, out: string) => {
@@ -209,6 +221,7 @@ try {
   }
   process.exitCode = 1
 } finally {
+  parseTimer.end() // kilocode_change - P0 instrumentation
   await KiloCli.shutdown() // kilocode_change - telemetry/session-export shutdown + instance disposal
 
   // Some subprocesses don't react properly to SIGTERM and similar signals.

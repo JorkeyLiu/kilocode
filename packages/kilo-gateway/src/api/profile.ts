@@ -5,12 +5,13 @@ import { KILO_API_BASE, DEFAULT_MODEL, DEFAULT_FREE_MODEL } from "./constants.js
 /**
  * Fetch user profile from Kilo API
  */
-export async function fetchProfile(token: string): Promise<KilocodeProfile> {
+export async function fetchProfile(token: string, opts?: { signal?: AbortSignal }): Promise<KilocodeProfile> {
   const response = await fetch(`${KILO_API_BASE}/api/profile`, {
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    signal: opts?.signal,
   })
 
   if (!response.ok) {

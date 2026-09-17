@@ -51,7 +51,11 @@ export namespace Identity {
     organizationId = orgId
   }
 
-  export async function updateFromKiloAuth(token: string | null, accountId?: string): Promise<void> {
+  export async function updateFromKiloAuth(
+    token: string | null,
+    accountId?: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<void> {
     organizationId = accountId || null
 
     if (!token) {
@@ -59,7 +63,13 @@ export namespace Identity {
       return
     }
 
-    const profile = await fetchProfile(token).catch(() => null)
+    if (opts?.signal?.aborted) throw new DOMException("Aborted", "AbortError")
+    const profile = await fetchProfile(token, { signal: opts?.signal }).catch((err: unknown) => {
+      // Abort must propagate so owners can settle fast; network failures degrade to anonymous.
+      if (opts?.signal?.aborted) throw err
+      return null
+    })
+    if (opts?.signal?.aborted) throw new DOMException("Aborted", "AbortError")
     userId = profile?.email || null
   }
 

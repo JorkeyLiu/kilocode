@@ -97,9 +97,14 @@ export namespace Telemetry {
     return Client.isEnabled()
   }
 
-  export async function updateIdentity(token: string | null, accountId?: string): Promise<void> {
+  export async function updateIdentity(
+    token: string | null,
+    accountId?: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<void> {
     const previousId = Identity.getDistinctId()
-    await Identity.updateFromKiloAuth(token, accountId)
+    await Identity.updateFromKiloAuth(token, accountId, opts)
+    if (opts?.signal?.aborted) return
 
     const email = Identity.getUserId()
     if (email && previousId && email !== previousId) {
