@@ -4,7 +4,7 @@
  */
 import type { KiloClient } from "@kilocode/sdk/v2"
 import type { KiloConnectionService } from "./services/cli-backend/connection-service"
-import { fetchKiloAuthStatusPrivateFirst } from "./kilo-provider/kilo-auth-status-privatefirst"
+import { fetchKiloAuthStatusPrivate } from "./kilo-provider/kilo-auth-status-private"
 import { fetchProviderAuthPrivateFirst } from "./kilo-provider/provider-auth-privatefirst"
 import { fetchProviderCatalogPrivateFirst } from "./kilo-provider/provider-catalog-privatefirst"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
@@ -41,23 +41,19 @@ export async function fetchProviderData(
         : ((out as { cause?: unknown }).cause ?? new Error("provider auth unavailable"))
     })
     .catch(() => ({}))
-  // Private-first `kilo.authStatus` branch: private success and validated
-  // terminal close with zero SDK; only unavailable/retryable/invalid/
-  // ambiguous/transport/closed/timeout takes exactly one same-directory
-  // `client.kilo.authStatus` fallback inside the helper (no retry, no post,
-  // no cache, no journal/reconcile). Any terminal/unavailable outcome plus
-  // any SDK failure degrades to `null` so the whole `fetchProviderData`
-  // never rejects on status.
-  const kiloRequest = fetchKiloAuthStatusPrivateFirst({
+  // Private-authority `kilo.authStatus` branch: valid private success returns
+  // the closed shape with zero SDK; validated terminal and unavailable/
+  // missing-capability/invalid/ambiguous/transport/closed/timeout close with
+  // zero SDK (no retry, no post, no cache, no journal/reconcile). Any
+  // terminal/unavailable outcome degrades to `null` so the whole
+  // `fetchProviderData` never rejects on status.
+  const kiloRequest = fetchKiloAuthStatusPrivate({
     connection: (connection ?? null) as never,
-    client: client as never,
     directory: dir,
   })
     .then((out) => {
       if (out.kind === "ok") return out.data.authenticated ? (out.data.type ?? null) : null
-      throw out.kind === "terminal"
-        ? new Error(`kilo auth-status terminal: ${out.code ?? "unknown"}`)
-        : ((out as { cause?: unknown }).cause ?? new Error("kilo auth-status unavailable"))
+      throw new Error(`kilo auth-status ${out.kind}: ${(out as { code?: string }).code ?? "unavailable"}`)
     })
     .catch(() => null)
 

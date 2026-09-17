@@ -1,4 +1,4 @@
-// Private-first `kilo/auth-status` read-only observation contract (production).
+// Private-authority `kilo/auth-status` read-only observation contract (production).
 // Request is strictly `{v:1,requestId,op:"kilo/auth-status",
 // context:{directory,workspace?},payload:{}}` with no `opId`/`idempotencyKey`
 // (observation identity is `requestId` only). Success data preserves the exact
@@ -14,18 +14,17 @@
 //   `authStatus` returns the shared `fetchKiloAuthStatusData`
 //   (`Auth.Service.get("kilo")` + `getToken` projection). The FD handler
 //   invokes the same shared read with no `InstanceRef`/drain lane.
-// - SDK: the v2 `kilo.authStatus` read issues `GET /kilo/auth-status` and
-//   remains the exactly-one fallback for
-//   unavailable/retryable/invalid/ambiguous/transport/closed/timeout outcomes.
-//   Validated terminal (`retryable === false`, including `validation.failed`/
-//   `internal`) closes with zero SDK.
+// - Authority: the shared `fetchKiloAuthStatusPrivate` helper is the sole
+//   authority with zero SDK. Validated terminal (`retryable === false`,
+//   including `validation.failed`/`internal`) remains terminal; unavailable,
+//   missing capability, invalid, ambiguous, transport, closed, and timeout map
+//   to explicit unavailable.
 // - Consumer: `provider-actions.fetchProviderData` (non-canonical) is
-//   private-first via `fetchKiloAuthStatusPrivateFirst`: validated success
-//   returns with zero SDK; validated terminal closes with zero SDK (the caller
-//   degrades to `null`); otherwise exactly one same-directory SDK fallback.
-//   The helper never retries, posts, caches, journals, or reconciles; the
-//   caller keeps catalog authority and `provider.auth` parallel failure
-//   isolation untouched.
+//   private-authority via `fetchKiloAuthStatusPrivate`: validated success
+//   returns the exact shape; validated terminal and unavailable both degrade
+//   to `null` via the caller. The helper never retries, posts, caches,
+//   journals, or reconciles; the caller keeps catalog authority and
+//   `provider.auth` parallel failure isolation untouched.
 // - Distinct from `provider.catalog`, `provider.auth`, `kilo/profile`,
 //   `models.discover`, canonical provider pipeline, OAuth, snapshot endpoint.
 //   This contract never matches those operations.

@@ -2,9 +2,9 @@ import { describe, expect, it } from "bun:test"
 import * as fs from "fs"
 import * as path from "path"
 
-/** Direct `client.kilo.authStatus(` may only remain in the helper fallback. */
+/** No production `client.kilo.authStatus(` remains in the shared auth read path. */
 describe("kilo-auth-status call-site guard", () => {
-  it("all production kilo.authStatus reads converge on fetchKiloAuthStatusPrivateFirst", () => {
+  it("no production kilo.authStatus reads remain; the shared helper is private-authority", () => {
     const root = path.join(__dirname, "..")
     const hits: string[] = []
     const walk = (dir: string) => {
@@ -24,22 +24,19 @@ describe("kilo-auth-status call-site guard", () => {
       }
     }
     walk(root)
-    expect(hits).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("kilo-provider/kilo-auth-status-privatefirst.ts"),
-      ]),
-    )
-    for (const h of hits) {
-      expect(h).toContain("kilo-provider/kilo-auth-status-privatefirst.ts")
-    }
+    expect(hits).toEqual([])
   })
 
   it("provider-actions routes the kilo branch through the helper and keeps catch-to-null", () => {
     const actions = fs.readFileSync(path.join(__dirname, "..", "provider-actions.ts"), "utf8")
-    expect(actions).toContain("fetchKiloAuthStatusPrivateFirst")
+    expect(actions).toContain("fetchKiloAuthStatusPrivate")
+    expect(actions).not.toContain("fetchKiloAuthStatusPrivateFirst")
     expect(actions).toContain(".catch(() => null)")
     expect(actions.match(/\.kilo\.authStatus\(/g) ?? []).toEqual([])
-    const helper = fs.readFileSync(path.join(__dirname, "kilo-auth-status-privatefirst.ts"), "utf8")
-    expect(helper).toContain("client.kilo.authStatus")
+    const helper = fs.readFileSync(path.join(__dirname, "kilo-auth-status-private.ts"), "utf8")
+    expect(helper).toContain("fetchKiloAuthStatusPrivate")
+    expect(helper).not.toContain("fetchKiloAuthStatusPrivateFirst")
+    expect(helper).not.toContain("client.kilo.authStatus")
+    expect(helper.match(/\.kilo\.authStatus\(/g) ?? []).toEqual([])
   })
 })

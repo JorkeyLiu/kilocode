@@ -46,10 +46,48 @@ function kiloTerminalPrivate(code = "internal") {
   }
 }
 
-function withoutKiloPrivate() {
-  const { privateKiloAuthStatusOutcomeWithHandle: _drop, ...rest } = okPrivate() as Record<string, unknown>
+function kiloInvalidPrivate() {
+  return {
+    ...okPrivate(),
+    privateKiloAuthStatusOutcomeWithHandle: () => ({
+      id: 3,
+      promise: Promise.resolve({ kind: "invalid", detail: "bad" }),
+      cancel: () => true,
+    }),
+  }
+}
+
+function kiloTransportPrivate() {
+  return {
+    ...okPrivate(),
+    privateKiloAuthStatusOutcomeWithHandle: () => ({
+      id: 3,
+      promise: Promise.reject(new Error("Private peer unavailable")),
+      cancel: () => true,
+    }),
+  }
+}
+
+function kiloMissingCapabilityPrivate() {
+  const base = okPrivate() as Record<string, unknown>
+  const { privateKiloAuthStatusOutcomeWithHandle: _drop, ...rest } = base
   void _drop
-  return rest
+  return {
+    ...rest,
+    getPrivatePeer: () => null,
+    getPrivateEpoch: () => 1,
+  }
+}
+
+function kiloHangingPrivate() {
+  return {
+    ...okPrivate(),
+    privateKiloAuthStatusOutcomeWithHandle: () => ({
+      id: 3,
+      promise: new Promise(() => {}),
+      cancel: () => true,
+    }),
+  }
 }
 
 function clientWith(opts: { catalog?: () => Promise<{ data: unknown }>; auth?: () => Promise<{ data: unknown }>; kilo?: () => Promise<unknown> } = {}) {
@@ -62,8 +100,8 @@ function clientWith(opts: { catalog?: () => Promise<{ data: unknown }>; auth?: (
   } as unknown as Parameters<typeof fetchProviderData>[0]
 }
 
-describe("fetchProviderData kilo/auth-status private-first failure isolation", () => {
-  it("private kilo success covers authStates with zero SDK status", async () => {
+describe("fetchProviderData kilo/auth-status private authority", () => {
+  it("private kilo success projects authStates with zero SDK status", async () => {
     let sdk = 0
     const client = clientWith({ kilo: async () => { sdk += 1; return { data: { authenticated: false } } } })
     const out = await fetchProviderData(client, "/tmp", okPrivate() as never)
@@ -71,7 +109,7 @@ describe("fetchProviderData kilo/auth-status private-first failure isolation", (
     expect(out.authStates).toEqual({ openai: "api", kilo: "oauth" })
   })
 
-  it("signed-out private status keeps catalog authStates with zero SDK", async () => {
+  it("signed-out private status omits kilo with zero SDK", async () => {
     let sdk = 0
     const client = clientWith({ kilo: async () => { sdk += 1; return { data: { authenticated: true, type: "api" } } } })
     const out = await fetchProviderData(client, "/tmp", okPrivate({ authenticated: false }) as never)
@@ -79,7 +117,7 @@ describe("fetchProviderData kilo/auth-status private-first failure isolation", (
     expect(out.authStates).toEqual({ openai: "api" })
   })
 
-  it("kilo terminal degrades to null with zero SDK and keeps catalog authority", async () => {
+  it("kilo terminal degrades to omitted auth state with zero SDK and keeps catalog authority", async () => {
     let sdk = 0
     const client = clientWith({ kilo: async () => { sdk += 1; return { data: { authenticated: true, type: "api" } } } })
     const out = await fetchProviderData(client, "/tmp", kiloTerminalPrivate() as never)
@@ -88,42 +126,57 @@ describe("fetchProviderData kilo/auth-status private-first failure isolation", (
     expect(out.response.all.length).toBe(1)
   })
 
-  it("kilo fallback uses exactly one same-directory SDK status", async () => {
-    let sdk = 0
-    const seen: unknown[] = []
-    const client = clientWith({
-      kilo: async (args?: unknown) => {
-        sdk += 1
-        seen.push(args)
-        return { data: { authenticated: true, type: "api" } }
-      },
-    })
-    const out = await fetchProviderData(client, "/tmp", withoutKiloPrivate() as never)
-    expect(sdk).toBe(1)
-    expect(seen).toEqual([{ directory: "/tmp" }])
-    expect(out.authStates).toEqual({ openai: "api", kilo: "api" })
+  it("fast non-terminal outcomes degrade to omitted auth state with zero SDK and keep catalog", async () => {
+    const cases: Array<{ name: string; conn: unknown }> = [
+      { name: "unavailable", conn: { isPrivateAvailable: () => false } },
+      { name: "missing-capability", conn: kiloMissingCapabilityPrivate() },
+      { name: "invalid", conn: kiloInvalidPrivate() },
+      { name: "transport", conn: kiloTransportPrivate() },
+    ]
+    for (const c of cases) {
+      let sdk = 0
+      const client = clientWith({ kilo: async () => { sdk += 1; return { data: { authenticated: true, type: "api" } } } })
+      const out = await fetchProviderData(client, "/tmp", c.conn as never)
+      expect(sdk, c.name).toBe(0)
+      expect(out.authStates, c.name).toEqual({ openai: "api" })
+      expect(out.response.all.length, c.name).toBe(1)
+    }
   })
 
-  it("kilo SDK failure degrades to null and never rejects", async () => {
+  it("hanging private kilo times out to omitted auth state with zero SDK and keeps catalog", async () => {
+    let sdk = 0
+    const client = clientWith({ kilo: async () => { sdk += 1; return { data: { authenticated: true, type: "api" } } } })
+    const out = await fetchProviderData(client, "/tmp", kiloHangingPrivate() as never)
+    expect(sdk).toBe(0)
+    expect(out.authStates).toEqual({ openai: "api" })
+    expect(out.response.all.length).toBe(1)
+  })
+
+  it("kilo SDK thrower is never called and never rejects", async () => {
+    let sdk = 0
     const client = {
       provider: { catalog: async () => ({ data: catalog() }), auth: async () => ({ data: authData() }) },
-      kilo: { authStatus: async () => { throw new Error("kilo down") } },
+      kilo: { authStatus: async () => { sdk += 1; throw new Error("kilo down") } },
     } as unknown as Parameters<typeof fetchProviderData>[0]
-    const out = await fetchProviderData(client, "/tmp", withoutKiloPrivate() as never)
+    const out = await fetchProviderData(client, "/tmp", kiloTransportPrivate() as never)
+    expect(sdk).toBe(0)
     expect(out.authStates).toEqual({ openai: "api" })
   })
 
-  it("three branches stay parallel", async () => {
+  it("kilo branch stays parallel without SDK while catalog/auth keep their semantics", async () => {
     const order: string[] = []
+    let kiloSdk = 0
     const client = {
       provider: {
         catalog: async () => { order.push("catalog"); return { data: catalog() } },
         auth: async () => { order.push("auth"); return { data: authData() } },
       },
-      kilo: { authStatus: async () => { order.push("kilo"); return { data: { authenticated: false } } } },
+      kilo: { authStatus: async () => { kiloSdk += 1; order.push("kilo"); return { data: { authenticated: false } } } },
     } as unknown as Parameters<typeof fetchProviderData>[0]
-    await fetchProviderData(client, "/tmp", { isPrivateAvailable: () => false } as never)
-    expect(order.sort()).toEqual(["auth", "catalog", "kilo"])
+    const out = await fetchProviderData(client, "/tmp", { isPrivateAvailable: () => false } as never)
+    expect(kiloSdk).toBe(0)
+    expect(order.sort()).toEqual(["auth", "catalog"])
+    expect(out.authStates).toEqual({ openai: "api" })
   })
 
   it("catalog failure still rejects the whole fetch", async () => {

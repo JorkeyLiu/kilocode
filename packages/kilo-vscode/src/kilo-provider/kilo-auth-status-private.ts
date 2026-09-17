@@ -4,7 +4,6 @@ import type { ServePrivatePeer } from "../services/cli-backend/serve-private-pee
 import { kiloAuthStatusHandle } from "../services/cli-backend/serve-private-kilo-auth-status-connection"
 import {
   isKiloAuthStatusValidationError,
-  validateKiloAuthStatusData,
   validateKiloAuthStatusResult,
 } from "../services/cli-backend/serve-private-kilo-auth-status-contract"
 import type {
@@ -15,21 +14,19 @@ import type {
 export type { KiloAuthStatusData }
 
 /**
- * Private-first `kilo/auth-status` read-only observation (the same
- * `Auth.Service.get("kilo")` + `getToken` projection as
- * `client.kilo.authStatus`).
+ * Private-authority `kilo/auth-status` read-only observation (the same
+ * `Auth.Service.get("kilo")` + `getToken` projection as `GET /kilo/auth-status`).
  *
- * One private attempt plus at most one same-directory SDK fallback per read,
- * never retried inside the helper. Valid private `succeeded`+`accepted`
- * returns the closed `{authenticated,type?}` shape with zero SDK; validated
- * terminal `failed` (`retryable === false`, including `validation.failed`/
- * `internal`) closes with zero SDK; unavailable/retryable/invalid/ambiguous/
- * transport/closed/timeout takes exactly one same-directory SDK
- * `client.kilo.authStatus` fallback. Read-only and safely repeatable: no
- * durable op, no journal, no reconcile, no `opId`/`idempotencyKey`
- * (observation identity is `requestId` only). No `postMessage`, no retry, no
- * cache, no journal — the caller keeps catalog authority and `provider.auth`
- * failure isolation with `catch`-to-`null` degradation.
+ * Exactly one private attempt per read with zero SDK, never retried inside the
+ * helper. Valid private `succeeded`+`accepted` returns the closed
+ * `{authenticated,type?}` shape; validated terminal `failed`
+ * (`retryable === false`, including `validation.failed`/`internal`) remains
+ * terminal; unavailable/missing-capability/invalid/ambiguous/transport/closed/
+ * timeout map to explicit unavailable. There is no config fence for this op.
+ * Read-only and safely repeatable: no durable op, no journal, no reconcile, no
+ * `opId`/`idempotencyKey` (observation identity is `requestId` only). No
+ * `postMessage`, no retry, no cache — the caller keeps catalog authority and
+ * `provider.auth` failure isolation with `catch`-to-`null` degradation.
  *
  * Timeout (default 3000 ms) exact-cancels the pending by `id` via the owned
  * transport handle; epoch coherence stays inside the transport (settled
@@ -61,37 +58,37 @@ export function buildKiloAuthStatusReq(directory: string, workspace?: string): K
 export type KiloAuthStatusAttempt =
   | { kind: "ok"; data: KiloAuthStatusData }
   | { kind: "terminal"; code?: string }
-  | { kind: "fallback"; reason: string }
+  | { kind: "unavailable"; reason: string }
 
 export function parseKiloAuthStatusResult(
   result: unknown,
   req: KiloAuthStatusContractRequest,
 ): KiloAuthStatusAttempt {
   const rec = result as { status?: unknown; accepted?: unknown; transportUnknown?: unknown } | null
-  if (!rec || typeof rec !== "object") return { kind: "fallback", reason: "invalid" }
-  if (rec.transportUnknown === true) return { kind: "fallback", reason: "transportUnknown" }
-  if (rec.status === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (!rec || typeof rec !== "object") return { kind: "unavailable", reason: "invalid" }
+  if (rec.transportUnknown === true) return { kind: "unavailable", reason: "transportUnknown" }
+  if (rec.status === "ambiguous") return { kind: "unavailable", reason: "ambiguous" }
   if (rec.status === "succeeded") {
     try {
       const out = validateKiloAuthStatusResult(result, req)
-      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "fallback", reason: "invalid" }
+      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "unavailable", reason: "invalid" }
       return { kind: "ok", data: out.data }
     } catch {
-      return { kind: "fallback", reason: "invalid" }
+      return { kind: "unavailable", reason: "invalid" }
     }
   }
   if (rec.status === "failed") {
     try {
       const out = validateKiloAuthStatusResult(result, req)
-      if (out.status !== "failed") return { kind: "fallback", reason: "invalid" }
-      if (out.failure.retryable === true) return { kind: "fallback", reason: out.failure.code }
+      if (out.status !== "failed") return { kind: "unavailable", reason: "invalid" }
+      if (out.failure.retryable === true) return { kind: "unavailable", reason: out.failure.code }
       if (out.failure.retryable === false) return { kind: "terminal", code: out.failure.code }
-      return { kind: "fallback", reason: "failed without retryable" }
+      return { kind: "unavailable", reason: "failed without retryable" }
     } catch {
-      return { kind: "fallback", reason: "invalid" }
+      return { kind: "unavailable", reason: "invalid" }
     }
   }
-  return { kind: "fallback", reason: "invalid" }
+  return { kind: "unavailable", reason: "invalid" }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -129,11 +126,11 @@ export async function attemptKiloAuthStatusPrivate(
   ms = 3000,
 ): Promise<KiloAuthStatusAttempt> {
   const conn = connection as KiloAuthStatusPrivateConnection | null | undefined
-  if (!conn) return { kind: "fallback", reason: "unavailable" }
+  if (!conn) return { kind: "unavailable", reason: "unavailable" }
   try {
-    if (!conn.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
+    if (!conn.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
   } catch {
-    return { kind: "fallback", reason: "unavailable" }
+    return { kind: "unavailable", reason: "unavailable" }
   }
   let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean | "stale" } | null = null
   try {
@@ -142,7 +139,7 @@ export async function attemptKiloAuthStatusPrivate(
       handle = direct(req)
     } else {
       const deps = ownerDeps(conn)
-      if (!deps || !deps.peer) return { kind: "fallback", reason: "missing-capability" }
+      if (!deps || !deps.peer) return { kind: "unavailable", reason: "missing-capability" }
       handle = kiloAuthStatusHandle(
         { peer: deps.peer, live: deps.live, epoch: deps.epoch, invalidate: deps.invalidate },
         req,
@@ -151,63 +148,40 @@ export async function attemptKiloAuthStatusPrivate(
     const outcome = (await withTimeout(handle.promise, ms)) as
       | { kind: "valid"; result: unknown }
       | { kind: "invalid"; detail: string }
-    if (outcome.kind === "invalid") return { kind: "fallback", reason: "invalid" }
+    if (outcome.kind === "invalid") return { kind: "unavailable", reason: "invalid" }
     return parseKiloAuthStatusResult(outcome.result, req)
   } catch (e) {
-    if (isKiloAuthStatusValidationError(e)) return { kind: "fallback", reason: "invalid" }
+    if (isKiloAuthStatusValidationError(e)) return { kind: "unavailable", reason: "invalid" }
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes("private kilo-auth-status timeout") && handle) {
       try {
         handle.cancel?.(`private kilo-auth-status timeout requestId=${req.requestId}`)
       } catch {}
-      return { kind: "fallback", reason: "timeout" }
+      return { kind: "unavailable", reason: "timeout" }
     }
-    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "fallback", reason: "transport" }
-    return { kind: "fallback", reason: msg.slice(0, 120) }
+    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "unavailable", reason: "transport" }
+    return { kind: "unavailable", reason: msg.slice(0, 120) }
   }
 }
 
-type SdkClient = {
-  kilo: {
-    authStatus: (args: { directory: string }, opts: { throwOnError: boolean }) => Promise<{ data?: unknown }>
-  }
-}
-
-export type KiloAuthStatusPrivateFirstOutcome =
-  | { kind: "ok"; data: KiloAuthStatusData; via: "private" | "sdk" }
+export type KiloAuthStatusPrivateOutcome =
+  | { kind: "ok"; data: KiloAuthStatusData }
   | { kind: "terminal"; code?: string }
-  | { kind: "unavailable"; cause?: unknown }
+  | { kind: "unavailable" }
 
-function coerceSdkData(data: unknown): KiloAuthStatusData | null {
-  try {
-    return validateKiloAuthStatusData(data)
-  } catch {
-    return null
-  }
-}
-
-// Shared private-first auth-status read: valid private returns the closed
-// `{authenticated,type?}` shape with zero SDK; validated terminal closes with
-// zero SDK (the caller degrades to `null`); otherwise exactly one
-// same-directory SDK fallback with no retry and no timeout wrapper; SDK
-// failure/malformed returns `unavailable` for the caller to degrade.
-export async function fetchKiloAuthStatusPrivateFirst(opts: {
+// Shared private-authority auth-status read: valid private `succeeded+accepted`
+// returns the exact `{authenticated,type?}` shape with zero SDK; validated
+// non-retryable terminal (`retryable === false`) remains terminal with zero
+// SDK; unavailable, missing capability, invalid, ambiguous/epoch drift,
+// transport/closed, and timeout return explicit unavailable with zero SDK and
+// no retry. Never falls back to stale data as a new success.
+export async function fetchKiloAuthStatusPrivate(opts: {
   connection?: KiloConnectionService | KiloAuthStatusPrivateConnection | null
-  client: SdkClient | null | undefined
   directory: string
-}): Promise<KiloAuthStatusPrivateFirstOutcome> {
+}): Promise<KiloAuthStatusPrivateOutcome> {
   const req = buildKiloAuthStatusReq(opts.directory)
   const attempt = await attemptKiloAuthStatusPrivate(opts.connection ?? null, req)
-  if (attempt.kind === "ok") return { kind: "ok", data: attempt.data, via: "private" }
+  if (attempt.kind === "ok") return { kind: "ok", data: attempt.data }
   if (attempt.kind === "terminal") return { kind: "terminal", code: attempt.code }
-  const client = opts.client
-  if (typeof client?.kilo?.authStatus !== "function") return { kind: "unavailable" }
-  try {
-    const res = await client.kilo.authStatus({ directory: opts.directory }, { throwOnError: true })
-    const coerced = coerceSdkData((res as { data?: unknown }).data)
-    if (!coerced) return { kind: "unavailable" }
-    return { kind: "ok", data: coerced, via: "sdk" }
-  } catch (e) {
-    return { kind: "unavailable", cause: e }
-  }
+  return { kind: "unavailable" }
 }
