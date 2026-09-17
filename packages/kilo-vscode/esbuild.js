@@ -258,6 +258,15 @@ async function main() {
     conditions: ["node", "import"],
     external: ["vscode"],
     logLevel: "silent",
+    // ESM-to-CJS builtin bridge: esbuild-bundled CJS deps (e.g. undici) call
+    // __require("node:assert"/"node:net"/"node:http"). In ESM output the
+    // __require shim falls back to throwing `Dynamic require of ... is not
+    // supported` when `require` is undefined. Defining a real
+    // createRequire(import.meta.url)-backed `require` lets those dynamic
+    // builtin requires resolve under the Extension Host Node runtime.
+    banner: {
+      js: 'import { createRequire as __kiloCreateRequire } from "node:module"; const require = __kiloCreateRequire(import.meta.url);',
+    },
     plugins: [esbuildProblemMatcherPlugin],
   })
 

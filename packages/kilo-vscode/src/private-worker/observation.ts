@@ -22,7 +22,7 @@ import {
   isStrictCursorTime,
   validateInfo,
   validatePart,
-} from "@opencode-ai/core/session/message-read"
+} from "./message-read"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ErrorCode } from "./json-rpc"
 

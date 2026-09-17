@@ -3,7 +3,7 @@ import { KiloProvider } from "./KiloProvider"
 import { fetchMessagePage } from "./kilo-provider/message-page"
 import { validatePrivateMessagesResult } from "./kilo-provider/session-messages-private"
 import { ErrorCode } from "./private-worker/json-rpc"
-import { encodeMessageCursor } from "@opencode-ai/core/session/message-read"
+import { encodeMessageCursor } from "./private-worker/message-read"
 import type { KiloConnectionService } from "./services/cli-backend/connection-service"
 
 const SECRET_DIR = "/tmp/secret-dir-xyz"

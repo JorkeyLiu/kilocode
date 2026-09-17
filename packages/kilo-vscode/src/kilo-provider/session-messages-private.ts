@@ -4,7 +4,7 @@ import {
   isStrictCursorTime,
   validateInfo,
   validatePart,
-} from "@opencode-ai/core/session/message-read"
+} from "../private-worker/message-read"
 import type { ObservationMessagesResult } from "../private-worker/observation"
 import { ErrorCode } from "../private-worker/json-rpc"
 import type { PrivateSessionReader } from "./options"
