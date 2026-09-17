@@ -690,8 +690,20 @@ export class ServerStartupError extends Error {
 }
 
 function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, "")
+  return str
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\([AB0]/g, "")
 }
+
+/**
+ * Explicit backend failure signal. A stderr line is only eligible for the
+ * concise `userMessage` when it carries one of these markers. Routine
+ * INFO/DEBUG/TRACE-style records never match, so an INFO-only tail falls
+ * through to the lifecycle `error` argument instead of promoting routine
+ * output to the red banner.
+ */
+const EXPLICIT_FAILURE_RE =
+  /\bERROR\b|\bWARN(ING)?\b|\bFATAL\b|\bfailed\b|\bfailure\b|\bexited?\b|\btimeout\b|\btimed?\s*out\b|\bEADDRINUSE\b|\bENOENT\b|\bEACCES\b|\bpanic\b|\bexception\b|\bcannot\b|\bcould not\b|\bunable to\b/i
 
 /**
  * Translate VS Code's `http.proxy` / `http.noProxy` / `http.proxySupport`
@@ -768,14 +780,24 @@ export function toErrorMessage(
   userDetails: string
   error: string
 } {
-  let lines = stderrLines.flatMap((line) => line.split("\n"))
+  const rawLines = stderrLines.flatMap((line) => line.split("\n"))
+  const cleaned = rawLines.map(stripAnsi)
 
-  const errorLine = lines.map(stripAnsi).find((line) => /Error:\s+/.test(line))
-  const userMessage = errorLine
-    ? errorLine.match(/Error:\s+(.+)/)![1].trim()
-    : stripAnsi([...lines].reverse().find((line) => line.trim() !== "") ?? error).trim()
+  // First causal failure wins: the earliest explicit `Error:` record, else
+  // the earliest explicit failure marker (ERROR/WARN/fatal/failed/exited/
+  // timeout and equivalents). Pure routine output never qualifies, so an
+  // INFO-only tail falls through to the lifecycle `error` argument below.
+  const errorLine = cleaned.find((line) => /Error:\s+/.test(line))
+  let userMessage: string
+  if (errorLine) {
+    userMessage = (errorLine.match(/Error:\s+(.+)/)?.[1] ?? errorLine).trim()
+    if (userMessage === "") userMessage = stripAnsi(error).trim() || "Failed to start CLI backend"
+  } else {
+    const failureLine = cleaned.find((line) => line.trim() !== "" && EXPLICIT_FAILURE_RE.test(line))
+    userMessage = failureLine ? failureLine.trim() : stripAnsi(error).trim() || "Failed to start CLI backend"
+  }
 
-  lines = [error, ...lines]
+  let lines = [error, ...rawLines]
   if (cliPath && cliPath.trim() !== "") {
     lines = [`CLI path: ${cliPath}`, ...lines]
   }

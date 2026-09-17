@@ -239,9 +239,9 @@ describe("cli tree-sitter resources", () => {
 })
 
 describe("toErrorMessage", () => {
-  it("uses last non-empty stderr line as userMessage when no Error: line", () => {
+  it("falls back to the lifecycle error when stderr has only routine lines", () => {
     const result = toErrorMessage("startup failed", ["line one", "line two", ""])
-    expect(result.userMessage).toBe("line two")
+    expect(result.userMessage).toBe("startup failed")
   })
 
   it("extracts message after Error: when present", () => {
@@ -260,9 +260,63 @@ describe("toErrorMessage", () => {
     expect(result.userMessage).toBe("the real problem")
   })
 
-  it("falls back to last non-empty line when no Error: match", () => {
+  it("prefers the first causal Error: line when several are present", () => {
+    const result = toErrorMessage("startup failed", ["Error: first cause", "Error: second line"])
+    expect(result.userMessage).toBe("first cause")
+  })
+
+  it("never promotes routine INFO-only output to userMessage", () => {
+    const tail = [
+      "INFO  2026-09-17T00:00:00 +5ms service=config source=file path=/tmp/kilo.json",
+      "INFO  2026-09-17T00:00:01 +1ms service=runtime ready=false",
+    ]
+    const result = toErrorMessage("Server startup timeout after 30 seconds", tail, "/bin/kilo")
+    expect(result.userMessage).toBe("Server startup timeout after 30 seconds")
+    expect(result.userMessage).not.toContain("service=config")
+    expect(result.userDetails).toContain("service=config")
+    expect(result.userDetails).toContain("CLI path: /bin/kilo")
+  })
+
+  it("never promotes DEBUG/TRACE-style output to userMessage", () => {
+    const tail = ["DEBUG service=session tick=1", "TRACE service=runtime span=open", "[INFO] service=config loaded"]
+    const result = toErrorMessage("CLI process exited with code 1 before server started", tail)
+    expect(result.userMessage).toBe("CLI process exited with code 1 before server started")
+  })
+
+  it("prefers an explicit failure line over surrounding INFO noise", () => {
+    const tail = [
+      "INFO  2026-09-17T00:00:00 +5ms service=config loaded",
+      "Error: listen EADDRINUSE: address already in use 127.0.0.1:0",
+      "INFO  2026-09-17T00:00:01 +1ms service=runtime shutdown",
+    ]
+    const result = toErrorMessage("Server startup timeout after 30 seconds", tail)
+    expect(result.userMessage).toBe("listen EADDRINUSE: address already in use 127.0.0.1:0")
+  })
+
+  it("selects ERROR/WARN/failed/exited/timeout markers as meaningful failures", () => {
+    expect(toErrorMessage("timeout", ["INFO service=config ok", "WARN provider unreachable, retrying"]).userMessage).toBe(
+      "WARN provider unreachable, retrying",
+    )
+    expect(
+      toErrorMessage("exited", ["INFO service=config ok", "backend failed to bind port"]).userMessage,
+    ).toBe("backend failed to bind port")
+    expect(toErrorMessage("exited", ["INFO boot", "CLI background process exited with code 1"]).userMessage).toBe(
+      "CLI background process exited with code 1",
+    )
+    expect(toErrorMessage("timeout", ["INFO boot", "Server startup timeout after 30 seconds"]).userMessage).toBe(
+      "Server startup timeout after 30 seconds",
+    )
+  })
+
+  it("strips ANSI from an explicit failure line", () => {
+    const result = toErrorMessage("startup failed", ["\x1b[31mERROR backend failed to start\x1b[0m", "INFO noise"])
+    expect(result.userMessage).toBe("ERROR backend failed to start")
+  })
+
+  it("falls back to the lifecycle error when stderr has no meaningful failure", () => {
     const result = toErrorMessage("startup failed", ["", "just some output", ""])
-    expect(result.userMessage).toBe("just some output")
+    expect(result.userMessage).toBe("startup failed")
+    expect(result.userDetails).toContain("just some output")
   })
 
   it("falls back to error arg when stderr is empty", () => {
@@ -270,9 +324,9 @@ describe("toErrorMessage", () => {
     expect(result.userMessage).toBe("startup failed")
   })
 
-  it("strips ANSI from fallback last non-empty line", () => {
-    const result = toErrorMessage("startup failed", ["\x1b[31msome colored output\x1b[0m"])
-    expect(result.userMessage).toBe("some colored output")
+  it("strips ANSI from the lifecycle error fallback", () => {
+    const result = toErrorMessage("\x1b[31mstartup failed\x1b[0m", ["INFO routine noise"])
+    expect(result.userMessage).toBe("startup failed")
   })
 
   it("includes error arg in userDetails", () => {

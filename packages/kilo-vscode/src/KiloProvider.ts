@@ -1590,6 +1590,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       state: this.connectionState,
       ...(this.connectionState === "error" && {
         error: getErrorMessage(error) || "Connection to CLI backend lost. Retry to reconnect.",
+        // Preserve the structured startup failure so the banner shows the
+        // concise userMessage with full userDetails, not the full blob.
+        ...(error instanceof ServerStartupError && {
+          userMessage: error.userMessage,
+          userDetails: error.userDetails,
+        }),
       }),
     })
   }
