@@ -205,7 +205,24 @@ for (const item of targets) {
   await Bun.build({
     conditions: ["bun", "node"], // kilocode_change - port anomalyco/opencode#30873; current form from #31566
     tsconfig: "./tsconfig.json",
-    plugins: [plugin],
+    // kilocode_change start - force bare jsonc-parser to ESM so the UMD
+    // runtime require("./impl/format") is never bundled (missing from bunfs
+    // in compiled binary; source mode runs from disk). Static imports already
+    // resolve to ESM; the dynamic require in config-file-convergence needs this.
+    // Mirrors packages/kilo-vscode/esbuild.js jsoncParserEsmPlugin.
+    plugins: [
+      plugin,
+      {
+        name: "jsonc-parser-esm",
+        setup(build) {
+          build.onResolve({ filter: /^jsonc-parser$/ }, () => {
+            const pkg = require.resolve("jsonc-parser/package.json")
+            return { path: path.join(path.dirname(pkg), "lib", "esm", "main.js") }
+          })
+        },
+      },
+    ],
+    // kilocode_change end
     // kilocode_change start - skip sourcemaps for release builds (each .js.map adds ~50 MB per target → ~600 MB total)
     sourcemap: Script.release ? "none" : "external",
     external: ["node-gyp"],
