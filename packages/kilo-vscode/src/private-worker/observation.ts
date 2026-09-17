@@ -129,6 +129,12 @@ export interface ObservationListResult {
   nextCursor?: string
 }
 
+export interface ObservationGetModel {
+  providerID: string
+  id: string
+  variant?: string
+}
+
 export interface ObservationGetSession {
   id: string
   title: string
@@ -138,6 +144,7 @@ export interface ObservationGetSession {
   createdAt: number
   updatedAt: number
   agent?: string
+  model?: ObservationGetModel
   summary?: { additions: number; deletions: number; files: number; diffs?: Array<{ file?: string; additions: number; deletions: number; status?: "added" | "deleted" | "modified" }> }
   revert?: { messageID: string; partID?: string; snapshot?: string; diff?: string }
 }
@@ -257,6 +264,22 @@ function validateRevert(rev: unknown): void {
   if ("diff" in r && r.diff !== undefined && typeof r.diff !== "string") throw internalError("get returned invalid session shape")
 }
 
+function validateModel(raw: unknown): void {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw internalError("get returned invalid session shape")
+  const m = raw as Record<string, unknown>
+  const allowed = new Set(["providerID", "id", "variant"])
+  for (const k of Object.keys(m)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
+  if (typeof m.providerID !== "string" || m.providerID.length === 0 || (m.providerID as string).includes("\0")) {
+    throw internalError("get returned invalid session shape")
+  }
+  if (typeof m.id !== "string" || m.id.length === 0 || (m.id as string).includes("\0")) {
+    throw internalError("get returned invalid session shape")
+  }
+  if ("variant" in m && m.variant !== undefined) {
+    if (typeof m.variant !== "string" || (m.variant as string).includes("\0")) throw internalError("get returned invalid session shape")
+  }
+}
+
 // eslint-disable-next-line complexity
 function validateFoundSession(raw: unknown, directory: string, sessionId: string): void {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw internalError("get returned invalid session shape")
@@ -290,7 +313,8 @@ function validateFoundSession(raw: unknown, directory: string, sessionId: string
   if ("agent" in s && typeof s.agent === "string" && s.agent.includes("\0")) throw internalError("get returned invalid session shape")
   if ("summary" in s && s.summary !== undefined) validateSummary(s.summary)
   if ("revert" in s && s.revert !== undefined) validateRevert(s.revert)
-  const allowed = new Set(["id", "title", "parentID", "directory", "projectID", "createdAt", "updatedAt", "agent", "summary", "revert"])
+  if ("model" in s && s.model !== undefined) validateModel(s.model)
+  const allowed = new Set(["id", "title", "parentID", "directory", "projectID", "createdAt", "updatedAt", "agent", "model", "summary", "revert"])
   for (const k of Object.keys(s)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
 }
 

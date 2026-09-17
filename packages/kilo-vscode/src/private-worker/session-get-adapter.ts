@@ -101,6 +101,37 @@ function buildSummary(row: {
   return diffs === undefined ? { additions, deletions, files } : { additions, deletions, files, diffs }
 }
 
+function buildModel(raw: unknown): { providerID: string; id: string; variant?: string } | undefined {
+  if (raw === null || raw === undefined) return undefined
+  const m = (() => {
+    if (typeof raw === "string") {
+      try {
+        const p = JSON.parse(raw)
+        if (p === null || p === undefined) return undefined
+        if (typeof p !== "object" || Array.isArray(p)) throw new Error("not object")
+        return p as Record<string, unknown>
+      } catch {
+        throw internalError("invalid stored model shape")
+      }
+    }
+    if (typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>
+    throw internalError("invalid stored model shape")
+  })()
+  if (m === undefined) return undefined
+  const allowed = new Set(["id", "providerID", "variant"])
+  for (const k of Object.keys(m)) if (!allowed.has(k)) throw internalError("invalid stored model shape")
+  if (typeof m.providerID !== "string" || m.providerID.length === 0 || (m.providerID as string).includes("\0")) {
+    throw internalError("invalid stored model shape")
+  }
+  if (typeof m.id !== "string" || m.id.length === 0 || (m.id as string).includes("\0")) throw internalError("invalid stored model shape")
+  if ("variant" in m && m.variant !== undefined && (typeof m.variant !== "string" || (m.variant as string).includes("\0"))) {
+    throw internalError("invalid stored model shape")
+  }
+  const out: { providerID: string; id: string; variant?: string } = { providerID: m.providerID as string, id: m.id as string }
+  if (typeof m.variant === "string") out.variant = m.variant as string
+  return out
+}
+
 function buildRevert(raw: unknown): { messageID: string; partID?: string; snapshot?: string; diff?: string } | undefined {
   if (raw === null || raw === undefined) return undefined
   const rev = (() => {
@@ -158,6 +189,7 @@ export function createSessionGetDeps(db: Database.Interface["db"]): {
         time_created: number
         time_updated: number
         agent: string | null
+        model: unknown
         summary_additions: number | null
         summary_deletions: number | null
         summary_files: number | null
@@ -174,6 +206,7 @@ export function createSessionGetDeps(db: Database.Interface["db"]): {
       if (typeof r.agent === "string" && r.agent.includes("\0")) throw internalError("invalid stored agent shape")
       const summary = buildSummary(r as unknown as { summary_additions: number | null; summary_deletions: number | null; summary_files: number | null; summary_diffs: unknown })
       const revert = buildRevert((r as unknown as { revert: unknown }).revert)
+      const model = buildModel((r as unknown as { model: unknown }).model)
       const session: ObservationGetResult & { status: "found" } = {
         v: "1.0",
         status: "found",
@@ -189,6 +222,7 @@ export function createSessionGetDeps(db: Database.Interface["db"]): {
       } as unknown as ObservationGetResult & { status: "found" }
       const sess = (session as unknown as { session: Record<string, unknown> }).session
       if (typeof r.agent === "string") sess.agent = r.agent
+      if (model !== undefined) sess.model = model as unknown as Record<string, unknown>
       if (summary !== undefined) sess.summary = summary as unknown as Record<string, unknown>
       if (revert !== undefined) sess.revert = revert as unknown as Record<string, unknown>
       return session

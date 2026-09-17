@@ -21,6 +21,10 @@ import { fetchAgentsPrivateFirst } from "../kilo-provider/agent-list-privatefirs
 import { fetchProviderCatalogPrivateFirst } from "../kilo-provider/provider-catalog-privatefirst"
 import { readPermissionsForDir } from "../kilo-provider/permission-privatefirst"
 import { readQuestionsForDir } from "../kilo-provider/question-privatefirst"
+import {
+  fetchFixtureSessionListPrivateFirst,
+  fetchFixtureSessionMessagesPrivateFirst,
+} from "../kilo-provider/fixture-session-privatefirst"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
@@ -1338,10 +1342,11 @@ export class AgentManagerProvider implements Disposable {
    * session statuses, the served agent catalog, the connected provider ids,
    * MCP server statuses, pending permission/question requests, and the
    * backend-derived child session ids. Session list and per-session
-   * transcripts stay direct SDK reads through the shared client against the
-   * real `kilo serve` backend; statuses, children, MCP status, agent list,
-   * provider catalog, permission list, and question list go through their
-   * shared private-first helpers with the same snapshot projections. The
+   * transcripts go through their shared private-first helpers (same
+   * `observation/list` + `observation/messages` sources as production)
+   * with the same snapshot projections; statuses, children, MCP status,
+   * agent list, provider catalog, permission list, and question list go
+   * through their shared private-first helpers the same way. The
    * extension-host runner writes this to the scratch dir and the harness
    * asserts on it. No production effect: the command is unregistered when
    * the env var is absent.
@@ -1353,13 +1358,16 @@ export class AgentManagerProvider implements Disposable {
       this.log(`fixture backendSnapshot: ${label} failed; returning empty`)
       return []
     }
-    const sessions = await client.session
-      .list({ directory: root })
-      .then((r) => r.data ?? [])
-      .catch((err) => {
-        this.log("fixture backendSnapshot: session.list failed:", err)
-        return empty("session.list")
-      })
+    const reader = this.coordinator?.observationReader() ?? null
+    const listOutcome = await fetchFixtureSessionListPrivateFirst({
+      reader,
+      client: client as unknown as Parameters<typeof fetchFixtureSessionListPrivateFirst>[0]["client"],
+      directory: root,
+    }).catch((err) => {
+      this.log("fixture backendSnapshot: session.list failed:", err)
+      return empty("session.list") as unknown as Awaited<ReturnType<typeof fetchFixtureSessionListPrivateFirst>>
+    })
+    const sessions = listOutcome.kind === "ok" ? listOutcome.sessions : empty("session.list")
     let statusReadable = true
     let statuses: Record<string, SessionStatus> = {}
     try {
@@ -1397,16 +1405,20 @@ export class AgentManagerProvider implements Disposable {
     const children: Record<string, string[]> = {}
     const unreadableMessages: Record<string, boolean> = {}
     for (const s of sessions) {
-      let messagesOk = true
-      const rows = await client.session
-        .messages({ sessionID: s.id, directory: root })
-        .then((r) => r.data ?? [])
-        .catch(() => {
-          messagesOk = false
-          return empty(`session.messages(${s.id})`)
-        })
-      if (!messagesOk) unreadableMessages[s.id] = false
-      messages[s.id] = rows.map(summarizeMessage)
+      // Private-first transcript read: one private observation/messages
+      // attempt plus at most one same-session/directory SDK fallback per
+      // session. Valid private pages and SDK fallback produce the same
+      // fixture `messages` projection; terminal and unavailable close
+      // fail-soft to empty with the existing log label plus unreadable.
+      const msgOutcome = await fetchFixtureSessionMessagesPrivateFirst({
+        reader,
+        client: client as unknown as Parameters<typeof fetchFixtureSessionMessagesPrivateFirst>[0]["client"],
+        directory: root,
+        sessionId: s.id,
+      }).catch(() => empty(`session.messages(${s.id})`) as unknown as Awaited<ReturnType<typeof fetchFixtureSessionMessagesPrivateFirst>>)
+      const rows = msgOutcome.kind === "ok" ? msgOutcome.items : empty(`session.messages(${s.id})`)
+      if (msgOutcome.kind !== "ok") unreadableMessages[s.id] = false
+      messages[s.id] = (rows as Parameters<typeof summarizeMessage>[0][]).map(summarizeMessage)
       // Private-first children read: one private attempt plus at most one
       // same-parent/directory SDK fallback per session. Valid private success
       // and SDK fallback produce the same fixture `children` id list; terminal

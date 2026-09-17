@@ -1,4 +1,5 @@
 import type { PrivateObservationService } from "../private-worker/private-observation-service"
+import type { PrivateSessionReader } from "../kilo-provider/options"
 
 function isSafeNonNegativeCursor(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
@@ -99,6 +100,11 @@ export class AgentManagerObservationCoordinator {
       return { shouldRefresh: true }
     }
     return this.decideFromReadResult(raw, cur)
+  }
+
+  /** Non-owning observation reader for fixture private-first list/messages. No lifecycle. */
+  observationReader(): PrivateSessionReader | null {
+    return this.svc as unknown as PrivateSessionReader
   }
 
   async ack(cursor: number): Promise<boolean> {

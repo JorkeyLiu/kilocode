@@ -210,7 +210,21 @@ export function validatePrivateGetResult(raw: unknown, directory: string, sessio
     if ("snapshot" in rr && rr.snapshot !== undefined && typeof rr.snapshot !== "string") throw internal("get returned invalid session shape")
     if ("diff" in rr && rr.diff !== undefined && typeof rr.diff !== "string") throw internal("get returned invalid session shape")
   }
-  const allowedKeys = new Set(["id", "title", "parentID", "directory", "projectID", "createdAt", "updatedAt", "agent", "summary", "revert"])
+  if ("model" in s && s.model !== undefined) {
+    const raw = s.model as unknown
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw internal("get returned invalid session shape")
+    const m = raw as Record<string, unknown>
+    const allowedModel = new Set(["providerID", "id", "variant"])
+    for (const k of Object.keys(m)) if (!allowedModel.has(k)) throw internal("get returned invalid session shape")
+    if (typeof m.providerID !== "string" || m.providerID.length === 0 || (m.providerID as string).includes("\0")) {
+      throw internal("get returned invalid session shape")
+    }
+    if (typeof m.id !== "string" || m.id.length === 0 || (m.id as string).includes("\0")) throw internal("get returned invalid session shape")
+    if ("variant" in m && m.variant !== undefined && (typeof m.variant !== "string" || (m.variant as string).includes("\0"))) {
+      throw internal("get returned invalid session shape")
+    }
+  }
+  const allowedKeys = new Set(["id", "title", "parentID", "directory", "projectID", "createdAt", "updatedAt", "agent", "model", "summary", "revert"])
   for (const k of Object.keys(s)) if (!allowedKeys.has(k)) throw internal("get returned invalid session shape")
   return r as ObservationGetResult
 }
