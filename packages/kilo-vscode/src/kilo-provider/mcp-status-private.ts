@@ -2,12 +2,8 @@ import * as crypto from "crypto"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import type { ServePrivatePeer } from "../services/cli-backend/serve-private-peer"
 import { mcpStatusOutcomeHandle } from "../services/cli-backend/serve-private-mcp-status-connection"
-import {
-  canonicalMcpStatusOpId,
-  validateMcpStatusMap,
-  validateMcpStatusResult,
-} from "../services/cli-backend/serve-private-mcp-status-contract"
 import type { McpStatusContractRequest, McpStatusMap } from "../services/cli-backend/serve-private-mcp-status-contract"
+import { canonicalMcpStatusOpId, validateMcpStatusResult } from "../services/cli-backend/serve-private-mcp-status-contract"
 
 export type { McpStatusMap }
 
@@ -33,37 +29,37 @@ export function buildMcpStatusReq(directory: string): McpStatusContractRequest {
 export type McpStatusAttempt =
   | { kind: "ok"; status: McpStatusMap }
   | { kind: "terminal" }
-  | { kind: "fallback"; reason: string }
+  | { kind: "unavailable"; reason: string }
 
 export function parseMcpStatusResult(result: unknown, req: McpStatusContractRequest): McpStatusAttempt {
   const rec = result as { kind?: unknown; status?: unknown; accepted?: unknown; transportUnknown?: unknown } | null
-  if (!rec || typeof rec !== "object") return { kind: "fallback", reason: "invalid" }
-  if (rec.kind === "invalid") return { kind: "fallback", reason: "invalid" }
+  if (!rec || typeof rec !== "object") return { kind: "unavailable", reason: "invalid" }
+  if (rec.kind === "invalid") return { kind: "unavailable", reason: "invalid" }
   const wire = rec as { kind?: string; result?: unknown }
   const inner = wire.kind === "valid" ? wire.result : result
   const typed = inner as { status?: unknown; accepted?: unknown; transportUnknown?: unknown }
-  if (typed.transportUnknown === true) return { kind: "fallback", reason: "transportUnknown" }
-  if (typed.status === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (typed.transportUnknown === true) return { kind: "unavailable", reason: "transportUnknown" }
+  if (typed.status === "ambiguous") return { kind: "unavailable", reason: "ambiguous" }
   if (typed.status === "succeeded") {
     try {
       const out = validateMcpStatusResult(inner, req)
-      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "fallback", reason: "invalid" }
+      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "unavailable", reason: "invalid" }
       return { kind: "ok", status: out.data.status }
     } catch {
-      return { kind: "fallback", reason: "invalid" }
+      return { kind: "unavailable", reason: "invalid" }
     }
   }
   if (typed.status === "failed") {
     try {
       const out = validateMcpStatusResult(inner, req)
-      if (out.status !== "failed") return { kind: "fallback", reason: "invalid" }
-      if (out.failure.retryable === true) return { kind: "fallback", reason: out.failure.code }
+      if (out.status !== "failed") return { kind: "unavailable", reason: "invalid" }
+      if (out.failure.retryable === true) return { kind: "unavailable", reason: out.failure.code }
       return { kind: "terminal" }
     } catch {
-      return { kind: "fallback", reason: "invalid" }
+      return { kind: "unavailable", reason: "invalid" }
     }
   }
-  return { kind: "fallback", reason: "invalid" }
+  return { kind: "unavailable", reason: "invalid" }
 }
 
 type Handle = { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
@@ -108,11 +104,11 @@ export async function attemptMcpStatusPrivate(
   ms = 3000,
 ): Promise<McpStatusAttempt> {
   const conn = connection as Conn | null | undefined
-  if (!conn) return { kind: "fallback", reason: "unavailable" }
+  if (!conn) return { kind: "unavailable", reason: "unavailable" }
   try {
-    if (!conn.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
+    if (!conn.isPrivateAvailable()) return { kind: "unavailable", reason: "unavailable" }
   } catch {
-    return { kind: "fallback", reason: "unavailable" }
+    return { kind: "unavailable", reason: "unavailable" }
   }
   let handle: Handle | null = null
   try {
@@ -121,7 +117,7 @@ export async function attemptMcpStatusPrivate(
       handle = direct(req)
     } else {
       const deps = ownerDeps(conn)
-      if (!deps || !deps.peer) return { kind: "fallback", reason: "missing-capability" }
+      if (!deps || !deps.peer) return { kind: "unavailable", reason: "missing-capability" }
       handle = mcpStatusOutcomeHandle(
         { peer: deps.peer, live: deps.live, epoch: deps.epoch, invalidate: deps.invalidate },
         req,
@@ -130,7 +126,7 @@ export async function attemptMcpStatusPrivate(
     const outcome = (await withTimeout(handle.promise, ms)) as
       | { kind: "valid"; result: unknown }
       | { kind: "invalid"; detail: string }
-    if (outcome.kind === "invalid") return { kind: "fallback", reason: "invalid" }
+    if (outcome.kind === "invalid") return { kind: "unavailable", reason: "invalid" }
     return parseMcpStatusResult(outcome.result, req)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -138,53 +134,32 @@ export async function attemptMcpStatusPrivate(
       try {
         handle.cancel?.(`private mcp-status timeout opId=${req.opId}`)
       } catch {}
-      return { kind: "fallback", reason: "timeout" }
+      return { kind: "unavailable", reason: "timeout" }
     }
-    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "fallback", reason: "transport" }
-    return { kind: "fallback", reason: msg.slice(0, 120) }
+    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "unavailable", reason: "transport" }
+    return { kind: "unavailable", reason: msg.slice(0, 120) }
   }
 }
 
-type SdkClient = {
-  mcp: {
-    status: (args: { directory: string }) => Promise<{ data?: unknown }>
-  }
-}
-
-export type McpStatusPrivateFirstOutcome =
-  | { kind: "ok"; status: McpStatusMap; via: "private" | "sdk" }
+export type McpStatusPrivateOutcome =
+  | { kind: "ok"; status: McpStatusMap }
   | { kind: "terminal" }
   | { kind: "unavailable" }
 
-function coerceSdkStatus(data: unknown): McpStatusMap | null {
-  try {
-    return validateMcpStatusMap(data ?? {})
-  } catch {
-    return null
-  }
-}
-
-// Shared private-first MCP status read: valid private `succeeded+accepted`
-// returns with zero SDK; validated terminal (`retryable === false`) closes
-// with zero SDK; unavailable/retryable/transport-ambiguous takes exactly one
-// same-directory SDK `client.mcp.status` fallback with no retry.
-export async function fetchMcpStatusPrivateFirst(opts: {
+// Shared private-authority MCP status read: valid private `succeeded+accepted`
+// returns the exact status map with zero SDK; validated non-retryable
+// terminal (`retryable === false`) remains terminal with zero SDK; private
+// unavailable, missing capability, invalid, ambiguous/epoch drift,
+// transport/closed, timeout, and retryable config-convergence fence all
+// return explicit unavailable with zero SDK status calls and no retry.
+// Never falls back to stale data as a new success.
+export async function fetchMcpStatusPrivate(opts: {
   connection?: KiloConnectionService | Conn | null
-  client: SdkClient | null | undefined
   directory: string
-}): Promise<McpStatusPrivateFirstOutcome> {
+}): Promise<McpStatusPrivateOutcome> {
   const req = buildMcpStatusReq(opts.directory)
   const attempt = await attemptMcpStatusPrivate(opts.connection ?? null, req)
-  if (attempt.kind === "ok") return { kind: "ok", status: attempt.status, via: "private" }
+  if (attempt.kind === "ok") return { kind: "ok", status: attempt.status }
   if (attempt.kind === "terminal") return { kind: "terminal" }
-  const client = opts.client
-  if (!client?.mcp?.status) return { kind: "unavailable" }
-  try {
-    const res = await client.mcp.status({ directory: opts.directory })
-    const coerced = coerceSdkStatus(res.data)
-    if (!coerced) return { kind: "unavailable" }
-    return { kind: "ok", status: coerced, via: "sdk" }
-  } catch {
-    return { kind: "unavailable" }
-  }
+  return { kind: "unavailable" }
 }

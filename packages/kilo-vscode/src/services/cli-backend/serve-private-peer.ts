@@ -4768,9 +4768,9 @@ export class ServePrivatePeer {
   }
 
   /**
-   * Internal normalized handle for the read-only mcp/status private-first read.
+   * Internal normalized handle for the read-only mcp/status private-authority read.
    * Resolves the discriminated wire outcome so invalid wire is an explicit
-   * `{ kind: "invalid" }` value consumed before any SDK fallback, never a
+   * `{ kind: "invalid" }` value consumed as unavailable with zero SDK, never a
    * normal result. Transport/closed/epoch semantics match the public handle.
    */
   privateMcpStatusOutcomeWithHandle(req: McpStatusContractRequest): {

@@ -549,6 +549,18 @@ One bounded private path carries `remote/status` (read) plus `remote/enable` and
 | Safe diagnostics | Logs carry fixed categories (`op:"find/files"`, counts, booleans) only. Logs contain no paths, directories, queries, `opId`/`requestId`, backend codes, or serialized payload. |
 | Non-goals | No mutation, sync, recovery, replay, or events; no source abort; no freshness/ordering/ignore-convergence/`.kilocodeignore`/cross-directory semantics; no suggestion/question/list/children/search-UI redesign; no public transport/API change; no new protocol design. FindFiles migrates one consumer with the single SDK fallback per type. |
 
+### Private `mcp/status` carrier over `kilo serve` fd3/fd4 — private-authority, same AppLayer
+
+One bounded private path carries `mcp/status` (read-only) over the existing `kilo serve` process extra fds, terminating at the same same-directory `MCP.Service.status()` owner as `GET /mcp`. The backend read is unchanged; the extension shared helper is the sole authority with zero SDK status calls and no retry. No new TCP listener, no Unix socket, no second runtime, no SDK regeneration.
+
+| Aspect | Behavior |
+|---|---|
+| Carrier | Same `kilo serve` extra-fd `5-stdio` (`stdio[3]` writer, `stdio[4]` reader), `epoch` per spawn, `FD_CAPABILITIES` includes `"mcp/status"`. `ServerManager` discovers port via `stdout`, `KiloConnectionService` owns `ServePrivatePeer` lifecycle. |
+| Read-only snapshot | `fd-carrier.ts` `mcp/status` validates, resolves `canonicalDirectory`, acquires `acquireDrainControl` snapshot lane (`InstanceUnavailableDuringConfigRebuild` maps to retryable fence, other defects to non-retryable terminal), then returns the same-directory `MCP.Service.status()` map under the acquired `InstanceRef`. Never mutates, never caches, never crosses directories. |
+| Private-authority contract | Valid `succeeded`+`accepted` returns the exact five-state map; validated non-retryable terminal remains terminal; unavailable, missing capability, invalid, ambiguous/epoch drift, transport/closed, timeout, and retryable fence return explicit unavailable with zero SDK and no retry. Callers fail closed without stale reuse. |
+| Lifecycle and timeout | Bounded 3000 ms timeout exact-cancels the pending by `id`; cancel miss/throw epoch-invalidates the peer until the next full backend connection/server reset. Closed/disposed/epoch-drift synthesizes ambiguous with transport unknown. No retry, no polling, no deferred work. |
+| Non-goals | No connect/disconnect/authenticate/add change; no cache/reconcile/journal; no public transport/API change. |
+
 ### Automatic retention (S2)
 
 Invisible private-runtime maintenance under internal byte-budget watermarks. Not a UI, config, or manual cleanup surface.

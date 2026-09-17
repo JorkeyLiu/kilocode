@@ -16,7 +16,7 @@ import type { ConnectionState } from "../services/cli-backend/connection-service
 import { getErrorMessage } from "../kilo-provider-utils"
 import { fetchSessionChildrenPrivateFirst } from "../kilo-provider/session-children-privatefirst"
 import { fetchSessionStatusesPrivateFirst } from "../kilo-provider/session-status-privatefirst"
-import { fetchMcpStatusPrivateFirst } from "../kilo-provider/mcp-status-privatefirst"
+import { fetchMcpStatusPrivate } from "../kilo-provider/mcp-status-private"
 import { fetchAgentsPrivateFirst } from "../kilo-provider/agent-list-privatefirst"
 import { fetchProviderCatalogPrivateFirst } from "../kilo-provider/provider-catalog-privatefirst"
 import { readPermissionsForDir } from "../kilo-provider/permission-privatefirst"
@@ -1048,7 +1048,6 @@ export class AgentManagerProvider implements Disposable {
           const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, client, root, this.connectionService)
           const { createSessionPrivateFirst } = await import("../kilo-provider/session-create")
           const session = await startSession(
-            client,
             root,
             () =>
               createSessionPrivateFirst({
@@ -1426,7 +1425,7 @@ export class AgentManagerProvider implements Disposable {
         })
       children[s.id] = kids.map((kid) => (kid as { id?: string }).id ?? "").filter((id) => id.length > 0)
     }
-    const mcp = await fetchMcpStatusPrivateFirst({ connection: this.connectionService, client, directory: root })
+    const mcp = await fetchMcpStatusPrivate({ connection: this.connectionService, directory: root })
       .then((outcome) => (outcome.kind === "ok" ? summarizeMcp(outcome.status) : undefined))
       .catch((err) => {
         this.log("fixture backendSnapshot: mcp.status failed:", err)

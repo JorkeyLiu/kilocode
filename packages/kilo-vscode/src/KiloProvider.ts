@@ -48,7 +48,7 @@ import {
   type SessionDetail,
 } from "./kilo-provider/session-detail"
 import { ErrorCode } from "./private-worker/json-rpc"
-import { fetchMcpStatusPrivateFirst } from "./kilo-provider/mcp-status-privatefirst"
+import { fetchMcpStatusPrivate } from "./kilo-provider/mcp-status-private"
 import {
   attemptMcpAuthenticatePrivate,
   attemptMcpConnectPrivate,
@@ -4430,9 +4430,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const directory = this.getWorkspaceDirectory()
-      const outcome = await fetchMcpStatusPrivateFirst({
+      const outcome = await fetchMcpStatusPrivate({
         connection: this.connectionService,
-        client: this.client,
         directory,
       })
       if (outcome.kind !== "ok") return
@@ -4547,9 +4546,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async convergeMcpStatusAfterAction(name: string): Promise<void> {
     try {
       const directory = this.getWorkspaceDirectory()
-      const outcome = await fetchMcpStatusPrivateFirst({
+      const outcome = await fetchMcpStatusPrivate({
         connection: this.connectionService,
-        client: this.client,
         directory,
       })
       if (outcome.kind !== "ok") {

@@ -1,4 +1,4 @@
-// Private-first `mcp/status` read-only contract (production).
+// Private-authority `mcp/status` read-only contract (production).
 // Request is strictly `{v:1,requestId,opId,op:"mcp/status",
 // idempotencyKey,context:{directory},payload:{}}` with
 // `opId === mcp-status:<token>` (token non-empty, no colon, no path
@@ -17,10 +17,12 @@
 //   (`connected`/`disabled`/`failed`+error/`needs_auth`/
 //   `needs_client_registration`+error).
 // - Consumers: `KiloProvider.fetchAndSendMcpStatus`, Agent Manager backend
-//   snapshot, and agent-manager mcp warmup are private-first: accepted
-//   success returns with zero SDK; validated terminal failure closes with
-//   zero SDK; fallback-eligible outcomes take exactly one SDK
-//   `client.mcp.status` call with the same directory.
+//   snapshot, and agent-manager mcp warmup are private-authority: accepted
+//   success returns the exact map with zero SDK; validated non-retryable
+//   terminal remains terminal with zero SDK; unavailable, missing
+//   capability, invalid, ambiguous/epoch drift, transport/closed, timeout,
+//   and retryable fence return explicit unavailable with zero SDK and no
+//   retry. No stale data is reused as a new success.
 //
 // ROUTING vs PAYLOAD SEMANTICS (v1):
 // - `context.directory` binds request routing and scope. A scope match says

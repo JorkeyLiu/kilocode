@@ -3,9 +3,9 @@ import {
   attemptMcpStatusPrivate,
   buildMcpStatusIdentity,
   buildMcpStatusReq,
-  fetchMcpStatusPrivateFirst,
+  fetchMcpStatusPrivate,
   parseMcpStatusResult,
-} from "./mcp-status-privatefirst"
+} from "./mcp-status-private"
 import { canonicalMcpStatusOpId } from "../services/cli-backend/serve-private-mcp-status-contract"
 
 const DIR = "/tmp"
@@ -81,7 +81,7 @@ function connWith(build: (r: ReturnType<typeof buildMcpStatusReq>) => unknown) {
   }
 }
 
-describe("mcp-status private-first", () => {
+describe("mcp-status private authority", () => {
   test("identity binds canonical mcp-status tuple", () => {
     const { opId, idempotencyKey, requestId } = buildMcpStatusIdentity()
     expect(opId).toBe(idempotencyKey)
@@ -112,7 +112,7 @@ describe("mcp-status private-first", () => {
     if (parsed.kind === "ok") expect(parsed.status).toEqual(map)
   })
 
-  test("terminal failed closes without SDK", async () => {
+  test("terminal failed remains terminal with zero SDK", async () => {
     for (const code of ["validation.failed", "scope_mismatch", "internal"]) {
       const r = buildMcpStatusReq(DIR)
       const out = await attemptMcpStatusPrivate(connWith((q) => terminalFor(q, code)) as never, r)
@@ -120,14 +120,20 @@ describe("mcp-status private-first", () => {
     }
   })
 
-  test("unavailable/ambiguous/invalid/transport/timeout are fallback-eligible", async () => {
+  test("unavailable/missing-capability/invalid/ambiguous/transport/timeout are explicit unavailable", async () => {
     const bad = buildMcpStatusReq(DIR)
     const off = await attemptMcpStatusPrivate({ isPrivateAvailable: () => false } as never, bad)
-    expect(off.kind).toBe("fallback")
+    expect(off).toEqual({ kind: "unavailable", reason: "unavailable" })
+
+    const missing = await attemptMcpStatusPrivate(
+      { isPrivateAvailable: () => true, getPrivatePeer: () => null, getPrivateEpoch: () => 1 } as never,
+      buildMcpStatusReq(DIR),
+    )
+    expect(missing).toEqual({ kind: "unavailable", reason: "missing-capability" })
 
     const r2 = buildMcpStatusReq(DIR)
     const vague = await attemptMcpStatusPrivate(connWith((q) => ambiguousFor(q)) as never, r2)
-    expect(vague.kind).toBe("fallback")
+    expect(vague).toEqual({ kind: "unavailable", reason: "transportUnknown" })
 
     const r3 = buildMcpStatusReq(DIR)
     const invalid = await attemptMcpStatusPrivate(
@@ -141,7 +147,7 @@ describe("mcp-status private-first", () => {
       } as never,
       r3,
     )
-    expect(invalid.kind).toBe("fallback")
+    expect(invalid).toEqual({ kind: "unavailable", reason: "invalid" })
 
     const r4 = buildMcpStatusReq(DIR)
     const broken = await attemptMcpStatusPrivate(
@@ -155,7 +161,20 @@ describe("mcp-status private-first", () => {
       } as never,
       r4,
     )
-    expect(broken.kind).toBe("fallback")
+    expect(broken).toEqual({ kind: "unavailable", reason: "transport" })
+
+    const closed = await attemptMcpStatusPrivate(
+      {
+        isPrivateAvailable: () => true,
+        privateMcpStatusOutcomeWithHandle: () => ({
+          id: 44,
+          promise: Promise.reject(new Error("Peer closed")),
+          cancel: () => true,
+        }),
+      } as never,
+      buildMcpStatusReq(DIR),
+    )
+    expect(closed).toEqual({ kind: "unavailable", reason: "transport" })
 
     const r5 = buildMcpStatusReq(DIR)
     const slow = await attemptMcpStatusPrivate(
@@ -170,13 +189,13 @@ describe("mcp-status private-first", () => {
       r5,
       10,
     )
-    expect(slow).toEqual({ kind: "fallback", reason: "timeout" })
+    expect(slow).toEqual({ kind: "unavailable", reason: "timeout" })
   })
 
-  test("retryable failed falls back", async () => {
+  test("retryable config-convergence fence returns explicit unavailable with zero SDK", async () => {
     const r = buildMcpStatusReq(DIR)
     const out = await attemptMcpStatusPrivate(connWith((q) => retryableFor(q)) as never, r)
-    expect(out.kind).toBe("fallback")
+    expect(out).toEqual({ kind: "unavailable", reason: "InstanceUnavailableDuringConfigRebuild" })
   })
 
   test("timeout exact-cancels the pending", async () => {
@@ -199,90 +218,89 @@ describe("mcp-status private-first", () => {
       r,
       10,
     )
-    expect(out).toEqual({ kind: "fallback", reason: "timeout" })
+    expect(out).toEqual({ kind: "unavailable", reason: "timeout" })
     expect(cancelled).toContain(r.opId)
   })
 
-  test("fetch returns private result with zero SDK calls", async () => {
-    let sdk = 0
-    const client = {
-      mcp: {
-        status: () => {
-          sdk += 1
-          return Promise.resolve({ data: {} })
-        },
-      },
-    }
-    const out = await fetchMcpStatusPrivateFirst({
-      connection: connWith((q) => okFor(q)) as never,
-      client: client as never,
-      directory: DIR,
-    })
-    expect(sdk).toBe(0)
-    expect(out.kind).toBe("ok")
-    if (out.kind === "ok") {
-      expect(out.via).toBe("private")
-      expect(out.status).toEqual({ docs: { status: "connected" } })
-    }
-  })
-
-  test("fetch exposes terminal with zero SDK calls", async () => {
-    let sdk = 0
-    const client = {
-      mcp: {
-        status: () => {
-          sdk += 1
-          return Promise.resolve({ data: {} })
-        },
-      },
-    }
-    const out = await fetchMcpStatusPrivateFirst({
-      connection: connWith((q) => terminalFor(q)) as never,
-      client: client as never,
-      directory: DIR,
-    })
-    expect(sdk).toBe(0)
+  test("settled terminal returns terminal", async () => {
+    const r = buildMcpStatusReq(DIR)
+    const out = await attemptMcpStatusPrivate(connWith((q) => terminalFor(q, "validation.failed")) as never, r)
     expect(out).toEqual({ kind: "terminal" })
   })
 
-  test("fetch falls back exactly once with the same directory", async () => {
-    const seen: unknown[] = []
-    const client = {
-      mcp: {
-        status: (args: unknown) => {
-          seen.push(args)
-          return Promise.resolve({ data: { docs: { status: "disabled" } } })
-        },
-      },
-    }
-    const out = await fetchMcpStatusPrivateFirst({
-      connection: { isPrivateAvailable: () => false } as never,
-      client: client as never,
+  test("fetch returns private ok with no client dependency", async () => {
+    const out = await fetchMcpStatusPrivate({
+      connection: connWith((q) => okFor(q)) as never,
       directory: DIR,
     })
-    expect(seen).toEqual([{ directory: DIR }])
     expect(out.kind).toBe("ok")
-    if (out.kind === "ok") {
-      expect(out.via).toBe("sdk")
-      expect(out.status).toEqual({ docs: { status: "disabled" } })
+    if (out.kind === "ok") expect(out.status).toEqual({ docs: { status: "connected" } })
+  })
+
+  test("fetch exposes terminal with no client dependency", async () => {
+    const out = await fetchMcpStatusPrivate({
+      connection: connWith((q) => terminalFor(q)) as never,
+      directory: DIR,
+    })
+    expect(out).toEqual({ kind: "terminal" })
+  })
+
+  test("fetch maps fast non-terminal private outcomes to unavailable with zero SDK", async () => {
+    // Timeout/exact-cancel stays covered by the dedicated attempt-level tests
+    // above ("explicit unavailable" with 10ms + "timeout exact-cancels"), so
+    // this matrix stays fast and never waits on the 3s production default.
+    const cases: Array<{ name: string; conn: unknown }> = [
+      { name: "unavailable", conn: { isPrivateAvailable: () => false } },
+      {
+        name: "missing-capability",
+        conn: { isPrivateAvailable: () => true, getPrivatePeer: () => null, getPrivateEpoch: () => 1 },
+      },
+      { name: "retryable-fence", conn: connWith((q) => retryableFor(q)) },
+      { name: "ambiguous", conn: connWith((q) => ambiguousFor(q)) },
+      {
+        name: "invalid",
+        conn: {
+          isPrivateAvailable: () => true,
+          privateMcpStatusOutcomeWithHandle: () => ({
+            id: 9,
+            promise: Promise.resolve({ kind: "invalid", detail: "bad" }),
+            cancel: () => true,
+          }),
+        },
+      },
+      {
+        name: "transport",
+        conn: {
+          isPrivateAvailable: () => true,
+          privateMcpStatusOutcomeWithHandle: () => ({
+            id: 10,
+            promise: Promise.reject(new Error("Private peer unavailable")),
+            cancel: () => true,
+          }),
+        },
+      },
+      {
+        name: "closed",
+        conn: {
+          isPrivateAvailable: () => true,
+          privateMcpStatusOutcomeWithHandle: () => ({
+            id: 11,
+            promise: Promise.reject(new Error("Peer closed")),
+            cancel: () => true,
+          }),
+        },
+      },
+    ]
+    for (const c of cases) {
+      const out = await fetchMcpStatusPrivate({ connection: c.conn as never, directory: DIR })
+      expect(out, c.name).toEqual({ kind: "unavailable" })
     }
   })
 
-  test("fetch treats SDK failure and malformed SDK data as unavailable", async () => {
-    const failing = { mcp: { status: () => Promise.reject(new Error("down")) } }
-    const lost = await fetchMcpStatusPrivateFirst({
-      connection: { isPrivateAvailable: () => false } as never,
-      client: failing as never,
-      directory: DIR,
-    })
-    expect(lost).toEqual({ kind: "unavailable" })
-
-    const malformed = { mcp: { status: () => Promise.resolve({ data: { docs: { status: "nope" } } }) } }
-    const bad = await fetchMcpStatusPrivateFirst({
-      connection: { isPrivateAvailable: () => false } as never,
-      client: malformed as never,
-      directory: DIR,
-    })
-    expect(bad).toEqual({ kind: "unavailable" })
+  test("shared helper has no SDK status surface", async () => {
+    const mod = (await import("./mcp-status-private")) as Record<string, unknown>
+    expect("coerceSdkStatus" in mod).toBeFalse()
+    expect("fetchMcpStatusPrivateFirst" in mod).toBeFalse()
+    expect(typeof mod.fetchMcpStatusPrivate).toBe("function")
   })
 })

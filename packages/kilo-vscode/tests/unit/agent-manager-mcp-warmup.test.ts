@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test"
+import { readFile } from "fs/promises"
+import { join } from "path"
 import { startSession } from "../../src/agent-manager/mcp-warmup"
-import type { buildMcpStatusReq } from "../../src/kilo-provider/mcp-status-privatefirst"
+import type { buildMcpStatusReq } from "../../src/kilo-provider/mcp-status-private"
 
 type Req = ReturnType<typeof buildMcpStatusReq>
 
@@ -40,6 +42,24 @@ function terminalWire(r: Req) {
   }
 }
 
+function retryableWire(r: Req) {
+  return {
+    v: 1,
+    requestId: r.requestId,
+    opId: r.opId,
+    op: "mcp/status",
+    idempotencyKey: r.idempotencyKey,
+    status: "failed",
+    outcome: {
+      type: "failed",
+      time: 1,
+      failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "busy", retryable: true },
+    },
+    accepted: false,
+    failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "busy", retryable: true },
+  }
+}
+
 function privateConn(build: (r: Req) => unknown) {
   return {
     isPrivateAvailable: () => true,
@@ -52,75 +72,66 @@ function privateConn(build: (r: Req) => unknown) {
 }
 
 describe("Agent Manager MCP warmup", () => {
-  it("falls back to exactly one same-directory SDK status without a private channel", async () => {
-    const calls: unknown[][] = []
-    const client = {
-      mcp: {
-        status: (input: unknown) => {
-          calls.push(["warm", input])
-          return Promise.resolve({ data: {} })
-        },
-      },
-    }
-
+  it("private unavailable degrades to logged failure with zero SDK and still creates the session", async () => {
+    const calls: string[] = []
+    const logs: unknown[][] = []
     const result = await startSession(
-      client as never,
       "/repo/session-feature",
       async () => {
-        calls.push(["session"])
+        calls.push("session")
         return "created"
       },
-      () => {},
+      (...args) => logs.push(args),
+      { isPrivateAvailable: () => false } as never,
     )
+    await flush()
 
     expect(result).toBe("created")
-    expect(calls.filter((c) => c[0] === "warm")).toEqual([["warm", { directory: "/repo/session-feature" }]])
-    expect(calls).toContainEqual(["session"])
+    expect(calls).toEqual(["session"])
+    expect(logs[0]).toEqual(["[MCPWarmup] Starting for /repo/session-feature"])
+    expect(logs[1]?.[0]).toBe("[MCPWarmup] Failed for /repo/session-feature:")
   })
 
   it("does not wait for MCP warmup before creating the session", async () => {
     const calls: string[] = []
-    const warmup = new Promise<unknown>(() => {})
-    const client = {
-      mcp: {
-        status: () => {
-          calls.push("warm")
-          return warmup
-        },
-      },
+    const pending = new Promise<unknown>(() => {})
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateMcpStatusOutcomeWithHandle: () => ({ id: 1, promise: pending, cancel: () => true }),
     }
 
     const result = await startSession(
-      client as never,
       "/repo/session-feature",
       async () => {
         calls.push("session")
         return "created"
       },
       () => {},
+      conn as never,
     )
 
     expect(result).toBe("created")
-    expect([...calls].sort()).toEqual(["session", "warm"])
+    expect(calls).toEqual(["session"])
   })
 
   it("logs and contains MCP warmup failures", async () => {
     const logs: unknown[][] = []
-    const client = {
-      mcp: {
-        status: () => {
-          throw new Error("connection failed")
-        },
-      },
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateMcpStatusOutcomeWithHandle: () => ({
+        id: 1,
+        promise: Promise.reject(new Error("connection failed")),
+        cancel: () => true,
+      }),
     }
 
     const result = await startSession(
-      client as never,
       "/repo/session-feature",
       async () => "created",
       (...args) => logs.push(args),
+      conn as never,
     )
-    await tick()
+    await flush()
 
     expect(result).toBe("created")
     expect(logs[0]).toEqual(["[MCPWarmup] Starting for /repo/session-feature"])
@@ -131,18 +142,9 @@ describe("Agent Manager MCP warmup", () => {
   it("private success completes with zero SDK calls", async () => {
     const dir = "/repo/session-feature"
     const calls: unknown[][] = []
-    const client = {
-      mcp: {
-        status: (input: unknown) => {
-          calls.push(["warm", input])
-          return Promise.resolve({ data: {} })
-        },
-      },
-    }
     const logs: unknown[][] = []
 
     const result = await startSession(
-      client as never,
       dir,
       async () => {
         calls.push(["session"])
@@ -162,18 +164,9 @@ describe("Agent Manager MCP warmup", () => {
   it("private terminal closes with zero SDK calls and still creates the session", async () => {
     const dir = "/repo/session-feature"
     const calls: unknown[][] = []
-    const client = {
-      mcp: {
-        status: (input: unknown) => {
-          calls.push(["warm", input])
-          return Promise.resolve({ data: {} })
-        },
-      },
-    }
     const logs: unknown[][] = []
 
     const result = await startSession(
-      client as never,
       dir,
       async () => {
         calls.push(["session"])
@@ -188,5 +181,34 @@ describe("Agent Manager MCP warmup", () => {
     expect(calls).toEqual([["session"]])
     expect(logs[0]).toEqual(["[MCPWarmup] Starting for /repo/session-feature"])
     expect(logs[1]?.[0]).toBe("[MCPWarmup] Failed for /repo/session-feature:")
+  })
+
+  it("retryable fence degrades to logged failure with zero SDK and still creates the session", async () => {
+    const dir = "/repo/session-feature"
+    const calls: unknown[][] = []
+    const logs: unknown[][] = []
+
+    const result = await startSession(
+      dir,
+      async () => {
+        calls.push(["session"])
+        return "created"
+      },
+      (...args) => logs.push(args),
+      privateConn((q) => retryableWire(q)) as never,
+    )
+    await flush()
+
+    expect(result).toBe("created")
+    expect(calls).toEqual([["session"]])
+    expect(logs[0]).toEqual(["[MCPWarmup] Starting for /repo/session-feature"])
+    expect(logs[1]?.[0]).toBe("[MCPWarmup] Failed for /repo/session-feature:")
+  })
+
+  it("warmup module has zero direct SDK status calls", async () => {
+    const text = await readFile(join(import.meta.dir, "..", "..", "src", "agent-manager", "mcp-warmup.ts"), "utf8")
+    expect(text.match(/\.mcp\.status\s*\(/g)?.length ?? 0).toBe(0)
+    expect(text).toContain("fetchMcpStatusPrivate")
+    expect(text).not.toContain("fetchMcpStatusPrivateFirst")
   })
 })

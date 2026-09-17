@@ -75,7 +75,7 @@ function scoped(ctx: InstanceContext, captured: Context.Context<never>) {
     )
 }
 
-describe("fd-carrier mcp/status (read-only private-first)", () => {
+describe("fd-carrier mcp/status (read-only private authority)", () => {
   afterEach(async () => {
     await disposeAllInstances()
     await resetDatabase()

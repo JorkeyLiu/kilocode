@@ -241,9 +241,9 @@ describe("KiloProvider MCP connect/disconnect private-only actions", () => {
     })
     await (ctx.provider.handleMcpConnect as (n: string) => Promise<void>)("demo")
     expect(ctx.connectCalls).toHaveLength(1)
-    // The existing status helper takes its single SDK fallback; both paths
-    // fail here so convergence posts the minimal completion instead.
-    expect(ctx.sdkStatusCalls).toHaveLength(1)
+    // Private-authority status has zero SDK fallback; invalid closes as
+    // unavailable so convergence posts the minimal completion instead.
+    expect(ctx.sdkStatusCalls).toHaveLength(0)
     expect(loaded(ctx.posted)).toHaveLength(0)
     const completions = done(ctx.posted)
     expect(completions).toHaveLength(1)
@@ -256,9 +256,9 @@ describe("KiloProvider MCP connect/disconnect private-only actions", () => {
     await (ctx.provider.handleMcpDisconnect as (n: string) => Promise<void>)("demo")
     expect(ctx.disconnectCalls).toHaveLength(0)
     expect(ctx.statusCalls).toHaveLength(0)
-    // Only the status helper's single SDK fallback runs; the mutation itself
+    // Private-authority status has zero SDK fallback; the mutation itself
     // never touches the SDK and is never replayed.
-    expect(ctx.sdkStatusCalls).toHaveLength(1)
+    expect(ctx.sdkStatusCalls).toHaveLength(0)
     expect(ctx.errors).toHaveBeenCalledTimes(1)
     const completions = done(ctx.posted)
     expect(completions).toHaveLength(1)
