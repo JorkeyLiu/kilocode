@@ -1,6 +1,6 @@
 import * as fs from "fs"
 import * as path from "path"
-import type { KiloClient, McpStatus, Message, Part, Session } from "@kilocode/sdk/v2/client"
+import type { KiloClient, McpStatus, Message, Part, Session, SessionStatus } from "@kilocode/sdk/v2/client"
 import {
   summarizeMcp,
   summarizeMessage,
@@ -15,6 +15,7 @@ import type { KiloConnectionService } from "../services/cli-backend"
 import type { ConnectionState } from "../services/cli-backend/connection-service"
 import { getErrorMessage } from "../kilo-provider-utils"
 import { fetchSessionChildrenPrivateFirst } from "../kilo-provider/session-children-privatefirst"
+import { fetchSessionStatusesPrivateFirst } from "../kilo-provider/session-status-privatefirst"
 import { fetchMcpStatusPrivateFirst } from "../kilo-provider/mcp-status-privatefirst"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
@@ -1353,14 +1354,24 @@ export class AgentManagerProvider implements Disposable {
         return empty("session.list")
       })
     let statusReadable = true
-    const statuses = await client.session
-      .status({ directory: root })
-      .then((r) => r.data ?? {})
-      .catch((err) => {
-        this.log("fixture backendSnapshot: session.status failed:", err)
-        statusReadable = false
-        return {}
+    let statuses: Record<string, SessionStatus> = {}
+    try {
+      const statusOutcome = await fetchSessionStatusesPrivateFirst({
+        connection: this.connectionService as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["connection"],
+        client: client as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["client"],
+        directory: root,
       })
+      if (statusOutcome.kind === "ok") statuses = statusOutcome.statuses as Record<string, SessionStatus>
+      else {
+        statusReadable = false
+        this.log("fixture backendSnapshot: session.status failed; returning empty")
+        statuses = {}
+      }
+    } catch (err) {
+      this.log("fixture backendSnapshot: session.status failed:", err)
+      statusReadable = false
+      statuses = {}
+    }
     const agents = await client.app
       .agents({ directory: root })
       .then((r) => r.data ?? [])

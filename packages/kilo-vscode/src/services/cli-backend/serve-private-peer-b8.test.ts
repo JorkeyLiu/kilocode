@@ -900,6 +900,260 @@ describe("B8 session/children private peer", () => {
     expect(new Set(observed).size).toBe(2)
   })
 
+  test("fixture backendSnapshot reads statuses private-first with zero SDK on success", async () => {
+    const { AgentManagerProvider } = await import("../../agent-manager/AgentManagerProvider")
+    const { summarizeStatuses } = await import("../../agent-manager/fixture-backend")
+    const OTHER = "ses_other00000000000000001"
+    const privateStatuses = {
+      [PARENT]: { type: "busy" },
+      [OTHER]: { type: "idle" },
+      ses_retry00000000000000001: { type: "retry", attempt: 1, message: "m", next: 5 },
+      ses_off0000000000000000001: { type: "offline", requestID: "que_1", message: "m" },
+    }
+    const observedStatus: string[] = []
+    let sdkStatusCalls = 0
+    const fakeClient = {
+      session: {
+        list: async () => ({ data: [{ id: PARENT, title: "p", agent: null, model: null, parentID: null, time: { created: 1, updated: 2 } }] }),
+        status: async (params: { directory: string }) => {
+          sdkStatusCalls += 1
+          expect(params.directory).toBe("/tmp")
+          return { data: {} }
+        },
+        messages: async () => ({ data: [] }),
+        children: async () => ({ data: [] }),
+      },
+      app: { agents: async () => ({ data: [] }) },
+      provider: { catalog: async () => ({ data: { connected: [] } }) },
+      mcp: { status: async () => ({ data: {} }) },
+      permission: { list: async () => ({ data: [] }) },
+      question: { list: async () => ({ data: [] }) },
+    }
+    const conn = {
+      getClientAsync: async () => fakeClient,
+      isPrivateAvailable: () => true,
+      getPrivateEpoch: () => 7,
+      privateChildrenOutcomeWithHandle: (req: { opId: string; requestId: string; idempotencyKey: string }) => ({
+        id: 1,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: "session/children",
+            idempotencyKey: req.idempotencyKey,
+            status: "succeeded",
+            outcome: { type: "succeeded", time: 1 },
+            accepted: true,
+            data: { children: [] },
+          },
+        }),
+      }),
+      privateStatusOutcomeWithHandle: (req: { opId: string; requestId: string; idempotencyKey: string }) => {
+        observedStatus.push(req.opId)
+        return {
+          id: 2,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "session/status",
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: 1 },
+              accepted: true,
+              data: { statuses: privateStatuses },
+            },
+          }),
+        }
+      },
+    }
+    const provider = Object.create(AgentManagerProvider.prototype) as {
+      backendSnapshotForFixture(): Promise<{ statuses: Record<string, string>; statusReadable?: boolean }>
+    } & Record<string, unknown>
+    provider.host = { workspacePath: () => "/tmp" }
+    provider.connectionService = conn
+    provider.outputChannel = { appendLine: () => {} }
+    const snap = await provider.backendSnapshotForFixture()
+    expect(snap.statuses).toEqual(summarizeStatuses(privateStatuses as never))
+    expect(snap.statusReadable).toBeUndefined()
+    expect(sdkStatusCalls).toBe(0)
+    expect(observedStatus.length).toBe(1)
+    expect(observedStatus[0]?.startsWith("status:")).toBeTrue()
+  })
+
+  test("fixture backendSnapshot terminal status closes with empty unreadable and zero SDK", async () => {
+    const { AgentManagerProvider } = await import("../../agent-manager/AgentManagerProvider")
+    const observedStatus: string[] = []
+    let sdkStatusCalls = 0
+    const fakeClient = {
+      session: {
+        list: async () => ({ data: [{ id: PARENT, title: "p", agent: null, model: null, parentID: null, time: { created: 1, updated: 2 } }] }),
+        status: async () => {
+          sdkStatusCalls += 1
+          return { data: { [PARENT]: { type: "busy" } } }
+        },
+        messages: async () => ({ data: [] }),
+        children: async () => ({ data: [] }),
+      },
+      app: { agents: async () => ({ data: [] }) },
+      provider: { catalog: async () => ({ data: { connected: [] } }) },
+      mcp: { status: async () => ({ data: {} }) },
+      permission: { list: async () => ({ data: [] }) },
+      question: { list: async () => ({ data: [] }) },
+    }
+    const conn = {
+      getClientAsync: async () => fakeClient,
+      isPrivateAvailable: () => true,
+      getPrivateEpoch: () => 7,
+      privateChildrenOutcomeWithHandle: (req: { opId: string; requestId: string; idempotencyKey: string }) => ({
+        id: 1,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: "session/children",
+            idempotencyKey: req.idempotencyKey,
+            status: "succeeded",
+            outcome: { type: "succeeded", time: 1 },
+            accepted: true,
+            data: { children: [] },
+          },
+        }),
+      }),
+      privateStatusOutcomeWithHandle: (req: { opId: string; requestId: string; idempotencyKey: string }) => {
+        observedStatus.push(req.opId)
+        return {
+          id: 2,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "session/status",
+              idempotencyKey: req.idempotencyKey,
+              status: "failed",
+              outcome: { type: "failed", time: 1, failure: { code: "validation.failed", message: "x", retryable: false } },
+              accepted: false,
+              failure: { code: "validation.failed", message: "x", retryable: false },
+            },
+          }),
+        }
+      },
+    }
+    const provider = Object.create(AgentManagerProvider.prototype) as {
+      backendSnapshotForFixture(): Promise<{ statuses: Record<string, string>; statusReadable?: boolean }>
+    } & Record<string, unknown>
+    provider.host = { workspacePath: () => "/tmp" }
+    provider.connectionService = conn
+    provider.outputChannel = { appendLine: () => {} }
+    const snap = await provider.backendSnapshotForFixture()
+    expect(snap.statuses).toEqual({})
+    expect(snap.statusReadable).toBe(false)
+    expect(sdkStatusCalls).toBe(0)
+    expect(observedStatus.length).toBe(1)
+  })
+
+  test("fixture backendSnapshot status fallback uses exactly one SDK read", async () => {
+    const { AgentManagerProvider } = await import("../../agent-manager/AgentManagerProvider")
+    const { summarizeStatuses } = await import("../../agent-manager/fixture-backend")
+    const childOk = (req: { opId: string; requestId: string; idempotencyKey: string }) => ({
+      id: 1,
+      promise: Promise.resolve({
+        kind: "valid",
+        result: {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/children",
+          idempotencyKey: req.idempotencyKey,
+          status: "succeeded",
+          outcome: { type: "succeeded", time: 1 },
+          accepted: true,
+          data: { children: [] },
+        },
+      }),
+    })
+    const retryable = (req: { opId: string; requestId: string; idempotencyKey: string }) => ({
+      id: 2,
+      promise: Promise.resolve({
+        kind: "valid",
+        result: {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/status",
+          idempotencyKey: req.idempotencyKey,
+          status: "failed",
+          outcome: {
+            type: "failed",
+            time: 1,
+            failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "fence", retryable: true },
+          },
+          accepted: false,
+          failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "fence", retryable: true },
+        },
+      }),
+    })
+    const invalid = () => ({ id: 2, promise: Promise.resolve({ kind: "invalid", detail: "bad" }) })
+    async function snapWith(statusImpl: (req: never) => unknown, sdkImpl: () => Promise<unknown>, dir = "/tmp") {
+      const observed: string[] = []
+      let calls = 0
+      const fakeClient = {
+        session: {
+          list: async () => ({ data: [{ id: PARENT, title: "p", agent: null, model: null, parentID: null, time: { created: 1, updated: 2 } }] }),
+          status: async (params: { directory: string }) => {
+            calls += 1
+            expect(params.directory).toBe(dir)
+            return sdkImpl()
+          },
+          messages: async () => ({ data: [] }),
+          children: async () => ({ data: [] }),
+        },
+        app: { agents: async () => ({ data: [] }) },
+        provider: { catalog: async () => ({ data: { connected: [] } }) },
+        mcp: { status: async () => ({ data: {} }) },
+        permission: { list: async () => ({ data: [] }) },
+        question: { list: async () => ({ data: [] }) },
+      }
+      const conn = {
+        getClientAsync: async () => fakeClient,
+        isPrivateAvailable: () => true,
+        getPrivateEpoch: () => 7,
+        privateChildrenOutcomeWithHandle: childOk,
+        privateStatusOutcomeWithHandle: (req: never) => {
+          observed.push((req as { opId: string }).opId)
+          return statusImpl(req) as { id: number; promise: Promise<unknown> }
+        },
+      }
+      const provider = Object.create(AgentManagerProvider.prototype) as {
+        backendSnapshotForFixture(): Promise<{ statuses: Record<string, string>; statusReadable?: boolean }>
+      } & Record<string, unknown>
+      provider.host = { workspacePath: () => dir }
+      provider.connectionService = conn
+      provider.outputChannel = { appendLine: () => {} }
+      const snap = await provider.backendSnapshotForFixture()
+      return { snap, observed, calls }
+    }
+    const sdkMap = { [PARENT]: { type: "busy" } }
+    const ok = await snapWith(retryable as never, async () => ({ data: sdkMap }))
+    expect(ok.snap.statuses).toEqual(summarizeStatuses(sdkMap as never))
+    expect(ok.snap.statusReadable).toBeUndefined()
+    expect(ok.calls).toBe(1)
+    expect(ok.observed.length).toBe(1)
+    const bad = await snapWith(invalid as never, async () => ({ data: { [PARENT]: { type: "bogus" } } }))
+    expect(bad.snap.statuses).toEqual({})
+    expect(bad.snap.statusReadable).toBe(false)
+    expect(bad.calls).toBe(1)
+    expect(bad.observed.length).toBe(1)
+  })
+
   test("production children handle cancel path is observable with safe logging", async () => {
     const { KiloConnectionService } = await import("./connection-service")
     const svc = new KiloConnectionService({} as never)
