@@ -18,11 +18,10 @@ describe("agent-list call-site guard", () => {
         if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue
         const text = fs.readFileSync(full, "utf8")
         // Fixtures and tests may call the SDK directly; only production matters.
-        // `src/extension.ts:provisionVariantModelFixture` is an E2E fixture
-        // that reads the real catalog/agents to seed variant selections.
+        // `src/extension.ts:provisionVariantModelFixture` now seeds through
+        // the shared private-first helper, so it stays under the guard.
         if (full.includes(`${path.sep}fixtures${path.sep}`)) continue
         if (full.includes("fixture-backend")) continue
-        if (full.endsWith(`${path.sep}src${path.sep}extension.ts`)) continue
         const lines = text.split("\n")
         lines.forEach((line, idx) => {
           const trimmed = line.trim()

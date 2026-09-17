@@ -33,14 +33,22 @@ describe("provider catalog call-site lock", () => {
     expect(kilo).not.toContain("getProviderCredential")
     expect(kilo).toContain("fetchProviderData")
 
-    // Fixture callers are explicitly excluded and stay on the direct SDK read.
+    // Variant fixture real seeding goes through the shared private-first
+    // projection; the SDK lives only in the helper fallback.
     const ext = await src("../../src/extension.ts")
-    expect(ext).toContain("client.provider.catalog")
+    expect(ext).toContain("fetchFixtureVariantRealPrivateFirst")
+    expect(ext).not.toMatch(/client\.provider\.catalog\s*\(/)
     expect(ext).not.toContain("client.provider.list")
 
+    const variant = await src("../../src/kilo-provider/fixture-variant-real-privatefirst.ts")
+    expect(variant).toContain("fetchProviderCatalogPrivateFirst")
+    expect(variant).toContain("fetchAgentsPrivateFirst")
+    expect(variant).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(variant).not.toMatch(/\.app\.agents\s*\(/)
+
     const agent = await src("../../src/agent-manager/AgentManagerProvider.ts")
-    expect(agent).toContain(".provider")
-    expect(agent).toContain(".catalog(")
+    expect(agent).toContain("fetchProviderCatalogPrivateFirst")
+    expect(agent).not.toMatch(/client\.provider\.catalog\s*\(/)
     expect(agent).not.toContain("client.provider\n      .list(")
     expect(agent).not.toMatch(/client\.provider\s*\n?\s*\.list\(/)
   })

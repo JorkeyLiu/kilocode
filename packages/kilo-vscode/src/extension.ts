@@ -38,6 +38,7 @@ import { resolveCanonicalDbPath } from "./private-worker/canonical-db-path"
 import { wirePeerCloseObservation } from "./agent-manager/peer-close-wiring"
 import { isE2EFixtureEnabled } from "./util/e2e-fixture"
 import { SseTimelineFixture, resolveTimelineSessionId } from "./services/cli-backend/sse-timeline"
+import { fetchFixtureVariantRealPrivateFirst } from "./kilo-provider/fixture-variant-real-privatefirst"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -238,6 +239,8 @@ type FixtureRealState = {
 
 // Fixture-only real catalog/agents read: preserves every real entry, injects
 // only the synthetic model, builds per-agent selections. No persistence.
+// Private-first via the shared production projections; the SDK lives only in
+// the helpers' exactly-once same-directory fallback.
 async function fixtureLoadReal(
   connectionService: KiloConnectionService,
   root: string | undefined,
@@ -245,34 +248,21 @@ async function fixtureLoadReal(
   modelID: string,
   injected: { id: string; name: string; variants: Record<string, unknown> },
 ): Promise<FixtureRealState> {
-  const raw: Record<string, FixtureRawProvider> = {}
-  let connected: string[] = []
-  let defaults: Record<string, string> = {}
-  const selections: Record<string, { providerID: string; modelID: string }> = {}
-  let realAgents: Array<Record<string, unknown>> = []
   try {
     const client = await connectionService.getClientAsync(root)
-    const { data } = await client.provider.catalog({ directory: root }, { throwOnError: true })
-    connected = data?.connected ?? []
-    defaults = data?.default ?? {}
-    for (const item of data?.all ?? []) {
-      const p = item as { id?: string } & FixtureRawProvider
-      const key = p.id ?? ""
-      const models = { ...((p.models as Record<string, unknown> | undefined) ?? {}), [modelID]: injected }
-      raw[key] = p.id === providerID ? { ...p, models } : p
-    }
-    const agentResult = await client.app.agents({ directory: root }, { throwOnError: true })
-    realAgents = ((agentResult.data ?? []) as Array<Record<string, unknown>>).filter(
-      (agent) => typeof (agent as { name?: unknown }).name === "string",
-    )
-    for (const agent of realAgents) {
-      const name = (agent as { name?: string }).name ?? ""
-      if (name.length > 0) selections[name] = { providerID, modelID }
-    }
+    const dir = root ?? ""
+    return await fetchFixtureVariantRealPrivateFirst({
+      connection: connectionService as never,
+      client: client as never,
+      directory: dir,
+      providerID,
+      modelID,
+      injected,
+    })
   } catch (err) {
     console.error("[Kilo New] provisionVariantModelFixture: real catalog/agents unavailable:", err)
+    return { raw: {}, connected: [], defaults: {}, selections: {}, realAgents: [] }
   }
-  return { raw, connected, defaults, selections, realAgents }
 }
 
 function fixtureEnsureSynthetic(

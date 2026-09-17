@@ -31,13 +31,20 @@ describe("fixture variant canonical provision (bounded)", () => {
   })
 
   it("preserves real catalog entries and injects only the synthetic model", () => {
-    expect(EXT).toContain("client.provider.catalog")
-    expect(EXT).toContain("client.app.agents")
-    expect(EXT).toContain("for (const item of data?.all ?? [])")
-    // Real models spread preserved; synthetic injected by key only.
-    expect(EXT).toContain("[modelID]: injected")
+    // Variant fixture real seeding goes through the shared private-first
+    // projections; the SDK lives only in the helpers' fallback.
+    expect(EXT).toContain("fetchFixtureVariantRealPrivateFirst")
     expect(EXT).toContain("function fixtureLoadReal")
     expect(EXT).toContain("function fixtureEnsureSynthetic")
+    expect(EXT).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(EXT).not.toMatch(/client\.app\.agents\s*\(/)
+    const helper = readFileSync(join(import.meta.dirname, "../../src/kilo-provider/fixture-variant-real-privatefirst.ts"), "utf8")
+    expect(helper).toContain("fetchProviderCatalogPrivateFirst")
+    expect(helper).toContain("fetchAgentsPrivateFirst")
+    expect(helper).toContain("for (const item of data.all ?? [])")
+    // Real models spread preserved; synthetic injected by key only.
+    expect(helper).toContain("[mid]: injected")
+    expect(EXT).toContain("[modelID]: injected")
     // No backend/config persistence from the fixture path.
     const fixtureSrc = EXT.slice(EXT.indexOf("type FixtureRawProvider"), EXT.indexOf("export function activate"))
     expect(fixtureSrc).not.toContain("writeConfig")
@@ -166,7 +173,9 @@ describe("fixture variant canonical provision (bounded)", () => {
     const block = provisionBlock()
     expect(block).toContain('state.selections["code"] = { providerID, modelID }')
     expect(block).toContain('state.selections["search"] = { providerID, modelID }')
-    expect(EXT).toContain("for (const agent of realAgents)")
+    const helper = readFileSync(join(import.meta.dirname, "../../src/kilo-provider/fixture-variant-real-privatefirst.ts"), "utf8")
+    expect(helper).toContain("for (const agent of realAgents)")
+    expect(helper).toContain("selections[name] = { providerID: pid, modelID: mid }")
   })
 
   it("delayed republishes reuse frozen payloads and stop atomically on newer real", () => {
