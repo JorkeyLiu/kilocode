@@ -425,6 +425,11 @@ export function unwrapSyncEvent(event: SSEPayload | RawSyncPayload): ProviderEve
   }
 }
 
+function noopSettled(): void {}
+function noopSessionLoad(): Promise<void> {
+  return Promise.resolve()
+}
+
 export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly instanceId = crypto.randomUUID()
 
@@ -1824,6 +1829,115 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     })
   }
 
+  /**
+   * Generation-aware catalog-settled barrier.
+   *
+   * Resolves only when, for the current connection generation, connection
+   * initialization has completed, every session-list load already queued on
+   * the serialized load chain (including the initialize/SSE tail flush of a
+   * deferred refresh) has been applied, the provider is connected with a
+   * client, and no deferred refresh remains pending. If the generation moves
+   * (reconnect, replacement, dispose) or a new initialization starts while
+   * waiting, the barrier repeats against the latest generation instead of
+   * resolving on stale state. Rejects on terminal connection error, dispose,
+   * abort, or timeout — never resolves early and never sleeps.
+   */
+  public async waitForCatalogSettled(opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<void> {
+    const timeoutMs = opts?.timeoutMs ?? 30_000
+    const signal = opts?.signal
+    if (signal?.aborted) throw new Error("catalog settled: aborted")
+    if (this.disposed) throw new Error("KiloProvider: disposed")
+    let failReject!: (err: Error) => void
+    const fail = new Promise<never>((_, reject) => {
+      failReject = reject
+    })
+    const timer = setTimeout(() => {
+      failReject(
+        new Error(
+          `catalog settled: timeout after ${timeoutMs}ms ` +
+            `(state=${this.connectionState} gen=${this.connectionGeneration} ` +
+            `init=${this.initConnectionPromise ? "active" : "idle"} ` +
+            `pending=${this.pendingSessionRefresh} client=${this.client ? "ready" : "none"})`,
+        ),
+      )
+    }, timeoutMs)
+    if (typeof (timer as unknown as { unref?: unknown }).unref === "function") {
+      ;(timer as unknown as { unref: () => void }).unref()
+    }
+    const onAbort = () => failReject(new Error("catalog settled: aborted"))
+    signal?.addEventListener("abort", onAbort, { once: true })
+    try {
+      for (;;) {
+        if (this.disposed) throw new Error("KiloProvider: disposed")
+        if (signal?.aborted) throw new Error("catalog settled: aborted")
+        const gen = this.connectionGeneration
+        if (this.initConnectionPromise) {
+          await Promise.race([this.initConnectionPromise.then(noopSettled, noopSettled), fail])
+          continue
+        }
+        await Promise.race([this.enqueueSessionLoad(noopSessionLoad), fail])
+        if (this.disposed) throw new Error("KiloProvider: disposed")
+        if (signal?.aborted) throw new Error("catalog settled: aborted")
+        if (this.connectionGeneration !== gen) continue
+        if (this.initConnectionPromise) continue
+        const state = this.connectionState
+        if (state === "error") {
+          const cause = this.connectionService.getConnectionError()
+          throw new Error(`catalog settled: connection error${cause ? `: ${getErrorMessage(cause)}` : ""}`)
+        }
+        if (state !== "connected" || !this.client || this.pendingSessionRefresh) {
+          await this.waitForCatalogProgress(fail)
+          continue
+        }
+        return
+      }
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
+  /** Waiters woken on any catalog-affecting progress: connection state moves, generation moves, or a session-list load is enqueued/settled. */
+  private catalogProgressCbs: Array<() => void> = []
+
+  private onCatalogProgress(cb: () => void): () => void {
+    this.catalogProgressCbs.push(cb)
+    return () => {
+      const i = this.catalogProgressCbs.indexOf(cb)
+      if (i >= 0) this.catalogProgressCbs.splice(i, 1)
+    }
+  }
+
+  private notifyCatalogProgress(): void {
+    for (const cb of [...this.catalogProgressCbs]) {
+      try {
+        cb()
+      } catch (e) {
+        console.warn("[Kilo New] catalog progress cb failed", e)
+      }
+    }
+  }
+
+  /**
+   * Wait until catalog-affecting progress occurs or the shared
+   * deadline/abort/dispose signal rejects. Listeners are always released.
+   */
+  private async waitForCatalogProgress(fail: Promise<never>): Promise<void> {
+    const cleanups: Array<() => void> = []
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          const done = () => resolve()
+          cleanups.push(this.connectionService.onStateChange(() => done()))
+          cleanups.push(this.onCatalogProgress(() => done()))
+        }),
+        fail,
+      ])
+    } finally {
+      for (const cleanup of cleanups.splice(0)) cleanup()
+    }
+  }
+
   /** Register a listener invoked when a plan follow-up session is adopted. */
   public onFollowupAdopted(cb: (session: SessionDetail | Session, directory: string) => void): void {
     this.followupListeners.push(cb as unknown as (session: SessionDetail | Session, directory: string) => void)
@@ -2435,6 +2549,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     this.connectionState = "connecting"
     this.connectionGeneration++
+    this.notifyCatalogProgress()
     this.postMessage({ type: "connectionState", state: "connecting" })
 
     // Clean up any existing subscriptions (e.g., webview panel re-created)
@@ -2498,6 +2613,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.unsubscribeState = this.connectionService.onStateChange(async (state, error) => {
         if (this.connectionState !== state) this.connectionGeneration++
         this.connectionState = state
+        this.notifyCatalogProgress()
         this.postConnectionState(error)
 
         if (state === "connected") {
@@ -3392,6 +3508,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private enqueueSessionLoad(task: () => Promise<void>): Promise<void> {
     const run = this.sessionLoadChain.then(task, task)
     this.sessionLoadChain = run.catch(() => {})
+    this.notifyCatalogProgress()
+    const note = () => this.notifyCatalogProgress()
+    void run.then(note, note)
     return run
   }
 
@@ -6551,6 +6670,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.cleanupTargets.clear()
     this.disposed = true
     this.connectionGeneration += 1
+    this.notifyCatalogProgress()
     this.viewStateDisposable?.dispose()
     this.webviewMessageDisposable?.dispose()
     this.telemetryStateDisposable?.dispose()

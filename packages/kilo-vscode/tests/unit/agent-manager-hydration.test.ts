@@ -773,4 +773,180 @@ describe("hydration — deferred pending + order independent", () => {
     expect(complete.nextIds).toEqual(["pending:1", "b", "a"])
     expect(complete.markHydrated).toBe(true)
   })
+
+  it("fresh empty durable preserves local A/B/C confirmed by catalog", () => {
+    const out = reconcile({
+      localIds: ["a", "b", "c"],
+      tabOrder: ["a", "b", "c"],
+      active: "b",
+      durable: { sessions: [] },
+      catalog: catalogOf("a", "b", "c"),
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(out.nextIds).toEqual(["a", "b", "c"])
+    expect(out.nextOrder).toEqual(["a", "b", "c"])
+    expect(out.nextActive).toBe("b")
+    expect(out.needsPending).toBe(false)
+    expect(out.markHydrated).toBe(true)
+    expect(out.applyActive).toBe(false)
+  })
+
+  it("fresh empty durable preserves lone-pending + A/B/C variants", () => {
+    const pending = "pending:lone"
+    const durable = { sessions: [] as { id: string }[] }
+    const full = catalogOf("a", "b", "c")
+    const head = reconcile({
+      localIds: [pending, "a", "b", "c"],
+      tabOrder: [pending, "a", "b", "c"],
+      active: pending,
+      durable,
+      catalog: full,
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(head.nextIds).toEqual([pending, "a", "b", "c"])
+    expect(head.nextOrder).toEqual([pending, "a", "b", "c"])
+    expect(head.nextActive).toBe(pending)
+    expect(head.needsPending).toBe(false)
+    expect(head.markHydrated).toBe(true)
+
+    const tail = reconcile({
+      localIds: ["a", "b", "c", pending],
+      tabOrder: ["a", "b", "c", pending],
+      active: "c",
+      durable,
+      catalog: full,
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(tail.nextIds).toEqual(["a", "b", "c", pending])
+    expect(tail.nextActive).toBe("c")
+    expect(tail.needsPending).toBe(false)
+    expect(tail.markHydrated).toBe(true)
+  })
+
+  it("fresh empty durable preserves via preserve when catalog empty", () => {
+    const out = reconcile({
+      localIds: ["a", "b", "c"],
+      tabOrder: ["a", "b", "c"],
+      active: "a",
+      durable: { sessions: [] },
+      catalog: catalogOf(),
+      hasMore: false,
+      preserveSessionIds: ["a", "b", "c"],
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(out.nextIds).toEqual(["a", "b", "c"])
+    expect(out.needsPending).toBe(false)
+    expect(out.markHydrated).toBe(true)
+    expect(out.nextActive).toBe("a")
+  })
+
+  it("fresh empty durable active prefers pending, then valid active, then first merged", () => {
+    const pending = "pending:keep"
+    const durable = { sessions: [] as { id: string }[] }
+    const full = catalogOf("a", "b", "c")
+    const prefersPending = reconcile({
+      localIds: [pending, "a", "b"],
+      tabOrder: [pending, "a", "b"],
+      active: pending,
+      durable,
+      catalog: full,
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(prefersPending.nextActive).toBe(pending)
+
+    const keepsValid = reconcile({
+      localIds: [pending, "a", "b"],
+      tabOrder: [pending, "a", "b"],
+      active: "b",
+      durable,
+      catalog: full,
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(keepsValid.nextActive).toBe("b")
+
+    const fallsBack = reconcile({
+      localIds: ["a", "b", "c"],
+      tabOrder: ["a", "b", "c"],
+      active: "ghost",
+      durable,
+      catalog: full,
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(fallsBack.nextIds).toEqual(["a", "b", "c"])
+    expect(fallsBack.nextActive).toBe("a")
+    expect(fallsBack.applyActive).toBe(true)
+    expect(fallsBack.needsPending).toBe(false)
+  })
+
+  it("fresh empty durable dedupes and keeps local order", () => {
+    const out = reconcile({
+      localIds: ["c", "a", "c", "b", "a"],
+      tabOrder: ["c", "a", "c", "b", "a"],
+      active: "c",
+      durable: { sessions: [] },
+      catalog: catalogOf("a", "b", "c"),
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(out.nextIds).toEqual(["c", "a", "b"])
+    expect(out.nextOrder).toEqual(["c", "a", "b"])
+    expect(out.needsPending).toBe(false)
+  })
+
+  it("fresh empty durable prunes genuine deletion to empty + needsPending", () => {
+    const pruned = reconcile({
+      localIds: ["ghost"],
+      tabOrder: ["ghost"],
+      active: "ghost",
+      durable: { sessions: [] },
+      catalog: catalogOf(),
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(pruned.nextIds).toEqual([])
+    expect(pruned.nextOrder).toEqual([])
+    expect(pruned.nextActive).toBeUndefined()
+    expect(pruned.needsPending).toBe(true)
+    expect(pruned.markHydrated).toBe(true)
+
+    const partial = reconcile({
+      localIds: ["a", "deleted"],
+      tabOrder: ["a", "deleted"],
+      active: "a",
+      durable: { sessions: [] },
+      catalog: catalogOf("a"),
+      hasMore: false,
+      LOCAL,
+      isFresh: true,
+      durableHydrated: false,
+    })
+    expect(partial.nextIds).toEqual(["a"])
+    expect(partial.nextActive).toBe("a")
+    expect(partial.needsPending).toBe(false)
+    expect(partial.markHydrated).toBe(true)
+  })
 })

@@ -44,6 +44,7 @@ import type {
 const EXTENSION_ID = "kilocode.kilo-code"
 const CMD_OPEN = "kilo-code.new.agentManagerOpen"
 const CMD_READY = "kilo-code.new.e2eFixture.agentManagerReady"
+const CMD_CONTENT_READY = "kilo-code.new.e2eFixture.agentManagerContentReady"
 const CMD_POST = "kilo-code.new.e2eFixture.postToAgentManager"
 
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
@@ -170,23 +171,32 @@ export async function run(): Promise<void> {
     60_000,
     "Agent Manager panel readiness",
   )
+  await vscode.commands.executeCommand(CMD_CONTENT_READY, 15_000)
 
   const iso = new Date().toISOString()
 
   if (scenario === "session-switch") {
     // Deterministic session set: N tabs with distinct titles + transcripts.
+    // Session IDs carry the `ses-` prefix so they satisfy the
+    // production/private `ses*` session-id contract; the run/fixture marker
+    // correlation ID stays `fixtureId`.
     const plan = {
       fixtureId,
       sessions: Array.from({ length: SWITCH_SESSIONS }, (_, i) => ({
-        id: `${fixtureId}-SW${i + 1}`,
+        id: `ses-${fixtureId}-SW${i + 1}`,
         title: `P0 Switch ${i + 1}`,
       })),
     }
     writeFileSync(join(scratch, "plan.json"), JSON.stringify(plan, null, 2))
 
+    // Flush the authoritative production refresh FIRST so no later real
+    // (empty) catalog refresh can prune the fixture tabs; the catalog seed
+    // plus the tab-open sequence is then last.
+    await vscode.commands.executeCommand("kilo-code.new.e2eFixture.settleSessions")
     await post(vscode, {
       type: "sessionsLoaded",
       sessions: plan.sessions.map((s) => session(s.id, s.title, iso)),
+      preserveSessionIds: plan.sessions.map((s) => s.id),
     } satisfies SessionsLoadedMessage)
 
     for (const s of plan.sessions) {
@@ -206,17 +216,10 @@ export async function run(): Promise<void> {
       } satisfies MessagesLoadedMessage)
     }
 
-    // Deterministic survival handshake, mirroring the existing E2E runner:
-    // await the real backend session-list refresh, then re-seed the full list
-    // with preserveSessionIds so no later refresh reconciles the fixtures away.
-    await vscode.commands.executeCommand("kilo-code.new.e2eFixture.settleSessions")
-    await post(vscode, {
-      type: "sessionsLoaded",
-      sessions: plan.sessions.map((s) => session(s.id, s.title, iso)),
-      preserveSessionIds: plan.sessions.map((s) => s.id),
-    } satisfies SessionsLoadedMessage)
-
     // Deterministic starting state: the last seeded tab is the active one.
+    // The tab-open sequence stays last: no authoritative production refresh
+    // remains after it (the settle ran first), so no trailing re-seed is
+    // needed — it would restore catalog/store only without recreating tabs.
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.sessions[0]!.id,
@@ -254,6 +257,7 @@ export async function run(): Promise<void> {
         60_000,
         `cycle-${cycle} Agent Manager panel readiness`,
       )
+      await vscode.commands.executeCommand(CMD_CONTENT_READY, 15_000)
       writeFileSync(join(scratch, `cycle-${cycle}-opened`), fixtureId)
       console.log(`[p0-runner] warm-view cycle ${cycle}: reopened marker written`)
     }

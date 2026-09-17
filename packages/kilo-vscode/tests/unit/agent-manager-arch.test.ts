@@ -467,10 +467,15 @@ describe("KiloProvider — pending session refresh on reconnect", () => {
   })
 
   it("connected state handler flushes deferred session refresh", () => {
-    // Find the onStateChange callback that handles "connected"
+    // Bound the assertion to the onStateChange subscription block: from the
+    // "connected" branch to the next subscription setup
+    // (unsubscribeLanguageChange), which structurally closes the connected
+    // handler regardless of how many best-effort steps the block grows.
     const connectedIdx = provider.indexOf('state === "connected"')
     expect(connectedIdx, '"connected" state handler must exist').toBeGreaterThan(-1)
-    const snippet = provider.slice(connectedIdx, connectedIdx + 800)
+    const endIdx = provider.indexOf("this.unsubscribeLanguageChange", connectedIdx)
+    expect(endIdx, "connected handler block must end before the next subscription").toBeGreaterThan(connectedIdx)
+    const snippet = provider.slice(connectedIdx, endIdx)
     expect(snippet, "must call flushPendingSessionRefresh from connected handler").toContain(
       'this.flushPendingSessionRefresh("sse-connected")',
     )
@@ -998,9 +1003,11 @@ describe("Agent Manager — Gate C in-flight preservation and bottom-page deriva
     expect(block).toContain("setIsBottomPage(false)")
     expect(block).not.toContain("setIsBottomPage(true)")
   })
-  it("reconciliation final invariant derives bottom-page from tab registry", () => {
+  it("reconciliation final invariant derives bottom-page from real content only", () => {
     expect(app).toContain("if (isBottomPage())")
-    expect(app).toContain("finalIds.length > 0")
+    expect(app).toContain("shouldClearBottomPage(")
+    expect(app).toContain("terms.current().length")
+    expect(app).not.toContain("if (finalIds.length > 0) setIsBottomPage(false)")
   })
   it("does not synthesize sessionsLoaded/sessionCreated/sessionAdded/title", () => {
     // Only real events may change state — no synthetic injections

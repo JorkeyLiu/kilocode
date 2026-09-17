@@ -1660,6 +1660,7 @@ describe("collectEvidence real-lifecycle (full inventory matrix)", () => {
       "child-phase1-done",
       "child-phase2-done",
       "child-phase2-ready",
+      "child-ready",
       "lc-dom-evidence",
       "lc-ready",
       "llm-matrix-*.json",

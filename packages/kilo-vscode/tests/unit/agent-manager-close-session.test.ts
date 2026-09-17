@@ -56,8 +56,42 @@ describe("AgentManagerProvider closeSession", () => {
     expect(manager.managedSessions.has("s1")).toBe(false)
     expect(manager.panelSessions.has("s1")).toBe(false)
     expect(manager.pushState).toHaveBeenCalled()
-    // Tab close is view lifecycle: the backend session persists, so timing
-    // must be retained. Only backend session.deleted or explicit forget prunes.
+    expect(manager.timing.forget).not.toHaveBeenCalled()
+  })
+
+  it("commits durable eviction and state push before a delayed stop resolves", async () => {
+    let release!: () => void
+    const gate = new Promise<{ data: object }>((resolve) => {
+      release = () => resolve({ data: {} })
+    })
+    const client = { backgroundProcess: { stopSession: mock(() => gate) } }
+    const manager = Object.create(AgentManagerProvider.prototype) as Manager
+    manager.connectionService = { getClient: () => client }
+    manager.managedSessions = new Map([["s1", { id: "s1" }]])
+    manager.panelSessions = new Set(["s1"])
+    manager.timing = { forget: mock(() => undefined) }
+    manager.getRoot = () => "/repo"
+    manager.pushState = mock(() => undefined)
+    manager.log = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+    ;(manager as unknown as Record<string, unknown>)["tabOrder"] = { ["local"]: ["s1"] }
+    ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = "s1"
+    ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>(["s1"])
+    ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: { get: () => undefined, update: () => Promise.resolve() } } as unknown as Record<string, unknown>
+
+    const closing = manager.onCloseSession("s1")
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(manager.managedSessions.has("s1")).toBe(false)
+    expect(manager.panelSessions.has("s1")).toBe(false)
+    expect((manager as unknown as Record<string, unknown>)["tabOrder"]).toEqual({ ["local"]: [] })
+    expect(manager.pushState).toHaveBeenCalledTimes(1)
+    expect((manager as unknown as Record<string, unknown>)["schedulePersist"]).toHaveBeenCalledTimes(1)
+    release()
+    await closing
+    expect(manager.managedSessions.has("s1")).toBe(false)
+    expect(manager.pushState).toHaveBeenCalledTimes(1)
     expect(manager.timing.forget).not.toHaveBeenCalled()
   })
 
@@ -90,10 +124,42 @@ describe("AgentManagerProvider closeSession", () => {
 
     await manager.onCloseSession("s1")
 
-    // Should still clean up even when stop fails
     expect(manager.managedSessions.has("s1")).toBe(false)
     expect(manager.panelSessions.has("s1")).toBe(false)
     expect(manager.pushState).toHaveBeenCalled()
+    expect(manager.timing.forget).not.toHaveBeenCalled()
+  })
+
+  it("keeps committed state when the delayed stop rejects", async () => {
+    let rejectStop!: (err: Error) => void
+    const gate = new Promise<{ data: object }>((_, reject) => {
+      rejectStop = reject
+    })
+    const client = { backgroundProcess: { stopSession: mock(() => gate) } }
+    const manager = Object.create(AgentManagerProvider.prototype) as Manager
+    manager.connectionService = { getClient: () => client }
+    manager.managedSessions = new Map([["s1", { id: "s1" }]])
+    manager.panelSessions = new Set(["s1"])
+    manager.timing = { forget: mock(() => undefined) }
+    manager.getRoot = () => "/repo"
+    manager.pushState = mock(() => undefined)
+    manager.log = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+    ;(manager as unknown as Record<string, unknown>)["tabOrder"] = { ["local"]: ["s1"] }
+    ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = "s1"
+    ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>(["s1"])
+    ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: { get: () => undefined, update: () => Promise.resolve() } } as unknown as Record<string, unknown>
+
+    const closing = manager.onCloseSession("s1")
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(manager.managedSessions.has("s1")).toBe(false)
+    expect(manager.pushState).toHaveBeenCalledTimes(1)
+    rejectStop(new Error("stop failed"))
+    await closing
+    expect(manager.managedSessions.has("s1")).toBe(false)
+    expect(manager.pushState).toHaveBeenCalledTimes(1)
     expect(manager.timing.forget).not.toHaveBeenCalled()
   })
 })

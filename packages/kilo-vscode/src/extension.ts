@@ -48,61 +48,297 @@ type RestoreState = {
   agentManager?: boolean
 }
 
-async function provisionVariantModelFixture(
-  agentManagerProvider: AgentManagerProvider,
-  connectionService: KiloConnectionService,
+type FixtureRawProvider = { id?: unknown; name?: unknown; hasCredential?: unknown; models?: unknown }
+type FixtureCanonicalModel = { id: string; name: string; variants?: Record<string, unknown> }
+type FixtureCanonicalProvider = { id: string; name: string; hasCredential: boolean; models: Record<string, FixtureCanonicalModel> }
+
+function fixtureModelView(mid: string, m: unknown): FixtureCanonicalModel {
+  const view = m as { id?: unknown; name?: unknown; variants?: unknown }
+  const modelVariants =
+    view.variants && typeof view.variants === "object" && !Array.isArray(view.variants)
+      ? (view.variants as Record<string, unknown>)
+      : undefined
+  const name = typeof view.name === "string" && view.name.length > 0 ? view.name : mid
+  const id = typeof view.id === "string" && view.id.length > 0 ? view.id : mid
+  return modelVariants ? { id, name, variants: modelVariants } : { id, name }
+}
+
+// Fixture-only canonical view: preserve every real catalog entry, inject only
+// the synthetic model. Narrowed to {id,name,hasCredential,models}; no
+// credentials, no extra catalog fields.
+function fixtureCanonicalProviders(
+  raw: Record<string, FixtureRawProvider>,
+  connected: string[],
+  providerID: string,
+): Record<string, FixtureCanonicalProvider> {
+  const out: Record<string, FixtureCanonicalProvider> = {}
+  for (const [key, entry] of Object.entries(raw)) {
+    const pid = typeof entry.id === "string" && entry.id.length > 0 ? entry.id : key
+    const name = typeof entry.name === "string" && entry.name.length > 0 ? entry.name : pid
+    const cred = typeof entry.hasCredential === "boolean" ? entry.hasCredential : connected.includes(pid)
+    const modelsRaw = (entry.models as Record<string, unknown> | undefined) ?? {}
+    const models: Record<string, FixtureCanonicalModel> = {}
+    for (const [mid, m] of Object.entries(modelsRaw)) models[mid] = fixtureModelView(mid, m)
+    out[pid] = { id: pid, name, hasCredential: pid === providerID ? true : cred, models }
+  }
+  return out
+}
+
+function fixtureCurrentVersion(canonicalConfig: CanonicalConfigService): number {
+  return Math.max(
+    canonicalConfig.stamp?.materializationVersion ?? 0,
+    canonicalConfig.providerIndex?.materializationVersion ?? 0,
+    canonicalConfig.snapshot?.generation ?? 0,
+    canonicalConfig.lastReadyStamp?.materializationVersion ?? 0,
+  )
+}
+
+type FixtureCanonicalAgentView = {
+  name: string
+  displayName: string
+  description: string
+  mode: "primary" | "subagent" | "all"
+  hidden: boolean
+  frontmatter?: Record<string, unknown>
+  color?: string
+  body?: string
+}
+
+type FixtureFrozenAgents = {
+  agents: FixtureCanonicalAgentView[]
+  allAgents: FixtureCanonicalAgentView[]
+  defaultAgent: string
+}
+
+function fixtureSyntheticAgents(providerID: string, modelID: string): FixtureCanonicalAgentView[] {
+  const binding = `${providerID}/${modelID}`
+  return [
+    {
+      name: "code",
+      displayName: "Code",
+      description: "E2E fixture code agent",
+      mode: "primary",
+      hidden: false,
+      frontmatter: { model: binding },
+    },
+    {
+      name: "search",
+      displayName: "Search",
+      description: "E2E fixture search agent",
+      mode: "primary",
+      hidden: false,
+      frontmatter: { model: binding },
+    },
+  ]
+}
+
+function fixtureAgentView(entry: Record<string, unknown>): FixtureCanonicalAgentView | null {
+  const name = typeof entry.name === "string" ? entry.name : ""
+  if (name.length === 0) return null
+  const displayName =
+    typeof entry.displayName === "string" && entry.displayName.length > 0 ? entry.displayName : name
+  const description = typeof entry.description === "string" ? entry.description : ""
+  const mode = entry.mode === "subagent" || entry.mode === "all" ? entry.mode : "primary"
+  const hidden = entry.hidden === true
+  const view: FixtureCanonicalAgentView = { name, displayName, description, mode, hidden }
+  if (entry.frontmatter && typeof entry.frontmatter === "object" && !Array.isArray(entry.frontmatter))
+    view.frontmatter = entry.frontmatter as Record<string, unknown>
+  if (typeof entry.color === "string") view.color = entry.color
+  if (typeof entry.body === "string") view.body = entry.body
+  return view
+}
+
+// Fixture-only canonical agent union: deterministic synthetic pair first
+// (`code`, then `search`), real entries deduped by name (synthetic wins) and
+// sorted by name. `agents` mirrors the canonical visible contract
+// (non-hidden only); `allAgents` preserves every entry including hidden.
+// Default prefers `code` so the seeded transcript `agent:"code"` stays valid.
+function fixtureCanonicalAgents(
+  realAgents: Array<Record<string, unknown>>,
   providerID: string,
   modelID: string,
-  variants: string[],
-): Promise<void> {
-  await agentManagerProvider.settleSessionsForFixture()
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  const variantMap: Record<string, unknown> = {}
-  for (const variant of variants) variantMap[variant] = {}
-  const injected = { id: modelID, name: modelID, variants: variantMap }
-  const providers: Record<string, unknown> = {}
+): FixtureFrozenAgents {
+  const synthetic = fixtureSyntheticAgents(providerID, modelID)
+  const seen = new Set(synthetic.map((a) => a.name))
+  const real: FixtureCanonicalAgentView[] = []
+  for (const entry of realAgents) {
+    const view = fixtureAgentView(entry)
+    if (!view) continue
+    if (seen.has(view.name)) continue
+    seen.add(view.name)
+    real.push(view)
+  }
+  real.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const allAgents = [...synthetic, ...real]
+  const agents = allAgents.filter((a) => !a.hidden)
+  const hasCode = allAgents.some((a) => a.name === "code")
+  const defaultAgent = hasCode ? "code" : (agents[0]?.name ?? allAgents[0]?.name ?? "code")
+  return { agents, allAgents, defaultAgent }
+}
+
+function fixturePostVariant(
+  agentManagerProvider: AgentManagerProvider,
+  canonicalConfig: CanonicalConfigService,
+  providers: Record<string, FixtureCanonicalProvider>,
+  connected: string[],
+  defaults: Record<string, string>,
+  selections: Record<string, { providerID: string; modelID: string }>,
+  providerID: string,
+  modelID: string,
+  fixtureVersion: number,
+  frozen: { stamp: Record<string, unknown>; contentHash: string; agents: FixtureFrozenAgents },
+): boolean {
+  if (fixtureCurrentVersion(canonicalConfig) > fixtureVersion) return false
+  const stamp = frozen.stamp
+  const contentHash = frozen.contentHash
+  if (Object.keys(selections).length > 0) {
+    agentManagerProvider.postMessage({
+      type: "modelSelectionsLoaded",
+      selections,
+      canonical: true,
+      materializationVersion: fixtureVersion,
+      stamp,
+    })
+  }
+  agentManagerProvider.postMessage({
+    type: "providersLoaded",
+    providers,
+    connected,
+    defaults,
+    defaultSelection: { providerID, modelID },
+    canonical: true,
+    ready: true,
+    materializationVersion: fixtureVersion,
+    contentHash,
+    diagnostics: {},
+    stamp,
+  })
+  agentManagerProvider.postMessage({
+    type: "agentsLoaded",
+    agents: frozen.agents.agents,
+    allAgents: frozen.agents.allAgents,
+    defaultAgent: frozen.agents.defaultAgent,
+    canonical: true,
+    ready: true,
+    materializationVersion: fixtureVersion,
+    contentHash,
+    diagnostics: {},
+    stamp,
+  })
+  return true
+}
+
+type FixtureRealState = {
+  raw: Record<string, FixtureRawProvider>
+  connected: string[]
+  defaults: Record<string, string>
+  selections: Record<string, { providerID: string; modelID: string }>
+  realAgents: Array<Record<string, unknown>>
+}
+
+// Fixture-only real catalog/agents read: preserves every real entry, injects
+// only the synthetic model, builds per-agent selections. No persistence.
+async function fixtureLoadReal(
+  connectionService: KiloConnectionService,
+  root: string | undefined,
+  providerID: string,
+  modelID: string,
+  injected: { id: string; name: string; variants: Record<string, unknown> },
+): Promise<FixtureRealState> {
+  const raw: Record<string, FixtureRawProvider> = {}
   let connected: string[] = []
   let defaults: Record<string, string> = {}
-  let selections: Record<string, { providerID: string; modelID: string }> = {}
+  const selections: Record<string, { providerID: string; modelID: string }> = {}
+  let realAgents: Array<Record<string, unknown>> = []
   try {
     const client = await connectionService.getClientAsync(root)
     const { data } = await client.provider.catalog({ directory: root }, { throwOnError: true })
     connected = data?.connected ?? []
     defaults = data?.default ?? {}
     for (const item of data?.all ?? []) {
-      const p = item as { id?: string; models?: Record<string, unknown> }
-      providers[p.id ?? ""] = p.id === providerID ? { ...p, models: { ...(p.models ?? {}), [modelID]: injected } } : p
+      const p = item as { id?: string } & FixtureRawProvider
+      const key = p.id ?? ""
+      const models = { ...((p.models as Record<string, unknown> | undefined) ?? {}), [modelID]: injected }
+      raw[key] = p.id === providerID ? { ...p, models } : p
     }
     const agentResult = await client.app.agents({ directory: root }, { throwOnError: true })
-    const agentNames = (agentResult.data ?? [])
-      .map((agent) => (agent as { name?: string }).name ?? "")
-      .filter((name) => name.length > 0)
-    for (const name of agentNames) selections[name] = { providerID, modelID }
+    realAgents = ((agentResult.data ?? []) as Array<Record<string, unknown>>).filter(
+      (agent) => typeof (agent as { name?: unknown }).name === "string",
+    )
+    for (const agent of realAgents) {
+      const name = (agent as { name?: string }).name ?? ""
+      if (name.length > 0) selections[name] = { providerID, modelID }
+    }
   } catch (err) {
     console.error("[Kilo New] provisionVariantModelFixture: real catalog/agents unavailable:", err)
   }
-  if (!providers[providerID])
-    providers[providerID] = { id: providerID, name: providerID, models: { [modelID]: injected } }
-  if (!connected.includes(providerID)) connected = [...connected, providerID]
+  return { raw, connected, defaults, selections, realAgents }
+}
 
-  const post = () => {
-    if (Object.keys(selections).length > 0) {
-      agentManagerProvider.postMessage({ type: "modelSelectionsLoaded", selections })
-    }
-    agentManagerProvider.postMessage({
-      type: "providersLoaded",
-      providers,
-      connected,
-      defaults,
-      defaultSelection: { providerID, modelID },
-      authMethods: {},
-      authStates: {},
-    })
+function fixtureEnsureSynthetic(
+  state: FixtureRealState,
+  providerID: string,
+  modelID: string,
+  injected: { id: string; name: string; variants: Record<string, unknown> },
+): void {
+  const existing = state.raw[providerID]
+  if (!existing) {
+    state.raw[providerID] = { id: providerID, name: providerID, hasCredential: true, models: { [modelID]: injected } }
+  } else {
+    const models = { ...((existing.models as Record<string, unknown> | undefined) ?? {}), [modelID]: injected }
+    state.raw[providerID] = { ...existing, id: providerID, models, hasCredential: true }
   }
-  post()
+  if (!state.connected.includes(providerID)) state.connected = [...state.connected, providerID]
+}
+
+async function provisionVariantModelFixture(
+  agentManagerProvider: AgentManagerProvider,
+  connectionService: KiloConnectionService,
+  canonicalConfig: CanonicalConfigService,
+  providerID: string,
+  modelID: string,
+  variants: string[],
+): Promise<void> {
+  if (!isE2EFixtureEnabled()) throw new Error("provisionVariantModelFixture requires KILO_E2E_FIXTURE")
+  await agentManagerProvider.settleSessionsForFixture()
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  const variantMap: Record<string, unknown> = {}
+  for (const variant of variants) variantMap[variant] = {}
+  const injected = { id: modelID, name: modelID, variants: variantMap }
+  const state = await fixtureLoadReal(connectionService, root, providerID, modelID, injected)
+  fixtureEnsureSynthetic(state, providerID, modelID, injected)
+  state.selections["code"] = { providerID, modelID }
+  state.selections["search"] = { providerID, modelID }
+
+  // Fixture materialization version: one past the current canonical state so
+  // the webview stale guard cannot reject it. Frozen for the provision;
+  // delayed republishes reuse the exact same version/stamp/hash/agents
+  // objects (byte-stable, idempotent) and stop atomically for all three
+  // surfaces when a newer real materialization exists (no split versions).
+  const fixtureVersion = Math.max(fixtureCurrentVersion(canonicalConfig), 0) + 1
+  const providers = fixtureCanonicalProviders(state.raw, state.connected, providerID)
+  const frozen = {
+    stamp: { ...canonicalConfig.stamp, materializationVersion: fixtureVersion },
+    contentHash: canonicalConfig.snapshot?.contentHash ?? "e2e-fixture",
+    agents: fixtureCanonicalAgents(state.realAgents, providerID, modelID),
+  }
+  const post = (): boolean =>
+    fixturePostVariant(
+      agentManagerProvider,
+      canonicalConfig,
+      providers,
+      state.connected,
+      state.defaults,
+      state.selections,
+      providerID,
+      modelID,
+      fixtureVersion,
+      frozen,
+    )
+  if (!post()) return
   for (const delayMs of [500, 1500, 3000, 5000]) {
     await new Promise((resolve) => setTimeout(resolve, delayMs))
-    post()
+    if (!post()) return
   }
 }
 
@@ -481,6 +717,22 @@ export function activate(context: vscode.ExtensionContext) {
         await agentManagerProvider.waitForReady()
         return true
       }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.agentManagerContentReady",
+        async (timeoutMs?: number) => {
+          const t = typeof timeoutMs === "number" ? timeoutMs : 15_000
+          await agentManagerProvider.waitForContentReadyForFixture(t)
+          return true
+        },
+      ),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.agentManagerBarrier",
+        async (token?: string, timeoutMs?: number) => {
+          const t = typeof timeoutMs === "number" ? timeoutMs : 15_000
+          await agentManagerProvider.waitForFixtureBarrierForFixture(token as string, t)
+          return true
+        },
+      ),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.postToAgentManager", (msg: unknown) => {
         agentManagerProvider.postMessage(msg)
         return true
@@ -561,6 +813,7 @@ export function activate(context: vscode.ExtensionContext) {
           await provisionVariantModelFixture(
             agentManagerProvider,
             connectionService,
+            canonicalConfig,
             opts?.providerID ?? "kilo",
             opts?.modelID ?? "e2e-probe",
             opts?.variants ?? ["low", "medium", "high"],

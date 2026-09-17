@@ -6,6 +6,7 @@ import { join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { isDirectExecution } from "../../script/e2e-direct"
 import { parseScenarios, needsCanonicalStorage } from "../../script/e2e-probe"
+import { CHILD_READY_MARKER, needsChildReadyGate } from "../../script/e2e-probe-dom"
 
 describe("probe scenario parsing (real-lifecycle reachable)", () => {
   test("parses real-lifecycle", () => {
@@ -22,6 +23,20 @@ describe("probe scenario parsing (real-lifecycle reachable)", () => {
   })
   test("needsCanonicalStorage for all includes r9", () => {
     expect(needsCanonicalStorage("r9-observation")).toBeTrue()
+  })
+  test("child-ready marker is distinct from child-phase coordination markers", () => {
+    expect(CHILD_READY_MARKER).toBe("child-ready")
+    expect(CHILD_READY_MARKER).not.toBe("child-phase1-done")
+    expect(CHILD_READY_MARKER).not.toBe("child-phase2-ready")
+    expect(CHILD_READY_MARKER).not.toBe("child-phase2-done")
+    expect(CHILD_READY_MARKER).not.toBe("ready")
+  })
+  test("needsChildReadyGate fires only when child follows tab-close in one composition", () => {
+    expect(needsChildReadyGate(new Set(["tab-close", "child-task-order", "variant-memory"]))).toBeTrue()
+    expect(needsChildReadyGate(parseScenarios("all"))).toBeTrue()
+    expect(needsChildReadyGate(new Set(["child-task-order"]))).toBeFalse()
+    expect(needsChildReadyGate(new Set(["tab-close"]))).toBeFalse()
+    expect(needsChildReadyGate(new Set(["variant-memory"]))).toBeFalse()
   })
   test("isDirectExecution remains import-safe for unit tests (not direct)", () => {
     // When imported via bun:test, argv[1] is the test runner, not e2e-probe

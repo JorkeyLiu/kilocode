@@ -143,10 +143,14 @@ function reconcileFresh(input: ReconcileInput): ReconcileOutput {
       applyActive: active !== undefined,
     }
   }
-  if (pendingIds.length > 0) {
-    const nextActive = active !== undefined && pendingIds.includes(active) ? active : pendingIds[0]
+  const kept = dedupe(localIds.filter((id) => isPending(id) || effective.has(id)))
+  if (kept.length > 0) {
+    let nextActive: string | undefined
+    if (active !== undefined && pendingIds.includes(active)) nextActive = active
+    else if (active !== undefined && kept.includes(active)) nextActive = active
+    else nextActive = kept[0]
     const applyActive = nextActive !== active
-    return { nextIds: pendingIds, nextActive, nextOrder: pendingIds, needsPending: false, markHydrated: true, applyActive }
+    return { nextIds: kept, nextActive, nextOrder: kept, needsPending: false, markHydrated: true, applyActive }
   }
   return {
     nextIds: [],

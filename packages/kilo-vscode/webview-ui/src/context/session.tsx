@@ -453,6 +453,7 @@ export const SessionProvider: ParentComponent = (props) => {
   const [agents, setAgents] = createSignal<AgentInfo[]>([])
   const [allAgents, setAllAgents] = createSignal<AgentInfo[]>([])
   const [agentStamp, setAgentStamp] = createSignal<CanonicalStamp>()
+  const [selectionsStamp, setSelectionsStamp] = createSignal<CanonicalStamp>()
   const [agentDiagnostic, setAgentDiagnostic] = createSignal<string | null>(null)
   const [defaultAgent, setDefaultAgent] = createSignal("code")
   const [pendingKiloModel, setPendingKiloModel] = createSignal<{
@@ -1326,6 +1327,24 @@ export const SessionProvider: ParentComponent = (props) => {
   // Uses replace semantics so a reset (empty payload) clears old entries.
   const unsubSelections = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "modelSelectionsLoaded") return
+    // Fixture-only canonical selections (KILO_E2E_FIXTURE) are accepted when
+    // canonical mode is active; production never sends canonical:true here.
+    // Monotonic by materializationVersion so a stale republish cannot
+    // overwrite newer selections. Legacy model.json selections stay dropped
+    // in canonical mode.
+    if (message.canonical === true) {
+      const version = message.materializationVersion
+      if (version < (selectionsStamp()?.materializationVersion ?? -1)) return
+      if ("stamp" in message && message.stamp) setSelectionsStamp(message.stamp)
+      else setSelectionsStamp({ globalHash: null, projectHash: null, materializationVersion: version, assetHash: null })
+      setStore("modelSelections", reconcile(message.selections))
+      const flags: Record<string, boolean> = {}
+      for (const name of Object.keys(message.selections)) {
+        flags[name] = true
+      }
+      setUserSetAgents(flags)
+      return
+    }
     // P4.1: ignore legacy model.json selections when canonical mode is active.
     if (canonicalMode?.()) return
     setStore("modelSelections", reconcile(message.selections))

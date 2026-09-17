@@ -52,6 +52,13 @@ export interface SessionProvider {
   trackSession(id: string): void
   /** Re-fetch and send the full session list; resolves once the load has been applied. */
   refreshSessions(): Promise<void>
+  /**
+   * Generation-aware catalog-settled barrier; resolves only when no
+   * initialization-triggered or pending catalog post remains queued for the
+   * current connected generation. Rejects on terminal connection
+   * error/dispose/abort/timeout.
+   */
+  waitForCatalogSettled?(opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<void>
   registerSession(session: import("@kilocode/sdk/v2/client").Session | SessionDetail): void
   /** Recover any pending permission/question prompts for tracked sessions. */
   recoverPendingPrompts(): void

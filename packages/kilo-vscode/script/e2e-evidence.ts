@@ -285,6 +285,7 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     // Extra markers/evidence each scenario may produce (copied when present).
     optional.push(
       { rel: "tab-close-done", base: "scratch" },
+      { rel: "child-ready", base: "scratch" },
       { rel: "child-phase1-done", base: "scratch" },
       { rel: "child-phase2-ready", base: "scratch" },
       { rel: "child-phase2-done", base: "scratch" },

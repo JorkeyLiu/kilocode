@@ -48,6 +48,7 @@ import type { Host, PanelContext, OutputHandle, Disposable } from "./host"
 import type { PrivateObservationService } from "../private-worker/private-observation-service"
 import type { TriggerResult } from "../private-worker/private-observation-lifecycle-triggers"
 import { AgentManagerObservationCoordinator } from "./observation-coordinator"
+import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 
 export class AgentManagerProvider implements Disposable {
   public static readonly viewType = "kilo-code.new.AgentManagerPanel"
@@ -99,9 +100,50 @@ export class AgentManagerProvider implements Disposable {
   )
   private hydrated = false
   private generation = 0
+  // Fixture-only Agent Manager content-readiness handshake (KILO_E2E_FIXTURE).
+  // Scoped to a content generation distinct from `generation` because the
+  // fixture reload path preserves the same PanelContext/provider while the
+  // webview document is replaced. Bumped on attach, fixture reload start, and
+  // panel dispose; the ack resolves only waiters of the current generation
+  // that have already seen the current generation's webviewReady.
+  private contentGen = 0
+  private contentReadyGen: number | null = null
+  private contentWebviewReadyGen: number | null = null
+  private contentWaiters: Array<{
+    gen: number
+    resolve: (v: boolean) => void
+    reject: (e: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }> = []
+  // Fixture-only per-seed delivery barrier waiters (KILO_E2E_FIXTURE).
+  // Scoped to the content generation captured at wait time plus the exact
+  // barrier token. An ack resolves only waiters whose gen is still current
+  // and whose token matches exactly; stale generations and mismatched tokens
+  // are ignored. Same lifecycle as contentWaiters: attach/reload/dispose/
+  // shutdown reject and clear. Identical gen+token waiters coalesce (one ack
+  // resolves all); distinct tokens resolve independently so per-batch tokens
+  // never collide.
+  private barrierWaiters: Array<{
+    gen: number
+    token: string
+    resolve: (v: boolean) => void
+    reject: (e: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }> = []
   private refreshPromise: Promise<void> | null = null
   private refreshGen: number | null = null
   private refreshSessions: unknown | null = null
+  // AgentManager-owned async activity that can emit catalog/durable updates
+  // across a fixture phase: in-flight close handlers plus observation
+  // refresh entry chains (including the stateReady prefix before the
+  // singleflight exists). The singleflight (refreshPromise) and the queued
+  // persistence flush (persistInFlight/pendingSnapshot) stay the source of
+  // truth for those lanes; this set only tracks the outer fire-and-forget
+  // wrappers so the fixture drain sees work before it reaches the
+  // singleflight. Production behavior is unchanged apart from making the
+  // commit order coherent; no sleeps, no fixture-special-cased paths.
+  private ownedOps: Set<Promise<unknown>> | undefined
+  private ownedGen = 0
   private coordinator: AgentManagerObservationCoordinator | undefined
   constructor(
     private readonly host: Host,
@@ -185,12 +227,31 @@ export class AgentManagerProvider implements Disposable {
     const sessionsAtCall = this.panel?.sessions
     if (!sessionsAtCall) return
     if (!this.panel?.visible) return
-    void this.waitForStateReady("observationRefreshVisible").then(() => {
-      if (this.generation !== genAtCall) return
-      if (this.panel?.sessions !== sessionsAtCall) return
-      if (!this.panel?.visible) return
-      void this.handleObservationRefresh()
-    })
+    void this.trackOwned(
+      this.waitForStateReady("observationRefreshVisible").then(() => {
+        if (this.generation !== genAtCall) return
+        if (this.panel?.sessions !== sessionsAtCall) return
+        if (!this.panel?.visible) return
+        return this.handleObservationRefresh()
+      }),
+    )
+  }
+
+  /** Track AgentManager-owned async work that can emit catalog/durable updates. */
+  private trackOwned<T>(op: Promise<T>): Promise<T> {
+    if (!this.ownedOps) {
+      this.ownedOps = new Set<Promise<unknown>>()
+      if (this.ownedGen === undefined) this.ownedGen = 0
+    }
+    this.ownedGen += 1
+    const set = this.ownedOps
+    const key = op as unknown as Promise<unknown>
+    set.add(key)
+    const done = () => {
+      set.delete(key)
+    }
+    void Promise.resolve(op).then(done, done)
+    return op
   }
 
   private onSessionStatus(event: unknown): void {
@@ -332,6 +393,7 @@ export class AgentManagerProvider implements Disposable {
   public async reloadWebviewForFixture(): Promise<void> {
     const cur = this.panel
     if (!cur) throw new Error("AgentManagerProvider: no panel to reload")
+    this.bumpContentGenForFixture(new Error("webview reload started"))
     const hostAny = this.host as unknown as { reloadAgentManagerPanelForFixture?: () => Promise<PanelContext | void> }
     if (!hostAny.reloadAgentManagerPanelForFixture) throw new Error("Host does not support AM reload")
     await hostAny.reloadAgentManagerPanelForFixture()
@@ -367,6 +429,7 @@ export class AgentManagerProvider implements Disposable {
       this.catalogUnsub = ctx.sessions.onCatalog((update) => this.onCatalogUpdate(update))
     }
     this.generation++
+    this.bumpContentGenForFixture(new Error("panel generation changed"))
     this.hydrated = false
     this.stateReady = this.initializeState()
     void this.sendRepoInfo()
@@ -394,6 +457,10 @@ export class AgentManagerProvider implements Disposable {
           this.catalogUnsub.dispose()
           this.catalogUnsub = undefined
         }
+        this.failContentWaitersForFixture(new Error("panel disposed"))
+        this.failBarrierWaitersForFixture(new Error("panel disposed"))
+        this.contentReadyGen = null
+        this.contentWebviewReadyGen = null
       }
       ctx.sessions.dispose()
     })
@@ -574,6 +641,8 @@ export class AgentManagerProvider implements Disposable {
   // Message interceptor
 
   private async onMessage(msg: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+    const fixtureIntercept = this.interceptContentHandshakeForFixture(msg)
+    if (fixtureIntercept !== undefined) return fixtureIntercept
     if (msg.type === "requestFileSearch" && typeof msg.sessionID !== "string" && this.activeSessionId) {
       return { ...msg, sessionID: this.activeSessionId }
     }
@@ -610,7 +679,7 @@ export class AgentManagerProvider implements Disposable {
     msg: Record<string, unknown>,
   ): Record<string, unknown> | null | undefined {
     if (m.type === "agentManager.closeSession") {
-      void this.onCloseSession(m.sessionId)
+      void this.trackOwned(this.onCloseSession(m.sessionId))
       return null
     }
 
@@ -796,9 +865,7 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private triggerObservationRefresh(): void {
-    void this.waitForStateReady("observationRefresh").then(() => {
-      void this.handleObservationRefresh()
-    })
+    void this.trackOwned(this.waitForStateReady("observationRefresh").then(() => this.handleObservationRefresh()))
   }
 
   private handleObservationRefresh(): Promise<void> {
@@ -895,6 +962,10 @@ export class AgentManagerProvider implements Disposable {
    * requested/ackCursor — skip ack rather than recursively starting a lane to avoid deadlock.
    */
   public async handlePeerCloseObservation(result: TriggerResult | undefined): Promise<void> {
+    return this.trackOwned(this.runPeerCloseObservation(result))
+  }
+
+  private async runPeerCloseObservation(result: TriggerResult | undefined): Promise<void> {
     const panelAtCall = this.panel
     const genAtCall = this.generation
     const sessionsAtCall = panelAtCall?.sessions
@@ -1104,22 +1175,19 @@ export class AgentManagerProvider implements Disposable {
   // Session actions
 
   /**
-   * Close a session: stop backend processes and remove from managed state.
-   * View lifecycle only — the backend session persists, so the cumulative
-   * runtime is deliberately retained across tab close and pruned only on a
-   * real backend session.deleted (or an explicit forgetSession).
+   * Close a session: commit durable/session ownership synchronously, then
+   * best-effort stop backend processes. View lifecycle only — the backend
+   * session persists, so the cumulative runtime is deliberately retained
+   * across tab close and pruned only on a real backend session.deleted
+   * (or an explicit forgetSession). Durable truth (eviction, tab order,
+   * active repair, persist schedule, state push) must not wait for the
+   * process stop; the stop stays awaited cleanup but never delays or
+   * reverts the commit, and a stop failure leaves state committed.
    */
   private async onCloseSession(sessionId: string): Promise<void> {
     this.panelSessions.delete(sessionId)
     if (!this.recentSessions) this.recentSessions = new Set<string>()
     this.recentSessions.delete(sessionId)
-    const root = this.getRoot() ?? ""
-    try {
-      const { stopSessionProcesses } = await import("../kilo-provider/background-process")
-      await stopSessionProcesses(this.connectionService.getClient(), sessionId, root, this.connectionService)
-    } catch (err) {
-      this.log(`Failed to stop session processes for ${sessionId}:`, err)
-    }
     this.managedSessions.delete(sessionId)
     if (this.tabOrder && this.LOCAL) {
       const ord = this.tabOrder[this.LOCAL]
@@ -1131,6 +1199,13 @@ export class AgentManagerProvider implements Disposable {
     }
     this.schedulePersist()
     this.pushState()
+    const root = this.getRoot() ?? ""
+    try {
+      const { stopSessionProcesses } = await import("../kilo-provider/background-process")
+      await stopSessionProcesses(this.connectionService.getClient(), sessionId, root, this.connectionService)
+    } catch (err) {
+      this.log(`Failed to stop session processes for ${sessionId}:`, err)
+    }
   }
 
   /** Fork a session via the CLI backend (local-only) — private-first with single same-tuple SDK fallback. */
@@ -1295,6 +1370,184 @@ export class AgentManagerProvider implements Disposable {
     return this.waitForPanelReady(panel)
   }
 
+  /**
+   * Fixture-only content-readiness intercept (KILO_E2E_FIXTURE).
+   * Returns null when the message is consumed, undefined when the caller
+   * should continue normal production handling. Production `webviewReady`
+   * passes through unchanged; the fixture-only `agentManager.contentReady`
+   * ack is consumed in all cases and only affects fixture state when the
+   * fixture flag is enabled, the panel is present, and the current
+   * generation has already seen its webviewReady. The fixture-only
+   * `agentManager.fixtureBarrierAck` echo is likewise consumed in all cases
+   * and resolves only exact current-generation/token barrier waiters.
+   */
+  private interceptContentHandshakeForFixture(
+    msg: Record<string, unknown>,
+  ): Record<string, unknown> | null | undefined {
+    if (msg.type === "webviewReady") {
+      if (isE2EFixtureEnabled() && this.panel) {
+        this.contentWebviewReadyGen = this.contentGen ?? 0
+        this.contentReadyGen = null
+      }
+      return undefined
+    }
+    if (msg.type === "agentManager.fixtureBarrierAck") {
+      if (!isE2EFixtureEnabled()) return null
+      if (!this.panel) return null
+      const token = msg.token
+      if (typeof token !== "string" || token.length === 0) return null
+      const gen = this.contentGen ?? 0
+      const waiters = this.barrierWaiters ?? []
+      const ready = waiters.filter((w) => w.gen === gen && w.token === token)
+      if (ready.length === 0) return null
+      this.barrierWaiters = waiters.filter((w) => !(w.gen === gen && w.token === token))
+      for (const w of ready) {
+        clearTimeout(w.timer)
+        w.resolve(true)
+      }
+      return null
+    }
+    if (msg.type !== "agentManager.contentReady") return undefined
+    if (!isE2EFixtureEnabled()) return null
+    if (!this.panel) return null
+    const gen = this.contentGen ?? 0
+    if (this.contentWebviewReadyGen !== gen) return null
+    this.contentReadyGen = gen
+    const waiters = this.contentWaiters ?? []
+    const ready = waiters.filter((w) => w.gen === gen)
+    this.contentWaiters = waiters.filter((w) => w.gen !== gen)
+    for (const w of ready) {
+      clearTimeout(w.timer)
+      w.resolve(true)
+    }
+    return null
+  }
+
+  private bumpContentGenForFixture(reason: Error): void {
+    // Field initializers do not run on prototype-only test doubles
+    // (Object.create), so default defensively here.
+    this.contentGen = (this.contentGen ?? 0) + 1
+    this.contentReadyGen = null
+    this.contentWebviewReadyGen = null
+    this.failContentWaitersForFixture(reason)
+    this.failBarrierWaitersForFixture(reason)
+  }
+
+  private failContentWaitersForFixture(reason: Error): void {
+    const waiters = this.contentWaiters
+    this.contentWaiters = []
+    for (const w of waiters ?? []) {
+      clearTimeout(w.timer)
+      w.reject(reason)
+    }
+  }
+
+  private failBarrierWaitersForFixture(reason: Error): void {
+    const waiters = this.barrierWaiters
+    this.barrierWaiters = []
+    for (const w of waiters ?? []) {
+      clearTimeout(w.timer)
+      w.reject(reason)
+    }
+  }
+
+  /** Fixture-only: current content generation (test inspection). */
+  public getContentGenerationForFixture(): number {
+    return this.contentGen ?? 0
+  }
+
+  /** Fixture-only: pending content-ready waiter count (test inspection). */
+  public getContentWaiterCountForFixture(): number {
+    return this.contentWaiters?.length ?? 0
+  }
+
+  /** Fixture-only: pending barrier waiter count (test inspection). */
+  public getBarrierWaiterCountForFixture(): number {
+    return this.barrierWaiters?.length ?? 0
+  }
+
+  /**
+   * Fixture-only: wait for the current panel/webview generation's
+   * content-ready ack. Resolves true when the ack for the calling
+   * generation arrives after its webviewReady. Rejects on timeout,
+   * disposal, reload, or generation change. Coalesces concurrent waiters
+   * for the same generation. Never resolves from webviewReady alone or
+   * from a stale generation's ack.
+   */
+  public waitForContentReadyForFixture(timeoutMs = 15_000): Promise<boolean> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture content-ready requires KILO_E2E_FIXTURE")
+    const panel = this.panel
+    if (!panel) throw new Error("fixture content-ready: no Agent Manager panel")
+    const gen = this.contentGen ?? 0
+    if (this.contentReadyGen === gen) return Promise.resolve(true)
+    if (!this.contentWaiters) this.contentWaiters = []
+    return new Promise<boolean>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const list = this.contentWaiters ?? []
+        const idx = list.indexOf(entry)
+        if (idx >= 0) list.splice(idx, 1)
+        reject(new Error(`fixture content-ready: timeout waiting for generation ${gen}`))
+      }, timeoutMs)
+      const entry = {
+        gen,
+        resolve: (v: boolean) => resolve(v),
+        reject: (e: Error) => reject(e),
+        timer,
+      }
+      ;(this.contentWaiters ??= []).push(entry)
+    })
+  }
+
+  /**
+   * Fixture-only: per-seed delivery barrier (KILO_E2E_FIXTURE). Arranges the
+   * waiter for the current content generation + token BEFORE posting the
+   * barrier to the current panel (no fast-ack race), then awaits the
+   * webview's `agentManager.fixtureBarrierAck` echo. Resolves true only on
+   * the exact current generation/token ack. Rejects on empty token, no
+   * panel, post failure, timeout, or generation change (attach/reload/
+   * dispose/shutdown). Concurrent identical gen+token waiters coalesce (one
+   * ack resolves all); distinct tokens resolve independently. Production
+   * never calls this; no queue, no production postMessage change.
+   */
+  public waitForFixtureBarrierForFixture(token: string, timeoutMs = 15_000): Promise<boolean> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture barrier requires KILO_E2E_FIXTURE")
+    if (typeof token !== "string" || token.length === 0) throw new Error("fixture barrier: non-empty token required")
+    const panel = this.panel
+    if (!panel) throw new Error("fixture barrier: no Agent Manager panel")
+    const gen = this.contentGen ?? 0
+    if (!this.barrierWaiters) this.barrierWaiters = []
+    let entry: { gen: number; token: string; resolve: (v: boolean) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+    const gate = new Promise<boolean>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const list = this.barrierWaiters ?? []
+        const idx = list.indexOf(entry)
+        if (idx >= 0) list.splice(idx, 1)
+        reject(new Error(`fixture barrier: timeout waiting for token ${token} generation ${gen}`))
+      }, timeoutMs)
+      entry = {
+        gen,
+        token,
+        resolve: (v: boolean) => resolve(v),
+        reject: (e: Error) => reject(e),
+        timer,
+      }
+      ;(this.barrierWaiters ??= []).push(entry)
+    })
+    try {
+      panel.postMessage({ type: "agentManager.fixtureBarrier", token })
+    } catch (err) {
+      const list = this.barrierWaiters ?? []
+      const idx = list.indexOf(entry!)
+      if (idx >= 0) list.splice(idx, 1)
+      clearTimeout(entry!.timer)
+      throw new Error(`fixture barrier: post failed for token ${token}: ${String(err)}`)
+    }
+    return gate.then((ok) => {
+      if ((this.contentGen ?? 0) !== gen) throw new Error(`fixture barrier: generation changed for token ${token}`)
+      return ok
+    })
+  }
+
   /** Expose session→directory mappings for the auto-approve toggle. */
   public getSessionDirectories(): ReadonlyMap<string, string> {
     return this.panel?.sessions.getSessionDirectories() ?? new Map()
@@ -1313,26 +1566,94 @@ export class AgentManagerProvider implements Disposable {
    * Deterministically wait until the Agent Manager's session list has been
    * synced from the real backend — including any deferred refresh flushed
    * when the CLI connection comes up. Used only by the env-gated E2E fixture
-   * bridge (KILO_E2E_FIXTURE); the extension-host runner calls this before
-   * its final re-seed so no later in-flight refresh can reconcile the
-   * fixture sessions away.
+   * bridge (KILO_E2E_FIXTURE); the extension-host runner calls this between
+   * its tab-open batch and its final re-seed so no later in-flight refresh
+   * can reconcile the fixture sessions away.
+   *
+   * Sequence: state ready, drain AgentManager-owned pending close/refresh
+   * work to a stable generation/empty tracker, catalog-settled barrier, one
+   * explicit observation refresh, catalog-settled barrier again, final drain.
+   * Returns only when no already-started Agent Manager operation can later
+   * post sessionsLoaded/agentManager.state for the prior phase and no
+   * initialization-triggered or pending catalog post remains queued for the
+   * current connected generation. Terminal connection failure, dispose,
+   * generation change, or timeout rejects so the fixture command fails fast
+   * and the runner never seeds on top of an unsettled catalog. No sleeps.
    */
   public async settleSessionsForFixture(): Promise<void> {
     const panel = this.panel
     if (!panel) return
     await this.waitForStateReady("settleSessionsForFixture")
-    // Ensure the CLI connection is established so the refresh performs a real
-    // fetch now instead of deferring (pendingSessionRefresh). KiloProvider
-    // serializes session-list loads, so this awaited refresh is the last one
-    // the webview applies.
-    try {
-      await this.connectionService.getClientAsync(this.getRoot())
-    } catch {
-      // Best effort — refreshSessions still enqueues; if the client is
-      // unavailable it defers and flushes on connect, which the serialized
-      // load chain resolves in order.
+    await this.drainOwnedForFixture(30_000)
+    this.throwIfSettleGenerationChanged(panel, "settleSessionsForFixture")
+    if (typeof panel.sessions.waitForCatalogSettled !== "function") {
+      await this.handleObservationRefresh()
+      await this.drainOwnedForFixture(30_000)
+      this.throwIfSettleGenerationChanged(panel, "settleSessionsForFixture")
+      return
     }
-    await panel.sessions.refreshSessions()
+    await panel.sessions.waitForCatalogSettled({ timeoutMs: 30_000 })
+    this.throwIfSettleGenerationChanged(panel, "settleSessionsForFixture")
+    await this.handleObservationRefresh()
+    await panel.sessions.waitForCatalogSettled({ timeoutMs: 30_000 })
+    await this.drainOwnedForFixture(30_000)
+    this.throwIfSettleGenerationChanged(panel, "settleSessionsForFixture")
+  }
+
+  private throwIfSettleGenerationChanged(panel: PanelContext, context: string): void {
+    if (this.panel !== panel) throw new Error(`${context}: panel generation changed during settle`)
+    if (this.closing) throw new Error(`${context}: provider disposed during settle`)
+  }
+
+  /**
+   * Drain AgentManager-owned pending close/refresh work that can emit
+   * catalog/durable updates: tracked fire-and-forget wrappers (ownedOps),
+   * the observation singleflight (refreshPromise), and the queued
+   * persistence flush (persistInFlight/pendingSnapshot, drained via flush
+   * which performs no state post). Loops until the tracker is empty at a
+   * stable owned generation so work spawned while draining is also awaited.
+   * Rejects on timeout, dispose, or owned-work error; settled entries clean
+   * themselves via trackOwned finally. No sleeps, no fixture IDs.
+   */
+  private async drainOwnedForFixture(timeoutMs = 10_000): Promise<void> {
+    const start = Date.now()
+    let stable = this.ownedGen ?? 0
+    for (;;) {
+      if (!this.panel) throw new Error("settleSessionsForFixture: disposed during drain")
+      if (this.closing) throw new Error("settleSessionsForFixture: disposed during drain")
+      const owned = [...(this.ownedOps ?? [])]
+      const refresh = this.refreshPromise
+      const persist = this.persistInFlight
+      const pending = this.pendingSnapshot !== null && this.pendingSnapshot !== undefined
+      const gen = this.ownedGen ?? 0
+      const empty = owned.length === 0 && !refresh && !persist && !pending
+      if (empty && gen === stable) return
+      const remaining = timeoutMs - (Date.now() - start)
+      if (remaining <= 0) throw new Error("settleSessionsForFixture: timeout draining Agent Manager work")
+      stable = gen
+      const waits: Array<Promise<unknown>> = [...owned]
+      if (refresh) waits.push(refresh)
+      if (persist) waits.push(persist)
+      if (waits.length === 0) {
+        await this.raceDrain(this.flush(), remaining)
+        await Promise.resolve()
+        continue
+      }
+      await this.raceDrain(Promise.all(waits), remaining)
+    }
+  }
+
+  private raceDrain<T>(op: Promise<T>, remainingMs: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const gate = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        if (!this.panel || this.closing) reject(new Error("settleSessionsForFixture: disposed during drain"))
+        else reject(new Error("settleSessionsForFixture: timeout draining Agent Manager work"))
+      }, remainingMs)
+    })
+    return Promise.race([op, gate]).finally(() => {
+      if (timer) clearTimeout(timer)
+    }) as Promise<T>
   }
 
   /**
@@ -1509,6 +1830,8 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private async disposeAsync(): Promise<void> {
+    this.failContentWaitersForFixture(new Error("provider disposed"))
+    this.failBarrierWaitersForFixture(new Error("provider disposed"))
     this.unsubConnectionState?.()
     this.unsubConnectionState = undefined
     await this.stateReady?.catch((err) => this.log("dispose: stateReady rejected:", err))

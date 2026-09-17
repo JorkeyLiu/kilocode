@@ -130,6 +130,17 @@ interface ActionOutMessage {
   action: string
 }
 
+/**
+ * Fixture-only per-seed delivery barrier (KILO_E2E_FIXTURE).
+ * Extension→webview ping with a non-empty token; the webview acks after at
+ * most one rAF so FIFO ordering proves prior synchronous seed handlers ran.
+ * Production never sends this; no queue, no production semantics change.
+ */
+interface FixtureBarrierMessage {
+  type: "agentManager.fixtureBarrier"
+  token: string
+}
+
 /** All messages the Agent Manager extension sends to the webview. */
 export type AgentManagerOutMessage =
   | LocalStatsMessage
@@ -142,6 +153,7 @@ export type AgentManagerOutMessage =
   | KeybindingsMessage
   | RepoInfoMessage
   | ActionOutMessage
+  | FixtureBarrierMessage
   | TerminalCreatedMessage
   | TerminalClosedMessage
   | TerminalErrorMessage
@@ -350,6 +362,15 @@ interface AbortIn {
   sessionID: string
 }
 
+/**
+ * Fixture-only barrier ack (KILO_E2E_FIXTURE). Webview→extension echo of the
+ * barrier token. Consumed by the fixture bridge only; ignored in production.
+ */
+interface FixtureBarrierAckIn {
+  type: "agentManager.fixtureBarrierAck"
+  token: string
+}
+
 // ---------------------------------------------------------------------------
 // Terminal inbound messages
 // ---------------------------------------------------------------------------
@@ -402,6 +423,7 @@ export type AgentManagerInMessage =
   | RequestTerminalContextIn
   | ClearSessionIn
   | AbortIn
+  | FixtureBarrierAckIn
   | TerminalCreateIn
   | TerminalCloseIn
   | TerminalResizeIn

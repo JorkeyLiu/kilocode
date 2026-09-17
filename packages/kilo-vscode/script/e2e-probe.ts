@@ -153,8 +153,8 @@
  *   `bun run test:e2e:p3-4-removal`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
- * through scenario-specific markers (tab-close-done, child-phase1-done /
- * child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
+ * through scenario-specific markers (tab-close-done, child-ready /
+ * child-phase1-done / child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
  * topic-reopen-ready / topic-reopen-done / topic-reload-frame /
  * topic-reload-ready / topic-reload-done, real-ready / real-snap-N-request /
  * real-snap-N.json / real-reopen-request / real-reopen-ready,
@@ -240,6 +240,7 @@ import {
   activeTabLabel,
   agentOptions,
   assertNoWorktree,
+  CHILD_READY_MARKER,
   clickChildTaskLink,
   clickRealNewSessionAction,
   clickRevertToHere,
@@ -258,6 +259,7 @@ import {
   findAgentManagerFrameAny,
   headerTitle,
   labelText,
+  needsChildReadyGate,
   openSidebarSession,
   pickAgent,
   pickOption,
@@ -2542,6 +2544,14 @@ async function runScenario(
     console.log("[probe] tab-close successor assertion passed")
   }
   if (scenarios.has("child-task-order")) {
+    // Deterministic phase gate for the `all` composition: the runner seeds
+    // the child catalog only after tab-close-done, so the first child finder
+    // must wait for child-ready (written after the full child seed) instead
+    // of racing the seed up to the finder timeout. Focused child runs stay
+    // governed by the initial ready marker.
+    if (needsChildReadyGate(scenarios)) {
+      await waitForFile(join(scratch, CHILD_READY_MARKER), 120_000, "child-ready marker")
+    }
     await assertChildTaskOrder(browser, plan, scratch)
     console.log("[probe] child-task tab-order assertion passed")
   }

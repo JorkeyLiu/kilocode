@@ -105,6 +105,7 @@ import { tracker } from "./telemetry"
 import { createSessionTabManager } from "./session-tab-manager"
 import { openSession, openChildSession, type OpenChildSessionDeps, type OpenSessionDeps } from "./open-session"
 import { accumulateCatalog, reconcile } from "./hydration"
+import { resolveCoverBottomPage, shouldClearBottomPage } from "./cover-bottom-page"
 import "./agent-manager.css"
 
 // Explicit tool registration at the Agent Manager boundary. The task renderer
@@ -403,12 +404,13 @@ const AgentManagerContent: Component = () => {
         if (imported.sidebarCollapsed !== undefined) sidebar.hydrate(imported.sidebarCollapsed)
       }
     }
-    // Final invariant: reconciled tab registry + bottom flag cannot be contradictory hidden.
-    // If a reconcile left isBottomPage true but the final registry has a pending tab,
-    // the tab bar would be hidden while tabs exist (tabCount 0 probe). Derive from final state.
+    // Final invariant: bottom stays while only an internal pending draft (or
+    // nothing) exists with no terminals. Lone pending is hidden by the
+    // bottom-page tab-bar gate, not real content. Any non-pending real tab
+    // or terminal content clears bottom as before.
     if (isBottomPage()) {
       const finalIds = tabMgr.ids(LOCAL)
-      if (finalIds.length > 0) setIsBottomPage(false)
+      if (shouldClearBottomPage(finalIds, terms.current().length, isPending)) setIsBottomPage(false)
     }
   }
 
@@ -459,19 +461,17 @@ const AgentManagerContent: Component = () => {
     }
   }
   const coverBottomPage = () => {
-    if (!isBottomPage()) return
-    const ids = tabMgr.ids(LOCAL)
-    if (ids.length !== 1) {
-      setIsBottomPage(false)
-      return
+    const decision = resolveCoverBottomPage(tabMgr.ids(LOCAL), isBottomPage(), isPending)
+    if (!decision) return
+    if (decision.coverId !== undefined) {
+      const cover = decision.coverId
+      setLocalSessionIDs((prev) => prev.filter((x) => x !== cover))
+      tabMgr.remove(LOCAL, cover)
+      setTabOrder((prev) => ({ ...prev, [LOCAL]: (prev[LOCAL] ?? []).filter((x) => x !== cover) }))
+      deletePendingDraft(cover)
+      if (activePendingId() === cover) setActivePendingId(undefined)
     }
-    const pendingId = ids[0]
-    setLocalSessionIDs((prev) => prev.filter((x) => x !== pendingId))
-    tabMgr.remove(LOCAL, pendingId)
-    setTabOrder((prev) => ({ ...prev, [LOCAL]: (prev[LOCAL] ?? []).filter((x) => x !== pendingId) }))
-    deletePendingDraft(pendingId)
-    setActivePendingId(undefined)
-    setIsBottomPage(false)
+    if (decision.clearBottom) setIsBottomPage(false)
   }
   const openDeps: OpenSessionDeps = {
     tabMgr,
@@ -916,6 +916,28 @@ const AgentManagerContent: Component = () => {
       if (msg.type === "sessionDeleted") handleSessionDeletedFromBackend(msg as { type: string; sessionID: string })
     })
 
+    // Fixture-only per-seed delivery barrier: registered after all Agent
+    // Manager session/catalog/state/deleted handlers above, so FIFO handler
+    // order proves prior synchronous seed handlers ran before this handler
+    // observes the barrier. Acks after at most one requestAnimationFrame
+    // (queueMicrotask fallback where rAF is unavailable). Production never
+    // sends this message, so the handler stays inert.
+    const unsubBarrier = vscode.onMessage((msg) => {
+      if (msg.type !== "agentManager.fixtureBarrier") return
+      const token = (msg as { type: string; token?: unknown }).token
+      if (typeof token !== "string" || token.length === 0) return
+      const send = () => vscode.postMessage({ type: "agentManager.fixtureBarrierAck", token } as never)
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => send())
+      else queueMicrotask(() => send())
+    })
+
+    // Fixture-only content-readiness ack: emitted only after all Agent Manager
+    // content subscriptions above (sessionCreated/sessionsLoaded/terminal/
+    // repo/state/model/initial-message/sessionDeleted) are installed, so the
+    // extension fixture bridge can wait for it before posting seed messages.
+    // A single extra webview→extension message; ignored in production.
+    vscode.postMessage({ type: "agentManager.contentReady" })
+
     onCleanup(() => {
       window.removeEventListener("message", handler)
       window.removeEventListener("keydown", preventDefaults, true)
@@ -925,6 +947,7 @@ const AgentManagerContent: Component = () => {
       unsubTerminals()
       unsub()
       unsubDeleted()
+      unsubBarrier()
     })
   })
 

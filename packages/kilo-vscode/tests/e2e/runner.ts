@@ -21,19 +21,30 @@
  *        - child session C known to the backend store but NOT opened as a tab,
  *        - A's transcript contains a production `task` tool part whose metadata
  *          points at C (renders the real sub-agent link in the Agent Manager),
- *   5. calls the fixture bridge's `settleSessions` handshake: the extension
- *      awaits the real backend session-list refresh (including any deferred
- *      refresh flushed when the CLI connection comes up), then re-seeds a
- *      full `sessionsLoaded` with `preserveSessionIds`. Because session-list
- *      loads are serialized and this re-seed is posted last, no later refresh
- *      can reconcile the fixture sessions away — the fixture survival is
- *      deterministic, with no timer polling or provider/network dependence,
+  *   5. calls the fixture bridge's `settleSessions` handshake FIRST: the extension
+  *      awaits the real backend session-list refresh (including any deferred
+  *      refresh flushed when the CLI connection comes up) before any fixture
+  *      tab exists. The runner then seeds the catalog via `sessionsLoaded`
+  *      (with `preserveSessionIds`), opens tabs through the production
+  *      `sessionAdded`/`sessionCreated` sequence (the leading `sessionAdded`
+  *      covers the startup bottom/pending tab), and re-posts the same
+  *      authoritative fixture `sessionsLoaded` with `preserveSessionIds`
+  *      LAST, so later reconciliation keeps the fixture tabs even if a
+  *      connection-completion real (empty) catalog refresh lands after the
+  *      tab-open sequence. Because session-list loads are serialized and
+  *      this re-seed is posted last, no later refresh can reconcile the
+  *      fixture sessions away — the fixture survival is deterministic, with
+  *      no timer polling or provider/network dependence. All synthetic
+  *      fixture session IDs carry the `ses-` prefix so they satisfy the
+  *      production/private `ses*` session-id contract; the run/fixture marker
+  *      correlation ID stays `e2e-probe-*`.
  *   6. writes `<scratch>/ready` + `<scratch>/plan.json`, then blocks until the
  *      harness (Playwright over CDP) asserts the scenario. The tab-close
  *      scenario runs first in the `all` composition and closes all its own
  *      tabs before finishing, handing the child scenario the startup state
  *      (one pending tab + bottom page) its seeding already expects,
- *   7. child phases: the harness asserts [A, B], clicks the real
+ *   7. child phases: the harness waits for `child-ready` (all composition)
+ *      then asserts [A, B], clicks the real
  *      "Open sub-agent in tab" button in source's chat, verifies the child
  *      lands immediately right of A; on `child-phase1-done` re-selects A so
  *      the harness can re-click and prove an already-open child is focused
@@ -94,8 +105,8 @@
  *                           services the bounded H-12 rollback snapshot markers
  *                           (`p32-snap-N`) against the shared served backend.
  *   Scenarios are independent: each seeds only its own fixtures and coordinates
- *   through scenario-specific markers (tab-close-done, child-phase1-done /
- *   child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
+ *   through scenario-specific markers (tab-close-done, child-ready /
+ *   child-phase1-done / child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
  *   topic-reopen-ready / topic-reopen-done / topic-reload-frame /
  *   topic-reload-ready / topic-reload-done, real-ready / real-snap-N-request /
  *   real-snap-N.json / real-reopen-request / real-reopen-ready,
@@ -154,19 +165,35 @@ const CMD_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.privateReplay"
 const CMD_SSE_TIMELINE_START = "kilo-code.new.e2eFixture.sseTimelineStart"
 const CMD_SSE_TIMELINE_STOP = "kilo-code.new.e2eFixture.sseTimelineStop"
 const CMD_RELOAD_AM = "kilo-code.new.e2eFixture.reloadAgentManagerWebview"
+const CMD_CONTENT_READY = "kilo-code.new.e2eFixture.agentManagerContentReady"
+const CMD_BARRIER = "kilo-code.new.e2eFixture.agentManagerBarrier"
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
+
+// --- Inter-scenario phase gate: written only after seedChildFixtures fully
+// completes (settle + tabs/messages + final preserve re-seed), before waiting
+// for child phase1 done. Distinct from child-phase1/2 coordination markers.
+// The harness waits for this before the first child finder when child follows
+// tab-close in the same `all` composition; `ready` alone is existence-only
+// and not a phase gate (it is overwritten across compositions).
+const CHILD_READY_MARKER = "child-ready"
 
 // --- Fixture session IDs (deterministic per run; shared with the harness via plan.json) ---
 
 function planIds(fixtureId: string) {
+  // Synthetic fixture session IDs must satisfy the production/private
+  // `ses*` session-id contract (all private observation/session helpers
+  // reject non-`ses` IDs, causing noisy non-fatal private/model-usage
+  // errors). The run/fixture marker correlation ID stays `fixtureId`
+  // (`e2e-probe-*`); every session ID embeds it but is prefixed with `ses-`
+  // so the two namespaces stay distinct and correlatable.
   return {
-    sourceId: `${fixtureId}-A`,
-    siblingId: `${fixtureId}-B`,
-    childId: `${fixtureId}-C`,
-    variantId: `${fixtureId}-D`,
-    tabAId: `${fixtureId}-TA`,
-    tabBId: `${fixtureId}-TB`,
-    tabCId: `${fixtureId}-TC`,
+    sourceId: `ses-${fixtureId}-A`,
+    siblingId: `ses-${fixtureId}-B`,
+    childId: `ses-${fixtureId}-C`,
+    variantId: `ses-${fixtureId}-D`,
+    tabAId: `ses-${fixtureId}-TA`,
+    tabBId: `ses-${fixtureId}-TB`,
+    tabCId: `ses-${fixtureId}-TC`,
     sourceTitle: "E2E Source",
     siblingTitle: "E2E Sibling",
     childTitle: "E2E Child",
@@ -174,9 +201,9 @@ function planIds(fixtureId: string) {
     tabATitle: "E2E Tab A",
     tabBTitle: "E2E Tab B",
     tabCTitle: "E2E Tab C",
-    topicRootId: `${fixtureId}-T1`,
-    topicChildId: `${fixtureId}-T1C`,
-    topicSiblingId: `${fixtureId}-T2`,
+    topicRootId: `ses-${fixtureId}-T1`,
+    topicChildId: `ses-${fixtureId}-T1C`,
+    topicSiblingId: `ses-${fixtureId}-T2`,
     topicRootTitle: "E2E Topic Root",
     topicChildTitle: "E2E Topic Child",
     topicSiblingTitle: "E2E Sibling Root",
@@ -259,6 +286,41 @@ async function waitForHarness(scratch: string, target: string, timeoutMs: number
 
 async function post(vscodeApi: typeof vscode, msg: unknown): Promise<void> {
   await vscodeApi.commands.executeCommand(CMD_POST, msg)
+}
+
+/**
+ * Deterministic fixture-only content-readiness handshake: after the existing
+ * panel readiness (CMD_READY / webviewReady) and before any settle/seed
+ * posts, wait for the AgentManagerContent onMount ack. Explicit fast failure:
+ * the command rejects on timeout/disposal/generation change — callers must
+ * not write ready markers before this resolves.
+ */
+async function waitForContentReady(vscodeApi: typeof vscode, label: string): Promise<void> {
+  try {
+    await vscodeApi.commands.executeCommand(CMD_CONTENT_READY, 15_000)
+  } catch (err) {
+    throw new Error(`probe runner: content-ready failed before ${label}: ${String(err)}`)
+  }
+}
+
+let barrierSeq = 0
+
+/**
+ * Fixture-only per-seed delivery barrier: after a complete seed batch (all
+ * fire-and-forget posts done, never between messages within a batch), ping
+ * the webview with a fresh deterministic token and await its ack before the
+ * caller writes any phase-ready marker. Proves the webview processed the
+ * batch; content-ready alone only proves subscription installation. Fails
+ * fast on no panel/post failure/timeout/generation change.
+ */
+async function awaitSeedBarrier(vscodeApi: typeof vscode, fixtureId: string, label: string): Promise<void> {
+  barrierSeq += 1
+  const token = `barrier-${fixtureId}-${label}-${barrierSeq}`
+  try {
+    await vscodeApi.commands.executeCommand(CMD_BARRIER, token, 15_000)
+  } catch (err) {
+    throw new Error(`probe runner: fixture barrier failed after ${label}: ${String(err)}`)
+  }
 }
 
 /**
@@ -398,8 +460,11 @@ function buildTranscript(sourceId: string, childId: string): Message[] {
 /**
  * Transcript for the variant-memory session. The user message pins the
  * variant-bearing model (providerID kilo / modelID e2e-probe, injected by the
- * fixture bridge) and the recovered agent (code), so the real webview resolves
- * the session to that model and renders the interactive ThinkingSelector.
+ * fixture bridge) with the low variant plus the recovered agent (code), so
+ * the real webview resolves the session to that model/variant and renders
+ * the interactive ThinkingSelector at Low. The explicit variant pin matters:
+ * recovered continuity with no variant means "ran with provider default"
+ * (LOCK-003) and displays Not set instead of variants[0].
  */
 function buildVariantTranscript(sessionId: string): Message[] {
   const now = Date.now()
@@ -412,7 +477,7 @@ function buildVariantTranscript(sessionId: string): Message[] {
     path: { cwd: "/tmp", root: "/tmp" },
     providerID: "kilo",
     modelID: "e2e-probe",
-    model: { providerID: "kilo", modelID: "e2e-probe" },
+    model: { providerID: "kilo", modelID: "e2e-probe", variant: "low" },
     agent: "code",
     mode: "primary",
     cost: 0,
@@ -459,8 +524,10 @@ function buildTopicTranscript(sessionId: string): Message[] {
  * the production open-session path, while boundary rehydrates (panel
  * close/reopen, webview reload) restore the full canonical state reached by
  * the navigation phase. `activeId` is selected last so the active tab is
- * deterministic. The settle + preserveSessionIds re-seed is the same survival
- * handshake as the other scenarios.
+ * deterministic. The authoritative production refresh is flushed FIRST via
+ * the settle handshake so no later real (empty) catalog refresh can prune
+ * the fixture tabs; the catalog seed plus the sessionCreated/sessionAdded
+ * tab-open sequence is then last, so tabs survive with no timing dependence.
  */
 async function seedTopicFixtures(
   vscodeApi: typeof vscode,
@@ -468,15 +535,25 @@ async function seedTopicFixtures(
   iso: string,
   activeId: string,
   openAll: boolean,
+  fixtureId: string,
 ): Promise<void> {
   const sessions = [
     session(plan.topicRootId, plan.topicRootTitle, iso, null),
     session(plan.topicChildId, plan.topicChildTitle, iso, plan.topicRootId),
     session(plan.topicSiblingId, plan.topicSiblingTitle, iso, null),
   ]
+  // Phase-boundary order: the strengthened settle/drain runs FIRST before
+  // any synthetic catalog/tab/select post (its explicit real empty refresh
+  // would otherwise prune just-opened synthetic tabs; the final preserve is
+  // prune-only and cannot recreate localIds/tabMgr), then the complete
+  // synthetic batch once, then the final authoritative catalog with
+  // preserve, then the delivery barrier. No settle after the first synthetic
+  // post and none after the final preserve.
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
   await post(vscodeApi, {
     type: "sessionsLoaded",
     sessions,
+    preserveSessionIds: sessions.map((s) => s.id),
   } satisfies SessionsLoadedMessage)
 
   // Open the root via the production sessionAdded path (covers the startup
@@ -510,20 +587,201 @@ async function seedTopicFixtures(
     } satisfies MessagesLoadedMessage)
   }
 
-  // Deterministic active session.
+  // Deterministic active session (last, so it wins).
   await post(vscodeApi, {
     type: "agentManager.sessionAdded",
     sessionId: activeId,
   })
-
-  // Survival handshake: flush the real backend refresh, then re-seed
-  // authoritatively so [T1, T1C, T2] survive with no timing dependence.
-  await vscodeApi.commands.executeCommand(CMD_SETTLE)
   await post(vscodeApi, {
     type: "sessionsLoaded",
     sessions,
     preserveSessionIds: sessions.map((s) => s.id),
   } satisfies SessionsLoadedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: activeId,
+  })
+  // Delivery barrier: prove the webview processed the batch before any
+  // ready/reopen marker is written for it.
+  await awaitSeedBarrier(vscodeApi, fixtureId, "topic")
+}
+
+/**
+ * Seed the tab-close fixtures [TA, TB, TC] with TA active through production
+ * message shapes. Phase-boundary order: the strengthened settle/drain runs
+ * FIRST before any synthetic catalog/tab/select post (its explicit real
+ * empty refresh would otherwise prune just-opened synthetic tabs; the final
+ * preserve is prune-only and cannot recreate localIds/tabMgr), then the
+ * catalog seed plus the sessionAdded/sessionCreated tab-open sequence (the
+ * leading sessionAdded covers the startup bottom/pending tab through the
+ * production coverBottomPage path); the same authoritative fixture
+ * sessionsLoaded with preserveSessionIds is posted LAST before the delivery
+ * barrier. No settle after the first synthetic post and none after the
+ * final preserve.
+ */
+async function seedTabCloseFixtures(
+  vscodeApi: typeof vscode,
+  plan: ReturnType<typeof planIds>,
+  iso: string,
+  fixtureId: string,
+): Promise<void> {
+  const tabs = [
+    session(plan.tabAId, plan.tabATitle, iso),
+    session(plan.tabBId, plan.tabBTitle, iso),
+    session(plan.tabCId, plan.tabCTitle, iso),
+  ]
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: tabs,
+    preserveSessionIds: [plan.tabAId, plan.tabBId, plan.tabCId],
+  } satisfies SessionsLoadedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.tabAId,
+  })
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: session(plan.tabAId, plan.tabATitle, iso),
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: session(plan.tabBId, plan.tabBTitle, iso),
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: session(plan.tabCId, plan.tabCTitle, iso),
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.tabAId,
+  })
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: tabs,
+    preserveSessionIds: [plan.tabAId, plan.tabBId, plan.tabCId],
+  } satisfies SessionsLoadedMessage)
+  // Delivery barrier: prove the webview processed the batch before the
+  // caller writes `ready`.
+  await awaitSeedBarrier(vscodeApi, fixtureId, "tab-close")
+}
+
+/**
+ * Seed the child-task fixtures: A + B open as tabs in order with A active, C
+ * known to the store but not opened. Phase-boundary order: the strengthened
+ * settle/drain runs FIRST before any synthetic catalog/tab/select post (its
+ * explicit real empty refresh would otherwise prune just-opened synthetic
+ * tabs; the final preserve is prune-only and cannot recreate
+ * localIds/tabMgr), then the complete synthetic batch once, then the same
+ * authoritative fixture sessionsLoaded with preserveSessionIds LAST before
+ * the delivery barrier. No settle after the first synthetic post and none
+ * after the final preserve.
+ */
+async function seedChildFixtures(
+  vscodeApi: typeof vscode,
+  plan: ReturnType<typeof planIds>,
+  iso: string,
+  fixtureId: string,
+): Promise<void> {
+  const catalog = [
+    session(plan.sourceId, plan.sourceTitle, iso),
+    session(plan.siblingId, plan.siblingTitle, iso),
+    session(plan.childId, plan.childTitle, iso),
+  ]
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: catalog,
+    preserveSessionIds: [plan.sourceId, plan.siblingId, plan.childId],
+  } satisfies SessionsLoadedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: session(plan.sourceId, plan.sourceTitle, iso),
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: session(plan.siblingId, plan.siblingTitle, iso),
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  await post(vscodeApi, {
+    type: "messagesLoaded",
+    sessionID: plan.sourceId,
+    messages: buildTranscript(plan.sourceId, plan.childId),
+  } satisfies MessagesLoadedMessage)
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: catalog,
+    preserveSessionIds: [plan.sourceId, plan.siblingId, plan.childId],
+  } satisfies SessionsLoadedMessage)
+  // Delivery barrier: prove the webview processed the batch. `child-ready`
+  // is written by the caller only after this resolves.
+  await awaitSeedBarrier(vscodeApi, fixtureId, "child")
+}
+
+/**
+ * Seed the variant-memory fixture D. Phase-boundary order: the strengthened
+ * settle/drain runs FIRST before any synthetic post (variant-only settles
+ * explicitly since no prior scenario settled it; all-mode reuses the child
+ * settlement plus the provision-internal settle), then the provision
+ * injection (its internal settle also lands before any synthetic post), then
+ * the complete D open/select batch once, then the trailing catalog re-seed
+ * last including every open tab, so it never prunes. No settle after the
+ * first synthetic post and none after the final preserve.
+ */
+async function seedVariantFixtures(
+  vscodeApi: typeof vscode,
+  plan: ReturnType<typeof planIds>,
+  iso: string,
+  child: boolean,
+  scratch: string,
+  fid: string,
+): Promise<void> {
+  if (!child) {
+    await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  }
+  await vscodeApi.commands.executeCommand(CMD_PROVISION)
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: session(plan.variantId, plan.variantTitle, iso),
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.variantId,
+  })
+  await post(vscodeApi, {
+    type: "messagesLoaded",
+    sessionID: plan.variantId,
+    messages: buildVariantTranscript(plan.variantId),
+  } satisfies MessagesLoadedMessage)
+  const found = [
+    ...(child
+      ? [
+          session(plan.sourceId, plan.sourceTitle, iso),
+          session(plan.siblingId, plan.siblingTitle, iso),
+          session(plan.childId, plan.childTitle, iso),
+        ]
+      : []),
+    session(plan.variantId, plan.variantTitle, iso),
+  ]
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: found,
+    preserveSessionIds: found.map((s) => s.id),
+  } satisfies SessionsLoadedMessage)
+  // Delivery barrier: prove the webview processed the batch before
+  // `variant-ready` (and `ready` in variant-only mode) is written.
+  await awaitSeedBarrier(vscodeApi, fid, "variant")
+  writeFileSync(join(scratch, "variant-ready"), fid)
+  if (!child) {
+    writeFileSync(join(scratch, "ready"), fid)
+  }
 }
 
 interface ScenarioFlags {
@@ -696,6 +954,7 @@ export async function run(): Promise<void> {
     60_000,
     "Agent Manager panel readiness",
   )
+  await waitForContentReady(vscode, "initial open")
 
   const iso = new Date().toISOString()
 
@@ -722,54 +981,7 @@ export async function run(): Promise<void> {
   // tabs before finishing, so the strip handed to the child scenario is exactly
   // the startup state (one pending tab + bottom page) it already expects.
   if (runTabClose) {
-    const tabSessions = [
-      session(plan.tabAId, plan.tabATitle, iso),
-      session(plan.tabBId, plan.tabBTitle, iso),
-      session(plan.tabCId, plan.tabCTitle, iso),
-    ]
-    // 1. Backend session store knows all three sessions.
-    await post(vscode, {
-      type: "sessionsLoaded",
-      sessions: tabSessions,
-    } satisfies SessionsLoadedMessage)
-
-    // 2. Open the first tab via the production sessionAdded path (replaces the
-    //    startup pending "New Session" tab), leaving [TA] as the base.
-    await post(vscode, {
-      type: "agentManager.sessionAdded",
-      sessionId: plan.tabAId,
-    })
-
-    // 3. Register the first tab in the local inventory, then open the other two
-    //    tabs in order: [TA, TB, TC].
-    await post(vscode, {
-      type: "sessionCreated",
-      session: session(plan.tabAId, plan.tabATitle, iso),
-    } satisfies SessionCreatedMessage)
-    await post(vscode, {
-      type: "sessionCreated",
-      session: session(plan.tabBId, plan.tabBTitle, iso),
-    } satisfies SessionCreatedMessage)
-    await post(vscode, {
-      type: "sessionCreated",
-      session: session(plan.tabCId, plan.tabCTitle, iso),
-    } satisfies SessionCreatedMessage)
-
-    // 4. Re-select the first tab so the seeded active tab is deterministic.
-    await post(vscode, {
-      type: "agentManager.sessionAdded",
-      sessionId: plan.tabAId,
-    })
-
-    // 5. Deterministic survival handshake (same as the child scenario): flush
-    //    the real backend refresh, then re-seed authoritatively so [TA, TB, TC]
-    //    survive with no timing dependence.
-    await vscode.commands.executeCommand(CMD_SETTLE)
-    await post(vscode, {
-      type: "sessionsLoaded",
-      sessions: tabSessions,
-      preserveSessionIds: [plan.tabAId, plan.tabBId, plan.tabCId],
-    } satisfies SessionsLoadedMessage)
+    await seedTabCloseFixtures(vscode, plan, iso, fixtureId)
 
     // `ready` gates the harness start: the tab-close fixtures are seeded. The
     // harness closes tabs via the real .am-tab-close buttons, then writes
@@ -780,74 +992,20 @@ export async function run(): Promise<void> {
 
   // --- Child-task scenario fixtures (A, B, C) — independent of the variant ---
   if (runChild) {
-    // 1. Backend session store knows all three sessions; only A and B open as tabs.
-    await post(vscode, {
-      type: "sessionsLoaded",
-      sessions: [
-        session(plan.sourceId, plan.sourceTitle, iso),
-        session(plan.siblingId, plan.siblingTitle, iso),
-        session(plan.childId, plan.childTitle, iso),
-      ],
-    } satisfies SessionsLoadedMessage)
+    await seedChildFixtures(vscode, plan, iso, fixtureId)
 
-    // 2. Open the source session via the production sessionAdded path while the
-    //    auto-created "New Session" pending tab is the only tab — the canonical
-    //    coverBottomPage transaction replaces it, leaving [source] as the base.
-    await post(vscode, {
-      type: "agentManager.sessionAdded",
-      sessionId: plan.sourceId,
-    })
-
-    // 3. Register the source in the local session inventory (sessionAdded alone
-    //    does not touch localSessionIDs) and mark it fresh so the extension's
-    //    real session refresh never reconciles it away.
-    await post(vscode, {
-      type: "sessionCreated",
-      session: session(plan.sourceId, plan.sourceTitle, iso),
-    } satisfies SessionCreatedMessage)
-
-    // 4. Open the sibling as the second tab: [source, sibling].
-    await post(vscode, {
-      type: "sessionCreated",
-      session: session(plan.siblingId, plan.siblingTitle, iso),
-    } satisfies SessionCreatedMessage)
-
-    // 5. Focus the source session again so its chat (with the child task link) is visible.
-    await post(vscode, {
-      type: "agentManager.sessionAdded",
-      sessionId: plan.sourceId,
-    })
-
-    // 6. A's transcript contains the production task tool part pointing at C.
-    await post(vscode, {
-      type: "messagesLoaded",
-      sessionID: plan.sourceId,
-      messages: buildTranscript(plan.sourceId, plan.childId),
-    } satisfies MessagesLoadedMessage)
-
-    // 7. Deterministic survival handshake: the extension awaits the real backend
-    //    session-list refresh (including any deferred refresh flushed when the
-    //    CLI connection comes up). Session-list loads are serialized, so when
-    //    this resolves the webview has applied the real (empty) list — and no
-    //    later in-flight refresh exists.
-    await vscode.commands.executeCommand(CMD_SETTLE)
-
-    // 8. Final authoritative re-seed AFTER the real refresh: a full
-    //    sessionsLoaded with preserveSessionIds is the last session-list message
-    //    the webview processes, so [A, B, C] survive with no timing dependence.
-    await post(vscode, {
-      type: "sessionsLoaded",
-      sessions: [
-        session(plan.sourceId, plan.sourceTitle, iso),
-        session(plan.siblingId, plan.siblingTitle, iso),
-        session(plan.childId, plan.childTitle, iso),
-      ],
-      preserveSessionIds: [plan.sourceId, plan.siblingId, plan.childId],
-    } satisfies SessionsLoadedMessage)
+    // Deterministic inter-scenario phase gate: `child-ready` (fixture ID
+    // content) is written only after seedChildFixtures fully completes
+    // (settle, tabs/messages, final preserve re-seed), before waiting for
+    // child phase1 done. Written in focused and all modes with identical
+    // semantics. The harness waits for this before the first child finder
+    // when child follows tab-close in the same `all` composition.
+    writeFileSync(join(scratch, CHILD_READY_MARKER), fixtureId)
 
     // `ready` gates the harness start: the child fixtures are seeded, so the
     // harness may begin its tab-order assertions. (Variant-only mode writes
-    // `ready` after the variant seeding below.)
+    // `ready` after the variant seeding below.) Existence-only: not a phase
+    // gate in the `all` composition (overwritten across scenarios).
     writeFileSync(join(scratch, "ready"), fixtureId)
 
     // Test-owned hang control: KILO_E2E_FIXTURE_HANG keeps the runner alive
@@ -867,61 +1025,24 @@ export async function run(): Promise<void> {
       type: "agentManager.sessionAdded",
       sessionId: plan.sourceId,
     })
+    // Delivery barrier for the single-post phase-2 batch before its marker.
+    await awaitSeedBarrier(vscode, fixtureId, "child-phase2")
     writeFileSync(join(scratch, "child-phase2-ready"), fixtureId)
 
     await waitForHarness(scratch, join(scratch, "child-phase2-done"), 120_000, "harness child-phase2-done marker")
   }
 
   // --- Variant-memory scenario fixtures (D) — independent of the child ---
+  // Explicit-config-only state provides no preset model catalog (LOCK-006
+  // P4.4-G2 deleted `models-api.json` (3 MB) and `Core.ModelsDev`
+  // `packages/core/src/models-dev.ts` disk/network/refresh plus models
+  // snapshot/build machinery); the fixture bridge injects a synthetic
+  // explicit-provider fixture variant model (kilo/e2e-probe) and pins it as
+  // the per-agent model for every backend agent (so switching agents keeps
+  // the variant-bearing model). See seedVariantFixtures for the settle-first
+  // ordering and the providersLoaded-LAST invariant.
   if (runVariant) {
-    // Explicit-config-only state provides no preset model catalog (LOCK-006
-    // P4.4-G2 deleted `models-api.json` (3 MB) and `Core.ModelsDev`
-    // `packages/core/src/models-dev.ts` disk/network/refresh plus models
-    // snapshot/build machinery); the fixture bridge injects a synthetic
-    // explicit-provider fixture variant model (kilo/e2e-probe) and pins it as
-    // the per-agent model for every backend agent (so switching agents keeps
-    // the variant-bearing model). The runner opens a session whose recovery
-    // selects it, then re-provisions the synthetic explicit-provider
-    // providersLoaded LAST so it stays the final provider message the webview
-    // processes.
-    await post(vscode, {
-      type: "sessionCreated",
-      session: session(plan.variantId, plan.variantTitle, iso),
-    } satisfies SessionCreatedMessage)
-    await post(vscode, {
-      type: "agentManager.sessionAdded",
-      sessionId: plan.variantId,
-    })
-    await post(vscode, {
-      type: "messagesLoaded",
-      sessionID: plan.variantId,
-      messages: buildVariantTranscript(plan.variantId),
-    } satisfies MessagesLoadedMessage)
-    await vscode.commands.executeCommand(CMD_PROVISION)
-    // Authoritative re-seed so the variant tab survives any later refresh. In
-    // all-mode the child tabs are already open, so re-seed the full list; in
-    // variant-only mode D is the only seeded tab.
-    const variantSessions = [
-      ...(runChild
-        ? [
-            session(plan.sourceId, plan.sourceTitle, iso),
-            session(plan.siblingId, plan.siblingTitle, iso),
-            session(plan.childId, plan.childTitle, iso),
-          ]
-        : []),
-      session(plan.variantId, plan.variantTitle, iso),
-    ]
-    await post(vscode, {
-      type: "sessionsLoaded",
-      sessions: variantSessions,
-      preserveSessionIds: variantSessions.map((s) => s.id),
-    } satisfies SessionsLoadedMessage)
-    writeFileSync(join(scratch, "variant-ready"), fixtureId)
-    if (!runChild) {
-      // Variant-only: the variant seeding above is the only prerequisite the
-      // harness needs before it drives the ThinkingSelector + ModeSwitcher.
-      writeFileSync(join(scratch, "ready"), fixtureId)
-    }
+    await seedVariantFixtures(vscode, plan, iso, runChild, scratch, fixtureId)
   }
 
   // --- Topic-navigation lifecycle-convergence scenario (focused only) ---
@@ -945,7 +1066,7 @@ export async function run(): Promise<void> {
     // Initial seed: root tab only, active root. The child and sibling open as
     // tabs only when the harness clicks their Topic/child rows (production
     // open-session path).
-    await seedTopicFixtures(vscode, plan, iso, plan.topicRootId, false)
+    await seedTopicFixtures(vscode, plan, iso, plan.topicRootId, false, fixtureId)
     writeFileSync(join(scratch, "ready"), fixtureId)
     await waitForHarness(scratch, join(scratch, "topic-nav-done"), 120_000, "harness topic-nav-done marker")
 
@@ -995,8 +1116,9 @@ export async function run(): Promise<void> {
       60_000,
       "reopened Agent Manager webview readiness",
     )
+    await waitForContentReady(vscode, "topic reopen")
     // Rehydrate to the canonical converged state (all tabs, child active).
-    await seedTopicFixtures(vscode, plan, iso, plan.topicChildId, true)
+    await seedTopicFixtures(vscode, plan, iso, plan.topicChildId, true, fixtureId)
     writeFileSync(join(scratch, "topic-reopen-ready"), fixtureId)
     await waitForHarness(scratch, join(scratch, "topic-reopen-done"), 120_000, "harness topic-reopen-done marker")
 
@@ -1014,7 +1136,8 @@ export async function run(): Promise<void> {
     await waitForHarness(scratch, join(scratch, "topic-reload-start"), 120_000, "harness topic-reload-start marker")
     await vscode.commands.executeCommand("workbench.action.webview.reloadWebviewAction")
     await waitForHarness(scratch, join(scratch, "topic-reload-frame"), 120_000, "harness topic-reload-frame marker")
-    await seedTopicFixtures(vscode, plan, iso, plan.topicChildId, true)
+    await waitForContentReady(vscode, "topic reload")
+    await seedTopicFixtures(vscode, plan, iso, plan.topicChildId, true, fixtureId)
     writeFileSync(join(scratch, "topic-reload-ready"), fixtureId)
     await waitForHarness(scratch, join(scratch, "topic-reload-done"), 120_000, "harness topic-reload-done marker")
   }
@@ -1381,11 +1504,21 @@ async function seedRootLocalSessions(
   vscodeApi: typeof vscode,
   plan: ReturnType<typeof planIds>,
   iso: string,
+  fixtureId: string,
 ): Promise<void> {
   const wtrSessions = [session(plan.sourceId, plan.sourceTitle, iso), session(plan.siblingId, plan.siblingTitle, iso)]
+  // Phase-boundary order: the strengthened settle/drain runs FIRST before
+  // any synthetic catalog/tab/select post (its explicit real empty refresh
+  // would otherwise prune just-opened synthetic tabs; the final preserve is
+  // prune-only and cannot recreate localIds/tabMgr), then the catalog seed
+  // plus the complete tab-open/select batch once, then the final
+  // authoritative catalog with preserve before the delivery barrier. No
+  // settle after the first synthetic post and none after the final preserve.
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
   await post(vscodeApi, {
     type: "sessionsLoaded",
     sessions: wtrSessions,
+    preserveSessionIds: wtrSessions.map((s) => s.id),
   } satisfies SessionsLoadedMessage)
   await post(vscodeApi, {
     type: "agentManager.sessionAdded",
@@ -1410,12 +1543,18 @@ async function seedRootLocalSessions(
     type: "agentManager.sessionAdded",
     sessionId: plan.sourceId,
   })
-  await vscodeApi.commands.executeCommand(CMD_SETTLE)
   await post(vscodeApi, {
     type: "sessionsLoaded",
     sessions: wtrSessions,
     preserveSessionIds: wtrSessions.map((s) => s.id),
   } satisfies SessionsLoadedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  // Delivery barrier: prove the webview processed the batch before the
+  // caller writes the removal evidence/ready markers.
+  await awaitSeedBarrier(vscodeApi, fixtureId, "root-local")
 }
 
 /**
@@ -1450,7 +1589,7 @@ async function assertWorktreeRemoval(
   const amReady = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
   if (!amReady) throw new Error("probe runner: Agent Manager readiness lost before P3.2 worktree-removal seeding")
   const plan = planIds(fixtureId)
-  await seedRootLocalSessions(vscodeApi, plan, new Date().toISOString())
+  await seedRootLocalSessions(vscodeApi, plan, new Date().toISOString(), fixtureId)
 
   writeFileSync(
     join(scratch, "worktree-removal-runtime-evidence"),
@@ -2246,6 +2385,7 @@ async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: str
         60_000,
         "real-session: reopened webview readiness",
       )
+      await waitForContentReady(vscodeApi, "real-session reopen")
       await vscodeApi.commands.executeCommand(CMD_SETTLE)
       writeFileSync(join(scratch, "real-reopen-ready"), fixtureId)
     }
@@ -2364,6 +2504,7 @@ async function serviceRealCompletedBoundary(
         60_000,
         "real-completed: reopened webview readiness",
       )
+      await waitForContentReady(vscodeApi, "real-completed reopen")
       await vscodeApi.commands.executeCommand(CMD_SETTLE)
       writeFileSync(join(scratch, "real-completed-reopen-ready"), fixtureId)
     }
@@ -2697,6 +2838,7 @@ async function serviceRealRestartReloadPhase(
     60_000,
     "real-restart reload phase: Agent Manager webview readiness",
   )
+  await waitForContentReady(vscodeApi, "real-restart reload phase")
   await vscodeApi.commands.executeCommand(CMD_SETTLE)
   writeFileSync(join(scratch, "rr-reloaded"), fixtureId)
 
@@ -2832,6 +2974,7 @@ async function serviceR9ObservationBoundary(
           60_000,
           "r9 panel readiness after reopen",
         )
+        await waitForContentReady(vscodeApi, "r9 panel reopen")
         await vscodeApi.commands.executeCommand(CMD_SETTLE)
         await sleep(500)
         // Re-seed sessions after reopen — include full production tab path so topics + tabs converge even if webview state restore missed
@@ -2877,6 +3020,7 @@ async function serviceR9ObservationBoundary(
         writeFileSync(join(scratch, "r9-reload-start"), "ok")
         await vscodeApi.commands.executeCommand("workbench.action.webview.reloadWebviewAction")
         await waitForHarness(scratch, join(scratch, "r9-reload-frame"), 60_000, "r9-reload-frame")
+        await waitForContentReady(vscodeApi, "r9 reload")
         // re-seed after reload in fresh webview — include tab path for convergence
         await sleep(500)
         await post(vscodeApi, {
@@ -3537,6 +3681,7 @@ async function serviceRealLifecycleBoundary(
         60_000,
         "lc reopened webview readiness",
       )
+      await waitForContentReady(vscodeApi, "lc panel reopen")
       await vscodeApi.commands.executeCommand(CMD_SETTLE)
       writeFileSync(join(scratch, "lc-panel-close-ready"), fixtureId)
     }
@@ -3544,6 +3689,7 @@ async function serviceRealLifecycleBoundary(
     if (existsSync(reloadReq)) {
       rmSync(reloadReq)
       await vscodeApi.commands.executeCommand(CMD_RELOAD_AM)
+      await waitForContentReady(vscodeApi, "lc fixture reload")
       await vscodeApi.commands.executeCommand(CMD_SETTLE)
       writeFileSync(join(scratch, "lc-reload-ready"), fixtureId)
     }

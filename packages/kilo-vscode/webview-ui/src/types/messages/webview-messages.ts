@@ -135,6 +135,27 @@ export interface WebviewReadyRequest {
   type: "webviewReady"
 }
 
+/**
+ * Fixture-only Agent Manager content-readiness ack (KILO_E2E_FIXTURE).
+ * Sent by AgentManagerApp after all content subscriptions are installed.
+ * Consumed by the extension fixture bridge only; ignored in production
+ * (no queue, no retry, no production state change).
+ */
+export interface AgentManagerContentReadyRequest {
+  type: "agentManager.contentReady"
+}
+
+/**
+ * Fixture-only per-seed delivery barrier ack (KILO_E2E_FIXTURE).
+ * Echoes the extension's `agentManager.fixtureBarrier` token after at most
+ * one rAF, proving prior synchronous seed handlers ran (FIFO). Consumed by
+ * the extension fixture bridge only; ignored in production.
+ */
+export interface AgentManagerFixtureBarrierAckRequest {
+  type: "agentManager.fixtureBarrierAck"
+  token: string
+}
+
 export interface SelectSourceRequest {
   type: "selectSource"
   id: string
@@ -872,6 +893,8 @@ export type WebviewMessage =
   | SetOrganizationRequest
   | WebviewReadyRequest
   | SelectSourceRequest
+  | AgentManagerContentReadyRequest
+  | AgentManagerFixtureBarrierAckRequest
   | RequestProvidersMessage
   | RequestAgentsMessage
   | RequestSkillsMessage

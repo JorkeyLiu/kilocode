@@ -170,6 +170,7 @@ export class VscodeHost implements Host {
       getSessionDirectories: () => provider.getSessionDirectories(),
       trackSession: (id) => provider.trackSession(id),
       refreshSessions: () => provider.refreshSessions(),
+      waitForCatalogSettled: (opts) => provider.waitForCatalogSettled(opts),
       registerSession: (s) => provider.registerSession(s),
       recoverPendingPrompts: () => provider.recoverPendingPrompts(),
       onFollowupAdopted: (cb) => provider.onFollowupAdopted(cb),

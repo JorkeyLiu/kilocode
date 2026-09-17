@@ -88,6 +88,17 @@ export async function waitForFile(file: string, timeoutMs: number, label: string
   }
 }
 
+// Deterministic inter-scenario child phase gate (mirrors CHILD_READY_MARKER in
+// tests/e2e/runner.ts — fixture-ID content written after the full child seed).
+// Scratch is run-owned per run, so a stale marker can never satisfy a new run.
+export const CHILD_READY_MARKER = "child-ready"
+
+// True when child follows tab-close in one composition: the harness must wait
+// for child-ready before the first child finder. Focused child stays on ready.
+export function needsChildReadyGate(scenarios: Set<string>): boolean {
+  return scenarios.has("tab-close") && scenarios.has("child-task-order")
+}
+
 /**
  * Backend-snapshot request client: each `request()` round-trips a numbered
  * marker to the extension-host runner, which executes the env-gated

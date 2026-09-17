@@ -774,6 +774,25 @@ export interface FavoritesLoadedMessage {
 export interface ModelSelectionsLoadedMessage {
   type: "modelSelectionsLoaded"
   selections: Record<string, ModelSelection>
+  canonical?: false
+  materializationVersion?: number
+  stamp?: CanonicalStamp
+}
+
+/**
+ * Fixture-only canonical per-agent model selections (KILO_E2E_FIXTURE,
+ * extension → webview). Carries the same per-agent map as the legacy
+ * message but with the canonical discriminator + version/stamp so session
+ * context accepts it when canonical mode is active (legacy
+ * modelSelectionsLoaded is dropped there). Production never sends this;
+ * no production authority change.
+ */
+export interface CanonicalModelSelectionsLoadedMessage {
+  type: "modelSelectionsLoaded"
+  selections: Record<string, ModelSelection>
+  canonical: true
+  materializationVersion: number
+  stamp: CanonicalStamp
 }
 
 // Agent Manager: Local workspace git stats push (extension → webview)
@@ -800,6 +819,16 @@ export interface AgentManagerSendInitialMessage {
   agent?: string
   variant?: string
   files?: Array<{ mime: string; url: string }>
+}
+
+/**
+ * Fixture-only per-seed delivery barrier (KILO_E2E_FIXTURE, extension →
+ * webview). Carries a non-empty token the webview echoes back. Production
+ * never sends this; no queue, no production semantics change.
+ */
+export interface AgentManagerFixtureBarrierMessage {
+  type: "agentManager.fixtureBarrier"
+  token: string
 }
 
 // Enhance prompt result (extension → webview)
@@ -1049,6 +1078,7 @@ export type ExtensionMessage =
   | AgentManagerMultiVersionProgressMessage
   | AgentManagerSetSessionModelMessage
   | AgentManagerSendInitialMessage
+  | AgentManagerFixtureBarrierMessage
   | SetChatBoxMessage
   | AppendChatBoxMessage
   | TriggerTaskMessage
@@ -1077,6 +1107,7 @@ export type ExtensionMessage =
   | ModelSelectorExpandedLoadedMessage
   | FavoritesLoadedMessage
   | ModelSelectionsLoadedMessage
+  | CanonicalModelSelectionsLoadedMessage
   | LanguageChangedMessage
   | McpStatusLoadedMessage
   | McpActionDoneMessage
