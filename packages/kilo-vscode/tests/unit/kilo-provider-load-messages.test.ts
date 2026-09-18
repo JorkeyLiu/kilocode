@@ -254,6 +254,13 @@ type ProviderInternals = {
   setMaxCost: (value: unknown) => void
   handleRevertSession: (sid: string, messageID: string) => Promise<void>
   handleSendMessage: (text: string, messageID?: string, sessionID?: string, draftID?: string) => Promise<void>
+  handleSendCommand: (
+    command: string,
+    args: string,
+    messageID?: string,
+    sessionID?: string,
+    draftID?: string,
+  ) => Promise<void>
   fetchAndSendSandboxDefault: (directory?: string, requestID?: string) => Promise<void>
   handleSetSandboxDefault: (enabled: boolean, requestID: string, directory?: string) => Promise<void>
   handleToggleSandbox: (input: { sessionID: string; requestID: string; enabled: boolean }) => Promise<void>
@@ -1388,5 +1395,82 @@ describe("KiloProvider.handleLoadMessages / prepend into deleted session", () =>
       (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
     )
     expect(loaded).toEqual([])
+  })
+})
+
+describe("KiloProvider generation-status ownership", () => {
+  it("prompt and command SDK total failure posts sendMessageFailed once with zero sessionStatus", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {})
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      for (const kind of ["prompt", "command"] as const) {
+        const MID = kind === "prompt" ? "msg_provider_prompt_01" : "msg_provider_command_01"
+        const client = createClient()
+        const { provider, internal, sent } = makeProvider(client)
+        internal.gatherEditorContext = async () => ({})
+        internal.currentSession = mkSession()
+        internal.sessionDirectories.set("ses_s1", "/repo")
+
+        const privSeen: Array<Record<string, unknown>> = []
+        const sdkSeen: Array<Record<string, unknown>> = []
+        const failure = new Error("rate limited")
+        const res = { status: 429, headers: new Headers() } as unknown as Response
+        const retryable = (req: Record<string, unknown>, op: string) => ({
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op,
+          idempotencyKey: req.idempotencyKey,
+          status: "failed",
+          outcome: {
+            type: "failed",
+            time: 1,
+            failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "busy", retryable: true },
+          },
+          accepted: false,
+          failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "busy", retryable: true },
+        })
+        const conn = (provider as unknown as { connectionService: Record<string, unknown> }).connectionService
+        conn.isPrivateAvailable = () => true
+        conn.privatePromptWithHandle = (req: Record<string, unknown>) => {
+          privSeen.push(req)
+          return { id: 1, promise: Promise.resolve(retryable(req, "session/prompt")), cancel: () => true }
+        }
+        conn.privateCommandWithHandle = (req: Record<string, unknown>) => {
+          privSeen.push(req)
+          return { id: 1, promise: Promise.resolve(retryable(req, "session/command")), cancel: () => true }
+        }
+        client.session.promptAsync = async (input: Record<string, unknown>) => {
+          sdkSeen.push(input)
+          return { error: failure, response: res }
+        }
+        ;(client.session as Record<string, unknown>).commandAsync = async (input: Record<string, unknown>) => {
+          sdkSeen.push(input)
+          return { error: failure, response: res }
+        }
+
+        if (kind === "prompt") await internal.handleSendMessage("hello", MID, "ses_s1")
+        else await internal.handleSendCommand("probe", "hello", MID, "ses_s1")
+
+        const status = sent.filter(
+          (msg) => typeof msg === "object" && msg !== null && (msg as { type?: unknown }).type === "sessionStatus",
+        )
+        expect(status).toEqual([])
+        const failed = sent.filter(
+          (msg) => typeof msg === "object" && msg !== null && (msg as { type?: unknown }).type === "sendMessageFailed",
+        ) as Array<Record<string, unknown>>
+        expect(failed).toHaveLength(1)
+        expect(failed[0].messageID).toBe(MID)
+        expect(privSeen).toHaveLength(1)
+        expect(sdkSeen).toHaveLength(1)
+        expect(privSeen[0].opId).toBe(`prompt:${MID}`)
+        expect((privSeen[0].payload as Record<string, unknown>).messageId).toBe(MID)
+        expect(sdkSeen[0].messageID).toBe(MID)
+        expect(sdkSeen[0].sessionID).toBe("ses_s1")
+      }
+    } finally {
+      err.mockRestore()
+      warn.mockRestore()
+    }
   })
 })

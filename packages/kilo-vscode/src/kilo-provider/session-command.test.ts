@@ -434,11 +434,10 @@ describe("command private-first", () => {
     expect(legacy).toBe(0)
   })
 
-  test("single-attempt seam never re-enters wrapper on retryable SDK status", async () => {
+  test("single-attempt seam never re-enters wrapper on retryable SDK status and posts no local status", async () => {
     let priv = 0
     let sdk = 0
     let legacy = 0
-    let idle = 0
     const retryableErr = new Error("rate limited")
     const retryableRes = { status: 429, headers: new Headers() } as unknown as Response
     const client = {
@@ -462,20 +461,15 @@ describe("command private-first", () => {
     }
     let thrown: unknown = null
     try {
-      await sendCommandOnce(
-        {
-          client: client as never,
-          connection: connection as unknown as KiloConnectionService,
-          sessionId: SID,
-          directory: DIR,
-          messageID: MID,
-          command: "probe",
-          args: "",
-        },
-        () => {
-          idle += 1
-        },
-      )
+      await sendCommandOnce({
+        client: client as never,
+        connection: connection as unknown as KiloConnectionService,
+        sessionId: SID,
+        directory: DIR,
+        messageID: MID,
+        command: "probe",
+        args: "",
+      })
     } catch (e) {
       thrown = e
     }
@@ -483,6 +477,5 @@ describe("command private-first", () => {
     expect(priv).toBe(1)
     expect(sdk).toBe(1)
     expect(legacy).toBe(0)
-    expect(idle).toBe(1)
   })
 })

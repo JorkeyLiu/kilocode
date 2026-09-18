@@ -352,10 +352,9 @@ describe("prompt private-first", () => {
     }
   })
 
-  test("single-attempt seam never re-enters wrapper on retryable SDK status", async () => {
+  test("single-attempt seam never re-enters wrapper on retryable SDK status and posts no local status", async () => {
     let priv = 0
     let sdk = 0
-    let idle = 0
     const retryableErr = new Error("rate limited")
     const retryableRes = {
       status: 429,
@@ -378,26 +377,20 @@ describe("prompt private-first", () => {
     }
     let thrown: unknown = null
     try {
-      await sendPromptOnce(
-        {
-          client: client as never,
-          connection: connection as unknown as KiloConnectionService,
-          sessionId: SID,
-          directory: DIR,
-          messageID: MID,
-          parts: PARTS as unknown as Array<Record<string, unknown>>,
-        },
-        () => {
-          idle += 1
-        },
-      )
+      await sendPromptOnce({
+        client: client as never,
+        connection: connection as unknown as KiloConnectionService,
+        sessionId: SID,
+        directory: DIR,
+        messageID: MID,
+        parts: PARTS as unknown as Array<Record<string, unknown>>,
+      })
     } catch (e) {
       thrown = e
     }
     expect(thrown).toBe(retryableErr)
     expect(priv).toBe(1)
     expect(sdk).toBe(1)
-    expect(idle).toBe(1)
   })
 
   test("missing messageID stays stable across private and SDK fallback", async () => {
@@ -503,9 +496,8 @@ describe("prompt private-first", () => {
     expect(priv.opId).toBe(`prompt:${MID}`)
   })
 
-  test("private unavailable still uses the same promptAsync tuple and SDK error posts idle once", async () => {
+  test("private unavailable still uses the same promptAsync tuple and SDK error throws with no local status post", async () => {
     let sdk = 0
-    let idle = 0
     const seen: unknown[] = []
     const failure = new Error("offline")
     const client = {
@@ -520,25 +512,19 @@ describe("prompt private-first", () => {
     const connection = { isPrivateAvailable: () => false }
     let thrown: unknown = null
     try {
-      await sendPromptOnce(
-        {
-          client: client as never,
-          connection: connection as unknown as KiloConnectionService,
-          sessionId: SID,
-          directory: DIR,
-          messageID: MID,
-          parts: PARTS as unknown as Array<Record<string, unknown>>,
-        },
-        () => {
-          idle += 1
-        },
-      )
+      await sendPromptOnce({
+        client: client as never,
+        connection: connection as unknown as KiloConnectionService,
+        sessionId: SID,
+        directory: DIR,
+        messageID: MID,
+        parts: PARTS as unknown as Array<Record<string, unknown>>,
+      })
     } catch (e) {
       thrown = e
     }
     expect(thrown).toBe(failure)
     expect(sdk).toBe(1)
-    expect(idle).toBe(1)
     expect((seen[0] as Record<string, unknown>).messageID).toBe(MID)
     expect((seen[0] as Record<string, unknown>).sessionID).toBe(SID)
   })

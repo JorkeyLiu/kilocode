@@ -113,7 +113,6 @@ import {
   watchWorkStyleConfig,
 } from "./kilo-provider/work-style"
 import * as McpOAuth from "./kilo-provider/mcp-oauth"
-import { retryable, backoff, MAX_RETRIES } from "./util/retry"
 import { canonicalDirectory } from "./private-worker/canonical-directory"
 import { decodeGlobalListCursor } from "./private-worker/session-cursor"
 import { hasGit } from "./kilo-provider/git-status"
@@ -2087,7 +2086,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         }
         case "abort":
-          this.cancelRetry(message.sessionID ?? "")
           await this.handleAbort(message.sessionID)
           break
         case "revertSession":
@@ -5251,81 +5249,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private closedDrafts = new Set<string>()
   private creatingDrafts = new Set<string>()
 
-  /** Abort controllers for active retry loops, keyed by session ID */
-  private retryAbortControllers = new Map<string, AbortController>()
-
-  /** Execute an SDK call with visible exponential backoff for retryable HTTP errors. */
-  private async withRetry(
-    fn: () => Promise<{ error?: unknown; response?: Response }>,
-    sid: string,
-    messageID?: string,
-  ): Promise<void> {
-    const abortController = new AbortController()
-    this.retryAbortControllers.set(sid, abortController)
-
-    try {
-      for (let attempt = 1; ; attempt++) {
-        if (abortController.signal.aborted) {
-          // User cancelled — return normally without triggering sendMessageFailed
-          return
-        }
-
-        const result = await fn()
-        if (!result.error) return
-        if (this.confirmations.has(messageID)) return
-
-        const status = result.response?.status ?? 0
-
-        // Non-retryable status codes fail immediately without retry
-        if (!retryable(status)) {
-          this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" })
-          throw result.error
-        }
-
-        // Stop retrying after MAX_RETRIES attempts
-        if (attempt >= MAX_RETRIES) {
-          this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" })
-          throw result.error
-        }
-
-        const delay = backoff(attempt, result.response?.headers)
-        console.log(`[Kilo New] KiloProvider: Retry on ${status}, attempt ${attempt}/${MAX_RETRIES}, delay ${delay}ms`)
-
-        this.postMessage({
-          type: "sessionStatus",
-          sessionID: sid,
-          status: "retry",
-          attempt,
-          message: `Error (${status}). Retrying...`,
-          next: Date.now() + delay,
-        })
-
-        // Wait for delay or until aborted
-        await new Promise<void>((resolve) => {
-          const done = () => {
-            clearTimeout(timer)
-            abortController.signal.removeEventListener("abort", done)
-            resolve()
-          }
-          const timer = setTimeout(done, delay)
-          abortController.signal.addEventListener("abort", done, { once: true })
-        })
-        if (this.confirmations.has(messageID)) return
-      }
-    } finally {
-      this.retryAbortControllers.delete(sid)
-    }
-  }
-
-  /** Cancel an active retry loop for a session */
-  private cancelRetry(sid: string): void {
-    const controller = this.retryAbortControllers.get(sid)
-    if (controller) {
-      controller.abort()
-      this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" })
-    }
-  }
-
   private maxCostSetting(): number {
     return this.setMaxCost(vscode.workspace.getConfiguration("kilo-code.new").get<number>("maxCost", 0))
   }
@@ -5457,24 +5380,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
       await this.checkpoints.get(sid)
       // Prompt is single-attempt: at most one private attempt plus at most one
-      // same-identity SDK fallback, never outer withRetry re-entry.
+      // same-identity SDK fallback. Generation status is owned by CLI runtime
+      // `session.status`/`session.error`; SDK failure posts sendMessageFailed
+      // with no local status publication.
       await runWithMessageConfirmation(this.confirmations, stableMessageID, "KiloProvider: Message request", () =>
-        sendPromptOnce(
-          {
-            client: this.client!,
-            connection: this.connectionService,
-            sessionId: sid,
-            directory: dir,
-            messageID: stableMessageID,
-            parts: parts as unknown as Array<Record<string, unknown>>,
-            model: providerID && modelID ? { providerID, modelID } : undefined,
-            agent,
-            variant,
-            editorContext: editorContext as unknown as Record<string, unknown> | undefined,
-            snapshotInitialization: this.opts.snapshotInitialization,
-          },
-          () => this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" }),
-        ),
+        sendPromptOnce({
+          client: this.client!,
+          connection: this.connectionService,
+          sessionId: sid,
+          directory: dir,
+          messageID: stableMessageID,
+          parts: parts as unknown as Array<Record<string, unknown>>,
+          model: providerID && modelID ? { providerID, modelID } : undefined,
+          agent,
+          variant,
+          editorContext: editorContext as unknown as Record<string, unknown> | undefined,
+          snapshotInitialization: this.opts.snapshotInitialization,
+        }),
       )
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to send message:", error)
@@ -5556,25 +5478,24 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       await this.requirements.assertAgentRequirements(agent, dir)
       await this.checkpoints.get(sid)
       // Command is single-attempt: at most one private attempt plus at most one
-      // same-identity SDK fallback, never outer withRetry re-entry.
+      // same-identity SDK fallback. Generation status is owned by CLI runtime
+      // `session.status`/`session.error`; SDK failure posts sendMessageFailed
+      // with no local status publication.
       await runWithMessageConfirmation(this.confirmations, stableMessageID, "KiloProvider: Command request", () =>
-        sendCommandOnce(
-          {
-            client: this.client!,
-            connection: this.connectionService,
-            sessionId: sid,
-            directory: dir,
-            messageID: stableMessageID,
-            command,
-            args,
-            model: providerID && modelID ? `${providerID}/${modelID}` : undefined,
-            agent,
-            variant,
-            parts: parts as unknown as Array<Record<string, unknown>> | undefined,
-            snapshotInitialization: this.opts.snapshotInitialization,
-          },
-          () => this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" }),
-        ),
+        sendCommandOnce({
+          client: this.client!,
+          connection: this.connectionService,
+          sessionId: sid,
+          directory: dir,
+          messageID: stableMessageID,
+          command,
+          args,
+          model: providerID && modelID ? `${providerID}/${modelID}` : undefined,
+          agent,
+          variant,
+          parts: parts as unknown as Array<Record<string, unknown>> | undefined,
+          snapshotInitialization: this.opts.snapshotInitialization,
+        }),
       )
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to send command:", error)
@@ -5619,7 +5540,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   private stopSession(sid: string): Promise<boolean> {
-    this.cancelRetry(sid)
     const client = this.client
     if (!client) return Promise.resolve(false)
     return this.aborts.stop(client, sid, this.getWorkspaceDirectory(sid), this.connectionService)

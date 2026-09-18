@@ -59,16 +59,12 @@ type SdkResult = { data?: unknown; error?: unknown; response?: Response }
 // Single-attempt prompt boundary used by KiloProvider.handleSendMessage.
 // Calls promptSessionPrivateFirst exactly once (at most one private attempt
 // plus at most one same-identity SDK fallback) and never retries on
-// retryable SDK status. SDK error maps to one idle post then throw so the
-// caller posts sendMessageFailed; private success returns void.
-export async function sendPromptOnce(opts: PromptPrivateFirstInput, onIdle?: () => void): Promise<void> {
+// retryable SDK status. SDK error is thrown as-is so the caller posts
+// sendMessageFailed; generation status stays owned by CLI runtime
+// `session.status`/`session.error` — this seam never posts local status.
+export async function sendPromptOnce(opts: PromptPrivateFirstInput): Promise<void> {
   const res = (await promptSessionPrivateFirst(opts)) as SdkResult
-  if (res?.error) {
-    try {
-      onIdle?.()
-    } catch {}
-    throw res.error
-  }
+  if (res?.error) throw res.error
 }
 
 // eslint-disable-next-line complexity
