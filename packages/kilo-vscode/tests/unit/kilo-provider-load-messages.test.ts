@@ -386,6 +386,32 @@ describe("KiloProvider.handleAbort", () => {
     expect(sent).not.toContainEqual(expect.objectContaining({ type: "sessionCreated" }))
   })
 
+  it("shares one in-flight creation across concurrent resolves and orphan-deletes once on close", async () => {
+    const created = defer<{ data: ReturnType<typeof mkCreatedSession> }>()
+    const client = createClient({ createDeferred: created })
+    const { provider, internal, sent } = makeProvider(client)
+    // Durable private-first delete resolves `true` (stale default mock returns
+    // `{}`); stub only this test so the orphan branch can complete.
+    const rawDelete = client.session.delete
+    client.session.delete = (async (params: Record<string, unknown>) => {
+      await rawDelete(params)
+      return { data: true }
+    }) as typeof rawDelete
+
+    const first = internal.resolveSession(undefined, "pending:concurrent-1", "local")
+    const second = internal.resolveSession(undefined, "pending:concurrent-1", "local")
+    await provider.abortSessions(["pending:concurrent-1"])
+    created.resolve({ data: mkCreatedSession() })
+
+    const [resolvedFirst, resolvedSecond] = await Promise.all([first, second])
+    expect(resolvedFirst).toBeUndefined()
+    expect(resolvedSecond).toBeUndefined()
+    expect(client.created).toHaveLength(1)
+    expect(client.deleted).toHaveLength(1)
+    expect(client.deleted[0]).toMatchObject({ sessionID: "ses_created" })
+    expect(sent).not.toContainEqual(expect.objectContaining({ type: "sessionCreated" }))
+  })
+
   it("does not tombstone a pending tab that never started creating", async () => {
     const client = createClient()
     const { provider, internal } = makeProvider(client)

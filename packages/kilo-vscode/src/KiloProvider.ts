@@ -5183,7 +5183,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (!sessionID && (draftID || !this.currentSession)) {
       const pending = this.sessionCreations.get(key)
       if (pending) return pending
-      if (draftID) this.creatingDrafts.add(draftID)
       const creation = (async () => {
         const metadata = await sandboxSessionMetadata(
           this.connectionService.sandboxPreference,
@@ -5232,7 +5231,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         return resolved
       })().finally(() => {
         this.sessionCreations.delete(key)
-        if (draftID) this.creatingDrafts.delete(draftID)
       })
       this.sessionCreations.set(key, creation)
       return creation
@@ -5246,7 +5244,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   /** Drafts closed while their backend session is being created or submitted. */
   private closedDrafts = new Set<string>()
-  private creatingDrafts = new Set<string>()
 
   private maxCostSetting(): number {
     return this.setMaxCost(vscode.workspace.getConfiguration("kilo-code.new").get<number>("maxCost", 0))
@@ -5531,7 +5528,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         }
       }
-      if (!sid && !this.creatingDrafts.has(draft)) continue
+      if (!sid) {
+        let creating = false
+        for (const k of this.sessionCreations.keys()) {
+          if (k.startsWith(`${draft}\0`)) {
+            creating = true
+            break
+          }
+        }
+        if (!creating) continue
+      }
       this.closedDrafts.add(draft)
       if (sid) targets.add(sid)
     }
