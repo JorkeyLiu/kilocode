@@ -26,7 +26,6 @@ export const FD_CAPABILITIES = [
   "suggestion/list",
   "permission/save-always-rules",
   "permission/reply",
-  "permission/allow-everything",
   "permission/list",
   "session/status",
   "session/get",

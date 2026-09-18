@@ -224,11 +224,6 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "fd-carrier permission integration test via the canonical production runtime (real permission dispatch and ticket lifecycle over the production runtime identity with live carriers; a local layer cannot serve the carrier path)",
   },
-  "kilocode/server/fd-carrier-permission-allow-everything.test.ts": {
-    count: 7,
-    reason:
-      "fd-carrier allow-everything permission integration test via the canonical production runtime (real allow-everything dispatch over the production runtime identity with live carriers; a local layer cannot serve the carrier path)",
-  },
   "kilocode/server/fd-carrier-suggestion.test.ts": {
     count: 26,
     reason:

@@ -523,18 +523,6 @@ import type {
   PermissionTerminal,
   PermissionTerminalFailure,
 } from "./serve-private-permission-contract"
-import {
-  makePermissionAllowEverythingAmbiguous,
-  validatePermissionAllowEverythingContractRequest,
-  validatePermissionAllowEverythingResult,
-  validatePermissionAllowEverythingTerminalFailure,
-} from "./serve-private-permission-allow-everything-contract"
-import type {
-  PermissionAllowEverythingAmbiguous,
-  PermissionAllowEverythingContractRequest,
-  PermissionAllowEverythingTerminal,
-  PermissionAllowEverythingTerminalFailure,
-} from "./serve-private-permission-allow-everything-contract"
 import * as crypto from "crypto"
 import {
   isTransportHealthSuccess,
@@ -1809,11 +1797,6 @@ export function validateSuggestionDismissOutcome(
 export type ServePrivatePermissionSaveRequest = PermissionSaveContractRequest
 export type ServePrivatePermissionReplyRequest = PermissionReplyContractRequest
 export type ServePrivatePermissionResult = PermissionTerminal | PermissionTerminalFailure | PermissionAmbiguous
-export type ServePrivatePermissionAllowEverythingRequest = PermissionAllowEverythingContractRequest
-export type ServePrivatePermissionAllowEverythingResult =
-  | PermissionAllowEverythingTerminal
-  | PermissionAllowEverythingTerminalFailure
-  | PermissionAllowEverythingAmbiguous
 
 export function validatePermissionSaveRequest(raw: unknown): ServePrivatePermissionSaveRequest {
   return validatePermissionSaveContractRequest(raw)
@@ -1869,34 +1852,6 @@ export function validatePermissionReplyOutcome(
     return raw as unknown as ServePrivatePermissionResult
   }
   throw new Error(`permission reply result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
-}
-
-export function validatePermissionAllowEverythingRequest(raw: unknown): ServePrivatePermissionAllowEverythingRequest {
-  return validatePermissionAllowEverythingContractRequest(raw)
-}
-
-export function validatePermissionAllowEverythingOutcome(
-  raw: unknown,
-  req: ServePrivatePermissionAllowEverythingRequest,
-): ServePrivatePermissionAllowEverythingResult {
-  if (!isRecord(raw)) throw new Error("result must be object")
-  const kind = raw.kind
-  if (kind === "terminal") return validatePermissionAllowEverythingResult(raw, req)
-  if (kind === "terminal-failure") return validatePermissionAllowEverythingTerminalFailure(raw, req)
-  if (kind === "ambiguous") {
-    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
-    for (const k of Object.keys(raw)) {
-      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
-    }
-    if (raw.v !== 1) throw new Error("v must be 1")
-    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
-    if (raw.opId !== req.opId) throw new Error("opId mismatch")
-    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
-    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
-    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
-    return raw as unknown as ServePrivatePermissionAllowEverythingResult
-  }
-  throw new Error(`permission allow-everything result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
 }
 
 function isNonEmptyString(v: unknown): boolean {
@@ -4064,7 +4019,6 @@ export class ServePrivatePeer {
       if (cap === "question/reject" && c["question/reject"]) return true
       if (cap === "permission/save-always-rules" && c["permission/save-always-rules"]) return true
       if (cap === "permission/reply" && c["permission/reply"]) return true
-      if (cap === "permission/allow-everything" && c["permission/allow-everything"]) return true
       if (cap === "skill/remove" && c["skill/remove"]) return true
       if (cap === "background-process/stop-session" && c["background-process/stop-session"]) return true
       if (cap === "transport/health" && c["transport/health"]) return true
@@ -4724,46 +4678,6 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makePermissionAmbiguous(req)
         return makePermissionAmbiguous(req)
-      }
-    })()
-    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
-    return { id: id as unknown as number, promise, cancel }
-  }
-
-  async privatePermissionAllowEverything(
-    req: ServePrivatePermissionAllowEverythingRequest,
-  ): Promise<ServePrivatePermissionAllowEverythingResult> {
-    const handle = this.privatePermissionAllowEverythingWithHandle(req)
-    return handle.promise
-  }
-
-  privatePermissionAllowEverythingWithHandle(req: ServePrivatePermissionAllowEverythingRequest): {
-    id: number
-    promise: Promise<ServePrivatePermissionAllowEverythingResult>
-    cancel: (msg?: string) => boolean
-  } {
-    validatePermissionAllowEverythingRequest(req)
-    if (this.disposed) throw new Error("Peer disposed")
-    if (!this.available || !this.peer || this.peer.getState() !== "open") {
-      throw new Error("Private peer unavailable")
-    }
-    if (!this.hasCapability("permission/allow-everything")) {
-      throw new Error("Private peer missing permission/allow-everything capability")
-    }
-    const currentEpoch = this.opts.epoch
-    const peerAtCall = this.peer
-    const { id, promise: rawPromise } = peerAtCall.requestWithId("permission/allow-everything", req)
-    const promise = (async (): Promise<ServePrivatePermissionAllowEverythingResult> => {
-      try {
-        const raw = (await rawPromise) as unknown
-        try {
-          return validatePermissionAllowEverythingOutcome(raw, req)
-        } catch {
-          return makePermissionAllowEverythingAmbiguous(req)
-        }
-      } catch (e: unknown) {
-        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makePermissionAllowEverythingAmbiguous(req)
-        return makePermissionAllowEverythingAmbiguous(req)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

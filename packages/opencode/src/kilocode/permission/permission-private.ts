@@ -1,18 +1,14 @@
 import { Effect, Schema } from "effect"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
-import { AllowEverythingPermission } from "@/kilocode/permission/allow-everything"
 import { Permission } from "@/permission"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { SessionID } from "@/session/schema"
 
 export const VERSION = 1 as const
 export const OP_SAVE = "permission/save-always-rules" as const
 export const OP_REPLY = "permission/reply" as const
-export const OP_ALLOW_EVERYTHING = "permission/allow-everything" as const
 
-export type Op = typeof OP_SAVE | typeof OP_REPLY | typeof OP_ALLOW_EVERYTHING
+export type Op = typeof OP_SAVE | typeof OP_REPLY
 export type FailureCode = "permission.not_found" | "scope_mismatch" | "validation.failed" | "internal"
-export type AllowEverythingFailureCode = "scope_mismatch" | "validation.failed" | "internal"
 
 export interface SaveRequest {
   v: typeof VERSION
@@ -32,16 +28,6 @@ export interface ReplyRequest {
   idempotencyKey: string
   context: { directory: string; requestID: string }
   payload: { reply: PermissionV1.Reply; message?: string }
-}
-
-export interface AllowEverythingRequest {
-  v: typeof VERSION
-  requestId: string
-  opId: string
-  op: typeof OP_ALLOW_EVERYTHING
-  idempotencyKey: string
-  context: { directory: string; sessionID?: string; requestID?: string }
-  payload: { enable: boolean }
 }
 
 export interface SaveTerminal {
@@ -80,33 +66,7 @@ export interface PermissionFailure {
   sideEffect: false
 }
 
-export interface AllowEverythingTerminal {
-  kind: "terminal"
-  v: typeof VERSION
-  requestId: string
-  opId: string
-  idempotencyKey: string
-  accepted: true
-  terminal: true
-  enable: boolean
-  sessionID?: string
-  requestID?: string
-}
-
-export interface AllowEverythingFailure {
-  kind: "terminal-failure"
-  v: typeof VERSION
-  requestId: string
-  opId: string
-  idempotencyKey: string
-  accepted: false
-  terminal: true
-  failure: { code: AllowEverythingFailureCode; retryable: false; time: number }
-  sideEffect: false
-}
-
 export type PermissionResult = SaveTerminal | ReplyTerminal | PermissionFailure
-export type AllowEverythingResult = AllowEverythingTerminal | AllowEverythingFailure
 
 function record(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v)
@@ -347,140 +307,4 @@ export const replyPermissionPrivate = Effect.fn("PermissionPrivate.reply")(funct
     requestID: String(found.id),
     reply: req.payload.reply,
   } satisfies ReplyTerminal
-})
-
-export function canonicalAllowEverythingOpId(token: string): string {
-  if (typeof token !== "string" || token.length === 0) throw new Error("token must be non-empty string")
-  if (token.includes(":")) throw new Error("token must not contain ':'")
-  if (token.includes("\0")) throw new Error("token must not contain null bytes")
-  if (token.includes("/")) throw new Error("token must not contain '/'")
-  if (token.includes("\\")) throw new Error("token must not contain '\\'")
-  return `permission-allow-everything:${token}`
-}
-
-export function parseAllowEverythingOpId(opId: string): { token: string } {
-  if (typeof opId !== "string" || opId.length === 0) throw new Error("opId must be non-empty string")
-  if (opId.includes("\0")) throw new Error("opId must not contain null bytes")
-  const segs = opId.split(":")
-  if (segs.length !== 2) throw new Error(`permission allow-everything opId must have 1 segment: ${opId}`)
-  if (segs[0] !== "permission-allow-everything") throw new Error(`opId kind must be permission-allow-everything: ${opId}`)
-  const token = segs[1]!
-  if (token.length === 0) throw new Error(`opId token must be non-empty: ${opId}`)
-  if (token.includes(":")) throw new Error("opId token must not contain ':'")
-  if (token.includes("\0")) throw new Error("opId token must not contain null bytes")
-  return { token }
-}
-
-function decodedSessionID(v: unknown): string {
-  return Schema.decodeUnknownSync(SessionID)(v) as unknown as string
-}
-
-function failedAllowEverything(
-  requestId: string,
-  opId: string,
-  key: string,
-  code: AllowEverythingFailureCode,
-): AllowEverythingFailure {
-  return {
-    kind: "terminal-failure",
-    v: 1,
-    requestId,
-    opId,
-    idempotencyKey: key,
-    accepted: false,
-    terminal: true,
-    failure: { code, retryable: false as const, time: Date.now() },
-    sideEffect: false as const,
-  }
-}
-
-export function validatePermissionAllowEverythingRequest(raw: unknown): AllowEverythingRequest {
-  if (!record(raw)) throw new Error("request must be object")
-  const allowed = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw)) {
-    if (!allowed.has(k)) throw new Error(`unexpected field ${k}`)
-  }
-  if (raw.v !== 1) throw new Error("v must be 1")
-  if (!present(raw.requestId)) throw new Error("requestId must be non-empty string")
-  if ((raw.requestId as string).includes("\0")) throw new Error("requestId must not contain null bytes")
-  if (!present(raw.opId)) throw new Error("opId must be non-empty string")
-  if ((raw.opId as string).includes("\0")) throw new Error("opId must not contain null bytes")
-  if (raw.op !== OP_ALLOW_EVERYTHING) throw new Error("op must be permission/allow-everything")
-  if (!present(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
-  if ((raw.idempotencyKey as string).includes("\0")) throw new Error("idempotencyKey must not contain null bytes")
-  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId")
-  const parsed = parseAllowEverythingOpId(raw.opId as string)
-  const idem = parseAllowEverythingOpId(raw.idempotencyKey as string)
-  if (idem.token !== parsed.token) throw new Error("idempotencyKey token must equal opId token")
-  const ctx = raw.context
-  if (!record(ctx)) throw new Error("context must be object")
-  const ctxAllowed = new Set(["directory", "sessionID", "requestID"])
-  for (const k of Object.keys(ctx)) {
-    if (!ctxAllowed.has(k)) throw new Error(`unexpected context field ${k}`)
-  }
-  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
-    throw new Error("context.directory must be non-empty string")
-  canonicalDirectory(ctx.directory)
-  let sessionID: string | undefined
-  if (ctx.sessionID !== undefined) {
-    sessionID = decodedSessionID(ctx.sessionID)
-    if (sessionID.includes("\0")) throw new Error("context.sessionID must not contain null bytes")
-  }
-  let requestID: string | undefined
-  if (ctx.requestID !== undefined) {
-    requestID = decodedPermissionID(ctx.requestID)
-    if (requestID.includes("\0")) throw new Error("context.requestID must not contain null bytes")
-  }
-  const payload = raw.payload
-  if (!record(payload)) throw new Error("payload must be object")
-  const payloadAllowed = new Set(["enable"])
-  for (const k of Object.keys(payload)) {
-    if (!payloadAllowed.has(k)) throw new Error(`unexpected payload field ${k}`)
-  }
-  if (typeof payload.enable !== "boolean") throw new Error("payload.enable must be boolean")
-  return {
-    v: 1,
-    requestId: raw.requestId as string,
-    opId: raw.opId as string,
-    op: OP_ALLOW_EVERYTHING,
-    idempotencyKey: raw.idempotencyKey as string,
-    context: {
-      directory: ctx.directory as string,
-      ...(sessionID !== undefined ? { sessionID } : {}),
-      ...(requestID !== undefined ? { requestID } : {}),
-    },
-    payload: { enable: payload.enable as boolean },
-  }
-}
-
-export const allowEverythingPermissionPrivate = Effect.fn("PermissionPrivate.allowEverything")(function* (raw: unknown) {
-  let req: AllowEverythingRequest
-  try {
-    req = validatePermissionAllowEverythingRequest(raw)
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    if (msg.includes("op must be permission/")) {
-      const ids = scopeFromRaw(raw)
-      if (!ids) throw e
-      return failedAllowEverything(ids.requestId, ids.opId, ids.key, "scope_mismatch")
-    }
-    throw e
-  }
-  yield* AllowEverythingPermission.effect({
-    enable: req.payload.enable,
-    requestID: req.context.requestID as any,
-    sessionID: req.context.sessionID as any,
-  })
-  return {
-    kind: "terminal",
-    v: 1,
-    requestId: req.requestId,
-    opId: req.opId,
-    idempotencyKey: req.idempotencyKey,
-    accepted: true,
-    terminal: true,
-    enable: req.payload.enable,
-    ...(req.context.sessionID !== undefined ? { sessionID: req.context.sessionID } : {}),
-    ...(req.context.requestID !== undefined ? { requestID: req.context.requestID } : {}),
-  } satisfies AllowEverythingTerminal
 })
