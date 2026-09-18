@@ -15,6 +15,7 @@ import type { Meta, StoryObj } from "storybook-solidjs-vite"
 import { type ParentComponent } from "solid-js"
 import { StoryProviders, mockSessionValue } from "./StoryProviders"
 import { SessionContext } from "../context/session"
+import { WorkStyleContext } from "../context/work-style"
 import { PromptInput } from "../components/chat/PromptInput"
 import { SandboxTooltipContent } from "../components/shared/SandboxButton"
 import { Button } from "@kilocode/kilo-ui/button"
@@ -29,7 +30,11 @@ const agents = [
 
 const noop = () => {}
 
-const PromptProviders: ParentComponent<{ variants?: boolean; modelOverride?: boolean }> = (props) => {
+const PromptProviders: ParentComponent<{
+  variants?: boolean
+  modelOverride?: boolean
+  level?: "review" | "autonomous" | "custom" | "unset"
+}> = (props) => {
   const base = mockSessionValue({ status: "idle" })
   const session = {
     ...base,
@@ -40,12 +45,23 @@ const PromptProviders: ParentComponent<{ variants?: boolean; modelOverride?: boo
     hasModelOverride: () => props.modelOverride ?? false,
     clearModelOverride: noop,
   }
+  const level = () => props.level ?? "review"
+  const work = {
+    style: () => "unset" as const,
+    level,
+    loading: () => false,
+    applying: () => false,
+    shouldShowOnboarding: () => false,
+    apply: noop,
+  }
 
   return (
     <StoryProviders noPadding>
       {/* overflow:hidden prevents margin-collapse so top/bottom borders are captured in screenshots */}
       <div style={{ overflow: "hidden" }}>
-        <SessionContext.Provider value={session as any}>{props.children}</SessionContext.Provider>
+        <SessionContext.Provider value={session as any}>
+          <WorkStyleContext.Provider value={work as any}>{props.children}</WorkStyleContext.Provider>
+        </SessionContext.Provider>
       </div>
     </StoryProviders>
   )
@@ -68,11 +84,21 @@ const FixedSubagentProviders: ParentComponent = (props) => {
     hasModelOverride: () => false,
     clearModelOverride: noop,
   }
+  const work = {
+    style: () => "unset" as const,
+    level: () => "review" as const,
+    loading: () => false,
+    applying: () => false,
+    shouldShowOnboarding: () => false,
+    apply: noop,
+  }
 
   return (
     <StoryProviders noPadding>
       <div style={{ overflow: "hidden" }}>
-        <SessionContext.Provider value={session as any}>{props.children}</SessionContext.Provider>
+        <SessionContext.Provider value={session as any}>
+          <WorkStyleContext.Provider value={work as any}>{props.children}</WorkStyleContext.Provider>
+        </SessionContext.Provider>
       </div>
     </StoryProviders>
   )
@@ -214,5 +240,36 @@ export const FixedSubagent200: Story = {
     <FixedSubagentProviders>
       <PromptInput />
     </FixedSubagentProviders>
+  ),
+}
+
+// ---------------------------------------------------------------------------
+// Stories — permission level chip (read-only, opens settings)
+// ---------------------------------------------------------------------------
+
+export const PermissionAutonomous420: Story = {
+  name: "Permission Autonomous — 420px",
+  render: () => (
+    <PromptProviders level="autonomous">
+      <PromptInput />
+    </PromptProviders>
+  ),
+}
+
+export const PermissionCustom420: Story = {
+  name: "Permission Custom — 420px",
+  render: () => (
+    <PromptProviders level="custom">
+      <PromptInput />
+    </PromptProviders>
+  ),
+}
+
+export const PermissionCustom200: Story = {
+  name: "Permission Custom — 200px",
+  render: () => (
+    <PromptProviders level="custom">
+      <PromptInput />
+    </PromptProviders>
   ),
 }

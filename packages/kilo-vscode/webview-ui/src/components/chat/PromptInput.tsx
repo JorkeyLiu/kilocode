@@ -23,6 +23,7 @@ import { SandboxButtonBase, SandboxTooltipContent } from "../shared/SandboxButto
 import { SpeechToTextButton } from "../speech-to-text/SpeechToTextButton"
 import { canUseSpeechToText, selectedSpeechToTextModel } from "../speech-to-text/availability"
 import { ThinkingSelector } from "../shared/ThinkingSelector"
+import { PermissionLevelChip } from "../shared/PermissionLevelChip"
 import { useFileMention } from "../../hooks/useFileMention"
 import { useTerminalContext } from "../../hooks/useTerminalContext"
 import { useGitChangesContext } from "../../hooks/useGitChangesContext"
@@ -1217,6 +1218,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <ModeSwitcher sessionID={sid} />
           <ModelSelector sessionID={sid} />
           <ThinkingSelector sessionID={sid} />
+          <PermissionLevelChip />
           <Show when={session.hasModelOverride(sid())}>
             <Tooltip value={language.t("prompt.action.resetModel")} placement="top">
               <Button

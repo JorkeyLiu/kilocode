@@ -761,8 +761,6 @@ describe("Agent Manager — provider chain parity with sidebar", () => {
     // Agent Manager owns its local session tabs and ChatView only reads this
     // optional context in the standard sidebar/editor webview.
     "LocalTabsProvider",
-    // Work-style onboarding is injected only into the sidebar empty state.
-    "WorkStyleProvider",
   ]
 
   it("agent manager includes all context providers from sidebar App.tsx", () => {

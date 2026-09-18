@@ -49,6 +49,7 @@ import { ServerProvider, useServer } from "../src/context/server"
 import { ProviderProvider } from "../src/context/provider"
 import { ConfigProvider } from "../src/context/config"
 import { DisplayProvider } from "../src/context/display"
+import { WorkStyleProvider } from "../src/context/work-style"
 import { ImageModelsProvider } from "../src/context/image-models"
 import { FeedbackProvider } from "../src/context/feedback"
 import { SessionProvider, useSession } from "../src/context/session"
@@ -1543,19 +1544,21 @@ export const AgentManagerApp: Component = () => {
                         <ConfigProvider>
                           <SpeechToTextPrewarm />
                           <DisplayProvider>
-                            <ImageModelsProvider>
-                              <SessionProvider>
-                                <AgentRequirementsProvider>
-                                  <FeedbackProvider>
-                                    <AgentManagerProvider>
-                                      <DataBridge>
-                                        <AgentManagerContent />
-                                      </DataBridge>
-                                    </AgentManagerProvider>
-                                  </FeedbackProvider>
-                                </AgentRequirementsProvider>
-                              </SessionProvider>
-                            </ImageModelsProvider>
+                            <WorkStyleProvider>
+                              <ImageModelsProvider>
+                                <SessionProvider>
+                                  <AgentRequirementsProvider>
+                                    <FeedbackProvider>
+                                      <AgentManagerProvider>
+                                        <DataBridge>
+                                          <AgentManagerContent />
+                                        </DataBridge>
+                                      </AgentManagerProvider>
+                                    </FeedbackProvider>
+                                  </AgentRequirementsProvider>
+                                </SessionProvider>
+                              </ImageModelsProvider>
+                            </WorkStyleProvider>
                           </DisplayProvider>
                         </ConfigProvider>
                       </ProviderProvider>

@@ -1120,6 +1120,8 @@ export const dict = {
   "workStyle.advanced.show": "Advanced",
   "workStyle.advanced.hide": "Hide advanced",
   "workStyle.advanced.hint": "Fine-grained permission rules. Editing rules switches the level to Custom.",
+  "permissionLevelChip.tooltip": "Open permission settings",
+  "permissionLevelChip.aria": "Permission level {{level}}. Open permission settings.",
 
   "workspace.new": "พื้นที่ทำงานใหม่",
   "workspace.type.local": "ในเครื่อง",
