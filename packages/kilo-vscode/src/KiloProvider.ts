@@ -3579,7 +3579,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.visibleTaskStreams.delete(sessionID)
     this.syncedChildSessions.delete(sessionID)
     this.sessionDirectories.delete(sessionID)
-    this.aborts.delete(sessionID)
     this.lastReconciledAt.delete(sessionID)
     this.checkpoints.delete(sessionID)
     this.revisions.delete(sessionID)
@@ -6159,7 +6158,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.costs.rearm(sid)
       }
       this.sessionStatusMap.set(sid, event.properties.status.type)
-      this.aborts.observe(sid, event.properties.status.type, directory)
       const msg = mapSSEEventToWebviewMessage(event, sid)
       if (msg) {
         this.streams.flush(sid)
@@ -6206,7 +6204,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (event.type === "server.instance.disposed") {
       const props = event.properties as Record<string, unknown> | null
       const dir = typeof props?.directory === "string" ? props.directory : undefined
-      if (dir) for (const sid of this.aborts.dispose(dir)) this.sessionStatusMap.set(sid, "idle")
+      // Fail-closed option A: instance disposal manufactures no local idle.
+      // Status stays runtime/SSE-owned; stale busy persists until
+      // authoritative convergence. No refresh/polling here.
       if (dir && !sameDirectory(dir, this.getWorkspaceDirectory())) return
       void this.reloadAfterAuthChange()
       return
@@ -6658,7 +6658,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.syncedChildSessions.clear()
     this.draftSessions.clear()
     this.sessionDirectories.clear()
-    this.aborts.clear()
     this.sessionStatusMap.clear()
     this.requirements.dispose()
     this.ignoreController?.dispose()

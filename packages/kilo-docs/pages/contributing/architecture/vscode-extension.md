@@ -135,7 +135,7 @@ Abort is private-first over the same `kilo serve` fd3/fd4 into the same `AppRunt
 | Spawn & streams | Reuses the same `ServerManager` 5-stdio carrier (`stdio[3]` writer, `stdio[4]` reader, `pid`/`epoch`). `FD_CAPABILITIES` adds `session/abort`. Port discovery still via `stdout`. |
 | Identity | `abort:<sessionId>:<token>` for both `opId` and `idempotencyKey` plus fresh `requestId` and `context {directory, sessionId}` with empty `payload`. Generation IDs come only from the owner `CancelTreeResult`, never the request token. |
 | Ownership | `kilo serve` `fd-carrier.ts` `session/abort` validates scope, checks `Session.Service.get` (`session.not_found`) and canonical directory (`scope_mismatch`), then awaits `KiloSessionPrompt.cancelTree` over `SessionRunState` before returning `terminal`. Extension `abortSessionPrivateFirst` uses the single canonical workspace directory (no multi-directory fan-out) with 3 s exact-cancel/epoch semantics. |
-| Projection | Extension never fabricates `idle` or `sessionTurnClosed` after the request; runtime SSE `session.turn.close(reason interrupted, generationID)` and `session.status idle` remain the projection facts. `handleAbort` keeps only local request/error cleanup. |
+| Projection | Extension never fabricates `idle` or `sessionTurnClosed` after the request; runtime SSE `session.turn.close(reason interrupted, generationID)` and `session.status idle` remain the projection facts. `handleAbort` keeps only local request/error cleanup. `server.instance.disposed` manufactures no local `idle`; status remains runtime/SSE-owned and stale `busy` is fail-closed until authoritative convergence. |
 
 ## Private `question/reply` + `question/reject` carrier — private-first terminal, same AppLayer
 

@@ -1,6 +1,5 @@
-import type { KiloClient, SessionStatus } from "@kilocode/sdk/v2/client"
+import type { KiloClient } from "@kilocode/sdk/v2/client"
 import * as crypto from "crypto"
-import { sameDirectory } from "../kilo-provider-utils"
 import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 import { canonicalAbortOpId, validateAbortContractRequest } from "../services/cli-backend/serve-private-abort-contract"
 import type { AbortContractRequest } from "../services/cli-backend/serve-private-abort-contract"
@@ -187,55 +186,12 @@ export function fixtureAbortAttemptsReset(): boolean {
 }
 
 export class SessionAbort {
-  private active = new Map<string, Set<string>>()
-
-  observe(sessionID: string, status: SessionStatus["type"], dir?: string) {
-    if (!dir) return
-    const dirs = this.active.get(sessionID)
-    if (status === "idle") {
-      if (!dirs) return
-      for (const entry of dirs) {
-        if (sameDirectory(entry, dir)) dirs.delete(entry)
-      }
-      if (dirs.size === 0) this.active.delete(sessionID)
-      return
-    }
-    if (!dirs) {
-      this.active.set(sessionID, new Set([dir]))
-      return
-    }
-    if (![...dirs].some((entry) => sameDirectory(entry, dir))) dirs.add(dir)
-  }
-
   async stop(client: KiloClient, sessionID: string, dir: string, connection?: KiloConnectionService) {
     if (connection) {
-      const ok = await abortSessionPrivateFirst({ client, connection, sessionID, directory: dir })
-      if (ok) this.active.delete(sessionID)
-      return ok
+      return abortSessionPrivateFirst({ client, connection, sessionID, directory: dir })
     }
     await abortSession({ client, sessionID, dir })
     return false
-  }
-
-  dispose(dir: string) {
-    const idle: string[] = []
-    for (const [sessionID, dirs] of this.active) {
-      for (const entry of dirs) {
-        if (sameDirectory(entry, dir)) dirs.delete(entry)
-      }
-      if (dirs.size > 0) continue
-      this.active.delete(sessionID)
-      idle.push(sessionID)
-    }
-    return idle
-  }
-
-  delete(sessionID: string) {
-    this.active.delete(sessionID)
-  }
-
-  clear() {
-    this.active.clear()
   }
 }
 

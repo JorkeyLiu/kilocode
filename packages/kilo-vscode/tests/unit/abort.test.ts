@@ -21,11 +21,10 @@ function client(calls: unknown[], fail = false) {
 }
 
 describe("SessionAbort", () => {
-  it("aborts the single caller directory via private terminal and clears ownership", async () => {
+  it("aborts the single caller directory via private terminal with zero SDK", async () => {
     const sdkCalls: unknown[] = []
     const seen: Record<string, unknown>[] = []
     const aborts = new SessionAbort()
-    aborts.observe("session_1", "busy", "/repo")
     const connection = {
       isPrivateAvailable: () => true,
       privateAbortWithHandle: (req: Record<string, unknown>) => {
@@ -56,16 +55,11 @@ describe("SessionAbort", () => {
     expect((seen[0]!["context"] as Record<string, unknown>)["directory"]).toBe("/repo/worktree")
     expect((seen[0]!["context"] as Record<string, unknown>)["sessionId"]).toBe("session_1")
     expect(seen[0]!["op"]).toBe("session/abort")
-    // Private terminal success clears ownership; nothing left to dispose.
-    expect(aborts.dispose("/repo")).toEqual([])
-    expect(aborts.dispose("/repo/worktree")).toEqual([])
   })
 
-  it("forgets an owner when its instance becomes idle", async () => {
+  it("aborts the single caller directory via SDK without a connection", async () => {
     const calls: unknown[] = []
     const aborts = new SessionAbort()
-    aborts.observe("session_1", "busy", "/repo")
-    aborts.observe("session_1", "idle", "/repo")
 
     expect(await aborts.stop(client(calls), "session_1", "/repo/worktree")).toBe(false)
     expect(calls).toEqual([
@@ -77,25 +71,28 @@ describe("SessionAbort", () => {
     ])
   })
 
-  it("canonicalizes equivalent observer paths with a single caller-directory abort", async () => {
-    const calls: unknown[] = []
-    const aborts = new SessionAbort()
-    aborts.observe("session_1", "busy", "/repo/worktree")
-    aborts.observe("session_1", "busy", "/repo/worktree/.")
+  it("retires active bookkeeping: no observe/dispose/delete/clear ownership", () => {
+    const proto = SessionAbort.prototype as unknown as Record<string, unknown>
+    expect("observe" in proto).toBe(false)
+    expect("dispose" in proto).toBe(false)
+    expect("delete" in proto).toBe(false)
+    expect("clear" in proto).toBe(false)
+    expect("active" in new SessionAbort()).toBe(false)
+  })
 
-    expect(await aborts.stop(client(calls), "session_1", "/repo/worktree/.")).toBe(false)
-    expect(calls).toHaveLength(1)
-    expect(calls).toEqual([
-      {
-        type: "abort",
-        params: { sessionID: "session_1", directory: "/repo/worktree/." },
-        opts: { throwOnError: true },
-      },
-    ])
-    // Without a connection the SDK path never clears ownership; the
-    // canonicalized observer entry is still retained exactly once.
-    expect(aborts.dispose("/repo/worktree")).toEqual(["session_1"])
-    expect(aborts.dispose("/repo/worktree")).toEqual([])
+  it("server.instance.disposed manufactures no local idle and keeps the same-directory reload gate", async () => {
+    const text = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
+    expect(text).not.toContain("aborts.observe")
+    expect(text).not.toContain("aborts.dispose")
+    expect(text).not.toContain("aborts.delete")
+    expect(text).not.toContain("aborts.clear")
+    const start = text.indexOf('if (event.type === "server.instance.disposed")')
+    expect(start).toBeGreaterThan(-1)
+    const block = text.slice(start, start + 800)
+    expect(block).not.toContain('sessionStatusMap.set(sid, "idle")')
+    expect(block).not.toContain("sessionStatusMap.set(sid,'idle')")
+    expect(block).toContain("sameDirectory(dir, this.getWorkspaceDirectory())")
+    expect(block).toContain("void this.reloadAfterAuthChange()")
   })
 })
 
@@ -195,8 +192,6 @@ describe("abort fixture recorder", () => {
     fixtureAbortAttemptsReset()
     const calls: unknown[] = []
     const aborts = new SessionAbort()
-    aborts.observe("session_1", "busy", "/repo")
-    aborts.observe("session_2", "busy", "/other")
 
     expect(await aborts.stop(client(calls), "session_1", "/repo/worktree")).toBe(false)
     expect(await aborts.stop(client(calls), "session_2", "/other")).toBe(false)
@@ -341,8 +336,6 @@ describe("abort fixture recorder", () => {
       },
     } as unknown as KiloClient
     const aborts = new SessionAbort()
-    aborts.observe("session_1", "busy", "/repo/good")
-    aborts.observe("session_1", "busy", "/repo/bad")
 
     await expect(aborts.stop(mixed, "session_1", "/repo/bad")).rejects.toThrow("bad dir failed")
     expect(calls).toEqual([
