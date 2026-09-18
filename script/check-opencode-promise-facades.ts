@@ -214,6 +214,11 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "listener standalone topology integration test via the canonical production runtime (two Server.listen transports share SessionStatus with AppRuntime; a local layer cannot prove cross-transport sharing or listener-stop ownership)",
   },
+  "kilocode/server/listener-retention-boot.test.ts": {
+    count: 7,
+    reason:
+      "listener retention-boot integration test via the canonical production runtime (retention replay blocked until post-bind gate release with shared AppLayer ownership; a local layer cannot prove the gate topology)",
+  },
   "kilocode/server/fd-carrier-permission.test.ts": {
     count: 9,
     reason:

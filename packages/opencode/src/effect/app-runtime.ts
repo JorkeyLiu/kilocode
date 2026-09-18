@@ -208,36 +208,27 @@ const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   // interrupt/join owned rebuild work before InstanceStore is torn down.
   // ConfigFileConvergence requires the real ConfigConvergence sibling: it is
   // provided explicitly so the production carrier never falls back to noop.
-  const convergence = ConfigConvergence.defaultLayer.pipe(Layer.provideMerge(base))
-  const rebuild = ConfigRebuild.defaultLayer.pipe(Layer.provideMerge(base))
-  const fileConvergence = ConfigFileConvergence.defaultLayer.pipe(
-    Layer.provideMerge(base),
-    Layer.provideMerge(convergence),
+  // Perf experiment: collapse the repeated provideMerge fan-out into the
+  // smallest edge set that expresses the same graph. lifecycleBase carries
+  // base outputs, so one edge satisfies both base and convergence consumers.
+  const lifecycleRaw = Layer.mergeAll(ConfigConvergence.defaultLayer, ConfigRebuild.defaultLayer)
+  const lifecycleBase = lifecycleRaw.pipe(Layer.provideMerge(base))
+  const fileConvergence = ConfigFileConvergence.defaultLayer.pipe(Layer.provideMerge(lifecycleBase))
+  const lifecycle = Layer.mergeAll(lifecycleBase, fileConvergence)
+  const dispatchRaw = Layer.mergeAll(
+    CancelQueuedDispatch.layer,
+    SessionUpdateDispatch.layer,
+    SessionForkDispatch.layer,
+    SessionCreateDispatch.layer,
+    SessionDeleteDispatch.layer,
+    SessionRevertDispatch.layer,
+    SessionPromptDispatch.layer,
+    SessionCommandDispatch.layer,
+    ProviderHttpExecuteBroker.layer,
   )
-  const lifecycle = Layer.mergeAll(convergence, rebuild, fileConvergence)
-  const cancelQueued = CancelQueuedDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionUpdate = SessionUpdateDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionFork = SessionForkDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionCreate = SessionCreateDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionDelete = SessionDeleteDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionRevert = SessionRevertDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionPrompt = SessionPromptDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const sessionCommand = SessionCommandDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
-  const providerHttpExecute = ProviderHttpExecuteBroker.layer.pipe(Layer.provideMerge(base))
-  const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(base))
-  return Layer.mergeAll(
-    lifecycle,
-    cancelQueued,
-    sessionUpdate,
-    sessionFork,
-    sessionCreate,
-    sessionDelete,
-    sessionRevert,
-    sessionPrompt,
-    sessionCommand,
-    providerHttpExecute,
-    maintenance,
-  )
+  const dispatch = dispatchRaw.pipe(Layer.provideMerge(lifecycle))
+  const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(lifecycle))
+  return Layer.mergeAll(lifecycle, dispatch, maintenance)
 }
 // kilocode_change end
 
