@@ -23,6 +23,14 @@ function defer<T>(): Deferred<T> {
   return { promise, resolve, reject }
 }
 
+async function waitFor(cond: () => boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now()
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out")
+    await Bun.sleep(1)
+  }
+}
+
 function mkMessage(id: string, role: "user" | "assistant", time = 0) {
   return {
     info: {
@@ -135,7 +143,7 @@ function createClient(options?: {
       delete: async (params: { sessionID: string; directory?: string }) => {
         deleted.push(params)
         if (options?.deleteDeferred) return options.deleteDeferred.promise
-        return { data: {} }
+        return { data: true }
       },
     },
     sandbox: {
@@ -287,7 +295,7 @@ function mockMaxCost(internal: ProviderInternals, value: number) {
 }
 
 describe("KiloProvider.handleAbort", () => {
-  it("aborts the original owner after a running session moves to a worktree", async () => {
+  it("aborts once in the caller directory with no local status fabrication", async () => {
     const client = createClient()
     const { provider, internal, sent } = makeProvider(client)
     internal.handleEvent(
@@ -299,13 +307,18 @@ describe("KiloProvider.handleAbort", () => {
     )
     internal.sessionDirectories.set("ses_s1", "/repo/worktree")
 
+    const statusBefore = sent.filter((m) => (m as { type?: string }).type === "sessionStatus").length
+
     await internal.handleAbort("ses_s1")
 
-    expect(client.aborted).toEqual([
-      { sessionID: "ses_s1", directory: "/repo" },
-      { sessionID: "ses_s1", directory: "/repo/worktree" },
+    expect(client.aborted).toEqual([{ sessionID: "ses_s1", directory: "/repo/worktree" }])
+    // handleAbort fabricates no local status: only the authoritative busy from
+    // the setup event remains, with no idle and no turnClosed.
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionStatus")).toEqual([
+      expect.objectContaining({ sessionID: "ses_s1", status: "busy" }),
     ])
-    expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "ses_s1", status: "idle" })
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionStatus")).toHaveLength(statusBefore)
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionTurnClosed")).toEqual([])
   })
 
   it("aborts the resolved session directory when the status event lacks a directory", async () => {
@@ -322,9 +335,9 @@ describe("KiloProvider.handleAbort", () => {
     expect(client.aborted).toEqual([{ sessionID: "ses_s1", directory: "/repo/worktree" }])
   })
 
-  it("attempts every owner and stays busy when one abort fails", async () => {
+  it("reports a single-directory abort failure without local busy fabrication", async () => {
     const error = spyOn(console, "error").mockImplementation(() => {})
-    const client = createClient({ abortFailures: ["/repo"] })
+    const client = createClient({ abortFailures: ["/repo/worktree"] })
     const { provider, internal, sent } = makeProvider(client)
     internal.handleEvent(
       {
@@ -335,18 +348,22 @@ describe("KiloProvider.handleAbort", () => {
     )
     internal.sessionDirectories.set("ses_s1", "/repo/worktree")
 
+    const statusBefore = sent.filter((m) => (m as { type?: string }).type === "sessionStatus").length
+
     await internal.handleAbort("ses_s1")
 
-    expect(client.aborted).toEqual([
-      { sessionID: "ses_s1", directory: "/repo" },
-      { sessionID: "ses_s1", directory: "/repo/worktree" },
-    ])
-    expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "ses_s1", status: "busy" })
+    expect(client.aborted).toEqual([{ sessionID: "ses_s1", directory: "/repo/worktree" }])
+    expect(sent).toContainEqual(
+      expect.objectContaining({ type: "error", message: "Failed to abort session", sessionID: "ses_s1" }),
+    )
+    // Failure surfaces as error with no local busy/idle fabrication.
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionStatus")).toHaveLength(statusBefore)
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionTurnClosed")).toEqual([])
     expect(error).toHaveBeenCalledTimes(1)
     error.mockRestore()
   })
 
-  it("snapshots every session owner before provider disposal", async () => {
+  it("aborts each distinct session once in its caller directory", async () => {
     const pending = defer<void>()
     const client = createClient({ abortDeferred: pending })
     const { provider, internal } = makeProvider(client)
@@ -363,8 +380,8 @@ describe("KiloProvider.handleAbort", () => {
     const stopped = provider.abortSessions(["ses_s1", "ses_s2", "ses_s2"])
     provider.dispose()
 
+    await waitFor(() => client.aborted.length === 2)
     expect(client.aborted).toEqual([
-      { sessionID: "ses_s1", directory: "/repo" },
       { sessionID: "ses_s1", directory: "/repo/worktree" },
       { sessionID: "ses_s2", directory: "/repo/other" },
     ])
@@ -382,7 +399,12 @@ describe("KiloProvider.handleAbort", () => {
     created.resolve({ data: mkCreatedSession() })
 
     expect(await resolving).toBeUndefined()
-    expect(client.deleted).toEqual([{ sessionID: "ses_created", directory: "/repo" }])
+    expect(client.deleted).toHaveLength(1)
+    expect(client.deleted[0]).toMatchObject({
+      sessionID: "ses_created",
+      query_directory: "/repo",
+      body_directory: "/repo",
+    })
     expect(sent).not.toContainEqual(expect.objectContaining({ type: "sessionCreated" }))
   })
 
@@ -390,14 +412,6 @@ describe("KiloProvider.handleAbort", () => {
     const created = defer<{ data: ReturnType<typeof mkCreatedSession> }>()
     const client = createClient({ createDeferred: created })
     const { provider, internal, sent } = makeProvider(client)
-    // Durable private-first delete resolves `true` (stale default mock returns
-    // `{}`); stub only this test so the orphan branch can complete.
-    const rawDelete = client.session.delete
-    client.session.delete = (async (params: Record<string, unknown>) => {
-      await rawDelete(params)
-      return { data: true }
-    }) as typeof rawDelete
-
     const first = internal.resolveSession(undefined, "pending:concurrent-1", "local")
     const second = internal.resolveSession(undefined, "pending:concurrent-1", "local")
     await provider.abortSessions(["pending:concurrent-1"])
@@ -867,6 +881,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
 
     await internal.handleLoadMessages("ses_s2")
 
+    await waitFor(() => client.stopped.length === 1)
     expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/old" }])
   })
 
@@ -923,6 +938,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     await Bun.sleep(0)
 
     expect(internal.currentSession?.id).toBe("ses_s2")
+    await waitFor(() => client.stopped.length === 1)
     expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/old" }])
   })
 
@@ -937,6 +953,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     const s2 = internal.handleLoadMessages("ses_s2")
     const s3 = internal.handleLoadMessages("ses_s3")
 
+    await waitFor(() => client.stopped.length === 2)
     expect(client.stopped).toEqual([
       { sessionID: "ses_s1", directory: "/repo/s1" },
       { sessionID: "ses_s2", directory: "/repo/s2" },
@@ -957,6 +974,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     internal.contextSessionID = undefined
     internal.currentSession = null
 
+    await waitFor(() => client.stopped.length === 1)
     expect(client.stopped).toEqual([{ sessionID: "ses_s2", directory: "/repo/s2" }])
   })
 
@@ -1027,6 +1045,12 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
       (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
     )
     expect(loaded).toEqual([])
+    expect(client.deleted).toHaveLength(1)
+    expect(client.deleted[0]).toMatchObject({
+      sessionID: "ses_s1",
+      query_directory: "/repo",
+      body_directory: "/repo",
+    })
     expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo" }])
   })
 })
@@ -1148,8 +1172,16 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
       sent.some((msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "sessionCostAlert"),
     ).toBe(false)
 
-    // New run (busy rearms): alert fires again since stop does not ack the limit
+    // New runtime epoch (authoritative idle then busy rearms): alert fires
+    // again since stop does not ack the limit
     sent.length = 0
+    internal.handleEvent(
+      {
+        type: "session.status",
+        properties: { sessionID: "ses_s1", status: { type: "idle" } },
+      },
+      "/repo",
+    )
     internal.handleEvent(
       {
         type: "session.status",
@@ -1242,7 +1274,7 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     expect(client.prompted).toHaveLength(1)
   })
 
-  it("aborts when the cost alert is stopped", async () => {
+  it("requests a single-directory abort on cost stop with no local turn fabrication", async () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
@@ -1263,7 +1295,10 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
 
     expect(client.aborted).toContainEqual({ sessionID: "ses_s1", directory: "/repo" })
     expect(sent).toContainEqual({ type: "sessionCostAlertResolved", sessionID: "ses_s1", limit: 1 })
-    expect(sent).toContainEqual({ type: "sessionTurnClosed", sessionID: "ses_s1", reason: "interrupted" })
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionTurnClosed")).toEqual([])
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionStatus")).toEqual([
+      expect.objectContaining({ sessionID: "ses_s1", status: "busy" }),
+    ])
   })
 
   it("strips transcript-only metadata before posting messages to the webview", async () => {
