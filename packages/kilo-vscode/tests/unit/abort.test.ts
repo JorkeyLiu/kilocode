@@ -21,24 +21,44 @@ function client(calls: unknown[], fail = false) {
 }
 
 describe("SessionAbort", () => {
-  it("stops the active owner and current mapped directory", async () => {
-    const calls: unknown[] = []
+  it("aborts the single caller directory via private terminal and clears ownership", async () => {
+    const sdkCalls: unknown[] = []
+    const seen: Record<string, unknown>[] = []
     const aborts = new SessionAbort()
     aborts.observe("session_1", "busy", "/repo")
+    const connection = {
+      isPrivateAvailable: () => true,
+      privateAbortWithHandle: (req: Record<string, unknown>) => {
+        seen.push(req)
+        return {
+          id: 7,
+          promise: Promise.resolve({
+            kind: "terminal",
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            idempotencyKey: req.idempotencyKey,
+            accepted: true,
+            terminal: true,
+            affected: [
+              { kind: "root", disposition: "cancelled", generationId: "gen_001", sessionId: "session_1" },
+            ],
+            diagnostic: { code: "cancelled", retryable: false, time: 1 },
+          }),
+          cancel: () => true,
+        }
+      },
+    } as unknown as Parameters<SessionAbort["stop"]>[3]
 
-    expect(await aborts.stop(client(calls), "session_1", "/repo/worktree")).toBe(true)
-    expect(calls).toEqual([
-      {
-        type: "abort",
-        params: { sessionID: "session_1", directory: "/repo" },
-        opts: { throwOnError: true },
-      },
-      {
-        type: "abort",
-        params: { sessionID: "session_1", directory: "/repo/worktree" },
-        opts: { throwOnError: true },
-      },
-    ])
+    expect(await aborts.stop(client(sdkCalls), "session_1", "/repo/worktree", connection)).toBe(true)
+    expect(sdkCalls).toHaveLength(0)
+    expect(seen).toHaveLength(1)
+    expect((seen[0]!["context"] as Record<string, unknown>)["directory"]).toBe("/repo/worktree")
+    expect((seen[0]!["context"] as Record<string, unknown>)["sessionId"]).toBe("session_1")
+    expect(seen[0]!["op"]).toBe("session/abort")
+    // Private terminal success clears ownership; nothing left to dispose.
+    expect(aborts.dispose("/repo")).toEqual([])
+    expect(aborts.dispose("/repo/worktree")).toEqual([])
   })
 
   it("forgets an owner when its instance becomes idle", async () => {
@@ -57,13 +77,25 @@ describe("SessionAbort", () => {
     ])
   })
 
-  it("deduplicates equivalent directory paths", async () => {
+  it("canonicalizes equivalent observer paths with a single caller-directory abort", async () => {
     const calls: unknown[] = []
     const aborts = new SessionAbort()
     aborts.observe("session_1", "busy", "/repo/worktree")
+    aborts.observe("session_1", "busy", "/repo/worktree/.")
 
-    expect(await aborts.stop(client(calls), "session_1", "/repo/worktree/.")).toBe(true)
+    expect(await aborts.stop(client(calls), "session_1", "/repo/worktree/.")).toBe(false)
     expect(calls).toHaveLength(1)
+    expect(calls).toEqual([
+      {
+        type: "abort",
+        params: { sessionID: "session_1", directory: "/repo/worktree/." },
+        opts: { throwOnError: true },
+      },
+    ])
+    // Without a connection the SDK path never clears ownership; the
+    // canonicalized observer entry is still retained exactly once.
+    expect(aborts.dispose("/repo/worktree")).toEqual(["session_1"])
+    expect(aborts.dispose("/repo/worktree")).toEqual([])
   })
 })
 
@@ -158,7 +190,7 @@ describe("abort fixture recorder", () => {
     expect(fixtureAbortAttemptCount("session_1")).toBe(1)
   })
 
-  it("tracks unambiguous per-session call count across fan-out", async () => {
+  it("tracks per-session counts for single-directory stops", async () => {
     process.env.KILO_E2E_FIXTURE = "1"
     fixtureAbortAttemptsReset()
     const calls: unknown[] = []
@@ -166,14 +198,18 @@ describe("abort fixture recorder", () => {
     aborts.observe("session_1", "busy", "/repo")
     aborts.observe("session_2", "busy", "/other")
 
-    expect(await aborts.stop(client(calls), "session_1", "/repo/worktree")).toBe(true)
-    expect(await aborts.stop(client(calls), "session_2", "/other")).toBe(true)
+    expect(await aborts.stop(client(calls), "session_1", "/repo/worktree")).toBe(false)
+    expect(await aborts.stop(client(calls), "session_2", "/other")).toBe(false)
 
-    expect(fixtureAbortAttemptCount("session_1")).toBe(2)
+    expect(calls).toEqual([
+      { type: "abort", params: { sessionID: "session_1", directory: "/repo/worktree" }, opts: { throwOnError: true } },
+      { type: "abort", params: { sessionID: "session_2", directory: "/other" }, opts: { throwOnError: true } },
+    ])
+    expect(fixtureAbortAttemptCount("session_1")).toBe(1)
     expect(fixtureAbortAttemptCount("session_2")).toBe(1)
-    expect(fixtureAbortAttemptCount()).toBe(3)
+    expect(fixtureAbortAttemptCount()).toBe(2)
     const entries = fixtureAbortAttempts()
-    expect(entries.filter((entry) => entry.sessionID === "session_1").map((entry) => entry.attempt)).toEqual([1, 2])
+    expect(entries.filter((entry) => entry.sessionID === "session_1").map((entry) => entry.attempt)).toEqual([1])
     expect(entries.filter((entry) => entry.sessionID === "session_2").map((entry) => entry.attempt)).toEqual([1])
   })
 
@@ -291,7 +327,7 @@ describe("abort fixture recorder", () => {
     expect(fixtureAbortAttemptCount()).toBe(1)
   })
 
-  it("records mixed fan-out failures without changing SDK args or return", async () => {
+  it("records single-directory failure without changing SDK args", async () => {
     process.env.KILO_E2E_FIXTURE = "1"
     fixtureAbortAttemptsReset()
     const calls: unknown[] = []
@@ -308,18 +344,17 @@ describe("abort fixture recorder", () => {
     aborts.observe("session_1", "busy", "/repo/good")
     aborts.observe("session_1", "busy", "/repo/bad")
 
-    expect(await aborts.stop(mixed, "session_1", "/repo/fallback")).toBe(false)
+    await expect(aborts.stop(mixed, "session_1", "/repo/bad")).rejects.toThrow("bad dir failed")
     expect(calls).toEqual([
-      { type: "abort", params: { sessionID: "session_1", directory: "/repo/good" }, opts: { throwOnError: true } },
       { type: "abort", params: { sessionID: "session_1", directory: "/repo/bad" }, opts: { throwOnError: true } },
-      { type: "abort", params: { sessionID: "session_1", directory: "/repo/fallback" }, opts: { throwOnError: true } },
     ])
     const entries = fixtureAbortAttempts()
-    expect(entries).toHaveLength(3)
-    expect(entries.filter((entry) => entry.ok)).toHaveLength(2)
+    expect(entries).toHaveLength(1)
+    expect(entries.filter((entry) => entry.ok)).toHaveLength(0)
     expect(entries.filter((entry) => !entry.ok)).toHaveLength(1)
-    expect(fixtureAbortAttemptCount("session_1")).toBe(3)
-    expect(entries.map((entry) => entry.attempt).sort((a, b) => a - b)).toEqual([1, 2, 3])
+    expect(entries[0]!.error).toContain("bad dir failed")
+    expect(fixtureAbortAttemptCount("session_1")).toBe(1)
+    expect(entries.map((entry) => entry.attempt).sort((a, b) => a - b)).toEqual([1])
   })
 
   it("numbers concurrent same-session attempts without duplicates", async () => {

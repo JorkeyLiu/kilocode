@@ -1209,13 +1209,14 @@ describe("stale observer timeout epoch ownership (LOCK-007)", () => {
     }
   })
 
-  it("current-epoch cancel miss still fail-closed invalidates", async () => {
+  it("current-epoch cancel miss quarantines and retains the private peer", async () => {
     const svc = new KiloConnectionService({} as never)
     const anySvc = svc as unknown as {
       privatePeer: unknown
       privateAvailable: boolean
       privateEpoch: number | null
     }
+    let quarantined = false
     const fake = statusFake({
       privateStatusOutcomeWithHandle: () => ({
         id: 42,
@@ -1223,6 +1224,11 @@ describe("stale observer timeout epoch ownership (LOCK-007)", () => {
         cancel: () => true,
       }),
       tryCancelPending: () => false,
+      isAvailable: () => !quarantined,
+      isQuarantined: () => quarantined,
+      invalidateOnObserverTimeout: () => {
+        quarantined = true
+      },
     })
     anySvc.privatePeer = fake
     anySvc.privateAvailable = true
@@ -1231,7 +1237,9 @@ describe("stale observer timeout epoch ownership (LOCK-007)", () => {
     const result = handle.cancel("private parity timeout")
     expect(result).toBe(false)
     expect(svc.isPrivateAvailable()).toBeFalse()
-    expect(svc.getPrivatePeer()).toBeNull()
+    expect(svc.getPrivatePeer()).toBe(fake)
+    expect(svc.getPrivateEpoch()).toBe(9)
+    expect(svc.isPrivateQuarantined()).toBeTrue()
   })
 
   it("stale cleanup throw is observed without touching the replacement peer", async () => {
@@ -1285,17 +1293,23 @@ describe("stale observer timeout epoch ownership (LOCK-007)", () => {
     expect(settled.kind).toBe("valid")
   })
 
-  it("current-epoch cancel throw is observed and still fail-closed invalidates", async () => {
+  it("current-epoch cancel throw quarantines and retains the private peer", async () => {
     const svc = new KiloConnectionService({} as never)
     const anySvc = svc as unknown as {
       privatePeer: unknown
       privateAvailable: boolean
       privateEpoch: number | null
     }
+    let quarantined = false
     const fake = statusFake({
       privateStatusOutcomeWithHandle: () => ({ id: 52, promise: new Promise(() => {}), cancel: () => true }),
       tryCancelPending: () => {
         throw new Error("cancel boom")
+      },
+      isAvailable: () => !quarantined,
+      isQuarantined: () => quarantined,
+      invalidateOnObserverTimeout: () => {
+        quarantined = true
       },
     })
     anySvc.privatePeer = fake
@@ -1315,7 +1329,9 @@ describe("stale observer timeout epoch ownership (LOCK-007)", () => {
       await latch.promise
       expect(result).toBe(false)
       expect(svc.isPrivateAvailable()).toBeFalse()
-      expect(svc.getPrivatePeer()).toBeNull()
+      expect(svc.getPrivatePeer()).toBe(fake)
+      expect(svc.getPrivateEpoch()).toBe(9)
+      expect(svc.isPrivateQuarantined()).toBeTrue()
       expect(warns.some((w) => w.includes("observer timeout cancel failed"))).toBeTrue()
     } finally {
       console.warn = orig

@@ -156,12 +156,14 @@ describe("abort private-first", () => {
         }
       },
     }
-    await abortSessionPrivateFirst({
+    const ok = await abortSessionPrivateFirst({
       client: client as never,
       connection: connection as unknown as KiloConnectionService,
       sessionID: SID,
       directory: DIR,
     })
+    // Request-path success: exactly-one SDK abort succeeded, not private terminal convergence.
+    expect(ok).toBeTrue()
     expect(sdk).toBe(1)
     expect(seen).toHaveLength(1)
     expect(params).toHaveLength(1)
@@ -201,12 +203,14 @@ describe("abort private-first", () => {
           return { id: 1, promise: Promise.resolve(item.outcome(req)), cancel: () => true }
         },
       }
-      await abortSessionPrivateFirst({
+      const ok = await abortSessionPrivateFirst({
         client: client as never,
         connection: connection as unknown as KiloConnectionService,
         sessionID: SID,
         directory: DIR,
       })
+      // Request-path success: exactly-one SDK abort succeeded, not private terminal convergence.
+      expect([item.label, ok]).toEqual([item.label, true])
       expect([item.label, sdk]).toEqual([item.label, 1])
       expect([item.label, seen.length]).toEqual([item.label, 1])
       expect(params[0]).toEqual({ sessionID: SID, directory: DIR })
@@ -229,12 +233,14 @@ describe("abort private-first", () => {
           cancel: () => true,
         }),
       }
-      await abortSessionPrivateFirst({
+      const ok = await abortSessionPrivateFirst({
         client: client as never,
         connection: connection as unknown as KiloConnectionService,
         sessionID: SID,
         directory: DIR,
       })
+      // Request-path success: exactly-one SDK abort succeeded, not private terminal convergence.
+      expect(ok).toBeTrue()
       expect(sdk).toBe(1)
     }
     // timeout with exact handle cancel ownership
@@ -250,12 +256,14 @@ describe("abort private-first", () => {
           cancel: () => { cancelled = 42; return true },
         }),
       }
-      await abortSessionPrivateFirst({
+      const ok = await abortSessionPrivateFirst({
         client: client as never,
         connection: connection as unknown as KiloConnectionService,
         sessionID: SID,
         directory: DIR,
       })
+      // Request-path success: exactly-one SDK abort succeeded, not private terminal convergence.
+      expect(ok).toBeTrue()
       expect(sdk).toBe(1)
       expect(cancelled).toBe(42)
     }
@@ -267,12 +275,14 @@ describe("abort private-first", () => {
         isPrivateAvailable: () => false,
         privateAbortWithHandle: () => { throw new Error("must not be called") },
       }
-      await abortSessionPrivateFirst({
+      const ok = await abortSessionPrivateFirst({
         client: client as never,
         connection: connection as unknown as KiloConnectionService,
         sessionID: SID,
         directory: DIR,
       })
+      // Request-path success: exactly-one SDK abort succeeded, not private terminal convergence.
+      expect(ok).toBeTrue()
       expect(sdk).toBe(1)
     }
     // missing capability maps to single SDK fallback
@@ -283,13 +293,58 @@ describe("abort private-first", () => {
         isPrivateAvailable: () => true,
         privateAbortWithHandle: () => { throw new Error("Private peer missing session/abort capability") },
       }
-      await abortSessionPrivateFirst({
+      const ok = await abortSessionPrivateFirst({
         client: client as never,
         connection: connection as unknown as KiloConnectionService,
         sessionID: SID,
         directory: DIR,
       })
+      // Request-path success: exactly-one SDK abort succeeded, not private terminal convergence.
+      expect(ok).toBeTrue()
       expect(sdk).toBe(1)
+    }
+  })
+
+  test("SDK fallback failure propagates with one private attempt and one SDK call", async () => {
+    const cases: { label: string; outcome: (req: Record<string, unknown>) => Promise<unknown> | unknown }[] = [
+      { label: "ambiguous", outcome: (req) => ambiguousFor(req) },
+      { label: "transport", outcome: () => Promise.reject(new Error("transport error")) },
+    ]
+    for (const item of cases) {
+      const seen: unknown[] = []
+      let sdk = 0
+      const params: unknown[] = []
+      const client = {
+        session: {
+          abort: async (p: unknown) => {
+            sdk += 1
+            params.push(p)
+            throw new Error(`sdk abort failed ${item.label}`)
+          },
+        },
+      }
+      const connection = {
+        isPrivateAvailable: () => true,
+        privateAbortWithHandle: (req: Record<string, unknown>) => {
+          seen.push(req)
+          return { id: 1, promise: Promise.resolve(item.outcome(req)), cancel: () => true }
+        },
+      }
+      // No success boolean is returned: the single SDK fallback error propagates.
+      await expect(
+        abortSessionPrivateFirst({
+          client: client as never,
+          connection: connection as unknown as KiloConnectionService,
+          sessionID: SID,
+          directory: DIR,
+        }),
+      ).rejects.toThrow(`sdk abort failed ${item.label}`)
+      expect([item.label, sdk]).toEqual([item.label, 1])
+      expect([item.label, seen.length]).toEqual([item.label, 1])
+      expect(params[0]).toEqual({ sessionID: SID, directory: DIR })
+      const req = seen[0] as Record<string, unknown>
+      expect(req.opId).toBe(req.idempotencyKey)
+      expect(String(req.opId).startsWith(`abort:${SID}:`)).toBeTrue()
     }
   })
 
