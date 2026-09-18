@@ -42,7 +42,7 @@ export interface SandboxSetSucceeded {
   status: "succeeded"
   outcome: { type: "succeeded"; time: number }
   accepted: true
-  data: { status: { directory: string; enabled: boolean; available: boolean; version: number } }
+  data: { status: { directory: string; enabled: boolean; available: boolean; reason?: string; version: number } }
 }
 
 export interface SandboxSetFailed {
@@ -154,7 +154,14 @@ export function failed(ids: Ids, code: string, message: string, retryable: boole
   }
 }
 
-export function succeeded(req: SandboxSetRequest, status: { directory: string; enabled: boolean; available: boolean; version: number }): SandboxSetSucceeded {
+export function succeeded(
+  req: SandboxSetRequest,
+  status: { directory: string; enabled: boolean; available: boolean; reason?: string; version: number },
+): SandboxSetSucceeded {
+  const kept =
+    typeof status.reason === "string"
+      ? { directory: status.directory, enabled: status.enabled, available: status.available, reason: status.reason, version: status.version }
+      : { directory: status.directory, enabled: status.enabled, available: status.available, version: status.version }
   return {
     v: VERSION,
     requestId: req.requestId,
@@ -164,7 +171,7 @@ export function succeeded(req: SandboxSetRequest, status: { directory: string; e
     status: "succeeded",
     outcome: { type: "succeeded", time: Date.now() },
     accepted: true,
-    data: { status },
+    data: { status: kept },
   }
 }
 
@@ -205,9 +212,10 @@ export function validateSandboxSetResult(raw: unknown, req: SandboxSetRequest): 
     for (const k of Object.keys(data)) if (k !== "status") throw new Error("unexpected data field")
     const st = (data as Record<string, unknown>).status
     if (!record(st)) throw new Error("succeeded data.status must be object")
-    for (const k of Object.keys(st)) if (!new Set(["directory", "enabled", "available", "version"]).has(k)) throw new Error("unexpected status field")
+    for (const k of Object.keys(st)) if (!new Set(["directory", "enabled", "available", "reason", "version"]).has(k)) throw new Error("unexpected status field")
     if (typeof st.directory !== "string" || typeof st.enabled !== "boolean" || typeof st.available !== "boolean" || typeof st.version !== "number")
       throw new Error("succeeded data.status invalid")
+    if (st.reason !== undefined && typeof st.reason !== "string") throw new Error("succeeded data.status invalid")
     if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
     if (out.failure !== undefined) throw new Error("succeeded outcome must not have failure")
     return raw as unknown as SandboxSetSucceeded
@@ -304,8 +312,14 @@ export const setSandboxPrivate = Effect.fn("SandboxSetPrivate.set")(function* (r
       Effect.catchDefect(() => Effect.succeed({ tag: "fail" as const, result: failed(safe, "internal", INTERNAL_MESSAGE, false) })),
     )
     if (out.tag !== "ok") return out.result
-    const st = out.value as { directory: string; enabled: boolean; available: boolean; version: number }
-    return succeeded(req, { directory: st.directory, enabled: st.enabled, available: st.available, version: st.version })
+    const st = out.value as { directory: string; enabled: boolean; available: boolean; reason?: string; version: number }
+    return succeeded(req, {
+      directory: st.directory,
+      enabled: st.enabled,
+      available: st.available,
+      ...(typeof st.reason === "string" ? { reason: st.reason } : {}),
+      version: st.version,
+    })
   }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
   return yield* inner.pipe(
     Effect.catch(() => Effect.succeed(failed(safe, "internal", INTERNAL_MESSAGE, false))),

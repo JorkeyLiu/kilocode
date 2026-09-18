@@ -5102,6 +5102,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (this.connectionGeneration !== generation || this.client !== client) {
       throw new Error("Sandbox connection changed")
     }
+    let postedUnavailableStatus = false
     try {
       const outcome = await setSandboxPrivateFirst({
         connection: this.connectionService as never,
@@ -5120,7 +5121,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (this.connectionState !== "connected" || this.connectionGeneration !== generation || this.client !== client) {
         throw new Error("Sandbox connection changed")
       }
-      if (!data.available) throw new Error(data.reason ?? "Sandbox backend is unavailable")
+      if (!data.available) {
+        this.postMessage({
+          type: "sandboxStatus",
+          sessionID: resolved.sid,
+          revision,
+          ...data,
+          requestID: input.requestID,
+        })
+        postedUnavailableStatus = true
+        throw new Error(data.reason ?? "Sandbox backend is unavailable")
+      }
       if (!sameDirectory(data.directory, this.getWorkspaceDirectory(resolved.sid))) {
         throw new Error("Session directory changed during sandbox toggle")
       }
@@ -5148,7 +5159,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     } catch (error) {
       if (this.connectionState === "connected" && this.connectionGeneration === generation && this.client === client) {
         this.postSandboxError(resolved.sid, error, revision, input.requestID)
-        void this.fetchAndSendSandboxStatus(resolved.sid)
+        if (!postedUnavailableStatus) void this.fetchAndSendSandboxStatus(resolved.sid)
       }
       throw error
     }

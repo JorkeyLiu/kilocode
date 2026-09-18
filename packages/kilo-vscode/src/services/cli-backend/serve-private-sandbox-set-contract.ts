@@ -75,16 +75,18 @@ export interface SandboxSetStatus {
   directory: string
   enabled: boolean
   available: boolean
+  reason?: string
   version: number
 }
 
-const STATUS_FIELDS = new Set(["directory", "enabled", "available", "version"])
+const STATUS_FIELDS = new Set(["directory", "enabled", "available", "reason", "version"])
 
 export function validateSandboxSetStatus(raw: unknown): SandboxSetStatus {
   if (!isRecord(raw)) throw new Error("sandbox-set status must be object")
   for (const k of Object.keys(raw)) if (!STATUS_FIELDS.has(k)) throw new Error(`unexpected status field ${k}`)
   if (typeof raw.directory !== "string" || typeof raw.enabled !== "boolean" || typeof raw.available !== "boolean")
     throw new Error("sandbox-set status invalid")
+  if (raw.reason !== undefined && typeof raw.reason !== "string") throw new Error("sandbox-set status reason invalid")
   if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 0)
     throw new Error("sandbox-set status version invalid")
   return raw as unknown as SandboxSetStatus

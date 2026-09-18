@@ -126,6 +126,54 @@ describe("sandbox explicit target", () => {
     expect(sent).toContainEqual(expect.objectContaining({ type: "sandboxStatus", sessionID: "ses_s1" }))
   })
 
+  test("private unavailable reason reaches UI without extra status read", async () => {
+    const client = createClient()
+    const connection = createConnection()
+    const privateConn = {
+      ...connection,
+      isPrivateAvailable: () => true,
+      privateSandboxSetOutcomeWithHandle: (req: { requestId: string; opId: string; op: string; idempotencyKey: string }) => ({
+        id: 2,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: req.op,
+            idempotencyKey: req.idempotencyKey,
+            status: "succeeded",
+            outcome: { type: "succeeded", time: 1 },
+            accepted: true,
+            data: { status: { directory: "/repo", enabled: true, available: false, reason: "no backend", version: 3 } },
+          },
+        }),
+        cancel: () => true,
+      }),
+    }
+    const withClient = { ...privateConn, getClient: () => client }
+    const provider = new KiloProvider({} as never, withClient as never)
+    const internal = provider as unknown as {
+      connectionState: string
+      webview: { postMessage: (m: unknown) => Promise<unknown> } | null
+      currentSession: unknown
+      sessionDirectories: Map<string, string>
+      trackedSessionIds: Set<string>
+      handleToggleSandbox: (input: { sessionID: string; requestID: string; enabled: boolean }) => Promise<void>
+    }
+    internal.connectionState = "connected"
+    const sent: Array<Record<string, unknown>> = []
+    internal.webview = { postMessage: async (m: unknown) => { sent.push(m as Record<string, unknown>) } }
+    internal.currentSession = mkSession()
+    internal.sessionDirectories = new Map([["ses_s1", "/repo"]])
+    internal.trackedSessionIds = new Set(["ses_s1"])
+    await internal.handleToggleSandbox({ sessionID: "ses_s1", requestID: "r4", enabled: true }).catch(() => undefined)
+    expect(client.setCalls).toHaveLength(0)
+    expect(sent).toContainEqual(expect.objectContaining({ type: "sandboxStatus", available: false, reason: "no backend", requestID: "r4" }))
+    expect(sent).toContainEqual(expect.objectContaining({ type: "sandboxStatusError", sessionID: "ses_s1", message: "no backend", requestID: "r4" }))
+    expect(client.statusCalls).toHaveLength(0)
+  })
+
   test("private success uses zero SDK", async () => {
     const client = createClient()
     const connection = createConnection()

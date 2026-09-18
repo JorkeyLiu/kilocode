@@ -46,5 +46,18 @@ describe("sandbox-set contract", () => {
     expect(() =>
       validateSandboxSetResult({ ...ok, data: { status: { directory: "/tmp", enabled: false, available: true } } }, r),
     ).toThrow()
+    const withReason = {
+      ...ok,
+      data: { status: { directory: "/tmp", enabled: true, available: false, reason: "no backend", version: 1 } },
+    }
+    const parsed = validateSandboxSetResult(withReason, r)
+    if (parsed.status !== "succeeded") throw new Error("expected succeeded")
+    expect(parsed.data.status.reason).toBe("no backend")
+    expect(() =>
+      validateSandboxSetResult(
+        { ...ok, data: { status: { directory: "/tmp", enabled: true, available: false, reason: 1, version: 1 } } },
+        r,
+      ),
+    ).toThrow()
   })
 })

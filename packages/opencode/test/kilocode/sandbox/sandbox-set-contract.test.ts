@@ -66,6 +66,19 @@ describe("sandbox set contract", () => {
     expect(validateSandboxSetResult(ok, req).status).toBe("succeeded")
     expect(() => validateSandboxSetResult({ ...ok, requestId: "r2" }, req)).toThrow()
     expect(() => validateSandboxSetResult({ ...ok, data: { status: { directory: "/tmp", enabled: "yes", available: true, version: 1 } } }, req)).toThrow()
+    const withReason = {
+      ...ok,
+      data: { status: { directory: "/tmp", enabled: true, available: false, reason: "no backend", version: 1 } },
+    }
+    const parsed = validateSandboxSetResult(withReason, req)
+    if (parsed.status !== "succeeded") throw new Error("expected succeeded")
+    expect(parsed.data.status.reason).toBe("no backend")
+    expect(() =>
+      validateSandboxSetResult(
+        { ...ok, data: { status: { directory: "/tmp", enabled: true, available: false, reason: 1, version: 1 } } },
+        req,
+      ),
+    ).toThrow()
     const bad = { ...ok, status: "failed", outcome: { type: "failed", time: 1, failure: { code: "x", message: "y", retryable: false } }, accepted: false, failure: { code: "x", message: "y", retryable: false } }
     expect(() => validateSandboxSetResult(bad, req)).toThrow()
   })

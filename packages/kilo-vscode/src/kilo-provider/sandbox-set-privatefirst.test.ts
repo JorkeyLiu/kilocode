@@ -115,6 +115,70 @@ describe("sandbox-set private-first", () => {
     expect(sdk).toBe(0)
   })
 
+  test("private succeeded unavailable keeps reason with zero SDK", async () => {
+    const req = buildSandboxSetReq(SID, DIR, true)
+    const raw = {
+      ...okRawFor(req, true),
+      data: { status: { directory: DIR, enabled: true, available: false, reason: "no backend", version: 3 } },
+    }
+    const parsed = parseSandboxSetResult(raw, req)
+    expect(parsed.kind).toBe("ok")
+    if (parsed.kind !== "ok") return
+    expect(parsed.status.available).toBe(false)
+    expect(parsed.status.reason).toBe("no backend")
+    let sdk = 0
+    const client = { sandbox: { set: async () => { sdk += 1; return { data: { directory: DIR, enabled: true, available: true, version: 1 } } } } }
+    const unavailableFor = (q: ReturnType<typeof buildSandboxSetReq>) => ({
+      ...okRawFor(q, true),
+      data: { status: { directory: DIR, enabled: true, available: false, reason: "no backend", version: 3 } },
+    })
+    const out = await setSandboxPrivateFirst({
+      connection: connWith(unavailableFor) as never,
+      client: client as never,
+      sessionId: SID,
+      directory: DIR,
+      enabled: true,
+    })
+    expect(out.kind).toBe("ok")
+    if (out.kind === "ok") {
+      expect(out.via).toBe("private")
+      expect(out.status.available).toBe(false)
+      expect(out.status.reason).toBe("no backend")
+    }
+    expect(sdk).toBe(0)
+  })
+
+  test("SDK fallback preserves reason", async () => {
+    const out = await setSandboxPrivateFirst({
+      connection: { isPrivateAvailable: () => false } as never,
+      client: {
+        sandbox: {
+          set: async () => ({
+            data: { directory: DIR, enabled: true, available: false, reason: "sdk backend down", version: 4 },
+          }),
+        },
+      } as never,
+      sessionId: SID,
+      directory: DIR,
+      enabled: true,
+    })
+    expect(out.kind).toBe("ok")
+    if (out.kind === "ok") {
+      expect(out.via).toBe("sdk")
+      expect(out.status.available).toBe(false)
+      expect(out.status.reason).toBe("sdk backend down")
+    }
+  })
+
+  test("non-string reason is invalid and falls back", async () => {
+    const req = buildSandboxSetReq(SID, DIR, true)
+    const raw = {
+      ...okRawFor(req, true),
+      data: { status: { directory: DIR, enabled: true, available: false, reason: 1, version: 3 } },
+    }
+    expect(parseSandboxSetResult(raw, req).kind).toBe("fallback")
+  })
+
   test("terminal closes with zero SDK", async () => {
     let sdk = 0
     const client = { sandbox: { set: async () => { sdk += 1; return { data: { directory: DIR, enabled: true, available: true, version: 1 } } } } }

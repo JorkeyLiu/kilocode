@@ -72,6 +72,7 @@ export function parseSandboxSetResult(result: unknown, req: ServePrivateSandboxS
       const st = out.data.status as unknown as Record<string, unknown>
       if (typeof st.directory !== "string" || typeof st.enabled !== "boolean" || typeof st.available !== "boolean")
         return { kind: "fallback", reason: "invalid" }
+      if (st.reason !== undefined && typeof st.reason !== "string") return { kind: "fallback", reason: "invalid" }
       if (typeof st.version !== "number" || !Number.isInteger(st.version)) return { kind: "fallback", reason: "invalid" }
       return { kind: "ok", status: st as unknown as SandboxSetStatus }
     } catch {
@@ -179,6 +180,7 @@ function coerceSdkStatus(data: unknown): SandboxSetStatus | null {
   if (!rec || typeof rec !== "object") return null
   if (typeof rec.directory !== "string" || typeof rec.enabled !== "boolean") return null
   if (typeof rec.available !== "boolean" || typeof rec.version !== "number") return null
+  if (rec.reason !== undefined && typeof rec.reason !== "string") return null
   return rec as unknown as SandboxSetStatus
 }
 
