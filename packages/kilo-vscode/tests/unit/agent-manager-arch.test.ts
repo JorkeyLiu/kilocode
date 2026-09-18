@@ -22,6 +22,7 @@ const TSX_FILES = [
   path.join(ROOT, "webview-ui/agent-manager/SidebarSearchMenu.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/SidebarToggleButton.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/tab-rendering.tsx"),
+  path.join(ROOT, "webview-ui/agent-manager/WorkStyleEmptyPicker.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/terminal/SortableTerminalTab.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/terminal/render.tsx"),
