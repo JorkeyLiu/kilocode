@@ -29,7 +29,7 @@ function req(overrides: Record<string, unknown> = {}) {
 
 function data(overrides: Record<string, unknown> = {}) {
   return {
-    workStyle: { hasPermission: false },
+    workStyle: { hasPermission: false, permissionPreset: "absent" },
     sandbox: { enabled: false },
     ...overrides,
   }
@@ -63,7 +63,7 @@ function failedFor(r: ReturnType<typeof req>, code: string, message: string, ret
 describe("config/ui-defaults projection", () => {
   test("defaults: no permission, no scalars, sandbox disabled", () => {
     expect(projectUiDefaults({})).toEqual({
-      workStyle: { hasPermission: false },
+      workStyle: { hasPermission: false, permissionPreset: "absent" },
       sandbox: { enabled: false },
     })
   })
@@ -72,11 +72,11 @@ describe("config/ui-defaults projection", () => {
     expect(
       projectUiDefaults({ terminal_command_display: "collapsed", auto_collapse_reasoning: false, sandbox: {} }),
     ).toEqual({
-      workStyle: { hasPermission: false, terminalCommandDisplay: "collapsed", autoCollapseReasoning: false },
+      workStyle: { hasPermission: false, permissionPreset: "absent", terminalCommandDisplay: "collapsed", autoCollapseReasoning: false },
       sandbox: { enabled: false },
     })
     expect(projectUiDefaults({ terminal_command_display: "expanded", auto_collapse_reasoning: true })).toEqual({
-      workStyle: { hasPermission: false, terminalCommandDisplay: "expanded", autoCollapseReasoning: true },
+      workStyle: { hasPermission: false, permissionPreset: "absent", terminalCommandDisplay: "expanded", autoCollapseReasoning: true },
       sandbox: { enabled: false },
     })
   })
@@ -111,7 +111,7 @@ describe("config/ui-defaults closed validation", () => {
     expect(() =>
       validateConfigUiDefaultsResult(
         okFor(r, {
-          workStyle: { hasPermission: true, terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
+          workStyle: { hasPermission: true, permissionPreset: "custom", terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
           sandbox: { enabled: true },
         }),
         r,
@@ -134,6 +134,7 @@ describe("config/ui-defaults closed validation", () => {
       { workStyle: { hasPermission: "yes" }, sandbox: { enabled: false } },
       { workStyle: { hasPermission: false, extra: 1 }, sandbox: { enabled: false } },
       { workStyle: { hasPermission: false }, sandbox: { enabled: false, network: "allow" } },
+      { workStyle: { hasPermission: false, permissionPreset: "everything" }, sandbox: { enabled: false } },
       { unknown: true },
     ]
     for (const d of secrets) {
@@ -186,7 +187,7 @@ describe("config/ui-defaults closed validation", () => {
 })
 
 describe("config/ui-defaults effective config read", () => {
-  test("fetchUiDefaultsData projects the merged effective config and strips secrets", async () => {
+  test("fetchUiDefaultsData reads workStyle global-only, display/sandbox effective, and strips secrets", async () => {
     const permissionToken = "UIDEFAULTS-SECRET-permission-rule-8f31"
     const providerToken = "UIDEFAULTS-SECRET-provider-key-4ab2"
     const mcpToken = "UIDEFAULTS-SECRET-mcp-token-77cc"
@@ -202,7 +203,12 @@ describe("config/ui-defaults effective config read", () => {
       fetchUiDefaultsData().pipe(Effect.provide(TestConfig.layer({ get: () => Effect.succeed(effective as never) }))),
     )
     expect(out).toEqual({
-      workStyle: { hasPermission: true, terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
+      workStyle: {
+        hasPermission: false,
+        permissionPreset: "absent",
+        terminalCommandDisplay: "collapsed",
+        autoCollapseReasoning: true,
+      },
       sandbox: { enabled: true },
     })
     const wire = JSON.stringify(out)
@@ -215,7 +221,60 @@ describe("config/ui-defaults effective config read", () => {
     const out = await Effect.runPromise(
       fetchUiDefaultsData().pipe(Effect.provide(TestConfig.layer({ get: () => Effect.succeed({}) }))),
     )
-    expect(out).toEqual({ workStyle: { hasPermission: false }, sandbox: { enabled: false } })
+    expect(out).toEqual({ workStyle: { hasPermission: false, permissionPreset: "absent" }, sandbox: { enabled: false } })
+  })
+
+  test("global autonomous wins over a hand-written project review level", async () => {
+    const { AUTONOMOUS_PERMISSION_PRESET } = await import("@opencode-ai/core/kilocode/permission-presets")
+    const global = { permission_level: "autonomous", permission: AUTONOMOUS_PERMISSION_PRESET }
+    const effective = { permission_level: "review", permission: { "*": "ask" } }
+    const out = await Effect.runPromise(
+      fetchUiDefaultsData().pipe(
+        Effect.provide(
+          TestConfig.layer({
+            get: () => Effect.succeed(effective as never),
+            getGlobal: () => Effect.succeed(global as never),
+          }),
+        ),
+      ),
+    )
+    expect(out.workStyle.permissionPreset).toBe("autonomous")
+    expect(out.workStyle.permissionLevel).toBe("autonomous")
+  })
+
+  test("global review wins over a hand-written project autonomous level", async () => {
+    const { REVIEW_PERMISSION_PRESET } = await import("@opencode-ai/core/kilocode/permission-presets")
+    const global = { permission_level: "review", permission: REVIEW_PERMISSION_PRESET }
+    const effective = { permission_level: "autonomous", permission: { "*": "allow" } }
+    const out = await Effect.runPromise(
+      fetchUiDefaultsData().pipe(
+        Effect.provide(
+          TestConfig.layer({
+            get: () => Effect.succeed(effective as never),
+            getGlobal: () => Effect.succeed(global as never),
+          }),
+        ),
+      ),
+    )
+    expect(out.workStyle.permissionPreset).toBe("review")
+    expect(out.workStyle.permissionLevel).toBe("review")
+  })
+
+  test("project-only permission_level is ignored: global absent reads absent", async () => {
+    const effective = { permission_level: "review", permission: { "*": "ask" } }
+    const out = await Effect.runPromise(
+      fetchUiDefaultsData().pipe(
+        Effect.provide(
+          TestConfig.layer({
+            get: () => Effect.succeed(effective as never),
+            getGlobal: () => Effect.succeed({} as never),
+          }),
+        ),
+      ),
+    )
+    expect(out.workStyle.permissionPreset).toBe("absent")
+    expect(out.workStyle.permissionLevel).toBeUndefined()
+    expect(out.workStyle.hasPermission).toBe(false)
   })
 
   test("configUiDefaultsPrivate rejects malformed requests without touching the lane", async () => {

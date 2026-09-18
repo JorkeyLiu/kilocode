@@ -24,9 +24,9 @@ import {
 } from "../../../src/config/registry"
 
 describe("closed JSONC field set", () => {
-  it("contains exactly 14 fields", () => {
+  it("contains exactly 15 fields", () => {
     const entries = getAllEntries()
-    expect(entries.length).toBe(14)
+    expect(entries.length).toBe(15)
   })
 
   it("matches the CLOSED_JSONC_FIELDS constant", () => {
@@ -55,6 +55,7 @@ describe("closed JSONC field set", () => {
       "provider",
       "mcp",
       "permission",
+      "permission_level",
       "instructions",
       "terminal_command_display",
       "auto_collapse_reasoning",
@@ -144,12 +145,18 @@ describe("policy fields", () => {
 describe("scope validation", () => {
   it("all fields valid in global scope", () => {
     const globalKeys = keysForScope("global")
-    expect(globalKeys.length).toBe(14)
+    expect(globalKeys.length).toBe(15)
   })
 
   it("all fields valid in project scope", () => {
     const projectKeys = keysForScope("project")
     expect(projectKeys.length).toBe(14)
+    expect(projectKeys).not.toContain("permission_level")
+  })
+
+  it("permission_level is global-only: project hand-writes are ignored", () => {
+    expect(keysForScope("global")).toContain("permission_level")
+    expect(keysForScope("project")).not.toContain("permission_level")
   })
 })
 
@@ -161,6 +168,7 @@ describe("composition operators", () => {
       "default_agent",
       "model",
       "model_variant",
+      "permission_level",
       "subagent_model",
       "subagent_variant",
       "terminal_command_display",
@@ -207,7 +215,7 @@ describe("secret-ref keys", () => {
 
 describe("snapshot keys", () => {
   const snapshots = snapshotKeys()
-  expect(snapshots.length).toBe(13)
+  expect(snapshots.length).toBe(14)
   // The $schema meta-key never appears in snapshots
   expect(snapshots).not.toContain("$schema")
 })

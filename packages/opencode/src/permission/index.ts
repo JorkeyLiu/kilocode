@@ -79,6 +79,12 @@ export function resolveAuthoredGlobalLayers(gPerm: unknown, workspaceRoot: strin
   return []
 }
 
+export function resolvePermissionLevel(gRaw: unknown): Evaluator.PermissionLevel | undefined {
+  const level = (gRaw as { permission_level?: unknown } | null | undefined)?.permission_level
+  if (level === "review" || level === "autonomous") return level
+  return undefined
+}
+
 export function effectiveProtectedTargets(request: { patterns: readonly string[]; metadata?: Record<string, unknown>; permission: string }, base: string): string[] {
   void base
   const seen = new Set<string>()
@@ -518,12 +524,12 @@ export const layer = Layer.effect(
         if (sessLayer) layers.push(sessLayer)
         if (protectedDenyLayer) layers.push(protectedDenyLayer)
         const approvals = [...st.r18.approvals, ...syntheticApprovals]
-        return { evalReq, layers, approvals, allowEverything: allowEverythingFlag, hardDenyRuleset: entry.hardRuleset }
+        return { evalReq, layers, approvals, allowEverything: allowEverythingFlag, hardDenyRuleset: entry.hardRuleset, permissionLevel: resolvePermissionLevel(gRaw) }
       })
     const computeProvenanceForEntry = (entry: PendingEntry, st: State) =>
       Effect.gen(function* () {
-        const { evalReq, layers, approvals, allowEverything, hardDenyRuleset } = yield* buildEvaluatorInputForEntry(entry, st)
-        const out = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything, hardDenyRuleset })
+        const { evalReq, layers, approvals, allowEverything, hardDenyRuleset, permissionLevel } = yield* buildEvaluatorInputForEntry(entry, st)
+        const out = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything, hardDenyRuleset, permissionLevel })
         yield* finalizeProvenance(String(entry.info.id), out.provenance)
         return out
       })
@@ -678,7 +684,7 @@ export const layer = Layer.effect(
         if (sessionLayer) layers.push(sessionLayer)
         if (protectedDenyLayer) layers.push(protectedDenyLayer)
         const allApprovals = [...st.r18.approvals, ...syntheticApprovals]
-        return { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: hardRuleset }
+        return { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: hardRuleset, permissionLevel: resolvePermissionLevel(gForAuthored) }
       })
 
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
@@ -720,13 +726,14 @@ export const layer = Layer.effect(
         fallbackAgentRuleset: effectiveHardRuleset,
         trustedReadCapability: trustedReadForShared,
       })
-      const { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: sharedHardDeny } = shared
+      const { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: sharedHardDeny, permissionLevel } = shared
       const evalOut = Evaluator.evaluate({
         request: evalReq,
         layers,
         approvals: allApprovals,
         allowEverything: allowEverythingFlag,
         hardDenyRuleset: sharedHardDeny,
+        permissionLevel,
       })
       const skill = ConfigProtection.globalSkillPattern(request as any)
       const canonicalTargetsForMeta = (evalReq as any).targets as string[] ?? [...request.patterns]
@@ -872,7 +879,7 @@ export const layer = Layer.effect(
         fallbackAgentRuleset: input.agentPermission,
         trustedReadCapability: input.trustedReadCapability as any,
       })
-      const out = Evaluator.evaluate({ request: shared.evalReq, layers: shared.layers, approvals: shared.approvals, allowEverything: shared.allowEverything, hardDenyRuleset: shared.hardDenyRuleset })
+      const out = Evaluator.evaluate({ request: shared.evalReq, layers: shared.layers, approvals: shared.approvals, allowEverything: shared.allowEverything, hardDenyRuleset: shared.hardDenyRuleset, permissionLevel: shared.permissionLevel })
       return { result: out.result, provenance: out.provenance, ceilingId: out.ceilingId }
     })
 
@@ -948,8 +955,8 @@ export const layer = Layer.effect(
         if (idx >= 0) r18.approvals.splice(idx, 1)
         // drain other pending that may be covered by remaining session approvals (once not carried) via evaluator — centralized with protected state
         for (const [id, item] of [...pending.entries()]) {
-          const { evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset } = yield* buildEvaluatorInputForEntry(item, st)
-          const out = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset })
+          const { evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel } = yield* buildEvaluatorInputForEntry(item, st)
+          const out = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel })
           if (out.result === "allow") {
             yield* finalizeProvenance(String(item.info.id), out.provenance)
             pending.delete(id)
@@ -1053,8 +1060,8 @@ export const layer = Layer.effect(
       }
       // drain pending covered by this session approval (same session only via evaluator's sessionID check) — centralized with protected state
       for (const [id, item] of [...pending.entries()]) {
-        const { evalReq: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2 } = yield* buildEvaluatorInputForEntry(item, st)
-        const out2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2 })
+        const { evalReq: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 } = yield* buildEvaluatorInputForEntry(item, st)
+        const out2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 })
         if (out2.result === "allow") {
           yield* finalizeProvenance(String(item.info.id), out2.provenance)
           pending.delete(id)
@@ -1187,8 +1194,8 @@ export const layer = Layer.effect(
       // Drain other pending via evaluator — centralized with protected state
       for (const [id, item] of [...s.pending.entries()]) {
         if (String(item.info.id) === String(input.requestID)) continue
-        const { evalReq: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2 } = yield* buildEvaluatorInputForEntry(item, s)
-        const out2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2 })
+        const { evalReq: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 } = yield* buildEvaluatorInputForEntry(item, s)
+        const out2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 })
         if (out2.result === "allow") {
           yield* finalizeProvenance(String(item.info.id), out2.provenance)
           s.pending.delete(id)
@@ -1231,8 +1238,8 @@ export const layer = Layer.effect(
       }
 
       const evalOne = (entry: PendingEntry): Effect.Effect<boolean> => Effect.gen(function* () {
-        const { evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset } = yield* buildEvaluatorInputForEntry(entry, s)
-        const outAE = Evaluator.evaluate({ request: evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset })
+        const { evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel } = yield* buildEvaluatorInputForEntry(entry, s)
+        const outAE = Evaluator.evaluate({ request: evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel })
         if (outAE.result === "allow") yield* finalizeProvenance(String(entry.info.id), outAE.provenance)
         else if (outAE.result === "deny") {
           yield* finalizeProvenance(String(entry.info.id), outAE.provenance)

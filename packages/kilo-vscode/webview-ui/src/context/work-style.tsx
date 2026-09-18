@@ -10,6 +10,7 @@ import type { WorkStyle, WorkStyleState } from "../../../src/shared/work-style-p
 
 export interface WorkStyleContextValue {
   style: Accessor<WorkStyleState>
+  level: Accessor<"review" | "autonomous" | "custom" | "unset" | "skipped">
   loading: Accessor<boolean>
   applying: Accessor<boolean>
   shouldShowOnboarding: Accessor<boolean>
@@ -22,6 +23,7 @@ export const WorkStyleProvider: ParentComponent = (props) => {
   const vscode = useVSCode()
   const language = useLanguage()
   const [style, setStyle] = createSignal<WorkStyleState>("unset")
+  const [level, setLevel] = createSignal<"review" | "autonomous" | "custom" | "unset" | "skipped">("unset")
   const [loading, setLoading] = createSignal(true)
   const [applying, setApplying] = createSignal(false)
   const [display, setDisplay] = createSignal(false)
@@ -31,6 +33,17 @@ export const WorkStyleProvider: ParentComponent = (props) => {
     if (message.type === "workStyleLoaded") {
       if (applying()) return
       setStyle(message.style)
+      const rec = message as unknown as Record<string, unknown>
+      const next = (rec.mainState ?? rec.level) as unknown
+      if (next === "review" || next === "autonomous" || next === "custom" || next === "unset" || next === "skipped") {
+        setLevel(next)
+      } else if (message.style === "human-in-the-loop") {
+        setLevel("review")
+      } else if (message.style === "autonomous") {
+        setLevel("autonomous")
+      } else {
+        setLevel(message.style as "unset" | "skipped")
+      }
       setDisplay((current) => resolveWorkStyleOnboarding(current, message.style))
       setLoading(false)
       return
@@ -38,6 +51,10 @@ export const WorkStyleProvider: ParentComponent = (props) => {
     if (message.type === "workStyleApplied") {
       setApplying(false)
       setStyle(message.style)
+      const rec = message as unknown as Record<string, unknown>
+      if (rec.level === "review" || rec.level === "autonomous") setLevel(rec.level)
+      else if (message.style === "human-in-the-loop") setLevel("review")
+      else if (message.style === "autonomous") setLevel("autonomous")
       setDisplay(false)
       toast.saved()
       return
@@ -101,6 +118,7 @@ export const WorkStyleProvider: ParentComponent = (props) => {
 
   const value: WorkStyleContextValue = {
     style,
+    level,
     loading: () => !ready(),
     applying,
     shouldShowOnboarding: onboarding,

@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import type { CanonicalConfigService } from "../config/service"
 import type { WorkStyle, WorkStyleState } from "../shared/work-style-presets"
+import { levelForStyle } from "../shared/work-style-presets"
 import {
   fetchConfigUiDefaultsPrivateFirst,
   requireUiDefaults,
@@ -72,7 +73,7 @@ export async function handleWorkStyleApplyMessage(input: {
   const result = await apply(input.connection, input.directory, input.message.style, input.canonical)
   input.post(
     result.ok
-      ? { type: "workStyleApplied", style: input.message.style }
+      ? { type: "workStyleApplied", style: input.message.style, level: levelForStyle(input.message.style) }
       : {
           type: "workStyleApplyFailed",
           message: result.error,

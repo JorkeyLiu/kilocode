@@ -637,11 +637,14 @@ export interface TimelineSettingLoadedMessage {
 export interface WorkStyleLoadedMessage {
   type: "workStyleLoaded"
   style: WorkStyleState
+  level?: "review" | "autonomous" | "custom" | "unset" | "skipped"
+  mainState?: "review" | "autonomous" | "custom" | "unset" | "skipped"
 }
 
 export interface WorkStyleAppliedMessage {
   type: "workStyleApplied"
   style: WorkStyle
+  level?: "review" | "autonomous"
 }
 
 export interface WorkStyleApplyFailedMessage {

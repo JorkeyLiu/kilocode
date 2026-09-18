@@ -208,6 +208,9 @@ export const Info = Schema.Struct({
   }),
   layout: Schema.optional(ConfigLayoutV1.Layout).annotate({ description: "@deprecated Always uses stretch layout." }),
   permission: Schema.optional(ConfigPermissionV1.Info),
+  permission_level: Schema.optional(Schema.Literals(["review", "autonomous"])).annotate({
+    description: "File-authoritative runtime hint for the VS Code Review/Autonomous permission surface; never replaces permission rules",
+  }),
   // kilocode_change start - user-persisted explicit approvals for protected config
   // files (AGENTS.md, kilo.json, .kilo/*). Scoped per agent name + exact path;
   // only the global config is read for this trust (project config is inert).

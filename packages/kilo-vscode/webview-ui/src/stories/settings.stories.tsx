@@ -15,6 +15,10 @@ import CustomProviderDialog from "../components/settings/CustomProviderDialog"
 import ModelsTab from "../components/settings/ModelsTab"
 import AgentBehaviourTab from "../components/settings/AgentBehaviourTab"
 import AutoApproveTab from "../components/settings/AutoApproveTab"
+import {
+  AUTONOMOUS_PERMISSION_PRESET,
+  REVIEW_PERMISSION_PRESET,
+} from "@opencode-ai/core/kilocode/permission-presets"
 import ModeEditView from "../components/settings/ModeEditView"
 import McpEditView from "../components/settings/McpEditView"
 import type { AgentConfig, CommandConfig, Config } from "../types/messages"
@@ -278,6 +282,7 @@ function OpenModelPicker(props: { children: any }) {
 
 const work: WorkStyleContextValue = {
   style: () => "unset",
+  level: () => "unset",
   loading: () => false,
   applying: () => false,
   shouldShowOnboarding: () => true,
@@ -876,6 +881,76 @@ export const ProvidersCustomOnly: Story = {
     >
       <div style={{ "max-height": "700px", overflow: "auto" }}>
         <ProvidersTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const AutoApproveLevelReview: Story = {
+  name: "AutoApproveTab — Review level",
+  render: () => (
+    <StoryProviders
+      config={{ permission_level: "review", permission: REVIEW_PERMISSION_PRESET } as any}
+      globalConfig={{ permission_level: "review", permission: REVIEW_PERMISSION_PRESET } as any}
+    >
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <AutoApproveTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const AutoApproveLevelAutonomous: Story = {
+  name: "AutoApproveTab — Autonomous level",
+  render: () => (
+    <StoryProviders
+      config={{ permission_level: "autonomous", permission: AUTONOMOUS_PERMISSION_PRESET } as any}
+      globalConfig={{ permission_level: "autonomous", permission: AUTONOMOUS_PERMISSION_PRESET } as any}
+    >
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <AutoApproveTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const AutoApproveLevelCustom: Story = {
+  name: "AutoApproveTab — Custom level",
+  render: () => (
+    <StoryProviders
+      config={{ permission: { "*": "ask", edit: "allow" } } as any}
+      globalConfig={{ permission: { "*": "ask", edit: "allow" } } as any}
+    >
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <AutoApproveTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const AutoApproveLevelReview420: Story = {
+  name: "AutoApproveTab — Review level 420px",
+  render: () => (
+    <StoryProviders
+      config={{ permission_level: "review", permission: REVIEW_PERMISSION_PRESET } as any}
+      globalConfig={{ permission_level: "review", permission: REVIEW_PERMISSION_PRESET } as any}
+    >
+      <div style={{ width: "420px", "max-height": "700px", overflow: "auto" }}>
+        <AutoApproveTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const AutoApproveLevelCustom200: Story = {
+  name: "AutoApproveTab — Custom level 200px",
+  render: () => (
+    <StoryProviders
+      config={{ permission: { "*": "ask", edit: "allow" } } as any}
+      globalConfig={{ permission: { "*": "ask", edit: "allow" } } as any}
+    >
+      <div style={{ width: "200px", "max-height": "700px", overflow: "auto" }}>
+        <AutoApproveTab />
       </div>
     </StoryProviders>
   ),

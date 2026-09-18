@@ -53,12 +53,15 @@ export type Request = {
   isProtectedRequest?: boolean
 }
 
+export type PermissionLevel = "review" | "autonomous"
+
 export type Input = {
   request: Request
   layers: LayerInput[]
   approvals: Approval[]
   allowEverything: boolean
   hardDenyRuleset?: Ruleset
+  permissionLevel?: PermissionLevel
 }
 
 type ProvenanceLayer = {
@@ -407,6 +410,20 @@ function hasBroadAllowFor(request: Request, layers: LayerInput[]) {
   return false
 }
 
+/**
+ * Autonomous semantics: when level=autonomous, every decision that would
+ * otherwise ask — ordinary ask from any layer (global/project/agent/
+ * session-restriction), doom_loop, question lifecycle, runtime ceiling b/c
+ * (protected files, .env reads), and the empty default-ask — resolves
+ * directly to allow with an explicit autonomous provenance reason. Only
+ * deny (any layer) and ceiling-a hard deny stay deny. File-authoritative
+ * hint only — never an approval and never allowEverything.
+ */
+export function autonomousReason(ceilingAskPresent: boolean): "autonomous" | "autonomous-ceiling" {
+  if (ceilingAskPresent) return "autonomous-ceiling"
+  return "autonomous"
+}
+
 export function evaluate(input: Input): { result: DecisiveResult; provenance: Provenance; ceilingId: CeilingId } {
   const req = input.request
   const targets = getTargets(req)
@@ -617,9 +634,14 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
     const hasExact = !!exactApproval
     const ceilingResolved = !ceilingAskPresent || hasExact
     const ordinaryResolved = !ordinaryAskPresent || hasExact || input.allowEverything
-    if (ceilingResolved && ordinaryResolved) {
+    if (input.permissionLevel === "autonomous") {
       result = "allow"
-      reason = hasExact ? "approval-exact" : "allow-everything"
+      reason = autonomousReason(ceilingAskPresent)
+      finalCeilingId = null
+    } else if (ceilingResolved && ordinaryResolved) {
+      result = "allow"
+      if (hasExact) reason = "approval-exact"
+      else reason = "allow-everything"
       if (hasExact) {
         finalCeilingId = null
         const isDurable = exactApproval!.kind === "durable"
@@ -663,6 +685,10 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
           expiry: exactApproval.kind === "once" ? "once-consumed" : isDurable2 ? "persistent" : "session-end",
         }
         contributingLayers.push(approvalLayer!)
+      } else if (input.permissionLevel === "autonomous") {
+        result = "allow"
+        reason = "autonomous"
+        finalCeilingId = null
       } else {
         result = "ask"
         reason = "default-ask"

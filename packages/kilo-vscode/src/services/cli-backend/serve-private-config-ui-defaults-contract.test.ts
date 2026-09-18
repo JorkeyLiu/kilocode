@@ -13,7 +13,7 @@ function req() {
 
 function data(overrides: Record<string, unknown> = {}) {
   return {
-    workStyle: { hasPermission: false },
+    workStyle: { hasPermission: false, permissionPreset: "absent" },
     sandbox: { enabled: false },
     ...overrides,
   }
@@ -44,14 +44,17 @@ describe("config-ui-defaults contract", () => {
     expect(() =>
       validateConfigUiDefaultsResult(
         ok(r, {
-          workStyle: { hasPermission: true, terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
+          workStyle: { hasPermission: true, permissionPreset: "custom", terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
           sandbox: { enabled: true },
         }),
         r,
       ),
     ).not.toThrow()
     expect(() => validateUiDefaultsData(data())).not.toThrow()
-    expect(() => validateUiDefaultsData(data({ workStyle: { hasPermission: true } }))).not.toThrow()
+    expect(() => validateUiDefaultsData(data({ workStyle: { hasPermission: true, permissionPreset: "custom" } }))).not.toThrow()
+    expect(() =>
+      validateUiDefaultsData(data({ workStyle: { hasPermission: true, permissionPreset: "review", permissionLevel: "review" } })),
+    ).not.toThrow()
   })
 
   test("secret and unknown fields rejected fail-closed", () => {
@@ -66,6 +69,7 @@ describe("config-ui-defaults contract", () => {
       { workStyle: { hasPermission: false }, sandbox: { enabled: false }, options: {}, headers: {} },
       { workStyle: { hasPermission: false, terminalCommandDisplay: "sideways" }, sandbox: { enabled: false } },
       { workStyle: { hasPermission: "yes" }, sandbox: { enabled: false } },
+      { workStyle: { hasPermission: false, permissionPreset: "everything" }, sandbox: { enabled: false } },
       { workStyle: { hasPermission: false, extra: 1 }, sandbox: { enabled: false } },
       { workStyle: { hasPermission: false }, sandbox: { enabled: false, network: "allow" } },
       { workStyle: { hasPermission: false }, sandbox: { enabled: "yes" } },

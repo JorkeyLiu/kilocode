@@ -12,7 +12,7 @@ import { buildWorkStyleApplyPlan, hasPermissionConfig } from "./work-style-prese
 
 function uiData(overrides: Record<string, unknown> = {}) {
   return {
-    workStyle: { hasPermission: false },
+    workStyle: { hasPermission: false, permissionPreset: "absent" },
     sandbox: { enabled: false },
     ...overrides,
   }
@@ -136,7 +136,7 @@ describe("config-ui-defaults private-first", () => {
     if (out.kind === "ok") {
       expect(out.via).toBe("sdk")
       expect(out.data).toEqual({
-        workStyle: { hasPermission: true, terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
+        workStyle: { hasPermission: true, permissionPreset: "custom", terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
         sandbox: { enabled: true },
       })
       expect(JSON.stringify(out.data)).not.toContain("sk-live")
@@ -156,7 +156,7 @@ describe("config-ui-defaults private-first", () => {
     expect(out.kind).toBe("ok")
     if (out.kind === "ok") {
       expect(out.data).toEqual({
-        workStyle: { hasPermission: false, terminalCommandDisplay: "collapsed", autoCollapseReasoning: false },
+        workStyle: { hasPermission: false, permissionPreset: "absent", terminalCommandDisplay: "collapsed", autoCollapseReasoning: false },
         sandbox: { enabled: false },
       })
     }
@@ -222,7 +222,7 @@ describe("config-ui-defaults private-first", () => {
   test("toWorkStyleConfig feeds the untouched plan builder with identical decisions", () => {
     // Present permission suppresses the preset permission write.
     const present = toWorkStyleConfig({
-      workStyle: { hasPermission: true, terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
+      workStyle: { hasPermission: true, permissionPreset: "custom", terminalCommandDisplay: "collapsed", autoCollapseReasoning: true },
       sandbox: { enabled: true },
     })
     expect(hasPermissionConfig(present)).toBe(true)
@@ -231,7 +231,7 @@ describe("config-ui-defaults private-first", () => {
     expect(skipPlan.config.terminal_command_display).toBeUndefined()
     expect(skipPlan.config.auto_collapse_reasoning).toBeUndefined()
     // Absent permission plus unset scalars fill from the preset.
-    const absent = toWorkStyleConfig({ workStyle: { hasPermission: false }, sandbox: { enabled: false } })
+    const absent = toWorkStyleConfig({ workStyle: { hasPermission: false, permissionPreset: "absent" }, sandbox: { enabled: false } })
     expect(hasPermissionConfig(absent)).toBe(false)
     const fillPlan = buildWorkStyleApplyPlan({ style: "human-in-the-loop", config: absent })
     expect(fillPlan.config.permission).toBeDefined()

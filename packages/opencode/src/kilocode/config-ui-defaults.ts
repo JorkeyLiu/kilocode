@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { Config } from "@/config/config"
+import { classifyPermissionPreset } from "@opencode-ai/core/kilocode/permission-presets"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import {
   acquireDrainControl,
@@ -26,6 +27,8 @@ export interface UiDefaultsWorkStyle {
   hasPermission: boolean
   terminalCommandDisplay?: "expanded" | "collapsed"
   autoCollapseReasoning?: boolean
+  permissionLevel?: "review" | "autonomous"
+  permissionPreset: "review" | "autonomous" | "custom" | "absent"
 }
 
 export interface UiDefaultsSandbox {
@@ -184,7 +187,8 @@ export function ambiguous(req: ConfigUiDefaultsRequest, transportUnknown = true)
 }
 
 const DATA_FIELDS = new Set(["workStyle", "sandbox"])
-const WORK_STYLE_FIELDS = new Set(["hasPermission", "terminalCommandDisplay", "autoCollapseReasoning"])
+const WORK_STYLE_FIELDS = new Set(["hasPermission", "terminalCommandDisplay", "autoCollapseReasoning", "permissionLevel", "permissionPreset"])
+const PERMISSION_PRESETS = new Set(["review", "autonomous", "custom", "absent"])
 const SANDBOX_FIELDS = new Set(["enabled"])
 
 export function validateUiDefaultsData(raw: unknown): UiDefaultsData {
@@ -198,6 +202,10 @@ export function validateUiDefaultsData(raw: unknown): UiDefaultsData {
     throw new Error("workStyle.terminalCommandDisplay invalid")
   if (style.autoCollapseReasoning !== undefined && typeof style.autoCollapseReasoning !== "boolean")
     throw new Error("workStyle.autoCollapseReasoning must be boolean when present")
+  if (style.permissionLevel !== undefined && style.permissionLevel !== "review" && style.permissionLevel !== "autonomous")
+    throw new Error("workStyle.permissionLevel invalid")
+  if (!PERMISSION_PRESETS.has(style.permissionPreset as string))
+    throw new Error("workStyle.permissionPreset invalid")
   const box = raw.sandbox
   if (!record(box)) throw new Error("sandbox must be object")
   for (const k of Object.keys(box)) if (!SANDBOX_FIELDS.has(k)) throw new Error(`unexpected sandbox field ${k}`)
@@ -285,19 +293,36 @@ export function isSettledConfigUiDefaultsResult(result: unknown, req: ConfigUiDe
 
 export interface UiDefaultsSource {
   permission?: unknown
+  permission_level?: unknown
   terminal_command_display?: unknown
   auto_collapse_reasoning?: unknown
   sandbox?: { enabled?: unknown }
 }
 
 // Closed minimal projection of the effective config for work-style and
-// sandbox readers. `hasPermission` carries only `permission !== undefined`
-// (empty objects and full rulesets are both `true`); rule content, provider
+// sandbox readers. Work-style identity is global-only: `hasPermission`,
+// `permissionLevel`, and `permissionPreset` derive from the global raw
+// config (`Config.getGlobal()`), never the effective project merge, so a
+// hand-written project `permission_level` is ignored by both display and
+// runtime. `hasPermission` carries only `permission !== undefined`;
+// `permissionLevel` carries only `review`/`autonomous` (absent otherwise);
+// `permissionPreset` carries the shared core classifier verdict
+// (`review`/`autonomous`/`custom`/`absent`). Rule content, provider
 // records, MCP config, and any other field never leave this function. Scalar
-// work-style fields pass through only with their exact schema values;
-// `sandbox.enabled` is strictly `=== true`, every other value reads `false`.
+// display values and `sandbox.enabled` keep effective-merge semantics.
 export function projectUiDefaults(source: UiDefaultsSource): UiDefaultsData {
-  const style: UiDefaultsWorkStyle = { hasPermission: source.permission !== undefined }
+  const style: UiDefaultsWorkStyle = {
+    hasPermission: source.permission !== undefined,
+    permissionPreset: classifyPermissionPreset({
+      permissionLevel: source.permission_level,
+      permission: source.permission,
+    }),
+  }
+  if (source.permission_level === "review" || source.permission_level === "autonomous") {
+    style.permissionLevel = source.permission_level
+  } else if (source.permission_level !== undefined) {
+    throw new ConfigUiDefaultsInternal()
+  }
   if (source.terminal_command_display !== undefined) {
     if (source.terminal_command_display !== "expanded" && source.terminal_command_display !== "collapsed")
       throw new ConfigUiDefaultsInternal()
@@ -313,18 +338,29 @@ export function projectUiDefaults(source: UiDefaultsSource): UiDefaultsData {
   }
 }
 
-// Shared `config/ui-defaults` read body (fd only; no HTTP route). Reads the
-// same effective `Config.Service.get()` (global/project merge) the
-// `GET /config` handler reads, then immediately projects the closed
-// whitelist above. `directory`/`workspace` are carrier routing identity only
+// Shared `config/ui-defaults` read body (fd only; no HTTP route). Work-style
+// identity reads the global raw config (`Config.getGlobal()`); display
+// scalars and sandbox keep the same effective `Config.Service.get()`
+// (global/project merge) the `GET /config` handler reads. Both are
+// immediately projected through the closed whitelist above.
+// `directory`/`workspace` are carrier routing identity only
 // and never reach the service beyond `InstanceState` selection performed by
 // the caller lane.
 export const fetchUiDefaultsData = (): Effect.Effect<UiDefaultsData, never, Config.Service> =>
   Effect.gen(function* () {
     const svc = yield* Config.Service
     const config = yield* svc.get().pipe(Effect.catch(() => Effect.die(new ConfigUiDefaultsInternal())))
+    const global = yield* svc.getGlobal().pipe(Effect.catch(() => Effect.die(new ConfigUiDefaultsInternal())))
     try {
-      const data = projectUiDefaults(config as UiDefaultsSource)
+      const g = global as unknown as UiDefaultsSource
+      const c = config as unknown as UiDefaultsSource
+      const data = projectUiDefaults({
+        permission: g.permission,
+        permission_level: g.permission_level,
+        terminal_command_display: c.terminal_command_display,
+        auto_collapse_reasoning: c.auto_collapse_reasoning,
+        sandbox: c.sandbox,
+      })
       validateUiDefaultsData(data)
       return data
     } catch {

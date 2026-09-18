@@ -17,7 +17,7 @@
  * The exact closed set of JSONC field classes:
  *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
- *   default_agent, provider, mcp, permission, instructions,
+ *   default_agent, provider, mcp, permission, permission_level, instructions,
  *   terminal_command_display, auto_collapse_reasoning
  *
  * `$schema` is a benign meta-key injected into kilo.jsonc by the CLI backend;
@@ -184,6 +184,18 @@ const entries: RegistryEntry[] = [
     removal: "preserve",
   },
   {
+    key: "permission_level",
+    description: "File-authoritative Review/Autonomous hint; global-only main level, preset-owned with permission, cleared on Advanced edits",
+    scopes: ["global"],
+    persistence: "jsonc",
+    owner: "extension",
+    composition: "single",
+    secret: "none",
+    snapshot: true,
+    provenance: "file",
+    removal: "remove",
+  },
+  {
     key: "instructions",
     description: "Additional instruction file paths or glob patterns",
     scopes: ["global", "project"],
@@ -313,6 +325,7 @@ export const CLOSED_JSONC_FIELDS = [
   "provider",
   "mcp",
   "permission",
+  "permission_level",
   "instructions",
   "terminal_command_display",
   "auto_collapse_reasoning",

@@ -1,8 +1,18 @@
 import * as vscode from "vscode"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
-import { getInitialWorkStyle, type WorkStyleState } from "../shared/work-style-presets"
+import {
+  getInitialWorkStyle,
+  resolveMainState,
+  type PermissionMainLevel,
+  type PermissionMainState,
+  type WorkStyleState,
+} from "../shared/work-style-presets"
 import { handleWorkStyleApplyMessage, type WorkStyleCanonicalWriter } from "./work-style-apply-handler"
 import { hasAnySession } from "./session-existence-privatefirst"
+import {
+  fetchConfigUiDefaultsPrivateFirst,
+  requireUiDefaults,
+} from "../shared/config-ui-defaults-privatefirst"
 
 export const WORK_STYLE_SETTING_KEYS = ["showTaskTimeline"] as const
 
@@ -18,6 +28,25 @@ export function getWorkStylePayload() {
   return {
     type: "workStyleLoaded" as const,
     style: getConfig().get<WorkStyleState>("agentWorkStyle", "unset"),
+  }
+}
+
+export type WorkStyleLoadedPayload = ReturnType<typeof getWorkStylePayload> & {
+  level: PermissionMainLevel | "custom" | "unset" | "skipped"
+  mainState: PermissionMainState | "unset" | "skipped"
+}
+
+async function getCanonicalLevel(
+  connection: KiloConnectionService,
+  directory: string,
+): Promise<{ permissionPreset?: unknown; hasPermission: boolean } | null> {
+  try {
+    const client = await connection.getClientAsync(directory)
+    const out = await fetchConfigUiDefaultsPrivateFirst({ connection, client: client as never, directory })
+    const data = requireUiDefaults(out, "work-style level")
+    return { permissionPreset: data.workStyle.permissionPreset, hasPermission: data.workStyle.hasPermission }
+  } catch {
+    return null
   }
 }
 
@@ -60,8 +89,20 @@ export async function handleWorkStyleMessage(input: {
         console.error("[Kilo New] Failed to initialize work style:", err)
         return false
       })
-    const payload = getWorkStylePayload()
-    input.post(initialized ? payload : { ...payload, style: "skipped" })
+    const base = getWorkStylePayload()
+    const style = initialized ? base.style : "skipped"
+    const canonical = await getCanonicalLevel(input.connection, input.directory)
+    const main = resolveMainState({
+      preset: canonical?.permissionPreset,
+      legacyStyle: style,
+    })
+    const payload: WorkStyleLoadedPayload = {
+      ...base,
+      style,
+      level: main === "custom" || main === "unset" || main === "skipped" ? main : main,
+      mainState: main,
+    }
+    input.post(payload)
     return true
   }
   if (await handleWorkStyleApplyMessage({ ...input, canonical: input.canonical })) return true

@@ -61,6 +61,9 @@ const instructionsSchema = z.union([z.string(), z.array(z.string())])
 /** permission: record (restrictive layers preserved as-is) */
 const permissionSchema = z.record(z.unknown())
 
+/** permission_level: file-authoritative Review/Autonomous hint */
+const permissionLevelSchema = z.enum(["review", "autonomous"])
+
 /** $schema: benign meta-key injected by CLI tooling; any non-empty string */
 const schemaMetaSchema = z.string().min(1, "$schema must not be empty")
 
@@ -84,6 +87,7 @@ const fieldSchemas: Record<CanonicalField, z.ZodTypeAny> = {
   provider: z.record(z.string(), providerConfigSchema),
   mcp: mcpConfigSchema,
   permission: permissionSchema,
+  permission_level: permissionLevelSchema,
   instructions: instructionsSchema,
   terminal_command_display: terminalCommandDisplaySchema,
   auto_collapse_reasoning: autoCollapseReasoningSchema,

@@ -123,7 +123,7 @@ describe("work-style apply via canonical config service", () => {
       })
 
       expect(handled).toBe(true)
-      expect(messages).toEqual([{ type: "workStyleApplied", style: "human-in-the-loop" }])
+      expect(messages).toEqual([{ type: "workStyleApplied", style: "human-in-the-loop", level: "review" }])
       expect(sdk.calls).toEqual([])
       expect(spy.length).toBe(1)
       const call = spy[0]!
@@ -233,7 +233,7 @@ describe("work-style apply via canonical config service", () => {
       })
 
       expect(handled).toBe(true)
-      expect(messages).toEqual([{ type: "workStyleApplied", style: "autonomous" }])
+      expect(messages).toEqual([{ type: "workStyleApplied", style: "autonomous", level: "autonomous" }])
       expect(sdk.calls).toEqual([])
       const file = JSON.parse(fs.readFileSync(path.join(global, "kilo.jsonc"), "utf8"))
       expect(file.terminal_command_display).toBe("collapsed")

@@ -63,6 +63,7 @@ export type CodeEditDisplay = "expanded" | "collapsed"
 
 export interface Config {
   permission?: PermissionConfig
+  permission_level?: "review" | "autonomous" | null
   model?: string | null
   small_model?: string | null
   model_variant?: string | null

@@ -834,6 +834,24 @@ button.am-section-toggle:hover .am-section-label {
   font-weight: 500;
   color: var(--text-weak);
 }
+/* Empty-state Work Style picker (Review/Autonomous main surface) */
+.am-workstyle-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  padding: 0 16px;
+}
+.am-workstyle-title {
+  font-size: var(--kilo-font-size-13);
+  font-weight: 600;
+  color: var(--text-weak);
+}
+.am-workstyle-custom {
+  font-size: var(--kilo-font-size-12);
+  color: var(--text-weaker);
+}
 /* Read-only session wrapper + banner */
 
 .am-chat-wrapper {

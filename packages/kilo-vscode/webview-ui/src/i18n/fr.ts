@@ -1148,6 +1148,18 @@ export const dict = {
   "workStyle.choice.autonomous.bash":
     "Peut exécuter des commandes dans le terminal de l'espace de travail sans autorisation.",
   "workStyle.choice.autonomous.visibility": "Les détails restent repliés jusqu'à ce que vous les développiez.",
+  "workStyle.level.review": "Review",
+  "workStyle.level.unset": "Not set",
+  "workStyle.switchBlocked.title": "Unsaved changes",
+  "workStyle.switchBlocked.description": "Save or discard your unsaved Advanced changes before switching levels.",
+  "workStyle.level.autonomous": "Autonomous",
+  "workStyle.level.custom": "Custom",
+  "workStyle.level.customDescription": "Manual permission edits. Switch levels to restore a preset.",
+  "workStyle.main.title": "Permission level",
+  "workStyle.main.description": "Review asks before high-impact actions. Autonomous never asks - every request is auto-approved. Only explicit deny rules still refuse.",
+  "workStyle.advanced.show": "Advanced",
+  "workStyle.advanced.hide": "Hide advanced",
+  "workStyle.advanced.hint": "Fine-grained permission rules. Editing rules switches the level to Custom.",
 
   "workspace.new": "Nouvel espace de travail",
   "workspace.type.local": "local",

@@ -58,6 +58,7 @@ import { ChatView } from "../src/components/chat"
 import { SpeechToTextPrewarm } from "../src/components/speech-to-text/SpeechToTextPrewarm"
 import HistoryView from "../src/components/history/HistoryView"
 import { SidebarSessionList } from "./SidebarSessionList"
+import { WorkStyleEmptyPicker } from "./WorkStyleEmptyPicker"
 import { DataBridge, MermaidDownloadBridge } from "../src/AppBridge"
 import { registerExpandedTaskTool } from "../src/components/chat/TaskToolExpanded"
 import { registerVscodeToolOverrides } from "../src/components/chat/VscodeToolOverrides"
@@ -1478,6 +1479,7 @@ const AgentManagerContent: Component = () => {
               <Icon name="branch" size="large" />
             </div>
             <div class="am-empty-state-text">{t("agentManager.session.noSessions")}</div>
+            <WorkStyleEmptyPicker />
             <Button variant="primary" size="small" onClick={handleAddSession}>
               {t("agentManager.session.new")}
               <span class="am-shortcut-hint">{kb().newTab ?? ""}</span>

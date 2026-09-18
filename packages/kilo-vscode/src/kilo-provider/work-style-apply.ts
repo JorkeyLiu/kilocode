@@ -1,5 +1,7 @@
 import {
-  buildWorkStyleApplyPlan,
+  buildLevelApplyPlan,
+  levelForStyle,
+  type PermissionMainLevel,
   type WorkStyle,
   type WorkStyleConfig,
   type WorkStyleSettings,
@@ -32,26 +34,37 @@ function message(err: unknown): string {
   return String(err)
 }
 
+/**
+ * Explicit Review/Autonomous switch: atomically overwrites the canonical
+ * global preset-owned permission plus the level field. Project, agent, and
+ * session restrictions are never touched — project layers keep stacking
+ * restrictively on top.
+ */
 export async function applyWorkStyle(style: WorkStyle, store: WorkStyleStore): Promise<WorkStyleApplyResult> {
+  return applyPermissionLevel(levelForStyle(style), style, store)
+}
+
+export async function applyPermissionLevel(
+  level: PermissionMainLevel,
+  style: WorkStyle,
+  store: WorkStyleStore,
+): Promise<WorkStyleApplyResult> {
   const completed: Array<{ key: Setting; value: unknown }> = []
 
   try {
-    const config = await store.read()
-    const plan = buildWorkStyleApplyPlan({
-      style,
-      config,
-      settingDefault: (key) => !store.inspect(key).customized,
-    })
-    const writes: Array<{ key: Setting; value: unknown }> = [
-      ...Object.entries(plan.settings).map(([key, value]) => ({ key: key as keyof WorkStyleSettings, value })),
-      { key: "agentWorkStyle", value: style },
-    ]
+    const plan = buildLevelApplyPlan(level)
+    const writes: Array<{ key: Setting; value: unknown }> = []
+    if (!store.inspect("showTaskTimeline").customized) {
+      const timeline = level === "review" ? true : false
+      writes.push({ key: "showTaskTimeline", value: timeline })
+    }
+    writes.push({ key: "agentWorkStyle", value: style })
 
     for (const write of writes) {
       completed.push({ key: write.key, value: store.inspect(write.key).global })
       await store.write(write.key, write.value)
     }
-    if (Object.keys(plan.config).length > 0) await store.patch(plan.config)
+    await store.patch(plan)
     return { ok: true }
   } catch (err) {
     const rollback: Setting[] = []

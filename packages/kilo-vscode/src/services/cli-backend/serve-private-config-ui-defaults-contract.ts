@@ -4,7 +4,10 @@
 // (observation identity is `requestId` only). Success data is the closed
 // minimal projection of the effective config (global/project merge) that the
 // work-style and sandbox readers need: work-style presence plus scalar
-// display values plus `sandbox.enabled`. Permission rule content, provider
+// display values plus `sandbox.enabled`, the file-authoritative
+// `permissionLevel` hint (`review`/`autonomous` only), and the global-only
+// `permissionPreset` classification (`review`/`autonomous`/`custom`/
+// `absent`) computed by the backend from the global raw config. Permission rule content, provider
 // records, MCP config, and any other field are rejected fail-closed so
 // secrets can never cross.
 //
@@ -102,6 +105,8 @@ export interface UiDefaultsWorkStyle {
   hasPermission: boolean
   terminalCommandDisplay?: "expanded" | "collapsed"
   autoCollapseReasoning?: boolean
+  permissionLevel?: "review" | "autonomous"
+  permissionPreset: "review" | "autonomous" | "custom" | "absent"
 }
 
 export interface UiDefaultsSandbox {
@@ -114,8 +119,20 @@ export interface UiDefaultsData {
 }
 
 const DATA_FIELDS = new Set(["workStyle", "sandbox"])
-const WORK_STYLE_FIELDS = new Set(["hasPermission", "terminalCommandDisplay", "autoCollapseReasoning"])
+const WORK_STYLE_FIELDS = new Set(["hasPermission", "terminalCommandDisplay", "autoCollapseReasoning", "permissionLevel", "permissionPreset"])
+const PERMISSION_PRESETS = new Set(["review", "autonomous", "custom", "absent"])
 const SANDBOX_FIELDS = new Set(["enabled"])
+
+function checkPermissionIdentity(style: Record<string, unknown>): void {
+  if (
+    style.permissionLevel !== undefined &&
+    style.permissionLevel !== "review" &&
+    style.permissionLevel !== "autonomous"
+  )
+    throw new Error("workStyle.permissionLevel invalid")
+  if (!PERMISSION_PRESETS.has(style.permissionPreset as string))
+    throw new Error("workStyle.permissionPreset invalid")
+}
 
 export function validateUiDefaultsData(raw: unknown): UiDefaultsData {
   if (!record(raw)) throw new Error("data must be object")
@@ -136,6 +153,7 @@ export function validateUiDefaultsData(raw: unknown): UiDefaultsData {
     throw new Error("workStyle.terminalCommandDisplay invalid")
   if (style.autoCollapseReasoning !== undefined && typeof style.autoCollapseReasoning !== "boolean")
     throw new Error("workStyle.autoCollapseReasoning must be boolean when present")
+  checkPermissionIdentity(style)
   const box = raw.sandbox
   if (!record(box)) throw new Error("sandbox must be object")
   for (const k of Object.keys(box)) {

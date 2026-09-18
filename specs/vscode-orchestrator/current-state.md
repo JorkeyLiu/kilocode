@@ -82,7 +82,33 @@ this note; when they disagree, the code is right.
   `packages/opencode/src/permission/evaluator.ts`. Across
   global/project/agent/session-restriction layers, deny wins first,
   ask/ceiling next, and allow holds only when every applicable layer allows.
-  The old last-match helper is not on this path.
+  The old last-match helper is not on this path. The file-authoritative
+  `permission_level` (`review`/`autonomous`) hint auto-approves under
+  Autonomous: every decision that would otherwise ask or ask-ceiling —
+  ordinary asks from any layer, doom_loop, question lifecycle, runtime
+  ceiling b/c (protected files, .env reads), and the empty default-ask —
+  resolves directly to allow with `autonomous`/`autonomous-ceiling`
+  provenance and no exact approval required. Explicit deny in any layer and
+  ceiling-a hard deny stay deny; per-agent tool disables stay enforced
+  outside the evaluator; system-agent hardening denies stay effective.
+  Main and child share the one main level with no child level; child
+  inherited denies still deny.
+- Review/Autonomous deterministic global presets live in the shared core
+  single source (`packages/core/src/kilocode/permission-presets.ts`): rule
+  content plus the semantic scalar-vs-wildcard classifier. The Autonomous
+  preset is a plain `{"*":"allow"}` baseline since the runtime level
+  auto-approves every ask. The CLI `config/ui-defaults` projection computes
+  the `permissionPreset` classification (`review`/`autonomous`/`custom`/
+  `absent`) global-only from `Config.getGlobal()` — rule content never
+  crosses the private transport, and a stale level with drifted permission
+  reads Custom. `permission_level` is a global-only main level (extension
+  registry scope `global`; project hand-writes are lazily ignored by compose,
+  projection, and the global-only evaluator). Custom derives from the
+  backend classification, never persisted. Level switches atomically write
+  preset-owned global `permission` plus `permission_level`; Advanced edits
+  clear the level via unset and read Custom from the unsaved draft;
+  switching levels with a dirty Advanced draft is blocked until save/discard;
+  project/agent/session layers are never deleted.
 - Pending permission provenance flows through live/recovery metadata and is
   projected in PermissionDock with closed enum labels only (raw
   paths/rules/IDs omitted); answered provenance stays runtime-internal and

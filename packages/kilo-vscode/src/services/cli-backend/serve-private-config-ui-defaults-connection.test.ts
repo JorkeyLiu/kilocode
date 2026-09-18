@@ -11,7 +11,7 @@ function okWire(r: ReturnType<typeof req>) {
     result: {
       v: 1, requestId: r.requestId, op: "config/ui-defaults", status: "succeeded",
       outcome: { type: "succeeded", time: 1 }, accepted: true,
-      data: { workStyle: { hasPermission: true }, sandbox: { enabled: true } },
+      data: { workStyle: { hasPermission: true, permissionPreset: "custom" }, sandbox: { enabled: true } },
     },
   }
 }

@@ -1,4 +1,5 @@
 import * as crypto from "crypto"
+import { classifyPermissionPreset } from "@opencode-ai/core/kilocode/permission-presets"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import type { ServePrivatePeer } from "../services/cli-backend/serve-private-peer"
 import { configUiDefaultsHandle } from "../services/cli-backend/serve-private-config-ui-defaults-connection"
@@ -16,9 +17,11 @@ import type { WorkStyleConfig } from "./work-style-presets"
 export type { UiDefaultsData }
 
 /**
- * Private-first `config/ui-defaults` read-only observation (the same
- * effective `Config.Service.get()` source as `client.config.get`, projected
- * to the closed minimal shape the work-style and sandbox readers need).
+ * Private-first `config/ui-defaults` read-only observation (the backend
+ * projects work-style identity global-only via `Config.getGlobal()` plus
+ * display/sandbox from the same effective `Config.Service.get()` source as
+ * `client.config.get`, all closed to the minimal shape the work-style and
+ * sandbox readers need).
  *
  * Lives in `shared/` so both `kilo-provider/work-style-apply-handler.ts` and
  * `shared/sandbox-session.ts` converge on it without a cross-layer import.
@@ -176,13 +179,27 @@ function record(v: unknown): v is Record<string, unknown> {
 }
 
 // Local whitelist projection of a `client.config.get` payload onto the same
-// closed shape the private op returns. Only the three work-style signals and
+// closed shape the private op returns. Only the work-style signals and
 // `sandbox.enabled` survive; permission rule content and every other field
-// (providers, MCP, secrets) are dropped here and never cross. Returns `null`
-// when the whitelisted fields themselves are malformed.
+// (providers, MCP, secrets) are dropped here and never cross. `permission`
+// presence feeds `hasPermission`, and the shared core classifier derives
+// `permissionPreset` best-effort from the merged fallback payload (the
+// private path classifies global-only; the fallback cannot separate scopes).
+// Returns `null` when the whitelisted fields themselves are malformed.
 export function projectUiDefaultsFromSdk(data: unknown): UiDefaultsData | null {
   if (!record(data)) return null
-  const style: UiDefaultsData["workStyle"] = { hasPermission: data.permission !== undefined }
+  const style: UiDefaultsData["workStyle"] = {
+    hasPermission: data.permission !== undefined,
+    permissionPreset: classifyPermissionPreset({
+      permissionLevel: data.permission_level,
+      permission: data.permission,
+    }),
+  }
+  if (data.permission_level === "review" || data.permission_level === "autonomous") {
+    style.permissionLevel = data.permission_level
+  } else if (data.permission_level !== undefined) {
+    return null
+  }
   if (data.terminal_command_display !== undefined) {
     if (data.terminal_command_display !== "expanded" && data.terminal_command_display !== "collapsed") return null
     style.terminalCommandDisplay = data.terminal_command_display
@@ -257,10 +274,12 @@ export function requireUiDefaults(out: ConfigUiDefaultsPrivateFirstOutcome, what
 // `permission` becomes a non-empty presence marker (never rule content — the
 // plan only asks `hasPermissionConfig`, and the marker is never written
 // because a present permission skips the preset write), absent fields stay
-// `undefined` so preset defaults still apply.
+// `undefined` so preset defaults still apply. `permissionLevel` flows through
+// verbatim as the file-authoritative runtime hint (never rule content).
 export function toWorkStyleConfig(data: UiDefaultsData): WorkStyleConfig {
   return {
     ...(data.workStyle.hasPermission ? { permission: { "*": "ask" } as WorkStyleConfig["permission"] } : {}),
+    ...(data.workStyle.permissionLevel !== undefined ? { permission_level: data.workStyle.permissionLevel } : {}),
     ...(data.workStyle.terminalCommandDisplay !== undefined
       ? { terminal_command_display: data.workStyle.terminalCommandDisplay }
       : {}),
