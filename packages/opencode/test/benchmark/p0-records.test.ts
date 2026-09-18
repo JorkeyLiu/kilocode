@@ -142,6 +142,7 @@ describe("p0 record parser", () => {
       "tool_execute_plugin",
       "permission_wait",
       "question_wait",
+      "kilo_viewers_module_load",
     ]
     for (const stage of stages) {
       expect(STAGES.includes(stage as (typeof STAGES)[number])).toBe(true)

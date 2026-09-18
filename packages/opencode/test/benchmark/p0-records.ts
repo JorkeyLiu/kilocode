@@ -48,6 +48,7 @@ export const STAGES = [
   "question_wait",
   "config_commit",
   "convergence_complete",
+  "kilo_viewers_module_load",
 ] as const
 
 /**
@@ -61,7 +62,9 @@ export const STAGES = [
  * the distinct plugin-body span nested under the outer pair, covering
  * def.execute + result normalization + output truncation, so a custom tool
  * call never emits two identical tool_execute pairs), permission/index.ts
- * (permission_wait), question/index.ts (question_wait).
+ * (permission_wait), question/index.ts (question_wait),
+ * kilocode/presence/service.ts (kilo_viewers_module_load — the lazy
+ * kilo-sessions heavy-graph import on first viewed, never at layer build).
  */
 export const SPAN_STAGES = [
   "listener",
@@ -74,6 +77,7 @@ export const SPAN_STAGES = [
   "tool_execute_plugin",
   "permission_wait",
   "question_wait",
+  "kilo_viewers_module_load",
 ] as const
 
 const FIELD_RE = /\b(event=p0\.(?:mark|start|end)|stage=(\S+)|ts=(\d+)|duration=(\d+)|id=(\S+)|dir=(\S+)|meta=(\{.*\}))/
