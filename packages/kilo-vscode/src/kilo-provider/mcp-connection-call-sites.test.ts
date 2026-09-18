@@ -3,10 +3,9 @@ import { readFile } from "fs/promises"
 import { join } from "path"
 
 // Structural lock for the Settings MCP switch: the Settings host
-// (`KiloProvider`) and BrowserAutomation perform connect/disconnect/add only
-// through the private-only helper with zero direct SDK mutation calls. The
-// single remaining direct `.mcp.disconnect(` site stays untouched: the
-// env-gated E2E fixture bridge (`mcpDisconnectForFixture`).
+// (`KiloProvider`), BrowserAutomation, and the env-gated E2E fixture bridge
+// (`mcpDisconnectForFixture`) perform connect/disconnect/add only through
+// the private-only helper with zero direct SDK mutation calls.
 // Behavioral proof lives in `src/kilo-provider-mcp-connection.test.ts`; this
 // file only locks the call sites against future SDK fallback/retry.
 const ROOT = join(import.meta.dir, "..", "..")
@@ -30,13 +29,16 @@ describe("mcp-connection Settings call sites", () => {
     expect(text.match(/attemptMcpDisconnectPrivate/g)?.length ?? 0).toBeGreaterThan(0)
   })
 
-  test("only the fixture bridge keeps direct disconnect calls", async () => {
+  test("Agent Manager fixture bridge has zero direct mutation calls", async () => {
     const agent = await src("src/agent-manager/AgentManagerProvider.ts")
     const start = agent.indexOf("mcpDisconnectForFixture")
     expect(start).toBeGreaterThan(0)
-    const outside = agent.slice(0, start)
-    expect(calls(outside, "disconnect")).toBe(0)
-    expect(calls(outside, "connect")).toBe(0)
+    expect(calls(agent, "disconnect")).toBe(0)
+    expect(calls(agent, "connect")).toBe(0)
+    expect(calls(agent, "authenticate")).toBe(0)
+    expect(calls(agent, "add")).toBe(0)
+    expect(agent.slice(start)).toContain("attemptMcpDisconnectPrivate")
+    expect(agent.slice(start)).toContain("buildMcpDisconnectReq")
     const auto = await src("src/services/browser-automation/browser-automation-service.ts")
     expect(calls(auto, "disconnect")).toBe(0)
     expect(calls(auto, "connect")).toBe(0)

@@ -1,6 +1,6 @@
 import * as fs from "fs"
 import * as path from "path"
-import type { KiloClient, McpStatus, Message, Part, Session, SessionStatus } from "@kilocode/sdk/v2/client"
+import type { KiloClient, Message, Part, Session, SessionStatus } from "@kilocode/sdk/v2/client"
 import {
   summarizeMcp,
   summarizeMessage,
@@ -17,6 +17,7 @@ import { getErrorMessage } from "../kilo-provider-utils"
 import { fetchSessionChildrenPrivateFirst } from "../kilo-provider/session-children-privatefirst"
 import { fetchSessionStatusesPrivateFirst } from "../kilo-provider/session-status-privatefirst"
 import { fetchMcpStatusPrivate } from "../kilo-provider/mcp-status-private"
+import { attemptMcpDisconnectPrivate, buildMcpDisconnectReq } from "../kilo-provider/mcp-connection-privatefirst"
 import { fetchAgentsPrivateFirst } from "../kilo-provider/agent-list-privatefirst"
 import { fetchProviderCatalogPrivateFirst } from "../kilo-provider/provider-catalog-privatefirst"
 import { readPermissionsForDir } from "../kilo-provider/permission-privatefirst"
@@ -1804,20 +1805,33 @@ export class AgentManagerProvider implements Disposable {
   }
 
   /**
-   * Disconnect a named MCP server through the real shared client, then return
+   * Disconnect a named MCP server through the private authority, then return
    * the served MCP status map. Env-gated E2E fixture bridge only
    * (KILO_E2E_FIXTURE): lets the harness prove the run-owned MCP stdio child
-   * is cleaned up by its exact owner (disconnect through the SDK, not a
-   * process-name kill). No production effect when the env var is absent.
+   * is cleaned up by its exact owner (disconnect through the private
+   * authority, not a process-name kill). Once-only with zero SDK
+   * fallback/retry; every outcome converges through private status.
+   * No production effect when the env var is absent.
    */
   public async mcpDisconnectForFixture(name: string): Promise<McpTruth> {
     const root = this.getRoot() ?? ""
-    const client = await this.connectionService.getClientAsync(root)
-    await client.mcp.disconnect({ name, directory: root }).catch((err) => {
+    try {
+      const attempt = await attemptMcpDisconnectPrivate(this.connectionService, buildMcpDisconnectReq(root, name))
+      if (attempt.kind !== "ok") {
+        const detail = attempt.kind === "failed" ? attempt.code : attempt.reason
+        this.log(`fixture mcpDisconnect(${name}) failed:`, detail)
+      }
+    } catch (err) {
       this.log(`fixture mcpDisconnect(${name}) failed:`, err)
-    })
-    const status = await client.mcp.status({ directory: root }).catch(() => ({ data: {} as Record<string, McpStatus> }))
-    return summarizeMcp(status.data ?? {})
+    }
+    const outcome = await fetchMcpStatusPrivate({ connection: this.connectionService, directory: root }).catch(
+      (err) => {
+        this.log("fixture mcpDisconnect: mcp.status failed:", err)
+        return { kind: "unavailable" } as const
+      },
+    )
+    if (outcome.kind === "ok") return summarizeMcp(outcome.status)
+    return summarizeMcp({})
   }
 
   public shutdown(): Promise<void> {
