@@ -5245,6 +5245,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   /** Drafts closed while their backend session is being created or submitted. */
   private closedDrafts = new Set<string>()
 
+  private suppressed(draftID?: string, sid?: string): boolean {
+    if (!draftID) return false
+    if (!this.closedDrafts.delete(draftID)) return false
+    if (sid) for (const [k, v] of this.draftSessions) if (v.sid === sid) this.draftSessions.delete(k)
+    return true
+  }
+
   private maxCostSetting(): number {
     return this.setMaxCost(vscode.workspace.getConfiguration("kilo-code.new").get<number>("maxCost", 0))
   }
@@ -5357,10 +5364,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
       await this.requirements.assertAgentRequirements(agent, dir)
       const editorContext = await this.gatherEditorContext(dir)
-      if (draftID && this.closedDrafts.delete(draftID)) {
-        for (const [k, v] of this.draftSessions) if (v.sid === sid) this.draftSessions.delete(k)
-        return
-      }
+      if (this.suppressed(draftID, sid)) return
 
       // P0 perf: record the submit after session resolution so new-session
       // first turns carry the resolved session id; `stableMessageID` (the user
@@ -5450,6 +5454,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       const sid = resolved.sid
       const dir = resolved.dir
 
+      const parts = files?.map((f) => ({
+        type: "file" as const,
+        mime: f.mime,
+        url: f.url,
+        filename: f.filename,
+        source: f.source,
+      }))
+
+      await this.requirements.assertAgentRequirements(agent, dir)
+      await this.checkpoints.get(sid)
+      if (this.suppressed(draftID, sid)) return
+
       // P0 perf: record the submit after session resolution so new-session
       // first turns carry the resolved session id; `stableMessageID` (the user
       // message id) is the join key to `model.firstEvent`'s `parentID`.
@@ -5462,17 +5478,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       })
 
       this.connectionService.recordMessageSessionId(stableMessageID, sid)
-
-      const parts = files?.map((f) => ({
-        type: "file" as const,
-        mime: f.mime,
-        url: f.url,
-        filename: f.filename,
-        source: f.source,
-      }))
-
-      await this.requirements.assertAgentRequirements(agent, dir)
-      await this.checkpoints.get(sid)
       // Command is single-attempt: at most one private attempt plus at most one
       // same-identity SDK fallback. Generation status is owned by CLI runtime
       // `session.status`/`session.error`; SDK failure posts sendMessageFailed

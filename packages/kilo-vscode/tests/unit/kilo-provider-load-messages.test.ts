@@ -456,6 +456,51 @@ describe("KiloProvider.handleAbort", () => {
     expect(client.aborted).toHaveLength(1)
   })
 
+  it("does not submit a command when its pending tab closes after creation", async () => {
+    const gate = defer<void>()
+    const client = createClient()
+    const { provider, internal, sent } = makeProvider(client)
+    const conn = provider as unknown as { connectionService: Record<string, unknown> }
+    const privSeen: Array<Record<string, unknown>> = []
+    const sdkSeen: Array<Record<string, unknown>> = []
+    const recorded: Array<unknown> = []
+    conn.connectionService.isPrivateAvailable = () => true
+    conn.connectionService.privateCommandWithHandle = (req: Record<string, unknown>) => {
+      privSeen.push(req)
+      return { id: 1, promise: Promise.resolve({ status: "succeeded", accepted: true }), cancel: () => true }
+    }
+    ;(client.session as unknown as Record<string, unknown>).commandAsync = async (input: Record<string, unknown>) => {
+      sdkSeen.push(input)
+      return { data: {} }
+    }
+    conn.connectionService.recordMessageSessionId = (...args: unknown[]) => {
+      recorded.push(args)
+      return undefined
+    }
+    ;(
+      provider as unknown as { requirements: { assertAgentRequirements: () => Promise<void> } }
+    ).requirements.assertAgentRequirements = () => gate.promise
+
+    const sending = internal.handleSendCommand("probe", "hello", "msg-c1", undefined, "pending:1")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sent).toContainEqual(expect.objectContaining({ type: "sessionCreated" }))
+
+    await provider.abortSessions(["pending:1"])
+    gate.resolve(undefined)
+    await sending
+
+    expect(client.aborted).toEqual([{ sessionID: "ses_created", directory: "/repo" }])
+    expect(privSeen).toEqual([])
+    expect(sdkSeen).toEqual([])
+    expect(recorded).toEqual([])
+    expect(sent.filter((m) => (m as { type?: string }).type === "sendMessageFailed")).toEqual([])
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionStatus")).toEqual([])
+    expect(sent.filter((m) => (m as { type?: string }).type === "sessionTurnClosed")).toEqual([])
+
+    await provider.abortSessions(["pending:1"])
+    expect(client.aborted).toHaveLength(1)
+  })
+
   it("releases draft routing after the webview adopts the created session", async () => {
     const client = createClient()
     const { provider, internal } = makeProvider(client)
