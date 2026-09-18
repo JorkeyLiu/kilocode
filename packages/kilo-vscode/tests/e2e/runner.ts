@@ -2051,7 +2051,6 @@ async function assertNoP34RuntimeCommands(vscodeApi: typeof vscode): Promise<{
     "kilo-code.new.agentManager.newTab",
     "kilo-code.new.explainCode",
     "kilo-code.new.addToContext",
-    "kilo-code.new.toggleAutoApprove",
   ]) {
     if (!kiloCommands.includes(retained)) {
       throw new Error(`probe runner: retained command missing at runtime: ${retained}`)

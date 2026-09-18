@@ -15,13 +15,11 @@ import { buildWebviewHtml } from "../utils"
 import { isP0PerfEnabled } from "../perf/perf-instrument"
 import { openFileInEditor, getWorkspaceRoot } from "../review-utils"
 import { TelemetryProxy, type TelemetryEventName } from "../services/telemetry"
-import type { AutoApproveController } from "../commands/toggle-auto-approve"
 import type { RemoteStatusService } from "../services/RemoteStatusService"
 import type { CanonicalConfigService } from "../config/service"
 import type { PrivateSessionReader, PrivateSessionList } from "../kilo-provider/options"
 
 export class VscodeHost implements Host {
-  private autoApprove: AutoApproveController | undefined
   private amPanel: vscode.WebviewPanel | undefined
   private amProvider: KiloProvider | undefined
   private amStreams: vscode.Disposable | undefined
@@ -39,10 +37,6 @@ export class VscodeHost implements Host {
     private readonly canonicalConfig: CanonicalConfigService,
     private readonly privateSessionReader?: PrivateSessionReader | null,
   ) {}
-
-  setAutoApproveController(ctrl: AutoApproveController): void {
-    this.autoApprove = ctrl
-  }
 
   /** Test-observable handoff: exact options wirePanel passes to KiloProvider. */
   providerOpts(): KiloProviderOptions {
@@ -259,7 +253,6 @@ export class VscodeHost implements Host {
     const streams = panel.onDidChangeViewState((event) =>
       provider.setStreamVisibility(event.webviewPanel.active && event.webviewPanel.visible),
     )
-    if (this.autoApprove) provider.setAutoApproveController(this.autoApprove)
     // Clear any previous host subscription before overwriting (defensive)
     if (this.amCloseSub) {
       try {

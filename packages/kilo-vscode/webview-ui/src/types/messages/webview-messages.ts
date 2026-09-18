@@ -681,14 +681,6 @@ export interface AgentManagerVisibleSessionMessage {
   sessionID: string | null
 }
 
-export interface RequestAutoApproveStateMessage {
-  type: "requestAutoApproveState"
-}
-
-export interface ToggleAutoApproveMessage {
-  type: "toggleAutoApprove"
-}
-
 export interface RequestSandboxStatusMessage {
   type: "requestSandboxStatus"
   sessionID: string
@@ -969,8 +961,6 @@ export type WebviewMessage =
   | SetDefaultBaseBranchRequest
   | AgentManagerOpenSessionsMessage
   | AgentManagerVisibleSessionMessage
-  | RequestAutoApproveStateMessage
-  | ToggleAutoApproveMessage
   | RequestSandboxStatusMessage
   | RequestSandboxDefaultMessage
   | SetSandboxDefaultMessage

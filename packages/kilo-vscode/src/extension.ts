@@ -13,7 +13,6 @@ import {
   type ChatTarget,
 } from "./services/code-actions"
 import { resolveChatTarget as resolveSharedChatTarget } from "./services/code-actions/chat-target"
-import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathPrivateConnection } from "./kilo-provider/model-state"
@@ -515,28 +514,7 @@ export function activate(context: vscode.ExtensionContext) {
     console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
   })
 
-  const defaultDir = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
-  const autoApprove = registerToggleAutoApprove(
-    context,
-    connectionService,
-    (sessionId) => {
-      if (sessionId) {
-        const dir = agentManagerProvider.getSessionDirectories().get(sessionId)
-        if (dir) return dir
-      }
-      return defaultDir()
-    },
-    () => {
-      const dirs = new Set([defaultDir()])
-      for (const dir of agentManagerProvider.getSessionDirectories().values()) dirs.add(dir)
-      return [...dirs]
-    },
-  )
-  const attention = new AttentionService(connectionService, {
-    approve: (event, directory) => autoApprove.approve(event, directory),
-  })
-
-  agentManagerHost.setAutoApproveController(autoApprove)
+  const attention = new AttentionService(connectionService)
 
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer(AgentManagerProvider.viewType, {

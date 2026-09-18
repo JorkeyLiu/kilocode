@@ -720,11 +720,6 @@ export interface AgentManagerKeybindingsMessage {
   bindings: Record<string, string>
 }
 
-export interface AutoApproveStateMessage {
-  type: "autoApproveState"
-  active: boolean
-}
-
 export interface SandboxStatusMessage {
   type: "sandboxStatus"
   sessionID: string
@@ -1089,7 +1084,6 @@ export type ExtensionMessage =
   | AgentManagerSessionForkedMessage
   | AgentManagerStateMessage
   | AgentManagerKeybindingsMessage
-  | AutoApproveStateMessage
   | SandboxStatusMessage
   | SandboxDefaultStatusMessage
   | SandboxStatusErrorMessage

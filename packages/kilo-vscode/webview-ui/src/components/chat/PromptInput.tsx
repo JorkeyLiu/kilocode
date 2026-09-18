@@ -164,7 +164,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const [text, setText] = createSignal("")
   const [reviewComments, setReviewComments] = createSignal<ReviewComment[]>([])
   const [enhancing, setEnhancing] = createSignal(false)
-  const [autoApprove, setAutoApprove] = createSignal(false)
   const [sandboxes, setSandboxes] = createSignal<Record<string, SandboxState>>({})
   const [sandboxDefault, setSandboxDefault] = createSignal<SandboxDefaultState>()
   const [sandboxRequests, setSandboxRequests] = createSignal<Record<string, string>>({})
@@ -451,12 +450,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
   }
 
-  const unsubAutoApprove = vscode.onMessage((message) => {
-    if (message.type === "autoApproveState") {
-      setAutoApprove(message.active)
-    }
-  })
-
   const restoreFailed = (failed: SendMessageFailedMessage) => {
     const draft = failed.review ? reviewBody(failed.review, failed.text) : failed.text
     if (draft === undefined) return
@@ -696,13 +689,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       mention.insertFilePickerResult(message.path, message.requestId)
     }
   })
-  vscode.postMessage({ type: "requestAutoApproveState" })
-
   onCleanup(() => {
     // Persist current draft before unmounting
     saveDraft(draftKey(), text(), reviewComments(), imageAttach.images())
     if (sandboxRetry) clearTimeout(sandboxRetry)
-    unsubAutoApprove()
     unsubscribe()
   })
 
@@ -1243,29 +1233,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           </Show>
         </div>
         <div class="prompt-input-hint-actions">
-          <Tooltip
-            value={
-              autoApprove()
-                ? language.t("prompt.action.autoApprove.enabled")
-                : language.t("prompt.action.autoApprove.disabled")
-            }
-            placement="top"
-          >
-            <Button
-              variant="ghost"
-              size="small"
-              onClick={() => vscode.postMessage({ type: "toggleAutoApprove" })}
-              aria-label={
-                autoApprove()
-                  ? language.t("prompt.action.autoApprove.disable")
-                  : language.t("prompt.action.autoApprove.enable")
-              }
-              aria-pressed={autoApprove()}
-              class={`prompt-status-button ${autoApprove() ? "prompt-status-button--active" : ""}`}
-            >
-              <Icon name="shield" size="small" />
-            </Button>
-          </Tooltip>
           <Show when={sandboxVisible()}>
             <SandboxButtonBase
               enabled={sandboxEnabled()}

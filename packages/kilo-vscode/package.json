@@ -250,11 +250,6 @@
         "category": "Kilo Code"
       },
       {
-        "command": "kilo-code.new.toggleAutoApprove",
-        "title": "Toggle Auto-Approve",
-        "category": "Kilo Code"
-      },
-      {
         "command": "kilo-code.new.generateTerminalCommand",
         "title": "Generate Terminal Command",
         "category": "Kilo Code"
@@ -331,11 +326,6 @@
         "command": "kilo-code.new.focusChatInput",
         "key": "ctrl+shift+a",
         "mac": "cmd+shift+a"
-      },
-      {
-        "command": "kilo-code.new.toggleAutoApprove",
-        "key": "ctrl+alt+a",
-        "mac": "cmd+alt+a"
       },
       {
         "command": "kilo-code.new.generateTerminalCommand",
@@ -553,11 +543,6 @@
           "type": "string",
           "default": "",
           "description": "Absolute path to a PEM file containing extra CA certificates to trust when the Kilo backend makes HTTPS requests (sets NODE_EXTRA_CA_CERTS on the CLI process). Use this if you're behind a corporate proxy that performs SSL inspection. Leave empty to rely on the OS trust store."
-        },
-        "kilo-code.new.autoApprove.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Start Kilo Code with the main auto-approve toggle enabled. When enabled, permission prompts are approved automatically."
         },
         "kilo-code.new.maxCost": {
           "type": "number",

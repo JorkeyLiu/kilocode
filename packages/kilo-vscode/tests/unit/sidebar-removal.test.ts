@@ -318,7 +318,7 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(promptInput).toContain("if (message.review) replaceReviewComments(message.review)")
   })
 
-  it("aggregates auto-approve sources from Agent Manager only", () => {
+  it("sources session directories from Agent Manager only (reload routing)", () => {
     expect(am).toContain("public getActiveSessionId(): string | undefined")
     expect(ext).not.toContain("tabPanels")
     expect(ext).toContain("agentManagerProvider.getSessionDirectories()")

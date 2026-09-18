@@ -375,12 +375,6 @@ export const dict = {
   "prompt.action.send.recording": "Transcribir y enviar",
   "prompt.action.stop": "Detener",
   "prompt.action.enhance": "Mejorar prompt",
-  "prompt.action.autoApprove.enable": "Activar aprobación automática",
-  "prompt.action.autoApprove.disable": "Desactivar aprobación automática",
-  "prompt.action.autoApprove.enabled":
-    "La aprobación automática está activada. Las solicitudes de permisos se aprobarán automáticamente.",
-  "prompt.action.autoApprove.disabled":
-    "La aprobación automática está desactivada. Haz clic para aprobar solicitudes de permisos automáticamente.",
   "prompt.action.resetModel": "Restablecer modelo al predeterminado",
   "prompt.action.enhanceDescription":
     "El botón 'Mejorar el mensaje' ayuda a mejorar tu petición proporcionando contexto adicional, aclaraciones o reformulaciones. Intenta escribir una petición aquí y haz clic en el botón nuevamente para ver cómo funciona.",

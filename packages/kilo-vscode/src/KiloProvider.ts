@@ -144,7 +144,6 @@ import { isUnsafeKey } from "./shared/agent-credentials"
 import { fetchOpenAIModels, FetchModelsError } from "./shared/fetch-models"
 import type { Agent } from "@kilocode/sdk/v2/client"
 import { configFeatures } from "./features"
-import { createAutoApproveBridge } from "./kilo-provider/auto-approve"
 import type { KiloProviderOptions } from "./kilo-provider/options"
 import { fetchImageModels } from "./image-generation/models"
 import { stopSessionProcesses } from "./kilo-provider/background-process"
@@ -511,7 +510,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private webviewMessageDisposable: vscode.Disposable | null = null
   private telemetryStateDisposable: vscode.Disposable | null = null
   private viewStateDisposable: vscode.Disposable | null = null
-  private autoApproveBridge: ReturnType<typeof createAutoApproveBridge> | null = null
 
   private ignoreController: FileIgnoreController | null = null
   private ignoreControllerDir: string | null = null
@@ -1469,12 +1467,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.unsubscribeRemote = service.onChange(() => this.sendRemoteStatus())
   }
 
-  setAutoApproveController(ctrl: Parameters<typeof createAutoApproveBridge>[0]): void {
-    this.autoApproveBridge?.dispose()
-    this.autoApproveBridge = createAutoApproveBridge(ctrl, (msg) => this.postMessage(msg), this.onBeforeMessage)
-    this.onBeforeMessage = (msg) => this.autoApproveBridge!.handle(msg)
-  }
-
   private setCurrentSession(session: SessionDetail | null): void {
     const ids = new Set([this.currentSession?.id, session?.id])
     for (const id of ids) {
@@ -1993,7 +1985,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   ): void {
     this.isWebviewReady = false
     this.webview = webview
-    if (!this.autoApproveBridge) this.onBeforeMessage = options?.onBeforeMessage ?? null
+    this.onBeforeMessage = options?.onBeforeMessage ?? null
     this.setupWebviewMessageHandler(webview)
     this.initializeConnection()
   }
@@ -6735,7 +6727,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.viewStateDisposable?.dispose()
     this.webviewMessageDisposable?.dispose()
     this.telemetryStateDisposable?.dispose()
-    this.autoApproveBridge?.dispose()
     this.visibleTaskStreams.clear()
     this.streams.dispose()
     this.isWebviewReady = false

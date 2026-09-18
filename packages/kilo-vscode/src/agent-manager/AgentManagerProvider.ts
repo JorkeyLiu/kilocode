@@ -1548,7 +1548,7 @@ export class AgentManagerProvider implements Disposable {
     })
   }
 
-  /** Expose session→directory mappings for the auto-approve toggle. */
+  /** Expose session→directory mappings for reload routing. */
   public getSessionDirectories(): ReadonlyMap<string, string> {
     return this.panel?.sessions.getSessionDirectories() ?? new Map()
   }

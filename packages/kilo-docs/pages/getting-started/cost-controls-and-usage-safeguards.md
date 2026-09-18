@@ -40,12 +40,6 @@ Every action Kilo takes — reading files, editing code, running shell commands,
 
 **When to use:** Keep `bash` set to `ask` by default for unfamiliar tasks. You can allow specific safe command prefixes (e.g. `git *`, `npm *`) while keeping everything else at `ask`. This prevents the agent from running expensive or destructive commands in a loop without oversight.
 
-### Runtime auto-approve toggle (VS Code)
-
-A shield button in the prompt controls lets you toggle auto-approve on and off at runtime without opening Settings. When enabled, pending permission prompts are approved automatically. The state stays synced across open Kilo tabs and Agent Manager sessions.
-
-**When to use:** Turn it on when working on a well-understood, low-risk task that does not need step-by-step review. Turn it off as soon as you want to pause and review the agent's next actions.
-
 ### Spending limits
 
 Individual accounts stop spending when their balance reaches zero — further requests to paid models return an error and prompt you to add credits. This acts as a hard ceiling on total spend.

@@ -24,8 +24,8 @@ export type SessionDirectorySource = {
  * tab's current session directory when a tab is focused, else the Agent
  * Manager's active session directory, else the fallback. The session ID
  * follows the same surface preference chat surfaces use (active tab, then
- * Agent Manager); the directory lookup reuses the session→directory maps the
- * auto-approve toggle aggregates.
+ * Agent Manager); the directory lookup reuses the session→directory maps
+ * kept for reload routing.
  */
 export function resolveReloadDirectory(input: {
   tab: SessionDirectorySource | undefined
