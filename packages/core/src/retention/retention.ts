@@ -231,9 +231,11 @@ function deleteFamilyWithDeleteTombstoneTx(
       .all()
       .pipe(Effect.orDie)
     if (rows.length !== actualIds.length) yield* Effect.die(`family row count mismatch ${rootID}`)
+    const changefeedEntries: Changefeed.Entry[] = []
     for (const row of rows) {
       const finalRev = row.rev + 1
-      yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
+      const entry = yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
+      changefeedEntries.push(entry)
     }
     // Include Event/EventSequence removal atomically before canonical commit checks
     yield* tx.delete(EventTable).where(inArray(EventTable.aggregate_id, actualIds)).run().pipe(Effect.orDie)
@@ -272,7 +274,7 @@ function deleteFamilyWithDeleteTombstoneTx(
       .run()
       .pipe(Effect.orDie)
     yield* tx.delete(SessionTable).where(sessionIdInArray(actualIds)).run().pipe(Effect.orDie)
-    return actualIds
+    return { ids: actualIds, entries: changefeedEntries }
   })
 }
 

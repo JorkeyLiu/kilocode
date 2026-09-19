@@ -1,5 +1,5 @@
 import { isAbsolute } from "path"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
@@ -15,6 +15,8 @@ import { Log } from "@opencode-ai/core/util/log"
 import { InstanceRef } from "@/effect/instance-ref"
 import { acquireDrainControl } from "@/kilocode/server/drain-control-acquire"
 import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 
 export const VERSION = 1 as const
 export const OP = "session/delete" as const
@@ -572,21 +574,19 @@ export const layer = Layer.effect(
           if (DispatchAtomicSeam.failDeleteBeforeTx) yield* Effect.die(new Error("injected delete before-tx failure"))
           const sessionSvc = yield* Session.Service
           const exit = yield* sessionSvc
-            .remove(sessionId, {
-              tombstone: {
-                opId: req.opId,
-                hash,
-                requestId: req.requestId,
-                directory: canonDir,
-                parentSessionId: req.context.parentSessionId ?? null,
-                configVersion: req.context.configVersion ?? null,
-                sessionRevision: req.context.sessionRevision ?? null,
-              },
+            .removeWithTombstone(sessionId, {
+              opId: req.opId,
+              hash,
+              requestId: req.requestId,
+              directory: canonDir,
+              parentSessionId: req.context.parentSessionId ?? null,
+              configVersion: req.context.configVersion ?? null,
+              sessionRevision: req.context.sessionRevision ?? null,
             })
             .pipe(Effect.exit)
-          if (exit._tag === "Failure") {
+          if (Exit.isFailure(exit)) {
             const cause = exit.cause
-            const err = (cause as unknown as { error?: unknown })?.error ?? cause
+            const err = (cause as { error?: unknown })?.error ?? cause
             const msg = err instanceof Error ? err.message : String(err)
             const causeStr = String(cause)
             const isUnique =
@@ -633,10 +633,54 @@ export const layer = Layer.effect(
             ) as unknown as SessionDeleteResult
           }
 
+          const { entries: committedEntries } = exit.value
           const revAfter = yield* readRevOmit(sessionId)
           const cfgAfter = yield* readCfgOmit(canonDir)
           const revision = makeRevision(revAfter, cfgAfter)
-          return buildSucceeded(req, revision)
+          const succeeded = buildSucceeded(req, revision) as SessionDeleteSucceeded
+          // Bounded observation/changed producer for fresh successful family delete:
+          // one versioned reverse notification containing all changefeed entries created by this transaction,
+          // ordered strictly ascending by seq, cursor=last seq, payload-free 5-key entries kind:"deleted".
+          // Best-effort after commit; isolation double-catch; replay/conflict/stale/failed never notify.
+          const entriesForNotify = Array.isArray(committedEntries) ? [...committedEntries] : []
+          // Filter to valid deleted payload shape and sort strictly ascending by seq
+          const sorted = entriesForNotify
+            .filter(
+              (e) =>
+                e &&
+                typeof e.seq === "number" &&
+                typeof e.session_id === "string" &&
+                typeof e.revision === "number" &&
+                typeof e.kind === "string" &&
+                typeof e.time === "number",
+            )
+            .sort((a, b) => a.seq - b.seq)
+          if (succeeded.status === "succeeded" && sorted.length > 0) {
+            const payload = {
+              v: OBSERVATION_VERSION,
+              cursor: sorted[sorted.length - 1]!.seq,
+              entries: sorted.map((e) => ({
+                seq: e.seq,
+                session_id: e.session_id,
+                revision: e.revision,
+                kind: e.kind,
+                time: e.time,
+              })),
+            }
+            yield* Effect.gen(function* () {
+              const opt = yield* Effect.serviceOption(PrivatePeerService)
+              if (opt._tag === "None") return
+              const peer = opt.value
+              yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(
+                Effect.catch(() => Effect.void),
+                Effect.catchDefect(() => Effect.void),
+              )
+            }).pipe(
+              Effect.catch(() => Effect.void),
+              Effect.catchDefect(() => Effect.void),
+            )
+          }
+          return succeeded
         }).pipe(Effect.ensuring(leaseRelease))
 
         return txResult

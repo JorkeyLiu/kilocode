@@ -21,6 +21,7 @@ import { SandboxStore } from "@/kilocode/sandbox/store"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import * as Artifact from "@opencode-ai/core/retention/artifact"
 import * as Retention from "@opencode-ai/core/retention/retention"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import * as Ownership from "@/retention/ownership"
 import { SessionChangefeedTable, RetentionObligationTable } from "@opencode-ai/core/retention/sql"
 import { Log } from "@opencode-ai/core/util/log"
@@ -580,6 +581,18 @@ export interface Interface {
       }
     },
   ) => Effect.Effect<void, NotFound>
+  readonly removeWithTombstone: (
+    sessionID: SessionID,
+    tombstone: {
+      opId: string
+      hash: string
+      requestId: string
+      directory: string
+      parentSessionId: string | null
+      configVersion: number | null
+      sessionRevision: number | null
+    },
+  ) => Effect.Effect<{ ids: readonly string[]; entries: readonly Changefeed.Entry[] }, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
@@ -753,6 +766,131 @@ export const layer: Layer.Layer<
     })
     // kilocode_change end
 
+    const removeWithTombstone: Interface["removeWithTombstone"] = Effect.fnUntraced(function* (
+      sessionID: SessionID,
+      tombstone: {
+        opId: string
+        hash: string
+        requestId: string
+        directory: string
+        parentSessionId: string | null
+        configVersion: number | null
+        sessionRevision: number | null
+      },
+    ) {
+      yield* get(sessionID)
+      const hasInstance = yield* InstanceState.directory.pipe(
+        Effect.as(true),
+        Effect.catchCause(() => Effect.succeed(false)),
+      )
+
+      if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
+
+      // kilocode_change start
+      let captured: { ids: readonly string[]; entries: readonly Changefeed.Entry[] } | undefined
+      yield* SandboxPolicy.dispose(
+        sessionID,
+        Effect.gen(function* () {
+          yield* Effect.promise(() => KiloSession.removeSession(sessionID)).pipe(Effect.ignore)
+          KiloSession.clearPlatformOverride(sessionID)
+          if (hasInstance) {
+            yield* Effect.promise(() => BackgroundProcess.stopSession(sessionID)).pipe(Effect.ignore)
+            yield* Effect.promise(() => InteractiveTerminal.stopSession(sessionID)).pipe(Effect.ignore)
+            yield* runState
+              .cancel(sessionID)
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Session.remove runState cancel failed", { sessionID, cause }).pipe(
+                    Effect.asVoid,
+                  ),
+                ),
+              )
+          }
+          const workspaceKey = hasInstance ? yield* InstanceState.directory : undefined
+          yield* Effect.promise(() => SessionExport.onSessionClose(sessionID, workspaceKey))
+          // Event/EventSequence deletion is now atomic within the canonical
+          // Retention transaction (BEGIN IMMEDIATE) below — no independent events.remove.
+          const now = Date.now()
+          const res = yield* Retention.deleteFamilyWithDeleteTombstoneUnprotected(db, sessionID, now, {
+            opId: tombstone.opId,
+            sessionId: sessionID,
+            hash: tombstone.hash,
+            requestId: tombstone.requestId,
+            directory: tombstone.directory,
+            parentSessionId: tombstone.parentSessionId,
+            configVersion: tombstone.configVersion,
+            sessionRevision: tombstone.sessionRevision,
+            time: now,
+            code: "delete.succeeded",
+            message: "delete succeeded",
+          }).pipe(Effect.orDie)
+          const familyIDs = res.ids
+          captured = { ids: res.ids, entries: res.entries }
+          if (familyIDs.length > 0) {
+            const keys = Artifact.familyArtifactsForFamily(familyIDs)
+            const delExit = yield* Effect.forEach(keys, (key) => storage.remove(key), { discard: true }).pipe(
+              Effect.exit,
+            )
+            if (delExit._tag === "Failure") {
+              yield* Effect.logWarning("Session.remove artifact delete failed, obligation retained", {
+                sessionID,
+                cause: String(delExit.cause),
+              })
+              yield* db
+                .run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE family_root_id = ${sessionID}`)
+                .pipe(
+                  Effect.orDie,
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("Session.remove obligation attempt bump failed", {
+                      sessionID,
+                      cause: String(cause),
+                    }).pipe(Effect.asVoid),
+                  ),
+                )
+            } else {
+              const obligationExit = yield* db
+                .delete(RetentionObligationTable)
+                .where(eq(RetentionObligationTable.family_root_id, sessionID))
+                .run()
+                .pipe(Effect.exit)
+              if (obligationExit._tag === "Failure") {
+                yield* Effect.logWarning("Session.remove obligation delete failed", {
+                  sessionID,
+                  cause: String(obligationExit.cause),
+                })
+                yield* db
+                  .run(
+                    sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE family_root_id = ${sessionID}`,
+                  )
+                  .pipe(
+                    Effect.orDie,
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("Session.remove obligation attempt bump after delete failure failed", {
+                        sessionID,
+                        cause: String(cause),
+                      }).pipe(Effect.asVoid),
+                    ),
+                  )
+              }
+            }
+          } else {
+            const directExit = yield* Effect.forEach(Artifact.familyArtifactsForSession(sessionID), (key) =>
+              storage.remove(key).pipe(Effect.catch(() => Effect.void)),
+            ).pipe(Effect.exit)
+            if (directExit._tag === "Failure") {
+              yield* Effect.logWarning("Session.remove direct artifact cleanup failed", {
+                sessionID,
+                cause: String(directExit.cause),
+              })
+            }
+          }
+        }),
+      )
+      // kilocode_change end
+      if (!captured) return yield* Effect.die("delete result missing")
+      return captured
+    })
+
     const remove: Interface["remove"] = Effect.fnUntraced(function* (
       sessionID: SessionID,
       options?: {
@@ -767,17 +905,20 @@ export const layer: Layer.Layer<
         }
       },
     ) {
-      const session = yield* get(sessionID)
-      const hasTombstone = !!options?.tombstone
+      if (options?.tombstone) {
+        yield* removeWithTombstone(sessionID, options.tombstone).pipe(Effect.asVoid)
+        return
+      }
+      yield* get(sessionID)
+      const hasInstance = yield* InstanceState.directory.pipe(
+        Effect.as(true),
+        Effect.catchCause(() => Effect.succeed(false)),
+      )
+
+      if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
+
+      // kilocode_change start
       try {
-        const hasInstance = yield* InstanceState.directory.pipe(
-          Effect.as(true),
-          Effect.catchCause(() => Effect.succeed(false)),
-        )
-
-        if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
-
-        // kilocode_change start
         yield* SandboxPolicy.dispose(
           sessionID,
           Effect.gen(function* () {
@@ -801,21 +942,7 @@ export const layer: Layer.Layer<
             // Event/EventSequence deletion is now atomic within the canonical
             // Retention transaction (BEGIN IMMEDIATE) below — no independent events.remove.
             const now = Date.now()
-            const familyIDs = options?.tombstone
-              ? yield* Retention.deleteFamilyWithDeleteTombstoneUnprotected(db, sessionID, now, {
-                  opId: options.tombstone.opId,
-                  sessionId: sessionID,
-                  hash: options.tombstone.hash,
-                  requestId: options.tombstone.requestId,
-                  directory: options.tombstone.directory,
-                  parentSessionId: options.tombstone.parentSessionId,
-                  configVersion: options.tombstone.configVersion,
-                  sessionRevision: options.tombstone.sessionRevision,
-                  time: now,
-                  code: "delete.succeeded",
-                  message: "delete succeeded",
-                }).pipe(Effect.orDie)
-              : yield* Retention.deleteFamilyUnprotected(db, sessionID, now).pipe(Effect.orDie)
+            const familyIDs = yield* Retention.deleteFamilyUnprotected(db, sessionID, now).pipe(Effect.orDie)
             if (familyIDs.length > 0) {
               const keys = Artifact.familyArtifactsForFamily(familyIDs)
               const delExit = yield* Effect.forEach(keys, (key) => storage.remove(key), { discard: true }).pipe(
@@ -878,7 +1005,6 @@ export const layer: Layer.Layer<
         )
         // kilocode_change end
       } catch (e) {
-        if (hasTombstone) throw e
         log.error(e)
       }
     })
@@ -1964,6 +2090,7 @@ export const layer: Layer.Layer<
       messages,
       children,
       remove,
+      removeWithTombstone,
       updateMessage,
       removeMessage,
       removePart,
