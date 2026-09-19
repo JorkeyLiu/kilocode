@@ -75,6 +75,9 @@ export const FD_CAPABILITIES = [
   "transport/health",
 ] as const
 
+export const OBSERVATION_CHANGED_REVERSE_CAPABILITY = "observation/changed" as const
+export const OBSERVATION_CHANGED_VERSION = "1.0" as const
+
 export const FD_REVERSE_CAPABILITY_MAX_LENGTH = 128
 export const FD_REVERSE_CAPABILITIES_MAX_COUNT = 64
 

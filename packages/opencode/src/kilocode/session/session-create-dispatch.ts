@@ -26,6 +26,8 @@ import * as SandboxPolicy from "@/kilocode/sandbox/policy"
 import { sessionPath } from "@/kilocode/session/fork"
 import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 
 export const VERSION = 1 as const
 export const OP = "session/create" as const
@@ -540,6 +542,13 @@ export const layer = Layer.effect(
               platform?: string | null
               targetCtx: unknown
             }
+            changefeedEntry?: {
+              seq: number
+              session_id: string
+              revision: number
+              kind: "changed" | "deleted"
+              time: number
+            }
           }
           const txOut: TxOut = yield* db.transaction(
             (tx) =>
@@ -780,7 +789,7 @@ export const layer = Layer.effect(
                   .values(newRow as unknown as typeof SessionTable.$inferInsert)
                   .run()
                   .pipe(Effect.orDie)
-                yield* Changefeed.appendTx(tx as unknown as typeof db, {
+                const changefeedEntry = yield* Changefeed.appendTx(tx as unknown as typeof db, {
                   session_id: newId,
                   revision: 0,
                   kind: "changed",
@@ -865,6 +874,13 @@ export const layer = Layer.effect(
                     platform,
                     targetCtx,
                   },
+                  changefeedEntry: {
+                    seq: changefeedEntry.seq,
+                    session_id: changefeedEntry.session_id,
+                    revision: changefeedEntry.revision,
+                    kind: changefeedEntry.kind,
+                    time: changefeedEntry.time,
+                  },
                 } as unknown as TxOut
               }),
             { behavior: "immediate" },
@@ -926,6 +942,42 @@ export const layer = Layer.effect(
                 Effect.catch(() => Effect.void),
                 Effect.catchDefect(() => Effect.void),
               )
+          }
+          // Strictly bounded observation/changed producer: only for fresh canonical create commit,
+          // payload-free {seq,session_id,revision,kind,time} with cursor=seq, after immediate tx commit.
+          // Fail-closed versioned notification via private peer reverse capability; exceptions never affect result.
+          const entry = (
+            txOut as unknown as {
+              changefeedEntry?: { seq: number; session_id: string; revision: number; kind: string; time: number }
+            }
+          ).changefeedEntry
+          const resultForNotify = (txOut as unknown as { result: SessionCreateResult }).result
+          if (entry && resultForNotify.status === "succeeded") {
+            yield* Effect.gen(function* () {
+              const opt = yield* Effect.serviceOption(PrivatePeerService)
+              if (opt._tag === "None") return
+              const peer = opt.value
+              const payload = {
+                v: OBSERVATION_VERSION,
+                cursor: entry.seq,
+                entries: [
+                  {
+                    seq: entry.seq,
+                    session_id: entry.session_id,
+                    revision: entry.revision,
+                    kind: entry.kind,
+                    time: entry.time,
+                  },
+                ],
+              }
+              yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(
+                Effect.catch(() => Effect.void),
+                Effect.catchDefect(() => Effect.void),
+              )
+            }).pipe(
+              Effect.catch(() => Effect.void),
+              Effect.catchDefect(() => Effect.void),
+            )
           }
           return (txOut as unknown as { result: SessionCreateResult }).result
         }).pipe(Effect.ensuring(leaseRelease))

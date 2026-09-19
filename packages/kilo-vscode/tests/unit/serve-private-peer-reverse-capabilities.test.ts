@@ -59,7 +59,7 @@ function disposeAll(f: Fixture, peer: ServePrivatePeer): void {
 }
 
 describe("serve private peer reverse capabilities", () => {
-  test("default omitted sends legacy list and empty reverse offer", async () => {
+  test("default omitted sends legacy list and auto reverse offer", async () => {
     const f = fixture(okHandler)
     const peer = new ServePrivatePeer({ reader: f.clientReader, writer: f.clientWriter, pid: 501, epoch: 51 })
     try {
@@ -68,7 +68,7 @@ describe("serve private peer reverse capabilities", () => {
       expect(init).toBeDefined()
       const params = init!.params as { capabilities: unknown; reverseCapabilities: unknown }
       expect(params.capabilities).toEqual([...LEGACY_INITIALIZE_CAPABILITIES])
-      expect(params.reverseCapabilities).toEqual([])
+      expect(params.reverseCapabilities).toEqual(["observation/changed"])
       expect(params.capabilities).not.toEqual(params.reverseCapabilities)
       expect(peer.hasCapability("session/cancelQueued")).toBeTrue()
     } finally {
@@ -76,7 +76,7 @@ describe("serve private peer reverse capabilities", () => {
     }
   })
 
-  test("explicit empty reverse offer sends legacy list and empty reverse", async () => {
+  test("explicit empty reverse offer sends legacy list and auto reverse", async () => {
     const f = fixture(okHandler)
     const peer = new ServePrivatePeer({
       reader: f.clientReader,
@@ -90,7 +90,7 @@ describe("serve private peer reverse capabilities", () => {
       const init = f.seen.find((s) => s.method === "initialize")
       const params = init!.params as { capabilities: unknown; reverseCapabilities: unknown }
       expect(params.capabilities).toEqual([...LEGACY_INITIALIZE_CAPABILITIES])
-      expect(params.reverseCapabilities).toEqual([])
+      expect(params.reverseCapabilities).toEqual(["observation/changed"])
     } finally {
       disposeAll(f, peer)
     }
@@ -111,7 +111,7 @@ describe("serve private peer reverse capabilities", () => {
       offered.push("reverse/late")
       const init = f.seen.find((s) => s.method === "initialize")
       const params = init!.params as { capabilities: unknown; reverseCapabilities: unknown }
-      expect(params.reverseCapabilities).toEqual(["reverse/a", "reverse/b"])
+      expect(params.reverseCapabilities).toEqual(["reverse/a", "reverse/b", "observation/changed"])
       expect(params.capabilities).toEqual([...LEGACY_INITIALIZE_CAPABILITIES])
     } finally {
       disposeAll(f, peer)

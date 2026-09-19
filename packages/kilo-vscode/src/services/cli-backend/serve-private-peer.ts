@@ -1,6 +1,7 @@
 /* eslint-disable max-lines */
 import { isAbsolute, normalize, resolve } from "path"
 import { JsonRpcPeer } from "../../private-worker/peer"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "../../private-worker/observation"
 import type { ChildProcess } from "child_process"
 import {
   makeGetAmbiguous,
@@ -1791,7 +1792,9 @@ export function validateSuggestionDismissOutcome(
   if (kind === "terminal") return validateSuggestionDismissResult(raw, req)
   if (kind === "terminal-failure") return validateSuggestionTerminalFailure(raw, req)
   if (kind === "ambiguous") return checkSuggestionAmbiguous(raw as Record<string, unknown>, req)
-  throw new Error(`suggestion dismiss result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+  throw new Error(
+    `suggestion dismiss result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`,
+  )
 }
 
 export type ServePrivatePermissionSaveRequest = PermissionSaveContractRequest
@@ -1815,7 +1818,16 @@ export function validatePermissionSaveOutcome(
   if (kind === "terminal") return validatePermissionSaveResult(raw, req)
   if (kind === "terminal-failure") return validatePermissionTerminalFailure(raw, req)
   if (kind === "ambiguous") {
-    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    const allowed = new Set([
+      "kind",
+      "v",
+      "requestId",
+      "opId",
+      "idempotencyKey",
+      "accepted",
+      "terminal",
+      "transportUnknown",
+    ])
     for (const k of Object.keys(raw)) {
       if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
     }
@@ -1839,7 +1851,16 @@ export function validatePermissionReplyOutcome(
   if (kind === "terminal") return validatePermissionReplyResult(raw, req)
   if (kind === "terminal-failure") return validatePermissionTerminalFailure(raw, req)
   if (kind === "ambiguous") {
-    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    const allowed = new Set([
+      "kind",
+      "v",
+      "requestId",
+      "opId",
+      "idempotencyKey",
+      "accepted",
+      "terminal",
+      "transportUnknown",
+    ])
     for (const k of Object.keys(raw)) {
       if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
     }
@@ -2615,6 +2636,8 @@ export function validateDeleteResult(raw: unknown, req: ServePrivateDeleteReques
   return raw as unknown as ServePrivateDeleteResult
 }
 
+export const OBSERVATION_CHANGED_REVERSE_CAPABILITY = OBSERVATION_NOTIFICATION
+
 export interface ServePrivatePeerOptions {
   reader: NodeJS.ReadableStream | null
   writer: NodeJS.WritableStream | null
@@ -2635,6 +2658,12 @@ export interface ServePrivatePeerOptions {
    * handled. The service instance is not owned; no duplicate SecretStorage.
    */
   providerHttpExecuteDeps?: import("./serve-private-provider-http-execute").ProviderHttpExecuteDeps
+  /**
+   * Strictly bounded observation/changed notification forwarder.
+   * Extension forwards validated notification to the existing PrivateObservationService/AgentManager consumer.
+   * When absent, notifications are ignored (fail-closed); when present, strictly validated before forwarding.
+   */
+  onObservationChanged?: (method: string, params: unknown) => void
 }
 
 /** Legacy request `capabilities` list: server-method expectations, ignored by the CLI. */
@@ -2690,6 +2719,46 @@ export function normalizeReverseCapabilities(raw: unknown): string[] {
   return [...out]
 }
 
+// eslint-disable-next-line complexity
+export function isValidObservationChangedNotification(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
+  const o = raw as Record<string, unknown>
+  if (o.v !== OBSERVATION_VERSION) return false
+  if (typeof o.cursor !== "number" || !Number.isInteger(o.cursor) || o.cursor < 0 || !Number.isSafeInteger(o.cursor))
+    return false
+  if (!Array.isArray(o.entries)) return false
+  const cursor = o.cursor as number
+  const entries = o.entries as unknown[]
+  if (entries.length === 0) return false
+  // strict payload-free: each entry must have exactly 5 keys seq,session_id,revision,kind,time
+  const allowed = new Set(["seq", "session_id", "revision", "kind", "time"])
+  let prevSeq = -1
+  for (const e of entries) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) return false
+    const rec = e as Record<string, unknown>
+    if (Object.keys(rec).length !== 5) return false
+    for (const k of Object.keys(rec)) if (!allowed.has(k)) return false
+    const seq = rec.seq
+    const sid = rec.session_id
+    const rev = rec.revision
+    const kind = rec.kind
+    const time = rec.time
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq <= 0) return false
+    if (typeof sid !== "string" || sid.length === 0 || !sid.startsWith("ses") || sid.includes("\0")) return false
+    if (typeof rev !== "number" || !Number.isSafeInteger(rev) || rev < 0) return false
+    if (kind !== "changed" && kind !== "deleted") return false
+    if (typeof time !== "number" || !Number.isSafeInteger(time) || time < 0) return false
+    if (prevSeq !== -1 && seq !== prevSeq + 1) return false
+    if (seq > cursor) return false
+    prevSeq = seq
+  }
+  if (prevSeq !== cursor) return false
+  // do not allow extra root keys beyond v,cursor,entries
+  const rootAllowed = new Set(["v", "cursor", "entries"])
+  for (const k of Object.keys(o)) if (!rootAllowed.has(k)) return false
+  return true
+}
+
 const invalidatedTransports = new WeakSet<object>()
 
 export type ServePrivateLifecycleState = "available" | "quarantined" | "disposed" | "closed"
@@ -2733,8 +2802,15 @@ export class ServePrivatePeer {
   private healthInFlight: Promise<boolean> | null = null
   private healthPeer: JsonRpcPeer | null = null
   private healthEpoch: number | null = null
+  private observationChangedHandler: ((method: string, params: unknown) => void) | null = null
 
-  constructor(private readonly opts: ServePrivatePeerOptions) {}
+  constructor(private readonly opts: ServePrivatePeerOptions) {
+    if (opts.onObservationChanged) this.observationChangedHandler = opts.onObservationChanged
+  }
+
+  setObservationChangedHandler(handler: ((method: string, params: unknown) => void) | null): void {
+    this.observationChangedHandler = handler
+  }
 
   getEpoch(): number {
     return this.opts.epoch
@@ -2823,6 +2899,13 @@ export class ServePrivatePeer {
             throw err
           }
         : undefined
+    const onObservationChanged = (method: string, params: unknown): void => {
+      if (method !== OBSERVATION_CHANGED_REVERSE_CAPABILITY) return
+      if (!isValidObservationChangedNotification(params)) return
+      try {
+        this.observationChangedHandler?.(method, params)
+      } catch {}
+    }
     const peerAtStart = new JsonRpcPeer({
       reader: this.opts.reader,
       writer: this.opts.writer,
@@ -2834,6 +2917,7 @@ export class ServePrivatePeer {
         if (this.opts.epoch !== epochAtStart) return
         this.available = false
       },
+      onNotification: onObservationChanged,
       ...(onRequest ? { onRequest } : {}),
     })
     this.peer = peerAtStart
@@ -2841,6 +2925,8 @@ export class ServePrivatePeer {
     let reverseOffer: string[]
     try {
       const base = normalizeReverseCapabilities(this.opts.reverseCapabilities)
+      // Strictly bounded producer slice: always advertise observation/changed reverse capability when not explicitly present
+      if (!base.includes(OBSERVATION_CHANGED_REVERSE_CAPABILITY)) base.push(OBSERVATION_CHANGED_REVERSE_CAPABILITY)
       const hasOfferedHttp = base.includes("provider/httpExecute")
       if (hasOfferedHttp && !canHttp) {
         throw new TypeError("provider/httpExecute reverse capability requires execution dependencies")
@@ -3970,7 +4056,8 @@ export class ServePrivatePeer {
         if (sess.delete) return true
       }
       if (cap === "session/prompt" && c["session/prompt"] === true) return true
-      if (cap === "session/prompt" && Array.isArray(c.session) && (c.session as unknown[]).includes("prompt")) return true
+      if (cap === "session/prompt" && Array.isArray(c.session) && (c.session as unknown[]).includes("prompt"))
+        return true
       if (cap === "session/prompt" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.prompt) return true
@@ -5355,7 +5442,9 @@ export class ServePrivatePeer {
     }
   }
 
-  async privateProviderModelsDiscover(req: ProviderModelsDiscoverContractRequest): Promise<ProviderModelsDiscoverResult> {
+  async privateProviderModelsDiscover(
+    req: ProviderModelsDiscoverContractRequest,
+  ): Promise<ProviderModelsDiscoverResult> {
     const handle = this.privateProviderModelsDiscoverOutcomeWithHandle(req)
     const outcome = await handle.promise
     if (outcome.kind === "invalid") throw new ProviderModelsDiscoverValidationError(outcome.detail)
@@ -5413,7 +5502,11 @@ export class ServePrivatePeer {
     return { id: id as unknown as number, promise, cancel }
   }
 
-  private failedConfigUiDefaults(req: ConfigUiDefaultsContractRequest, code: string, msg: string): ConfigUiDefaultsResult {
+  private failedConfigUiDefaults(
+    req: ConfigUiDefaultsContractRequest,
+    code: string,
+    msg: string,
+  ): ConfigUiDefaultsResult {
     return {
       v: 1,
       requestId: req.requestId,
@@ -5629,8 +5722,7 @@ export class ServePrivatePeer {
           return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
         return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
       }
-      if (this.isStaleHandle(peerAtCall, currentEpoch))
-        return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return { kind: "valid", result: makeMcpAddAmbiguous(req, true) }
       return normalizePrivateMcpAddWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
@@ -6145,8 +6237,7 @@ export class ServePrivatePeer {
       try {
         raw = (await rawPromise) as unknown
       } catch (e: unknown) {
-        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
-          return makeSessionModelUsageAmbiguous(req, true)
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeSessionModelUsageAmbiguous(req, true)
         const { code, msg } = this.parseFailedInfo(e)
         return this.failedSessionModelUsage(req, code, msg)
       }

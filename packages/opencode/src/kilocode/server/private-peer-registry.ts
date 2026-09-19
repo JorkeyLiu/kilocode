@@ -92,6 +92,7 @@ export interface PrivatePeer {
     onEvent: (event: unknown) => void,
   ) => Effect.Effect<Call, Unavailable | Unsupported>
   readonly supports: (capability: string) => Effect.Effect<boolean>
+  readonly notify: (method: string, params?: unknown) => Effect.Effect<void, Unavailable | Unsupported>
 }
 
 export class Service extends Context.Service<Service, PrivatePeer>()("@kilocode/PrivatePeer") {}
@@ -295,7 +296,42 @@ export const layer = Layer.effect(
         return supportsFor(owner, capability)
       })
 
-    return Service.of({ install, release, negotiate, current, request, requestWithEvents, supports })
+    const notifyImpl = (
+      owner: JsonRpcPeer,
+      method: string,
+      params?: unknown,
+    ): Effect.Effect<void, Unavailable | Unsupported> =>
+      Effect.suspend((): Effect.Effect<void, Unavailable | Unsupported> => {
+        if (held !== owner || owner.getState() !== "open") return Effect.fail(new Unavailable())
+        if (!owner.isInitialized()) return Effect.fail(new Unavailable())
+        if (!negotiated || !caps) return Effect.fail(new Unavailable())
+        if (method === "initialize" || method === "$/cancelRequest" || method.startsWith("$/"))
+          return Effect.fail(new Unsupported({ capability: method }))
+        if (!caps.has(method)) return Effect.fail(new Unsupported({ capability: method }))
+        try {
+          owner.notify(method, params)
+        } catch {
+          sweep()
+          return Effect.fail(new Unavailable())
+        }
+        return Effect.succeed(undefined)
+      })
+
+    const notify = (method: string, params?: unknown): Effect.Effect<void, Unavailable | Unsupported> =>
+      Effect.suspend((): Effect.Effect<void, Unavailable | Unsupported> => {
+        sweep()
+        const owner = held
+        if (!alive(owner)) {
+          held = null
+          caps = null
+          capsList = []
+          negotiated = false
+          return Effect.fail(new Unavailable())
+        }
+        return notifyImpl(owner, method, params)
+      })
+
+    return Service.of({ install, release, negotiate, current, request, requestWithEvents, supports, notify })
   }),
 )
 

@@ -519,13 +519,17 @@ export function activate(context: vscode.ExtensionContext) {
   // observation/changed notifications. Fail-closed validation, no second private read,
   // burst coalesced to one refresh, ack only after refresh success, exceptions never
   // bubble to transport (service boundary + consumer try/catch).
-  privateObservation.setNotificationConsumer((method, params) => {
+  const observationChangedForwarder = (method: string, params: unknown): void => {
     try {
       agentManagerProvider.handleObservationChanged(method, params)
     } catch (e) {
       console.warn("[Kilo] observation/changed consumer failed:", e)
     }
-  })
+  }
+  privateObservation.setNotificationConsumer(observationChangedForwarder)
+  // Strictly bounded producer via fd-carrier: forward serve-private-peer observation/changed to the same consumer
+  // with strict validation and coalesced refresh, keeping standalone-worker path compatible and deduped via coordinator.
+  connectionService.setObservationChangedHandler(observationChangedForwarder)
 
   privateObservation.initialize().catch((err) => {
     console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)

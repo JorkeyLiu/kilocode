@@ -102,7 +102,11 @@ import { notebookListHandle, notebookRejectHandle, notebookReplyHandle } from ".
 import { suggestionAcceptHandle, suggestionDismissHandle } from "./serve-private-suggestion-connection"
 import { wrapEpochHandle } from "./serve-private-epoch"
 import { quarantinePeerOnTimeout } from "./serve-private-quarantine"
-import { collectViewedSnapshot, emitDisposeDetach, emitViewedOnce } from "../../kilo-provider/session-viewed-privatefirst"
+import {
+  collectViewedSnapshot,
+  emitDisposeDetach,
+  emitViewedOnce,
+} from "../../kilo-provider/session-viewed-privatefirst"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 /**
@@ -217,6 +221,7 @@ export class KiloConnectionService {
   private privateAvailable = false
   private privateEpoch: number | null = null
   private privatePid: number | undefined
+  private privateObservationChangedHandler: ((method: string, params: unknown) => void) | null = null
   /**
    * One-shot late observers (status parity seed race): listeners run once
    * when the current backend's private negotiation completes. Cleared on
@@ -799,7 +804,14 @@ export class KiloConnectionService {
     this.viewedDirty = false
     this.viewedSequence += 1
     try {
-      await emitDisposeDetach({ viewerId: this.viewerId, seq: this.viewedSequence, directory: this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0], peer: this.privatePeer, live: this.privateAvailable, client: this.client })
+      await emitDisposeDetach({
+        viewerId: this.viewerId,
+        seq: this.viewedSequence,
+        directory: this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0],
+        peer: this.privatePeer,
+        live: this.privateAvailable,
+        client: this.client,
+      })
     } catch {}
     // Invalidate any pending connect continuations before resource installation
     this.sseClient?.dispose()
@@ -1319,6 +1331,15 @@ export class KiloConnectionService {
     return !!server.privateReader && !!server.privateWriter
   }
 
+  setObservationChangedHandler(handler: ((method: string, params: unknown) => void) | null): void {
+    this.privateObservationChangedHandler = handler
+    if (this.privatePeer) {
+      try {
+        this.privatePeer.setObservationChangedHandler(handler)
+      } catch {}
+    }
+  }
+
   private makePrivatePeer(server: import("./server-manager").ServerInstance): ServePrivatePeer {
     const deps = (() => {
       const svc = this.canonicalConfigService
@@ -1333,6 +1354,8 @@ export class KiloConnectionService {
       epoch: server.epoch,
       process: server.process,
       initializeTimeoutMs: 5000,
+      reverseCapabilities: ["observation/changed"],
+      ...(this.privateObservationChangedHandler ? { onObservationChanged: this.privateObservationChangedHandler } : {}),
       ...(deps ? { providerHttpExecuteDeps: deps } : {}),
     })
   }
@@ -1490,8 +1513,12 @@ export class KiloConnectionService {
     return this.privateEpoch
   }
 
-  async privateConvergenceRequest(method: "config/convergence/acquire" | "config/convergence/resolve" | "config/convergence/observe", params: unknown): Promise<unknown> {
-    const peer = this.privatePeer, epoch = this.privateEpoch
+  async privateConvergenceRequest(
+    method: "config/convergence/acquire" | "config/convergence/resolve" | "config/convergence/observe",
+    params: unknown,
+  ): Promise<unknown> {
+    const peer = this.privatePeer,
+      epoch = this.privateEpoch
     if (!peer || !this.privateAvailable || !peer.isAvailable()) throw new Error("Private peer unavailable")
     const raw = await peer.requestConvergence(method, params)
     if (this.privatePeer !== peer || this.privateEpoch !== epoch) throw new Error("convergence epoch changed")
@@ -1895,7 +1922,12 @@ export class KiloConnectionService {
     cancel: (msg?: string) => boolean
   } {
     return revertHandle(
-      { peer: this.privatePeer, live: this.privateAvailable, epoch: this.privateEpoch, invalidate: (r) => this.invalidatePrivatePeerOnObserverTimeout(r) },
+      {
+        peer: this.privatePeer,
+        live: this.privateAvailable,
+        epoch: this.privateEpoch,
+        invalidate: (r) => this.invalidatePrivatePeerOnObserverTimeout(r),
+      },
       req,
     )
   }
@@ -1911,7 +1943,12 @@ export class KiloConnectionService {
     cancel: (msg?: string) => boolean
   } {
     return unrevertHandle(
-      { peer: this.privatePeer, live: this.privateAvailable, epoch: this.privateEpoch, invalidate: (r) => this.invalidatePrivatePeerOnObserverTimeout(r) },
+      {
+        peer: this.privatePeer,
+        live: this.privateAvailable,
+        epoch: this.privateEpoch,
+        invalidate: (r) => this.invalidatePrivatePeerOnObserverTimeout(r),
+      },
       req,
     )
   }
@@ -2052,7 +2089,9 @@ export class KiloConnectionService {
   }
 
   privateSuggestionWithHandle(
-    req: import("./serve-private-peer").ServePrivateSuggestionAcceptRequest | import("./serve-private-peer").ServePrivateSuggestionDismissRequest,
+    req:
+      | import("./serve-private-peer").ServePrivateSuggestionAcceptRequest
+      | import("./serve-private-peer").ServePrivateSuggestionDismissRequest,
   ) {
     const deps = {
       peer: this.privatePeer,
