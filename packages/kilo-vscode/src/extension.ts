@@ -515,6 +515,18 @@ export function activate(context: vscode.ExtensionContext) {
   // observation-only and are not routed to UI.
   wirePeerCloseObservation(privateObservation, privateObservationTriggers, agentManagerProvider)
 
+  // Strictly bounded observation/changed consumer — only this consumer may handle
+  // observation/changed notifications. Fail-closed validation, no second private read,
+  // burst coalesced to one refresh, ack only after refresh success, exceptions never
+  // bubble to transport (service boundary + consumer try/catch).
+  privateObservation.setNotificationConsumer((method, params) => {
+    try {
+      agentManagerProvider.handleObservationChanged(method, params)
+    } catch (e) {
+      console.warn("[Kilo] observation/changed consumer failed:", e)
+    }
+  })
+
   privateObservation.initialize().catch((err) => {
     console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
   })

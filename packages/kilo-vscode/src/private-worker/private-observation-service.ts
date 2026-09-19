@@ -110,7 +110,7 @@ export class PrivateObservationService implements Disposable {
   private reconnectPromise: Promise<unknown> | null = null
   private disposed = false
   private epoch = 0
-  private readonly consumer: ((method: string, params: unknown) => void) | undefined
+  private consumer: ((method: string, params: unknown) => void) | undefined
   private readonly opts: PrivateObservationServiceOptions
   private readonly cursorStore: ObservationCursorStore | undefined
   // R9 fixture-only bounded notification recorder at onNotification boundary:
@@ -660,6 +660,16 @@ export class PrivateObservationService implements Disposable {
   clearNotificationLog(): void {
     this.notificationLog.length = 0
     // Keep nextOrdinal monotonic — watermark advances; cleared window is [next, next)
+  }
+
+  /**
+   * Set or replace the observation/changed notification consumer.
+   * Additive wiring for extension-side consumer slice — updates the
+   * injected onNotification handler after construction without
+   * recreating the host. Consumer exceptions never bubble to transport.
+   */
+  setNotificationConsumer(handler: ((method: string, params: unknown) => void) | null | undefined): void {
+    this.consumer = handler ?? undefined
   }
 
   /** Owned peer-close hook — lifecycle triggers call setOnPeerClosed to receive transport close events. No polling. */

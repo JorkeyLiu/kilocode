@@ -49,6 +49,7 @@ import type { Host, PanelContext, OutputHandle, Disposable } from "./host"
 import type { PrivateObservationService } from "../private-worker/private-observation-service"
 import type { TriggerResult } from "../private-worker/private-observation-lifecycle-triggers"
 import { AgentManagerObservationCoordinator } from "./observation-coordinator"
+import { OBSERVATION_NOTIFICATION } from "../private-worker/observation"
 import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 
 export class AgentManagerProvider implements Disposable {
@@ -134,6 +135,8 @@ export class AgentManagerProvider implements Disposable {
   private refreshPromise: Promise<void> | null = null
   private refreshGen: number | null = null
   private refreshSessions: unknown | null = null
+  private pendingChangedAckCursor: number | undefined
+  private pendingChangedBaseline: number | undefined
   // AgentManager-owned async activity that can emit catalog/durable updates
   // across a fixture phase: in-flight close handlers plus observation
   // refresh entry chains (including the stateReady prefix before the
@@ -982,7 +985,13 @@ export class AgentManagerProvider implements Disposable {
     }
     let prevalidated: { shouldRefresh: boolean; ackCursor?: number } = { shouldRefresh: true }
     let valid = false
-    if (result && !result.readError && result.requestedCursor !== undefined && result.readResult !== undefined && this.coordinator) {
+    if (
+      result &&
+      !result.readError &&
+      result.requestedCursor !== undefined &&
+      result.readResult !== undefined &&
+      this.coordinator
+    ) {
       try {
         const r = this.coordinator.decideFromReadResultWithValidity(result.readResult, result.requestedCursor)
         valid = r.valid
@@ -1011,10 +1020,15 @@ export class AgentManagerProvider implements Disposable {
       return p
     }
     const curPersisted = this.coordinator?.getPersistedCursor()
-    if (curPersisted === undefined || result?.requestedCursor === undefined || curPersisted !== result.requestedCursor) {
+    if (
+      curPersisted === undefined ||
+      result?.requestedCursor === undefined ||
+      curPersisted !== result.requestedCursor
+    ) {
       return this.handleObservationRefresh()
     }
-    if (this.refreshPromise && this.refreshGen === curGen && this.refreshSessions === curSessions) return this.refreshPromise
+    if (this.refreshPromise && this.refreshGen === curGen && this.refreshSessions === curSessions)
+      return this.refreshPromise
     const p = this.doPeerCloseObservationRefresh(curGen, curSessions, result, prevalidated).finally(() => {
       if (this.refreshPromise === p) {
         this.refreshPromise = null
@@ -1069,6 +1083,121 @@ export class AgentManagerProvider implements Disposable {
     }
   }
 
+  /**
+   * Strictly bounded observation/changed consumer — payload-free, versioned, fail-closed.
+   * - Validates via coordinator.decideFromChangedNotificationWithValidity (v1.0, cursor, entries, seq/revision/time/kind)
+   * - Invalid/out-of-order/gap discarded: no refresh, no ack, no cursor mutation
+   * - Legal changed/deleted converted to single re-observe signal (refresh + ack after success)
+   * - Merges with existing refreshPromise/generation/singleflight; burst coalesces to one refresh (pending latest cursor)
+   * - Visible=false discarded (next visible trigger will re-read)
+   * - No second private read; notification is read-equivalent decision input
+   * - Consumer exceptions never bubble to JSON-RPC transport (service try/catch + local try/catch)
+   */
+  public handleObservationChanged(method: string, params: unknown): void {
+    try {
+      if (method !== OBSERVATION_NOTIFICATION) return
+      const panel = this.panel
+      if (!panel || !panel.visible) return
+      if (!this.coordinator) return
+      if (!this.hydrated) {
+        const genAtCall = this.generation
+        const sessionsAtCall = panel.sessions
+        if (!sessionsAtCall) return
+        void this.trackOwned(
+          this.waitForStateReady("observationChangedHydration").then(() => {
+            if (this.generation !== genAtCall) return
+            if (this.panel?.sessions !== sessionsAtCall) return
+            if (!this.panel?.visible) return
+            return this.handleObservationRefresh()
+          }),
+        )
+        return
+      }
+      const cur = this.coordinator.getPersistedCursor()
+      let res: { valid: boolean; decision: { shouldRefresh: boolean; ackCursor?: number } }
+      try {
+        res = this.coordinator.decideFromChangedNotificationWithValidity(params, cur)
+      } catch {
+        return
+      }
+      if (!res.valid) return
+      if (!res.decision.shouldRefresh) return
+      const ackCursor = res.decision.ackCursor
+      if (ackCursor !== undefined) {
+        if (this.pendingChangedAckCursor === undefined || ackCursor > this.pendingChangedAckCursor) {
+          this.pendingChangedAckCursor = ackCursor
+          if (this.pendingChangedBaseline === undefined) this.pendingChangedBaseline = cur
+        } else if (this.pendingChangedBaseline === undefined) {
+          this.pendingChangedBaseline = cur
+        }
+      }
+      const genAtCall = this.generation
+      const sessionsAtCall = panel.sessions
+      if (!sessionsAtCall) return
+      void this.trackOwned(
+        this.waitForStateReady("observationChanged").then(async () => {
+          const curPanel = this.panel
+          const curGen = this.generation
+          const curSessions = curPanel?.sessions
+          if (!curPanel || !curSessions || !curPanel.visible) return
+          if (curGen !== genAtCall || curSessions !== sessionsAtCall) return
+          if (this.refreshPromise && this.refreshGen === curGen && this.refreshSessions === curSessions)
+            return this.refreshPromise
+          const p = this.doChangedObservationRefresh(curGen, curSessions).finally(() => {
+            if (this.refreshPromise === p) {
+              this.refreshPromise = null
+              this.refreshGen = null
+              this.refreshSessions = null
+            }
+          })
+          this.refreshPromise = p
+          this.refreshGen = curGen
+          this.refreshSessions = curSessions
+          return p
+        }),
+      )
+    } catch (e) {
+      try {
+        this.log("handleObservationChanged failed:", e)
+      } catch {}
+    }
+  }
+
+  private async doChangedObservationRefresh(gen: number, sessions: PanelContext["sessions"]): Promise<void> {
+    if (this.generation !== gen || this.panel?.sessions !== sessions) {
+      this.pendingChangedAckCursor = undefined
+      this.pendingChangedBaseline = undefined
+      return
+    }
+    try {
+      await sessions.refreshSessions()
+    } catch {
+      this.pendingChangedAckCursor = undefined
+      this.pendingChangedBaseline = undefined
+      return
+    }
+    if (this.generation !== gen || this.panel?.sessions !== sessions) {
+      this.pendingChangedAckCursor = undefined
+      this.pendingChangedBaseline = undefined
+      return
+    }
+    const latestAck = this.pendingChangedAckCursor
+    const latestBaseline = this.pendingChangedBaseline
+    this.pendingChangedAckCursor = undefined
+    this.pendingChangedBaseline = undefined
+    if (latestAck === undefined || !this.coordinator) return
+    if (latestBaseline === undefined) return
+    try {
+      const curNow = this.coordinator.getPersistedCursor()
+      if (curNow === undefined || curNow !== latestBaseline || curNow > latestAck) return
+    } catch {
+      return
+    }
+    try {
+      await this.coordinator.ack(latestAck)
+    } catch {}
+  }
+
   private shouldWaitForState(m: AgentManagerInMessage): boolean {
     switch (m.type) {
       case "agentManager.persistSession":
@@ -1121,7 +1250,12 @@ export class AgentManagerProvider implements Disposable {
           } catch {
             return false
           }
-          const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, client, root, this.connectionService)
+          const metadata = await sandboxSessionMetadata(
+            this.connectionService.sandboxPreference,
+            client,
+            root,
+            this.connectionService,
+          )
           const { createSessionPrivateFirst } = await import("../kilo-provider/session-create")
           const session = await startSession(
             root,
@@ -1227,7 +1361,13 @@ export class AgentManagerProvider implements Disposable {
     const { forkSessionPrivateFirst } = await import("../kilo-provider/fork-session")
     let forked: Session | undefined
     try {
-      forked = await forkSessionPrivateFirst({ client, connection: this.connectionService, sessionId, directory, messageId })
+      forked = await forkSessionPrivateFirst({
+        client,
+        connection: this.connectionService,
+        sessionId,
+        directory,
+        messageId,
+      })
     } catch (error) {
       const err = getErrorMessage(error)
       this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
@@ -1517,7 +1657,13 @@ export class AgentManagerProvider implements Disposable {
     if (!panel) throw new Error("fixture barrier: no Agent Manager panel")
     const gen = this.contentGen ?? 0
     if (!this.barrierWaiters) this.barrierWaiters = []
-    let entry: { gen: number; token: string; resolve: (v: boolean) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+    let entry: {
+      gen: number
+      token: string
+      resolve: (v: boolean) => void
+      reject: (e: Error) => void
+      timer: ReturnType<typeof setTimeout>
+    }
     const gate = new Promise<boolean>((resolve, reject) => {
       const timer = setTimeout(() => {
         const list = this.barrierWaiters ?? []
@@ -1694,7 +1840,9 @@ export class AgentManagerProvider implements Disposable {
     let statuses: Record<string, SessionStatus> = {}
     try {
       const statusOutcome = await fetchSessionStatusesPrivateFirst({
-        connection: this.connectionService as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["connection"],
+        connection: this.connectionService as unknown as Parameters<
+          typeof fetchSessionStatusesPrivateFirst
+        >[0]["connection"],
         client: client as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["client"],
         directory: root,
       })
@@ -1717,7 +1865,9 @@ export class AgentManagerProvider implements Disposable {
       .then((outcome) => (outcome.kind === "ok" ? outcome.agents : empty("app.agents")))
       .catch(() => empty("app.agents"))
     const connected = await fetchProviderCatalogPrivateFirst({
-      connection: this.connectionService as unknown as Parameters<typeof fetchProviderCatalogPrivateFirst>[0]["connection"],
+      connection: this.connectionService as unknown as Parameters<
+        typeof fetchProviderCatalogPrivateFirst
+      >[0]["connection"],
       client: client as unknown as Parameters<typeof fetchProviderCatalogPrivateFirst>[0]["client"],
       directory: root,
     })
@@ -1737,7 +1887,12 @@ export class AgentManagerProvider implements Disposable {
         client: client as unknown as Parameters<typeof fetchFixtureSessionMessagesPrivateFirst>[0]["client"],
         directory: root,
         sessionId: s.id,
-      }).catch(() => empty(`session.messages(${s.id})`) as unknown as Awaited<ReturnType<typeof fetchFixtureSessionMessagesPrivateFirst>>)
+      }).catch(
+        () =>
+          empty(`session.messages(${s.id})`) as unknown as Awaited<
+            ReturnType<typeof fetchFixtureSessionMessagesPrivateFirst>
+          >,
+      )
       const rows = msgOutcome.kind === "ok" ? msgOutcome.items : empty(`session.messages(${s.id})`)
       if (msgOutcome.kind !== "ok") unreadableMessages[s.id] = false
       messages[s.id] = (rows as Parameters<typeof summarizeMessage>[0][]).map(summarizeMessage)
@@ -1747,7 +1902,9 @@ export class AgentManagerProvider implements Disposable {
       // and unavailable close fail-soft to empty with the existing log label.
       // `compareChildrenParity` stays as pure diagnostic/test evidence only.
       const kids = await fetchSessionChildrenPrivateFirst({
-        connection: this.connectionService as unknown as Parameters<typeof fetchSessionChildrenPrivateFirst>[0]["connection"],
+        connection: this.connectionService as unknown as Parameters<
+          typeof fetchSessionChildrenPrivateFirst
+        >[0]["connection"],
         client: client as unknown as Parameters<typeof fetchSessionChildrenPrivateFirst>[0]["client"],
         parentSessionId: s.id,
         directory: root,
