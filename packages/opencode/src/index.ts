@@ -38,6 +38,9 @@ import { KiloCli } from "@/kilocode/cli/setup" // kilocode_change
 import { installFatalHandlers } from "@/kilocode/fatal-handler" // kilocode_change
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
+// kilocode_change - P0 instrumentation: process-entry anchor for cold-start spawn→port accounting (P0 off no-op)
+P0Perf.mark("cli_entry", { id: String(process.pid) })
+
 const processMetadata = ensureProcessMetadata("main")
 
 // kilocode_change start - non-reentrant, EPIPE-safe fatal handlers
@@ -122,7 +125,10 @@ let cli = yargs(args) // kilocode_change
       run_id: processMetadata.runID,
     })
 
+    // kilocode_change - P0 instrumentation: outer bootstrap span for cold start; p0.end → serve_cli_entry covers yargs dispatch + handler setup (P0 off no-op)
+    const bootstrapTimer = P0Perf.span("cli_bootstrap")
     await KiloCli.bootstrap() // kilocode_change - env tagging, telemetry init, legacy auth migration
+    bootstrapTimer.end()
   })
   .usage("")
   .completion("completion", "generate shell completion script")
