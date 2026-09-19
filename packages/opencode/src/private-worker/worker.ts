@@ -1,6 +1,6 @@
 import { JsonRpcPeer } from "./peer"
 import { ErrorCode } from "./json-rpc"
-import { ObservationController, type ObservationDeps } from "./observation"
+import { ObservationController, type ObservationDeps, buildObservationCapabilities } from "./observation"
 
 /**
  * Private worker entrypoint (R9).
@@ -40,7 +40,7 @@ export function startWorker(opts: WorkerOptions = {}): JsonRpcPeer {
         return {
           protocolVersion: "1.0",
           serverInfo: { name: "kilo-private-worker", version },
-          capabilities: {},
+          capabilities: ctrl ? buildObservationCapabilities() : {},
         }
       }
       if (method === "ping") return { pong: true }

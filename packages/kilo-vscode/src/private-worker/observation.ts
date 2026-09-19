@@ -40,6 +40,61 @@ export const OBSERVATION_METHODS = {
 
 export const OBSERVATION_NOTIFICATION = "observation/changed" as const
 
+export const OBSERVATION_REQUIRED_CAPABILITIES = [
+  "observation/snapshot",
+  "observation/read",
+  "observation/ack",
+  "observation/subscribe",
+  "observation/list",
+  "observation/get",
+  "observation/messages",
+] as const
+
+export type ObservationRequiredCapability = (typeof OBSERVATION_REQUIRED_CAPABILITIES)[number]
+
+export function buildObservationCapabilities(): Record<string, unknown> {
+  const caps: Record<string, unknown> = {
+    observation: { version: OBSERVATION_VERSION },
+  }
+  for (const m of OBSERVATION_REQUIRED_CAPABILITIES) caps[m] = {}
+  return caps
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
+}
+
+export function assertObservationCapable(result: unknown): void {
+  if (!isPlainObject(result)) throw new Error("initialize result must be object")
+  const r = result as Record<string, unknown>
+  if (r.protocolVersion !== "1.0") throw new Error(`unsupported protocolVersion: ${String(r.protocolVersion)}`)
+  if (!isPlainObject(r.serverInfo)) throw new Error("serverInfo must be object")
+  if (!isPlainObject(r.capabilities)) throw new Error("capabilities must be object")
+  const caps = r.capabilities as Record<string, unknown>
+  for (const k of Object.keys(caps)) {
+    if (k.length === 0 || k.includes("\0")) throw new Error(`illegal capability: ${JSON.stringify(k)}`)
+  }
+  const obs = caps["observation"]
+  if (!isPlainObject(obs)) throw new Error("missing required capability: observation")
+  const ver = (obs as Record<string, unknown>).version
+  if (typeof ver !== "string" || ver.length === 0 || ver.includes("\0")) throw new Error("illegal observation version")
+  if (ver !== OBSERVATION_VERSION) throw new Error(`unsupported observation version: ${String(ver)}`)
+  for (const m of OBSERVATION_REQUIRED_CAPABILITIES) {
+    if (!(m in caps)) throw new Error(`missing required capability: ${m}`)
+    const v = caps[m]
+    if (!isPlainObject(v as unknown)) throw new Error(`illegal capability value for ${m}`)
+  }
+}
+
+export function isObservationCapable(result: unknown): boolean {
+  try {
+    assertObservationCapable(result)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export type ObservationKind = "changed" | "deleted"
 
 const VALID_KINDS = new Set<string>(["changed", "deleted"])
@@ -145,7 +200,12 @@ export interface ObservationGetSession {
   updatedAt: number
   agent?: string
   model?: ObservationGetModel
-  summary?: { additions: number; deletions: number; files: number; diffs?: Array<{ file?: string; additions: number; deletions: number; status?: "added" | "deleted" | "modified" }> }
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<{ file?: string; additions: number; deletions: number; status?: "added" | "deleted" | "modified" }>
+  }
   revert?: { messageID: string; partID?: string; snapshot?: string; diff?: string }
 }
 
@@ -163,9 +223,19 @@ export interface ObservationDeps {
   getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
   readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
   ack: (cursor: number) => Promise<void>
-  list?: (input: { directory: string; archived?: boolean; cursor?: string; limit: number }) => Promise<ObservationListResult>
+  list?: (input: {
+    directory: string
+    archived?: boolean
+    cursor?: string
+    limit: number
+  }) => Promise<ObservationListResult>
   get?: (input: { directory: string; sessionId: string }) => Promise<ObservationGetResult>
-  messages?: (input: { directory: string; sessionId: string; limit: number; cursor?: string }) => Promise<ObservationMessagesResult>
+  messages?: (input: {
+    directory: string
+    sessionId: string
+    limit: number
+    cursor?: string
+  }) => Promise<ObservationMessagesResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -187,7 +257,12 @@ function notFound(msg: string): Error & { code?: number } {
 }
 
 function validateVersion(params: unknown): void {
-  if (params !== null && typeof params === "object" && !Array.isArray(params) && "v" in (params as Record<string, unknown>)) {
+  if (
+    params !== null &&
+    typeof params === "object" &&
+    !Array.isArray(params) &&
+    "v" in (params as Record<string, unknown>)
+  ) {
     const v = (params as Record<string, unknown>).v
     if (v !== undefined && v !== OBSERVATION_VERSION) {
       throw invalidParams(`unsupported observation version: ${String(v)}`)
@@ -212,24 +287,29 @@ function extractCursor(params: unknown, required: boolean): number {
 }
 
 function parseDirectory(raw: unknown): string {
-  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0"))
+    throw invalidParams("directory must be non-empty absolute path")
   if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
   try {
     return canonicalDirectory(raw)
   } catch (e) {
-    throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
+    throw invalidParams(
+      (e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path",
+    )
   }
 }
 
 function parseSessionId(raw: unknown): string {
-  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0") || !raw.startsWith("ses")) throw invalidParams("sessionId must be non-empty session id")
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0") || !raw.startsWith("ses"))
+    throw invalidParams("sessionId must be non-empty session id")
   if (!isValidSessionId(raw)) throw invalidParams("sessionId must be non-empty session id")
   return raw as string
 }
 
 // eslint-disable-next-line complexity
 function validateSummary(sum: unknown): void {
-  if (typeof sum !== "object" || sum === null || Array.isArray(sum)) throw internalError("get returned invalid session shape")
+  if (typeof sum !== "object" || sum === null || Array.isArray(sum))
+    throw internalError("get returned invalid session shape")
   const s = sum as Record<string, unknown>
   const allowed = new Set(["additions", "deletions", "files", "diffs"])
   for (const k of Object.keys(s)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
@@ -239,33 +319,42 @@ function validateSummary(sum: unknown): void {
   if ("diffs" in s && s.diffs !== undefined) {
     if (!Array.isArray(s.diffs)) throw internalError("get returned invalid session shape")
     for (const d of s.diffs as unknown[]) {
-      if (typeof d !== "object" || d === null || Array.isArray(d)) throw internalError("get returned invalid session shape")
+      if (typeof d !== "object" || d === null || Array.isArray(d))
+        throw internalError("get returned invalid session shape")
       const diff = d as Record<string, unknown>
       const allowedDiff = new Set(["file", "additions", "deletions", "status"])
-      for (const k of Object.keys(diff)) if (!allowedDiff.has(k)) throw internalError("get returned invalid session shape")
+      for (const k of Object.keys(diff))
+        if (!allowedDiff.has(k)) throw internalError("get returned invalid session shape")
       if (!isFiniteNumber(diff.additions)) throw internalError("get returned invalid session shape")
       if (!isFiniteNumber(diff.deletions)) throw internalError("get returned invalid session shape")
-      if ("file" in diff && diff.file !== undefined && typeof diff.file !== "string") throw internalError("get returned invalid session shape")
+      if ("file" in diff && diff.file !== undefined && typeof diff.file !== "string")
+        throw internalError("get returned invalid session shape")
       if ("status" in diff && diff.status !== undefined) {
-        if (typeof diff.status !== "string" || !["added", "deleted", "modified"].includes(diff.status as string)) throw internalError("get returned invalid session shape")
+        if (typeof diff.status !== "string" || !["added", "deleted", "modified"].includes(diff.status as string))
+          throw internalError("get returned invalid session shape")
       }
     }
   }
 }
 
 function validateRevert(rev: unknown): void {
-  if (typeof rev !== "object" || rev === null || Array.isArray(rev)) throw internalError("get returned invalid session shape")
+  if (typeof rev !== "object" || rev === null || Array.isArray(rev))
+    throw internalError("get returned invalid session shape")
   const r = rev as Record<string, unknown>
   const allowed = new Set(["messageID", "partID", "snapshot", "diff"])
   for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
   if (!isValidMessageId(r.messageID)) throw internalError("get returned invalid session shape")
-  if ("partID" in r && r.partID !== undefined && !isValidPartId(r.partID)) throw internalError("get returned invalid session shape")
-  if ("snapshot" in r && r.snapshot !== undefined && typeof r.snapshot !== "string") throw internalError("get returned invalid session shape")
-  if ("diff" in r && r.diff !== undefined && typeof r.diff !== "string") throw internalError("get returned invalid session shape")
+  if ("partID" in r && r.partID !== undefined && !isValidPartId(r.partID))
+    throw internalError("get returned invalid session shape")
+  if ("snapshot" in r && r.snapshot !== undefined && typeof r.snapshot !== "string")
+    throw internalError("get returned invalid session shape")
+  if ("diff" in r && r.diff !== undefined && typeof r.diff !== "string")
+    throw internalError("get returned invalid session shape")
 }
 
 function validateModel(raw: unknown): void {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw internalError("get returned invalid session shape")
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    throw internalError("get returned invalid session shape")
   const m = raw as Record<string, unknown>
   const allowed = new Set(["providerID", "id", "variant"])
   for (const k of Object.keys(m)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
@@ -276,13 +365,15 @@ function validateModel(raw: unknown): void {
     throw internalError("get returned invalid session shape")
   }
   if ("variant" in m && m.variant !== undefined) {
-    if (typeof m.variant !== "string" || (m.variant as string).includes("\0")) throw internalError("get returned invalid session shape")
+    if (typeof m.variant !== "string" || (m.variant as string).includes("\0"))
+      throw internalError("get returned invalid session shape")
   }
 }
 
 // eslint-disable-next-line complexity
 function validateFoundSession(raw: unknown, directory: string, sessionId: string): void {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw internalError("get returned invalid session shape")
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw internalError("get returned invalid session shape")
   const s = raw as Record<string, unknown>
   if (
     !isValidSessionId(s.id) ||
@@ -295,7 +386,9 @@ function validateFoundSession(raw: unknown, directory: string, sessionId: string
     !isAbsolute(s.directory as string) ||
     (() => {
       try {
-        return canonicalDirectory(s.directory as string) !== (s.directory as string) || (s.directory as string) !== directory
+        return (
+          canonicalDirectory(s.directory as string) !== (s.directory as string) || (s.directory as string) !== directory
+        )
       } catch {
         return true
       }
@@ -309,12 +402,26 @@ function validateFoundSession(raw: unknown, directory: string, sessionId: string
     throw internalError("get returned invalid session shape")
   }
   if (s.id !== sessionId) throw internalError("get returned invalid session shape")
-  if ("agent" in s && s.agent !== undefined && typeof s.agent !== "string") throw internalError("get returned invalid session shape")
-  if ("agent" in s && typeof s.agent === "string" && s.agent.includes("\0")) throw internalError("get returned invalid session shape")
+  if ("agent" in s && s.agent !== undefined && typeof s.agent !== "string")
+    throw internalError("get returned invalid session shape")
+  if ("agent" in s && typeof s.agent === "string" && s.agent.includes("\0"))
+    throw internalError("get returned invalid session shape")
   if ("summary" in s && s.summary !== undefined) validateSummary(s.summary)
   if ("revert" in s && s.revert !== undefined) validateRevert(s.revert)
   if ("model" in s && s.model !== undefined) validateModel(s.model)
-  const allowed = new Set(["id", "title", "parentID", "directory", "projectID", "createdAt", "updatedAt", "agent", "model", "summary", "revert"])
+  const allowed = new Set([
+    "id",
+    "title",
+    "parentID",
+    "directory",
+    "projectID",
+    "createdAt",
+    "updatedAt",
+    "agent",
+    "model",
+    "summary",
+    "revert",
+  ])
   for (const k of Object.keys(s)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
 }
 
@@ -322,7 +429,8 @@ function validateGetResult(res: unknown, directory: string, sessionId: string): 
   if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("get returned invalid shape")
   const r = res as Record<string, unknown>
   if (r.v !== OBSERVATION_VERSION) throw internalError("get returned invalid version")
-  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string)) throw internalError("get returned invalid status")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string))
+    throw internalError("get returned invalid status")
   const status = r.status as string
   if (status === "not_found" || status === "scope_mismatch") {
     const allowed = new Set(["v", "status"])
@@ -338,7 +446,8 @@ function validateGetResult(res: unknown, directory: string, sessionId: string): 
 
 // eslint-disable-next-line complexity
 function validateMessagesResult(res: unknown, limit: number): asserts res is ObservationMessagesResult {
-  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("messages returned invalid shape")
+  if (res === null || typeof res !== "object" || Array.isArray(res))
+    throw internalError("messages returned invalid shape")
   const r = res as Record<string, unknown>
   if (r.v !== OBSERVATION_VERSION) throw internalError("messages returned invalid version")
   if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string))
@@ -356,16 +465,19 @@ function validateMessagesResult(res: unknown, limit: number): asserts res is Obs
   const messages = r.messages as unknown[]
   try {
     for (const m of messages) {
-      if (m === null || typeof m !== "object" || Array.isArray(m)) throw new Error("messages returned invalid message shape")
+      if (m === null || typeof m !== "object" || Array.isArray(m))
+        throw new Error("messages returned invalid message shape")
       const rec = m as Record<string, unknown>
       const keys = Object.keys(rec)
-      if (keys.length !== 2 || !keys.includes("info") || !keys.includes("parts")) throw new Error("messages returned invalid message shape")
+      if (keys.length !== 2 || !keys.includes("info") || !keys.includes("parts"))
+        throw new Error("messages returned invalid message shape")
       validateInfo(rec.info)
       if (!Array.isArray(rec.parts)) throw new Error("messages returned invalid message shape")
       for (const p of rec.parts as unknown[]) validatePart(p)
     }
     const rawCursor = "nextCursor" in r ? r.nextCursor : undefined
-    if (rawCursor !== undefined && typeof rawCursor !== "string") throw new Error("messages returned invalid nextCursor")
+    if (rawCursor !== undefined && typeof rawCursor !== "string")
+      throw new Error("messages returned invalid nextCursor")
     if (rawCursor !== undefined) {
       const decoded = decodeMessageCursor(rawCursor)
       if (!isStrictCursorTime(decoded.time)) throw new Error("non-integer cursor time")
@@ -434,7 +546,12 @@ export class ObservationController {
         throw invalidParams(`invalid observation kind: ${String(e.kind)}`)
       }
     }
-    return { v: OBSERVATION_VERSION, cursor: res.cursor, rehydrate: false as const, entries: [...res.entries] as ObservationEntry[] }
+    return {
+      v: OBSERVATION_VERSION,
+      cursor: res.cursor,
+      rehydrate: false as const,
+      entries: [...res.entries] as ObservationEntry[],
+    }
   }
 
   private async handleAck(params: unknown): Promise<AckResult> {
@@ -446,7 +563,12 @@ export class ObservationController {
 
   private async handleSubscribe(params: unknown): Promise<SubscribeResult> {
     validateVersion(params)
-    if (params !== null && typeof params === "object" && !Array.isArray(params) && "cursor" in (params as Record<string, unknown>)) {
+    if (
+      params !== null &&
+      typeof params === "object" &&
+      !Array.isArray(params) &&
+      "cursor" in (params as Record<string, unknown>)
+    ) {
       extractCursor(params, true)
     } else if (params !== undefined && params !== null && typeof params !== "object") {
       throw invalidParams("subscribe params must be object if provided")
@@ -539,7 +661,8 @@ export class ObservationController {
   }
 
   private async handleGet(params: unknown): Promise<ObservationGetResult> {
-    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    if (params === null || typeof params !== "object" || Array.isArray(params))
+      throw invalidParams("params must be object")
     const o = params as Record<string, unknown>
     const allowed = new Set(["v", "directory", "sessionId"])
     for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
@@ -562,7 +685,8 @@ export class ObservationController {
   }
 
   private async handleMessages(params: unknown): Promise<ObservationMessagesResult> {
-    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    if (params === null || typeof params !== "object" || Array.isArray(params))
+      throw invalidParams("params must be object")
     const o = params as Record<string, unknown>
     const allowed = new Set(["v", "directory", "sessionId", "limit", "cursor"])
     for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
@@ -574,7 +698,8 @@ export class ObservationController {
     const sessionId = parseSessionId(o.sessionId)
     const limit = (() => {
       const raw = o.limit
-      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 100) throw invalidParams("limit must be integer 1..100")
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 100)
+        throw invalidParams("limit must be integer 1..100")
       return raw as number
     })()
     const msgCursor: string | undefined = (() => {
@@ -602,7 +727,11 @@ export class ObservationController {
     return res
   }
 
-  notifyChanged(peer: { notify: (method: string, params?: unknown) => void }, entries: ReadonlyArray<ObservationEntry>, cursor: number): void {
+  notifyChanged(
+    peer: { notify: (method: string, params?: unknown) => void },
+    entries: ReadonlyArray<ObservationEntry>,
+    cursor: number,
+  ): void {
     for (const e of entries) {
       if (!isValidKind((e as ObservationEntry).kind)) {
         throw invalidParams(`invalid observation kind: ${String((e as ObservationEntry).kind)}`)

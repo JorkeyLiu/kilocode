@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { PrivateWorkerHost, type HostOptions } from "./host"
-import { OBSERVATION_METHODS, OBSERVATION_VERSION } from "./observation"
+import { OBSERVATION_METHODS, OBSERVATION_VERSION, assertObservationCapable } from "./observation"
 import type { ObservationCursorStore } from "./observation-cursor-store"
 import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 
@@ -466,6 +466,17 @@ export class PrivateObservationService implements Disposable {
     try {
       // Suppressed: host.start internal timeout dispose must not invoke lifecycle hook; external close after success still fires because suppress is scoped to this await.
       const res = await this.runSuppressedAsync(() => host.start())
+      try {
+        assertObservationCapable(res)
+      } catch (e) {
+        // Fail-closed: required capability missing/illegal/unknown version => host not available, epoch unchanged
+        this.runSuppressed(() => {
+          try {
+            host.dispose()
+          } catch {}
+        })
+        throw e
+      }
       this.epoch += 1
       return res
     } catch (e) {

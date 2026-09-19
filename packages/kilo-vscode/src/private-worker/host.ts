@@ -5,6 +5,7 @@ import { StderrTail } from "../services/cli-backend/stderr-tail"
 import * as path from "path"
 import * as fs from "fs"
 import { isAbsolute } from "path"
+import { assertObservationCapable } from "./observation"
 
 export function isStandaloneEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.KILO_PRIVATE_WORKER_STANDALONE === "1" && typeof env.KILO_DB === "string" && isAbsolute(env.KILO_DB)
@@ -134,6 +135,17 @@ export class PrivateWorkerHost {
     try {
       const result = await Promise.race([init, timeout])
       if (timer) clearTimeout(timer)
+      // Additive observation capability validation (P4.2b): when standalone gate is enabled,
+      // require explicit versioned observation capabilities; missing/duplicate/illegal/unknown => fail-closed
+      const effectiveEnv = { ...process.env, ...this.opts.env } as NodeJS.ProcessEnv
+      if (isStandaloneEnabled(effectiveEnv)) {
+        try {
+          assertObservationCapable(result)
+        } catch (e) {
+          this.dispose()
+          throw e
+        }
+      }
       return result
     } catch (e) {
       if (timer) clearTimeout(timer)
@@ -232,7 +244,13 @@ export class PrivateWorkerHost {
   }
 
   /** Fixture-only: close the underlying JsonRpcPeer transport without killing the child process. */
-  closePeerTransport(): { closed: boolean; aliveBefore: boolean; aliveAfter: boolean; beforePid?: number; afterPid?: number } {
+  closePeerTransport(): {
+    closed: boolean
+    aliveBefore: boolean
+    aliveAfter: boolean
+    beforePid?: number
+    afterPid?: number
+  } {
     const beforePid = this.getPid()
     const aliveBefore = this.isAlive()
     if (!this.peer) return { closed: false, aliveBefore, aliveAfter: aliveBefore, beforePid, afterPid: beforePid }

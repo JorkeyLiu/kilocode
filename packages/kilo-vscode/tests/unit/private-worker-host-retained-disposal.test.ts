@@ -4,10 +4,12 @@ import * as fs from "fs"
 import * as os from "os"
 import { PrivateWorkerHost } from "../../src/private-worker/host"
 import { PrivateObservationService } from "../../src/private-worker/private-observation-service"
+import { buildObservationCapabilities } from "../../src/private-worker/observation"
 
 function makeHelperScript(): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-host-retained-"))
   const file = path.join(tmp, "helper-ignore-sigterm.mjs")
+  const caps = JSON.stringify(buildObservationCapabilities())
   // Minimal JSON-RPC handler that ignores SIGTERM and responds to initialize/ping
   const code = `
 process.on('SIGTERM', () => {});
@@ -28,7 +30,7 @@ process.stdin.on('data', (chunk) => {
     let msg;
     try { msg = JSON.parse(body); } catch { buf = buf.subarray(total); continue; }
     if (msg.method === 'initialize') {
-      const resp = { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "1.0", serverInfo: { name: "test-helper", version: "1" }, capabilities: {} } };
+      const resp = { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "1.0", serverInfo: { name: "test-helper", version: "1" }, capabilities: ${caps} } };
       const json = JSON.stringify(resp);
       const out = 'Content-Length: ' + Buffer.byteLength(json) + '\\r\\n\\r\\n' + json;
       process.stdout.write(out);
@@ -55,6 +57,7 @@ if (process.stdin.isTTY === false) process.stdin.resume();
 function makeGracefulHelperScript(): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-host-graceful-"))
   const file = path.join(tmp, "helper-graceful.mjs")
+  const caps = JSON.stringify(buildObservationCapabilities())
   const code = `
 process.on('SIGTERM', () => { process.exit(0); });
 process.on('SIGINT', () => { process.exit(0); });
@@ -74,7 +77,7 @@ process.stdin.on('data', (chunk) => {
     let msg;
     try { msg = JSON.parse(body); } catch { buf = buf.subarray(total); continue; }
     if (msg.method === 'initialize') {
-      const resp = { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "1.0", serverInfo: { name: "test-helper", version: "1" }, capabilities: {} } };
+      const resp = { jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "1.0", serverInfo: { name: "test-helper", version: "1" }, capabilities: ${caps} } };
       const json = JSON.stringify(resp);
       const out = 'Content-Length: ' + Buffer.byteLength(json) + '\\r\\n\\r\\n' + json;
       process.stdout.write(out);
@@ -285,7 +288,10 @@ describe("Host retained lastProc disposal after shutdown timeout (real child ign
       try {
         fs.rmSync(tmp, { recursive: true, force: true })
       } catch {}
-      const lease = path.join(path.dirname(path.dirname(dbPath)), `.kilo-${path.basename(path.dirname(dbPath))}.lease.json`)
+      const lease = path.join(
+        path.dirname(path.dirname(dbPath)),
+        `.kilo-${path.basename(path.dirname(dbPath))}.lease.json`,
+      )
       try {
         fs.rmSync(lease, { force: true })
       } catch {}
@@ -515,7 +521,10 @@ describe("Failed initialization retains live child until exact exit (no replacem
       try {
         fs.rmSync(tmp, { recursive: true, force: true })
       } catch {}
-      const lease = path.join(path.dirname(path.dirname(dbPath)), `.kilo-${path.basename(path.dirname(dbPath))}.lease.json`)
+      const lease = path.join(
+        path.dirname(path.dirname(dbPath)),
+        `.kilo-${path.basename(path.dirname(dbPath))}.lease.json`,
+      )
       try {
         fs.rmSync(lease, { force: true })
       } catch {}

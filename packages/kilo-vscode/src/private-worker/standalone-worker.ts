@@ -9,7 +9,7 @@ import { createSessionMessagesDeps } from "./session-messages-adapter"
 import { startWorker } from "./worker"
 import type { ObservationDeps } from "./observation"
 import { JsonRpcPeer } from "./peer"
-import { ObservationController } from "./observation"
+import { ObservationController, buildObservationCapabilities } from "./observation"
 import { ErrorCode } from "./json-rpc"
 import { OBSERVATION_VERSION } from "./observation"
 
@@ -23,14 +23,22 @@ import { OBSERVATION_VERSION } from "./observation"
  */
 
 export function isStandaloneEnabled(): boolean {
-  return process.env.KILO_PRIVATE_WORKER_STANDALONE === "1" && typeof process.env.KILO_DB === "string" && isAbsolute(process.env.KILO_DB)
+  return (
+    process.env.KILO_PRIVATE_WORKER_STANDALONE === "1" &&
+    typeof process.env.KILO_DB === "string" &&
+    isAbsolute(process.env.KILO_DB)
+  )
 }
 
 export function isTestBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.KILO_PRIVATE_WORKER_TEST_BRIDGE === "1"
 }
 
-export async function createStandaloneDeps(): Promise<{ deps: ObservationDeps; dispose: () => Promise<void>; db: Database.Interface["db"] }> {
+export async function createStandaloneDeps(): Promise<{
+  deps: ObservationDeps
+  dispose: () => Promise<void>
+  db: Database.Interface["db"]
+}> {
   const file = process.env.KILO_DB!
   if (!isAbsolute(file)) throw new Error(`KILO_DB must be absolute for standalone worker: ${file}`)
   const layer = Database.layerNoLease(file)
@@ -80,7 +88,10 @@ function detachProcessSignals(sigInt: () => void, sigTerm: () => void): void {
 
 function detachStdin(onEnd: () => void): void {
   safe(() => {
-    const r = process.stdin as unknown as { off?: (e: string, h: () => void) => void; removeListener?: (e: string, h: () => void) => void }
+    const r = process.stdin as unknown as {
+      off?: (e: string, h: () => void) => void
+      removeListener?: (e: string, h: () => void) => void
+    }
     safeOff(r, "end", onEnd)
     safeOff(r, "close", onEnd)
     safeOff(r, "error", onEnd)
@@ -164,22 +175,52 @@ if (isMain) {
             onRequest: async (method, params) => {
               if (method === "test/mutateChangefeed") {
                 const p = (params ?? {}) as Record<string, unknown>
-                const session_id = typeof p.session_id === "string" ? p.session_id : `ses_${Date.now()}_${Math.floor(Math.random() * 1000)}`
-                const revision = typeof p.revision === "number" && Number.isInteger(p.revision) && p.revision >= 0 ? p.revision : 1
+                const session_id =
+                  typeof p.session_id === "string"
+                    ? p.session_id
+                    : `ses_${Date.now()}_${Math.floor(Math.random() * 1000)}`
+                const revision =
+                  typeof p.revision === "number" && Number.isInteger(p.revision) && p.revision >= 0 ? p.revision : 1
                 const kindRaw = typeof p.kind === "string" ? p.kind : "changed"
                 const kind = kindRaw === "deleted" || kindRaw === "changed" ? kindRaw : "changed"
                 const time = typeof p.time === "number" && Number.isInteger(p.time) ? p.time : Date.now()
                 const capsRaw = p.caps as unknown
                 let entry: Changefeed.Entry
-                if (capsRaw && typeof capsRaw === "object" && !Array.isArray(capsRaw) && ("maxRows" in (capsRaw as Record<string, unknown>) || "maxBytes" in (capsRaw as Record<string, unknown>))) {
+                if (
+                  capsRaw &&
+                  typeof capsRaw === "object" &&
+                  !Array.isArray(capsRaw) &&
+                  ("maxRows" in (capsRaw as Record<string, unknown>) ||
+                    "maxBytes" in (capsRaw as Record<string, unknown>))
+                ) {
                   const caps = capsRaw as { maxRows?: number; maxBytes?: number }
-                  const maxRows = typeof caps.maxRows === "number" && Number.isInteger(caps.maxRows) && caps.maxRows > 0 ? caps.maxRows : Changefeed.MAX_ROWS
-                  const maxBytes = typeof caps.maxBytes === "number" && Number.isInteger(caps.maxBytes) && caps.maxBytes > 0 ? caps.maxBytes : Changefeed.MAX_BYTES
-                  entry = await Effect.runPromise(Changefeed.appendWithCaps(db, { session_id, revision, kind: kind as Changefeed.Kind, time }, { maxRows, maxBytes }))
+                  const maxRows =
+                    typeof caps.maxRows === "number" && Number.isInteger(caps.maxRows) && caps.maxRows > 0
+                      ? caps.maxRows
+                      : Changefeed.MAX_ROWS
+                  const maxBytes =
+                    typeof caps.maxBytes === "number" && Number.isInteger(caps.maxBytes) && caps.maxBytes > 0
+                      ? caps.maxBytes
+                      : Changefeed.MAX_BYTES
+                  entry = await Effect.runPromise(
+                    Changefeed.appendWithCaps(
+                      db,
+                      { session_id, revision, kind: kind as Changefeed.Kind, time },
+                      { maxRows, maxBytes },
+                    ),
+                  )
                 } else {
-                  entry = await Effect.runPromise(Changefeed.append(db, { session_id, revision, kind: kind as Changefeed.Kind, time }))
+                  entry = await Effect.runPromise(
+                    Changefeed.append(db, { session_id, revision, kind: kind as Changefeed.Kind, time }),
+                  )
                 }
-                const obs = { seq: entry.seq, session_id: entry.session_id, revision: entry.revision, kind: entry.kind, time: entry.time }
+                const obs = {
+                  seq: entry.seq,
+                  session_id: entry.session_id,
+                  revision: entry.revision,
+                  kind: entry.kind,
+                  time: entry.time,
+                }
                 if (peerRef) {
                   try {
                     ctrl.notifyChanged(peerRef, [obs as unknown as import("./observation").ObservationEntry], entry.seq)
@@ -189,7 +230,11 @@ if (isMain) {
               }
               if (method.startsWith("observation/")) return ctrl.handle(method, params)
               if (method === "initialize") {
-                return { protocolVersion: "1.0", serverInfo: { name: "kilo-private-worker", version: "7.4.11" }, capabilities: {} }
+                return {
+                  protocolVersion: "1.0",
+                  serverInfo: { name: "kilo-private-worker", version: "7.4.11" },
+                  capabilities: buildObservationCapabilities(),
+                }
               }
               if (method === "ping") return { pong: true }
               if (method === "echo") return params
