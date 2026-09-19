@@ -11,6 +11,7 @@ import { ensureFfmpegForTarget } from "./ffmpeg-helper"
 import {
   VSIX_TARGET_CONFIGS,
   normalizeTarget,
+  serveBinaryFor,
   validateStagedBinDir,
   validateVsixFile,
 } from "./artifact-validation"
@@ -84,19 +85,27 @@ for (const config of targets) {
 
   const sourceBinary = join(cliDistDir, config.cliDir, "bin", config.binary)
   const targetBinary = join(binDir, config.binary)
+  const sourceServe = join(cliDistDir, config.cliDir, "bin", serveBinaryFor(config))
+  const targetServe = join(binDir, serveBinaryFor(config))
 
   if (!existsSync(sourceBinary)) {
     throw new Error(`CLI binary not found at ${sourceBinary}`)
   }
+  if (!existsSync(sourceServe)) {
+    throw new Error(`Serve CLI binary not found at ${sourceServe}`)
+  }
 
   console.log(`  📥 Copying binary from ${config.cliDir}/bin/${config.binary}...`)
   await $`cp ${sourceBinary} ${targetBinary}`
+  console.log(`  📥 Copying serve binary from ${config.cliDir}/bin/${serveBinaryFor(config)}...`)
+  await $`cp ${sourceServe} ${targetServe}`
   await copyTreeSitterResources(sourceBinary, targetBinary)
   await copySandboxResources(sourceBinary, targetBinary)
   await copyKiloSandboxWorker(sourceBinary, targetBinary)
 
   if (config.binary !== "kilo.exe") {
     chmodSync(targetBinary, 0o755)
+    chmodSync(targetServe, 0o755)
   }
 
   console.log(`  ✅ Binary ready at ${targetBinary}`)

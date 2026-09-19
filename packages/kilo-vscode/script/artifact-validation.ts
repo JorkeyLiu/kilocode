@@ -49,6 +49,11 @@ export const VSIX_TARGET_CONFIGS: readonly TargetConfig[] = [
   { target: "win32-arm64", cliDir: "@kilocode/cli-windows-arm64", binary: "kilo.exe" },
 ]
 
+/** Serve-only backend binary staged next to the full CLI (`kilo-serve` / `kilo-serve.exe`). */
+export function serveBinaryFor(cfg: Pick<TargetConfig, "binary">): string {
+  return cfg.binary === "kilo.exe" ? "kilo-serve.exe" : "kilo-serve"
+}
+
 export class ValidationError extends Error {
   constructor(
     readonly code: string,
@@ -453,11 +458,16 @@ export function validateStagedBinDir(binDir: string, target: string): void {
   if (!existsSync(binary)) {
     throw new ValidationError("missing-binary", `CLI binary not found at ${binary}`)
   }
+  const serve = join(binDir, serveBinaryFor(cfg))
+  if (!existsSync(serve)) {
+    throw new ValidationError("missing-binary", `Serve CLI binary not found at ${serve}`)
+  }
   const marker = join(binDir, ".cli-version")
   if (existsSync(marker)) {
     throw new ValidationError("marker", `Source build marker ${marker} must not be staged for production`)
   }
   validateNativeBinaryFile(binary, target)
+  validateNativeBinaryFile(serve, target)
   for (const file of requiredStagedFiles(target)) {
     const staged = join(binDir, file)
     if (!existsSync(staged)) {
@@ -642,6 +652,7 @@ export function requiredVsixEntries(target: string): string[] {
     "extension/package.json",
     "extension/dist/extension.js",
     `extension/bin/${cfg.binary}`,
+    `extension/bin/${serveBinaryFor(cfg)}`,
     "extension/bin/tree-sitter/tree-sitter.wasm",
     "extension/bin/kilo-sandbox-mutation-worker.js",
   ]
@@ -674,11 +685,12 @@ export function validateVsixBuffer(buf: Uint8Array, target: string): void {
     )
   }
   const binaryName = `extension/bin/${cfg.binary}`
+  const serveName = `extension/bin/${serveBinaryFor(cfg)}`
   for (const name of requiredVsixEntries(target)) {
     const zipEntry = entries.find((e) => e.name === name)
     if (!zipEntry) throw new ValidationError("missing-entry", `VSIX is missing required entry ${name}`)
     const content = readZipEntry(buf, zipEntry)
-    if (name === binaryName) {
+    if (name === binaryName || name === serveName) {
       validateNativeBinary(content, target)
     }
   }

@@ -90,22 +90,42 @@ export function resolveManagedServerEnv(env: NodeJS.ProcessEnv, canonicalOverrid
 /**
  * Resolve the CLI binary path to spawn.
  *
- * Production always returns the bundled binary under the extension dir. The
- * benchmark-only `KILO_P0_BACKEND_CLI` env override (opt-in KILO_P0_* flag,
- * same trust level as KILO_P0_PERF; never set in production) is honored ONLY
- * when explicitly set: the P0 harness copies `bin/kilo` to a run-owned temp
- * snapshot path before the campaign and pins it here so the non-owned dev
- * watcher (script/watch-cli.ts) cannot change the measured binary
- * mid-campaign. When the override is absent or empty the bundled fallback is
- * unchanged — disabled product behavior is identical.
+ * Production prefers the lightweight serve-only `bin/kilo-serve` backend and
+ * falls back to the full `bin/kilo` binary when the serve entry is absent
+ * (dev source-wrapper mode, older bundles). Both entries accept the same
+ * `serve --port 0` contract, so spawn args are unchanged — only the binary
+ * path varies. The benchmark-only `KILO_P0_BACKEND_CLI` env override (opt-in
+ * KILO_P0_* flag, same trust level as KILO_P0_PERF; never set in production)
+ * is honored ONLY when explicitly set: the P0 harness copies the backend to
+ * a run-owned temp snapshot path before the campaign and pins it here so the
+ * non-owned dev watcher (script/watch-cli.ts) cannot change the measured
+ * binary mid-campaign. When the override is absent or empty the bundled
+ * fallback is unchanged — disabled product behavior is identical.
  */
+export function resolveServeBinaryName(platform: string = process.platform): string {
+  return platform === "win32" ? "kilo-serve.exe" : "kilo-serve"
+}
+
+export function resolveFullBinaryName(platform: string = process.platform): string {
+  return platform === "win32" ? "kilo.exe" : "kilo"
+}
+
 export function resolveCliPath(extensionPath: string, env?: NodeJS.ProcessEnv): string {
   const override = env?.KILO_P0_BACKEND_CLI
   if (override && override.trim() !== "") {
     console.log("[Kilo New] ServerManager: 📦 Using benchmark CLI snapshot:", override)
     return override
   }
-  const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
+  const serve = path.join(extensionPath, "bin", resolveServeBinaryName())
+  try {
+    if (fs.existsSync(serve)) {
+      console.log("[Kilo New] ServerManager: 📦 Using serve-only CLI:", serve)
+      return serve
+    }
+  } catch {
+    // fail-closed to the full CLI fallback below
+  }
+  const binName = resolveFullBinaryName()
   return path.join(extensionPath, "bin", binName)
 }
 

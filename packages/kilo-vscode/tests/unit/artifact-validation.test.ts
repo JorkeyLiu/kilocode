@@ -28,6 +28,7 @@ import {
   readZipEntry,
   requiredStagedFiles,
   requiredVsixEntries,
+  serveBinaryFor,
   targetConfig,
   ValidationError,
   validateNativeBinary,
@@ -462,6 +463,7 @@ describe("validateStagedBinDir", () => {
     const dir = path.join(root, target)
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
     fs.writeFileSync(path.join(dir, cfg.binary), binary)
+    fs.writeFileSync(path.join(dir, serveBinaryFor(cfg)), binary)
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
     fs.writeFileSync(path.join(dir, "ffmpeg"), "ffmpeg")
@@ -521,6 +523,7 @@ describe("validateStagedBinDir", () => {
     const dir = path.join(root, "partial")
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, cfg.binary), machoThin(CPU_ARM64))
+    fs.writeFileSync(path.join(dir, serveBinaryFor(cfg)), machoThin(CPU_ARM64))
     // no tree-sitter.wasm, no worker, no ffmpeg
     expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "missing-staged")
   })
@@ -530,6 +533,7 @@ describe("validateStagedBinDir", () => {
     const dir = path.join(root, "win32-arm64")
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
     fs.writeFileSync(path.join(dir, cfg.binary), pe(0xaa64))
+    fs.writeFileSync(path.join(dir, serveBinaryFor(cfg)), pe(0xaa64))
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
     validateStagedBinDir(dir, "win32-arm64")
@@ -539,10 +543,22 @@ describe("validateStagedBinDir", () => {
     ])
   })
 
+  it("rejects a staged dir missing the serve binary", () => {
+    const cfg = targetConfig("darwin-arm64")
+    const dir = path.join(root, "no-serve")
+    fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
+    fs.writeFileSync(path.join(dir, cfg.binary), machoThin(CPU_ARM64))
+    fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
+    fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
+    fs.writeFileSync(path.join(dir, "ffmpeg"), "ffmpeg")
+    expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "missing-binary")
+  })
+
   it("requires ffmpeg.exe for win32-x64", () => {
     const dir = path.join(root, "win32-x64-no-ffmpeg")
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
     fs.writeFileSync(path.join(dir, "kilo.exe"), pe(0x8664))
+    fs.writeFileSync(path.join(dir, "kilo-serve.exe"), pe(0x8664))
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
     expectValidation(() => validateStagedBinDir(dir, "win32-x64"), "missing-staged")
@@ -626,6 +642,7 @@ const VSIX_COMMON = (kilo: Buffer): ZipSourceEntry[] => [
   { name: "extension/package.json", content: Buffer.from('{"name":"kilo-code"}') },
   { name: "extension/dist/extension.js", content: Buffer.from("module.exports = {}") },
   { name: "extension/bin/kilo", content: kilo },
+  { name: "extension/bin/kilo-serve", content: kilo },
   { name: "extension/bin/tree-sitter/tree-sitter.wasm", content: Buffer.from("wasm") },
   { name: "extension/bin/kilo-sandbox-mutation-worker.js", content: Buffer.from("worker") },
   { name: "extension/bin/ffmpeg", content: Buffer.from("ffmpeg") },
@@ -740,6 +757,7 @@ describe("validateVsixBuffer", () => {
     const cfg = targetConfig("win32-arm64")
     const entries = VSIX_COMMON(pe(0xaa64)).filter((e) => e.name !== "extension/bin/ffmpeg")
     entries.find((e) => e.name === "extension/bin/kilo")!.name = `extension/bin/${cfg.binary}`
+    entries.find((e) => e.name === "extension/bin/kilo-serve")!.name = `extension/bin/${serveBinaryFor(cfg)}`
     validateVsixBuffer(makeZip(entries), "win32-arm64")
   })
 
@@ -790,13 +808,14 @@ describe("validateVsixBuffer", () => {
   it("rejects a required entry whose data exceeds the archive bounds", () => {
     const entries = VSIX_COMMON(machoThin(CPU_ARM64))
     const pkg = entries.find((e) => e.name === "extension/package.json")!
-    pkg.compressedSize = pkg.content.length + 1000
+    pkg.compressedSize = pkg.content.length + 100000
     expectValidation(() => validateVsixBuffer(makeZip(entries), "darwin-arm64"), "zip")
   })
 
   it("requires the documented VSIX entries", () => {
     const want = requiredVsixEntries("darwin-arm64")
     expect(want).toContain("extension/bin/kilo")
+    expect(want).toContain("extension/bin/kilo-serve")
     expect(want).toContain("extension/bin/tree-sitter/tree-sitter.wasm")
     expect(want).toContain("extension/bin/kilo-sandbox-mutation-worker.js")
     expect(want).toContain("extension/dist/extension.js")
@@ -804,6 +823,11 @@ describe("validateVsixBuffer", () => {
     const entries = VSIX_COMMON(machoThin(CPU_ARM64)).filter(
       (e) => e.name !== "extension/bin/tree-sitter/tree-sitter.wasm",
     )
+    expectValidation(() => validateVsixBuffer(makeZip(entries), "darwin-arm64"), "missing-entry")
+  })
+
+  it("rejects an archive missing the serve binary", () => {
+    const entries = VSIX_COMMON(machoThin(CPU_ARM64)).filter((e) => e.name !== "extension/bin/kilo-serve")
     expectValidation(() => validateVsixBuffer(makeZip(entries), "darwin-arm64"), "missing-entry")
   })
 

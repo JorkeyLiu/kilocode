@@ -16,7 +16,12 @@ const packagesDir = join(kiloVscodeDir, "..")
 const opencodeDir = join(packagesDir, "opencode")
 const opencodeSrcDir = join(opencodeDir, "src")
 const targetBinDir = join(kiloVscodeDir, "bin")
-const targetBinPath = join(targetBinDir, "kilo")
+// Platform naming mirrors script/local-bin.ts, server-manager.ts, and
+// script/artifact-validation.ts: kilo(.exe) + kilo-serve(.exe).
+const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
+const serveName = binName === "kilo.exe" ? "kilo-serve.exe" : "kilo-serve"
+const targetBinPath = join(targetBinDir, binName)
+const targetServePath = join(targetBinDir, serveName)
 
 let building = false
 let pending = false
@@ -26,8 +31,17 @@ function log(msg: string) {
   console.log(`[watch-cli] ${msg}`)
 }
 
+function platformTag(): string {
+  const os = process.platform === "win32" ? "windows" : process.platform
+  return `@kilocode/cli-${os}-${process.arch}`
+}
+
 function sourceBinaryPath(): string {
-  return join(opencodeDir, "dist", `@kilocode/cli-${process.platform}-${process.arch}`, "bin", "kilo")
+  return join(opencodeDir, "dist", platformTag(), "bin", binName)
+}
+
+function sourceServePath(): string {
+  return join(opencodeDir, "dist", platformTag(), "bin", serveName)
 }
 
 async function rebuild() {
@@ -60,10 +74,19 @@ async function rebuild() {
     await $`cp ${source} ${targetBinPath}`
     await copyTreeSitterResources(source, targetBinPath)
     await copySandboxResources(source, targetBinPath)
-    chmodSync(targetBinPath, 0o755)
+    if (binName !== "kilo.exe") chmodSync(targetBinPath, 0o755)
+
+    const serve = sourceServePath()
+    if (await Bun.file(serve).exists()) {
+      await $`cp ${serve} ${targetServePath}`
+      if (serveName !== "kilo-serve.exe") chmodSync(targetServePath, 0o755)
+      log(`Serve binary updated: ${relative(packagesDir, serve)} -> bin/${serveName}`)
+    } else {
+      log(`Serve binary not found at ${relative(packagesDir, serve)}; keeping full-CLI fallback.`)
+    }
 
     const elapsed = ((performance.now() - start) / 1000).toFixed(1)
-    log(`Binary updated (${elapsed}s): ${relative(packagesDir, source)} -> bin/kilo`)
+    log(`Binary updated (${elapsed}s): ${relative(packagesDir, source)} -> bin/${binName}`)
   } catch (err) {
     log(`ERROR: ${err instanceof Error ? err.message : String(err)}`)
   } finally {

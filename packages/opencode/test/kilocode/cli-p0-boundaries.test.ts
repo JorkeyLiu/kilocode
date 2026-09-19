@@ -1,12 +1,12 @@
 /**
  * Focused boundary/order tests for the CLI bootstrap P0 instrumentation
- * (`src/index.ts` + `src/kilocode/cli/setup.ts`).
+ * (`src/index.ts` + `src/kilocode/cli/bootstrap.ts` + `src/serve-entry.ts`).
  *
  * The test inspects source text only — it never imports the CLI entry or
  * executes bootstrap logic, so it cannot copy business logic. It proves:
  * - every required stage exists once as a `P0Perf.span("<snake_case>")` site,
  * - emit sites are ordered around the unchanged business awaits (boundary),
- * - telemetry identity runs in the background under explicit KiloCli
+ * - telemetry identity runs in the background under explicit KiloBootstrap
  *   ownership (no awaited network before the handler, no detached work).
  */
 
@@ -16,7 +16,8 @@ import fs from "fs"
 
 const SRC = path.join(import.meta.dir, "../../src")
 const INDEX = fs.readFileSync(path.join(SRC, "index.ts"), "utf8")
-const SETUP = fs.readFileSync(path.join(SRC, "kilocode/cli/setup.ts"), "utf8")
+const SETUP = fs.readFileSync(path.join(SRC, "kilocode/cli/bootstrap.ts"), "utf8")
+const SERVE = fs.readFileSync(path.join(SRC, "serve-entry.ts"), "utf8")
 
 function indexOf(hay: string, needle: string): number {
   const at = hay.indexOf(needle)
@@ -59,6 +60,30 @@ describe("cli P0 instrumentation boundaries", () => {
     expect(INDEX).toContain("await KiloCli.bootstrap()")
     expect(INDEX).toContain("await KiloCli.shutdown()")
     expect(INDEX).toContain("await cli.parse()")
+  })
+
+  it("serve-entry.ts mirrors the serve-required middleware without the full command tree", () => {
+    expect(SERVE).toContain('P0Perf.span("cli_construct")')
+    expect(SERVE).toContain('P0Perf.span("cli_parse")')
+    expect(SERVE).toContain('P0Perf.span("log_init")')
+    expect(SERVE).toContain('P0Perf.span("heap_start")')
+    expect(SERVE).toContain('P0Perf.span("cli_bootstrap")')
+    expect(SERVE).toContain("await KiloBootstrap.runner()")
+    expect(SERVE).toContain("await KiloBootstrap.bootstrap()")
+    expect(SERVE).toContain("await KiloBootstrap.shutdown()")
+    expect(SERVE).toContain("ServeCommand")
+    expect(SERVE).not.toContain("kilocode/cli/setup")
+    expect(SERVE).not.toContain("RunCommand")
+    expect(SERVE).not.toContain("TuiThreadCommand")
+  })
+
+  it("serve-entry.ts keeps index.ts fatal diagnostic fidelity (no string-only narrowing)", () => {
+    for (const src of [INDEX, SERVE]) {
+      expect(src).toContain("let data: Record<string, any>")
+      expect(src).toContain("data[key] = value")
+    }
+    expect(SERVE).not.toContain("Record<string, string")
+    expect(SERVE).not.toContain("String(entry)")
   })
 
   it("setup.ts distinguishes runner and bootstrap sub-stages in order", () => {

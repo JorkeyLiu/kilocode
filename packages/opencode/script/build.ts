@@ -274,6 +274,59 @@ for (const item of targets) {
     },
   })
 
+  // kilocode_change start - lightweight serve-only backend for VS Code cold
+  // start. Static graph is serve-entry.ts + ServeCommand + shared bootstrap
+  // only: no full yargs command tree, no TUI worker. Same defines and
+  // sandbox/tree-sitter sibling layout as the full binary so serve semantics
+  // (flags, fd carrier, watchdog, shutdown) stay identical.
+  await Bun.build({
+    conditions: ["bun", "node"],
+    tsconfig: "./tsconfig.json",
+    plugins: [
+      {
+        name: "jsonc-parser-esm",
+        setup(build) {
+          build.onResolve({ filter: /^jsonc-parser$/ }, () => {
+            const pkg = require.resolve("jsonc-parser/package.json")
+            return { path: path.join(path.dirname(pkg), "lib", "esm", "main.js") }
+          })
+        },
+      },
+    ],
+    sourcemap: Script.release ? "none" : "external",
+    external: ["node-gyp"],
+    format: "esm",
+    minify: true,
+    splitting: false,
+    compile: {
+      autoloadBunfig: false,
+      autoloadDotenv: false,
+      autoloadTsconfig: true,
+      autoloadPackageJson: true,
+      target: name.replace(pkg.name, "bun") as any,
+      outfile: `dist/${name}/bin/kilo-serve`,
+      execArgv: [`--user-agent=kilo/${Script.version}`, "--use-system-ca", "--"],
+      windows: {},
+    },
+    files: {},
+    entrypoints: ["./src/serve-entry.ts", sessionExportWorkerPath],
+    define: {
+      KILO_VERSION: `'${Script.version}'`,
+      OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
+      KILO_WORKER_PATH: workerPath,
+      KILO_SESSION_EXPORT_WORKER_PATH: sessionExportWorkerPath,
+      KILO_SANDBOX_MUTATION_WORKER_PATH: JSON.stringify(KiloSandboxWorker.filename),
+      KILO_SANDBOX_NETWORK_RELAY_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.relay) : "undefined",
+      KILO_SANDBOX_SECCOMP_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.seccomp) : "undefined",
+      KILO_CHANNEL: `'${Script.channel}'`,
+      KILO_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
+      KILO_BWRAP_SHA256: bwrap ? `'${bwrap}'` : "undefined",
+      KILO_BUILD_KIND: Script.release ? `'release'` : `'source'`,
+      ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
+    },
+  })
+  // kilocode_change end
+
   // kilocode_change start
   await copyTreeSitterWasms(path.resolve(dir, `dist/${name}/bin`))
   await KiloSandboxWorker.copy(kiloSandboxWorker, path.resolve(dir, `dist/${name}/bin`))
@@ -297,6 +350,14 @@ for (const item of targets) {
       } catch {
         console.warn(`patchelf not available, skipping interpreter fix for ${name}`)
       }
+      // kilocode_change start - same interpreter for the serve-only binary
+      try {
+        await $`patchelf --set-interpreter ${interpreter} dist/${name}/bin/kilo-serve`
+        console.log(`patched interpreter for ${name}/kilo-serve -> ${interpreter}`)
+      } catch {
+        console.warn(`patchelf not available, skipping interpreter fix for ${name}/kilo-serve`)
+      }
+      // kilocode_change end
     }
   }
   // kilocode_change end
@@ -311,6 +372,12 @@ for (const item of targets) {
       // kilocode_change start
       await KiloSandboxWorker.smoke(binaryPath)
       console.log("Kilo sandbox mutation worker smoke test passed")
+      const servePath = `dist/${name}/bin/kilo-serve`
+      const serveVersion = await $`${servePath} --version`.text()
+      console.log(`Serve smoke test passed: ${serveVersion.trim()}`)
+      const serveHelp = await $`${servePath} serve --help`.nothrow().quiet()
+      if (serveHelp.exitCode !== 0) throw new Error("kilo-serve serve --help exited non-zero")
+      console.log("Serve help smoke test passed")
       // kilocode_change end
       // kilocode_change start
     } catch (e) {

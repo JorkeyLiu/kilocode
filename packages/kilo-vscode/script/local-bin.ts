@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { $ } from "bun"
 import { join, relative, dirname, basename } from "node:path"
-import { chmodSync, statSync, rmSync, readdirSync, existsSync } from "node:fs"
+import { chmodSync, statSync, rmSync, readdirSync, existsSync, readFileSync } from "node:fs"
 import {
   copyKiloSandboxWorker,
   copySandboxResources,
@@ -38,7 +38,9 @@ const sandboxDir = join(packagesDir, "kilo-sandbox")
 
 const targetBinDir = join(kiloVscodeDir, "bin")
 const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
+const serveName = binName === "kilo.exe" ? "kilo-serve.exe" : "kilo-serve"
 const targetBinPath = join(targetBinDir, binName)
+const targetServePath = join(targetBinDir, serveName)
 const versionFile = join(targetBinDir, ".cli-version")
 
 function log(msg: string) {
@@ -208,10 +210,52 @@ async function writeSourceWrapper() {
   )
 }
 
+function isSourceWrapper(file: string): boolean {
+  try {
+    // Source wrapper fallback is a bash script, not a native binary.
+    return readFileSync(file, "utf8").slice(0, 2) === "#!"
+  } catch {
+    return false
+  }
+}
+
+type Stage = {
+  kiloReady: boolean
+  serveExists: boolean
+  wrapper: boolean
+  ready: boolean
+}
+
+function stageState(exists: boolean): Stage {
+  const kiloReady = exists && hasTreeSitterResources(targetBinPath) && hasKiloSandboxWorker(targetBinPath)
+  const serveExists = existsSync(targetServePath)
+  // Source-wrapper fallback has no compiled serve binary; missing serve is
+  // expected there and keeps the full-CLI fallback via ServerManager.
+  const wrapper = exists && isSourceWrapper(targetBinPath)
+  return { kiloReady, serveExists, wrapper, ready: kiloReady && (serveExists || wrapper) }
+}
+
+// Fast path: compiled kilo is fresh but kilo-serve was never staged (e.g.
+// an older bin/ predating the dual entry). Copy serve from the existing
+// dist without rebuilding or deleting the working kilo binary.
+async function copyMissingServeFromDist(): Promise<boolean> {
+  const distKilo = await findKiloBinaryInOpencodeDist()
+  if (!distKilo) return false
+  const from = join(dirname(distKilo), serveName)
+  if (!existsSync(from)) return false
+  await $`mkdir -p ${targetBinDir}`
+  await $`cp ${from} ${targetServePath}`
+  if (serveName !== "kilo-serve.exe") chmodSync(targetServePath, 0o755)
+  await ensureLocalHelpers()
+  log(`Copied serve CLI binary from ${relative(packagesDir, from)} -> ${relative(kiloVscodeDir, targetServePath)}`)
+  return true
+}
+
 async function main() {
   const targetFile = Bun.file(targetBinPath)
   const exists = await targetFile.exists()
-  const ready = exists && hasTreeSitterResources(targetBinPath) && hasKiloSandboxWorker(targetBinPath)
+  const stage = stageState(exists)
+  const ready = stage.ready
 
   const stale = ready && !forceRebuild && (await isStale())
   const rebuild = forceRebuild || stale || !ready
@@ -225,17 +269,11 @@ async function main() {
     return
   }
 
-  if (forceRebuild && !exists) {
-    removeDist()
+  if (stage.kiloReady && !stage.serveExists && !stage.wrapper && !forceRebuild && !(await isStale())) {
+    if (await copyMissingServeFromDist()) return
   }
 
-  if (exists && rebuild) {
-    log(stale ? `CLI source has changed — rebuilding.` : `Refreshing existing CLI resources.`)
-    rmSync(targetBinPath)
-    if (forceRebuild || stale || !ready) {
-      removeDist()
-    }
-  }
+  cleanForRebuild(exists, rebuild, stale)
 
   const opencodePkgFile = Bun.file(join(opencodeDir, "package.json"))
   if (!(await opencodePkgFile.exists())) {
@@ -248,18 +286,50 @@ async function main() {
     return null
   })
   if (!sourceBinPath) return
+  await installBuiltBinary(sourceBinPath)
+}
+
+function cleanForRebuild(exists: boolean, rebuild: boolean, stale: boolean): void {
+  if (!rebuild) return
+  if (!exists) {
+    if (forceRebuild) removeDist()
+    return
+  }
+  log(stale ? `CLI source has changed — rebuilding.` : `Refreshing existing CLI resources.`)
+  rmSync(targetBinPath)
+  removeDist()
+}
+
+async function installBuiltBinary(source: string): Promise<void> {
   await $`mkdir -p ${targetBinDir}`
-  await $`cp ${sourceBinPath} ${targetBinPath}`
-  await copyTreeSitterResources(sourceBinPath, targetBinPath)
-  await copySandboxResources(sourceBinPath, targetBinPath)
-  await copyKiloSandboxWorker(sourceBinPath, targetBinPath)
+  await $`cp ${source} ${targetBinPath}`
+  await copyTreeSitterResources(source, targetBinPath)
+  await copySandboxResources(source, targetBinPath)
+  await copyKiloSandboxWorker(source, targetBinPath)
   chmodSync(targetBinPath, 0o755)
+  await copyServeBinary(source)
   await ensureLocalHelpers()
 
   const hash = await cliSourceHash()
   if (hash) await Bun.write(versionFile, hash + "\n")
 
-  log(`Copied CLI binary from ${relative(packagesDir, sourceBinPath)} -> ${relative(kiloVscodeDir, targetBinPath)}`)
+  log(`Copied CLI binary from ${relative(packagesDir, source)} -> ${relative(kiloVscodeDir, targetBinPath)}`)
+}
+
+// Serve-only backend: copy when the opencode build produced it; dev
+// source-wrapper mode has no compiled serve binary and keeps the
+// full-CLI fallback via ServerManager.
+async function copyServeBinary(source: string): Promise<void> {
+  const serve = binName === "kilo.exe" ? "kilo-serve.exe" : "kilo-serve"
+  const from = join(dirname(source), serve)
+  const to = join(targetBinDir, serve)
+  if (!existsSync(from)) {
+    log(`Serve CLI binary not found at ${relative(packagesDir, from)}; keeping full-CLI fallback.`)
+    return
+  }
+  await $`cp ${from} ${to}`
+  if (serve !== "kilo-serve.exe") chmodSync(to, 0o755)
+  log(`Copied serve CLI binary from ${relative(packagesDir, from)} -> ${relative(kiloVscodeDir, to)}`)
 }
 
 function removeDist() {
