@@ -132,10 +132,21 @@ describe("S2 production wiring", () => {
         const storage = yield* Storage.Service
         const session = yield* SessionV2.Service
         const created = yield* session.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, created.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, created.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* storage.write(["session_diff", created.id], [{ file: "a.ts", additions: 1, deletions: 0 }])
         const fam = { rootID: created.id, sessionIDs: [created.id], activity: 0 }
-        yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, () => false)
+        yield* Retention.deleteFamilyTransaction(
+          db,
+          fam,
+          Date.now(),
+          () => false,
+          () => false,
+        )
         const before = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
         expect(before.length).toBe(1)
         yield* Retention.replayObligations(db, (keys) =>
@@ -163,7 +174,12 @@ describe("S2 production wiring", () => {
         const created = yield* Effect.gen(function* () {
           const svc = yield* SessionV2.Service
           const c = yield* svc.create({ location })
-          yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, c.id)).run().pipe(Effect.orDie)
+          yield* db
+            .update(SessionTable)
+            .set({ time_updated: 0 })
+            .where(eq(SessionTable.id, c.id))
+            .run()
+            .pipe(Effect.orDie)
           return c
         }).pipe(provideInstance(dir1))
 
@@ -173,19 +189,28 @@ describe("S2 production wiring", () => {
           const fam = { rootID: created.id, sessionIDs: [created.id], activity: 0 }
           const isActive = (id: string) => ownership.isActive(id)
           const isLeased = (id: string) => ownership.isLeased(id)
-          const exit = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), isActive, isLeased).pipe(Effect.exit)
+          const exit = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), isActive, isLeased).pipe(
+            Effect.exit,
+          )
           return exit._tag === "Failure"
         }).pipe(provideInstance(dir2))
 
         expect(blocked).toBe(true)
-        const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, created.id)).get().pipe(Effect.orDie)
+        const row = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, created.id))
+          .get()
+          .pipe(Effect.orDie)
         expect(row).toBeDefined()
         yield* release
         const ok = yield* Effect.gen(function* () {
           const fam = { rootID: created.id, sessionIDs: [created.id], activity: 0 }
           const isActive = (id: string) => ownership.isActive(id)
           const isLeased = (id: string) => ownership.isLeased(id)
-          const exit = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), isActive, isLeased).pipe(Effect.exit)
+          const exit = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), isActive, isLeased).pipe(
+            Effect.exit,
+          )
           return exit._tag === "Success"
         }).pipe(provideInstance(dir2))
         expect(ok).toBe(true)
@@ -201,19 +226,33 @@ describe("S2 production wiring", () => {
         const ownership = yield* Ownership.Service
         const svc = yield* SessionV2.Service
         const info = yield* svc.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, info.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, info.id))
+          .run()
+          .pipe(Effect.orDie)
         const release = yield* ownership.acquireLease(info.id)
         expect(ownership.isLeased(info.id)).toBe(true)
         const fam = { rootID: info.id, sessionIDs: [info.id], activity: 0 }
         const isLeased = (id: string) => ownership.isLeased(id)
-        const exitBlocked = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, isLeased).pipe(Effect.exit)
+        const exitBlocked = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, isLeased).pipe(
+          Effect.exit,
+        )
         expect(exitBlocked._tag).toBe("Failure")
         yield* release
         expect(ownership.isLeased(info.id)).toBe(false)
-        const exitOk = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, isLeased).pipe(Effect.exit)
+        const exitOk = yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, isLeased).pipe(
+          Effect.exit,
+        )
         expect(exitOk._tag).toBe("Success")
         const info2 = yield* svc.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, info2.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, info2.id))
+          .run()
+          .pipe(Effect.orDie)
         const fetched = yield* svc.get(info2.id).pipe(Effect.provideService(Ownership.Service, ownership))
         expect(fetched.id).toBe(info2.id)
         expect(ownership.isLeased(info2.id)).toBe(false)
@@ -270,8 +309,18 @@ describe("S2 production wiring", () => {
         const maintenance = yield* Maintenance.Service
         const a = yield* session.create({ location })
         const b = yield* session.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, a.id)).run().pipe(Effect.orDie)
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, b.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, a.id))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, b.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* storage.write(["session_diff", a.id], [{ file: "a.ts", additions: 1, deletions: 0 }])
         yield* storage.write(["session_diff", b.id], [{ file: "b.ts", additions: 1, deletions: 0 }])
         // Wait for EventV2-triggered queued runs from a/b creation to complete and drain (they return 0 when not direct)
@@ -306,10 +355,22 @@ describe("S2 production wiring", () => {
         const { db } = yield* Database.Service
         const svc = yield* SessionV2.Service
         const created = yield* svc.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, created.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, created.id))
+          .run()
+          .pipe(Effect.orDie)
         const fam = { rootID: created.id, sessionIDs: [created.id], activity: 0 }
-        yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, () => false)
-        const attemptsBefore = (yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie))[0]?.attempts ?? 0
+        yield* Retention.deleteFamilyTransaction(
+          db,
+          fam,
+          Date.now(),
+          () => false,
+          () => false,
+        )
+        const attemptsBefore =
+          (yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie))[0]?.attempts ?? 0
         expect(attemptsBefore).toBe(0)
         const failingDeleter = () => Effect.fail(new Error("delete fail"))
         yield* Retention.replayObligations(db, failingDeleter)
@@ -329,19 +390,33 @@ describe("S2 production wiring", () => {
       const base = makeBaseWithoutMaintenance()
       return yield* Effect.gen(function* () {
         const { db } = yield* Database.Service
-        yield* db.run(sql`INSERT INTO retention_obligation (family_root_id, session_ids, time_created, attempts) VALUES ('root-mal', 'not-json', 0, 0)`).pipe(Effect.orDie)
+        yield* db
+          .run(
+            sql`INSERT INTO retention_obligation (family_root_id, session_ids, time_created, attempts) VALUES ('root-mal', 'not-json', 0, 0)`,
+          )
+          .pipe(Effect.orDie)
         const before = yield* db
-          .all<{ id: number; attempts: number }>(sql`SELECT id, attempts FROM retention_obligation WHERE family_root_id = 'root-mal'`)
+          .all<{
+            id: number
+            attempts: number
+          }>(sql`SELECT id, attempts FROM retention_obligation WHERE family_root_id = 'root-mal'`)
           .pipe(Effect.orDie)
         expect(before.length).toBe(1)
         expect(before[0].attempts).toBe(0)
         yield* Retention.replayObligations(db, () => Effect.void)
         const after = yield* db
-          .all<{ id: number; attempts: number }>(sql`SELECT id, attempts FROM retention_obligation WHERE family_root_id = 'root-mal'`)
+          .all<{
+            id: number
+            attempts: number
+          }>(sql`SELECT id, attempts FROM retention_obligation WHERE family_root_id = 'root-mal'`)
           .pipe(Effect.orDie)
         expect(after.length).toBe(1)
         expect(after[0].attempts).toBe(1)
-        yield* db.delete(RetentionObligationTable).where(eq(RetentionObligationTable.family_root_id, "root-mal")).run().pipe(Effect.orDie)
+        yield* db
+          .delete(RetentionObligationTable)
+          .where(eq(RetentionObligationTable.family_root_id, "root-mal"))
+          .run()
+          .pipe(Effect.orDie)
       }).pipe(Effect.provide(base))
     }),
   )
@@ -389,7 +464,12 @@ describe("S2 production wiring", () => {
         const session = yield* SessionV2.Service
         const maintenance = yield* Maintenance.Service
         const a = yield* session.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, a.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, a.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* storage.write(["session_diff", a.id], [{ file: "diag.ts", additions: 2, deletions: 0 }])
         // Queued run from a creation should not delete when not direct
         yield* Effect.sleep("100 millis")
@@ -402,7 +482,11 @@ describe("S2 production wiring", () => {
         expect(diag.deleted).toBeGreaterThanOrEqual(1)
         expect(diag.rowsReclaimed).toBeGreaterThanOrEqual(1)
         expect(diag.artifactBytesReclaimed).toBeGreaterThanOrEqual(0)
-        expect(["ok", "skipped-below-high", "skipped-busy", "skipped-no-delete"].some((v) => diag.checkpoint.includes(v) || diag.checkpoint === "ok")).toBe(true)
+        expect(
+          ["ok", "skipped-below-high", "skipped-busy", "skipped-no-delete"].some(
+            (v) => diag.checkpoint.includes(v) || diag.checkpoint === "ok",
+          ),
+        ).toBe(true)
         expect(diag.checkpoint).not.toBe("")
         expect(diag.vacuum).not.toBe("")
         expect(Array.isArray(diag.failures)).toBe(true)
@@ -420,19 +504,53 @@ describe("S2 production wiring", () => {
         const { db } = yield* Database.Service
         const svc = yield* SessionV2.Service
         const created = yield* svc.create({ location })
-        const row = yield* db.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, created.id)).get().pipe(Effect.orDie)
+        const row = yield* db
+          .select({ rev: SessionTable.revision })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, created.id))
+          .get()
+          .pipe(Effect.orDie)
         const beforeRev = (row as { rev: number } | undefined)?.rev ?? 0
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, created.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, created.id))
+          .run()
+          .pipe(Effect.orDie)
         const fam = { rootID: created.id, sessionIDs: [created.id], activity: 0 }
-        yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, () => false)
-        const feed = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, created.id)).all().pipe(Effect.orDie)
-        expect(feed.length).toBe(1)
-        expect(feed[0].revision).toBe(beforeRev + 1)
-        expect(feed[0].kind).toBe("deleted")
-        const gone = yield* db.select().from(SessionTable).where(eq(SessionTable.id, created.id)).get().pipe(Effect.orDie)
+        yield* Retention.deleteFamilyTransaction(
+          db,
+          fam,
+          Date.now(),
+          () => false,
+          () => false,
+        )
+        const feed = yield* db
+          .select()
+          .from(SessionChangefeedTable)
+          .where(eq(SessionChangefeedTable.session_id, created.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(feed.length).toBe(2)
+        const sorted = [...feed].sort((a, b) => a.revision - b.revision)
+        expect(sorted[0].kind).toBe("changed")
+        expect(sorted[0].revision).toBe(beforeRev)
+        expect(sorted[1].kind).toBe("deleted")
+        expect(sorted[1].revision).toBe(beforeRev + 1)
+        const gone = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, created.id))
+          .get()
+          .pipe(Effect.orDie)
         expect(gone).toBeUndefined()
-        const still = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, created.id)).all().pipe(Effect.orDie)
-        expect(still.length).toBe(1)
+        const still = yield* db
+          .select()
+          .from(SessionChangefeedTable)
+          .where(eq(SessionChangefeedTable.session_id, created.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(still.length).toBe(2)
       }).pipe(Effect.provide(base))
     }),
   )
@@ -446,7 +564,8 @@ describe("S2 production wiring", () => {
         expect(exit._tag).toBe("Failure")
         if (exit._tag === "Failure") {
           const cause = exit.cause
-          const hasUnregistered = cause.toString().includes("UnregisteredArtifactError") || cause.toString().includes("Unregistered")
+          const hasUnregistered =
+            cause.toString().includes("UnregisteredArtifactError") || cause.toString().includes("Unregistered")
           expect(hasUnregistered).toBe(true)
         }
       }).pipe(Effect.provide(base))
@@ -491,10 +610,21 @@ describe("S2 production wiring", () => {
           const storage = yield* Storage.Service
           const session = yield* SessionV2.Service
           const created = yield* session.create({ location })
-          yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, created.id)).run().pipe(Effect.orDie)
+          yield* db
+            .update(SessionTable)
+            .set({ time_updated: 0 })
+            .where(eq(SessionTable.id, created.id))
+            .run()
+            .pipe(Effect.orDie)
           yield* storage.write(["session_diff", created.id], [{ file: "a.ts", additions: 1, deletions: 0 }])
           const fam = { rootID: created.id, sessionIDs: [created.id], activity: 0 }
-          yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, () => false)
+          yield* Retention.deleteFamilyTransaction(
+            db,
+            fam,
+            Date.now(),
+            () => false,
+            () => false,
+          )
           const obs = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
           expect(obs.length).toBe(1)
         }).pipe(Effect.provide(setupBase), Effect.scoped)
@@ -605,7 +735,12 @@ describe("S2 production wiring", () => {
         const storage = yield* Storage.Service
         // Create old eligible family
         const old = yield* session.create({ location })
-        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, old.id)).run().pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: 0 })
+          .where(eq(SessionTable.id, old.id))
+          .run()
+          .pipe(Effect.orDie)
         yield* storage.write(["session_diff", old.id], [{ file: "old.ts", additions: 1, deletions: 0 }])
         const before = yield* Retention.listFamilies(db)
         expect(before.find((f) => f.rootID === old.id)).toBeDefined()
@@ -625,9 +760,19 @@ describe("S2 production wiring", () => {
         const fresh = yield* session.create({ location })
         expect(fresh.id).toBeDefined()
         // Verify commit observable immediately before maintenance deletes old
-        const freshRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, fresh.id)).get().pipe(Effect.orDie)
+        const freshRow = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, fresh.id))
+          .get()
+          .pipe(Effect.orDie)
         expect(freshRow).toBeDefined()
-        const oldRowBefore = yield* db.select().from(SessionTable).where(eq(SessionTable.id, old.id)).get().pipe(Effect.orDie)
+        const oldRowBefore = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, old.id))
+          .get()
+          .pipe(Effect.orDie)
         expect(oldRowBefore).toBeDefined()
         // Wait for queued maintenance to delete old (proves schedule after commit)
         yield* pollWithTimeout(
