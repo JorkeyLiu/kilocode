@@ -116,7 +116,10 @@ describe("KiloProvider follow-up sessions", () => {
     expect(internal.currentSession?.id).toBe("ses-followup")
     expect(internal.trackedSessionIds.has("ses-followup")).toBe(true)
     expect(loaded).toEqual(["ses-followup"])
-    expect(sent).toEqual([
+    // First-screen hydration posts gitStatus/sessionStatus independently
+    // after extensionDataReady; only the follow-up sessionCreated is asserted.
+    const msgs = sent.filter((m) => (m as { type?: string }).type === "sessionCreated")
+    expect(msgs).toEqual([
       {
         type: "sessionCreated",
         session: {

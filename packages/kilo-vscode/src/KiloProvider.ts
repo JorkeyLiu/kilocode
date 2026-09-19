@@ -2713,7 +2713,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendAgents().catch((e) => console.error("[Kilo New] fetchAndSendAgents background failed:", e)),
           this.fetchAndSendConfig().catch((e) => console.error("[Kilo New] fetchAndSendConfig background failed:", e)),
         ])
-        await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands(), this.seedSessionStatusMap()])
+        await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands()])
       } else {
         await Promise.all([
           this.fetchAndSendProviders(),
@@ -2721,17 +2721,30 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendSkills(),
           this.fetchAndSendCommands(),
           this.fetchAndSendConfig(),
-          this.seedSessionStatusMap(),
         ])
       }
-      this.cachedGitRepo = await hasGit(this.client!, this.getWorkspaceDirectory())
-      this.postMessage({ type: "gitStatus", repo: this.cachedGitRepo })
-      this.sendNotificationSettings()
-      this.sendTimelineSetting()
       this.postMessage({ type: "extensionDataReady" })
       // P0 perf: the current global readiness gate (LOCK-012: P0 may measure
       // the current gate; LOCK-PERF-4 targets action-specific gates instead).
       p0Stage("dataReady.done")
+
+      // First-screen hydration: independent session-status seed, git-status
+      // probe, and sync-only settings pushes run after the readiness gate so
+      // they never block dataReady.done. Webview tolerates out-of-order
+      // arrival (gitStatus/sessionStatus/notification/timeline each have
+      // independent handlers plus request* retry); syncWebviewState reposts
+      // cached gitStatus and reseeds statuses for final consistency.
+      this.sendNotificationSettings()
+      this.sendTimelineSetting()
+      void this.seedSessionStatusMap().catch((e) =>
+        console.error("[Kilo New] seedSessionStatusMap background failed:", e),
+      )
+      void hasGit(this.client!, this.getWorkspaceDirectory())
+        .then((repo) => {
+          this.cachedGitRepo = repo
+          this.postMessage({ type: "gitStatus", repo })
+        })
+        .catch((e) => console.error("[Kilo New] hasGit background failed:", e))
 
       console.log("[Kilo New] KiloProvider: ✅ initializeConnection completed successfully")
     } catch (error) {
