@@ -8,7 +8,7 @@ import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { SessionRevision } from "@opencode-ai/core/session/revision"
 import { ConfigConvergence } from "@/kilocode/server/config-convergence"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -19,6 +19,9 @@ import { Project } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Log } from "@opencode-ai/core/util/log"
 import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
+import { SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 
 export const VERSION = 1 as const
 export const OP = "session/update" as const
@@ -620,7 +623,12 @@ export const layer = Layer.effect(
             | { status: "conflict"; existing: SessionOperation.SessionUpdateRecord }
             | { status: "replay"; existing: SessionOperation.SessionUpdateRecord }
             | { status: "internal"; message: string }
-            | { status: "reserved"; record: SessionOperation.SessionUpdateRecord; event: EventV2.Payload }
+            | {
+                status: "reserved"
+                record: SessionOperation.SessionUpdateRecord
+                event: EventV2.Payload
+                changefeedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number }
+              }
 
           const reserveResult: ReserveResult = yield* db.transaction(
             (tx) =>
@@ -745,7 +753,28 @@ export const layer = Layer.effect(
                   { location: loc as unknown as Location.Ref },
                 )
                 if (DispatchAtomicSeam.failUpdateInsideTx) yield* Effect.die(new Error("injected update tx failure"))
-                return { status: "reserved" as const, record: inserted, event }
+                const persistedRev = (inserted as unknown as { revision: number }).revision
+                const cfEntry = yield* tx
+                  .select()
+                  .from(SessionChangefeedTable)
+                  .where(
+                    and(
+                      eq(SessionChangefeedTable.session_id, sessionId),
+                      eq(SessionChangefeedTable.revision, persistedRev),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!cfEntry) yield* Effect.die(new Error("changefeed entry missing after update"))
+                const cf = cfEntry as NonNullable<typeof cfEntry>
+                const changefeedEntry = {
+                  seq: cf.seq,
+                  session_id: cf.session_id,
+                  revision: cf.revision,
+                  kind: cf.kind,
+                  time: cf.time,
+                }
+                return { status: "reserved" as const, record: inserted, event, changefeedEntry }
               }),
             { behavior: "immediate" },
           )
@@ -861,6 +890,37 @@ export const layer = Layer.effect(
               ),
             ),
           )
+          // Strictly bounded observation/changed producer: only for fresh canonical update commit,
+          // payload-free {seq,session_id,revision,kind,time} with cursor=seq, after immediate tx commit.
+          // Fail-closed versioned notification via private peer reverse capability; exceptions never affect result.
+          const entry = (reserveResult as unknown as { changefeedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number } }).changefeedEntry
+          if (entry && succeeded.status === "succeeded") {
+            yield* Effect.gen(function* () {
+              const opt = yield* Effect.serviceOption(PrivatePeerService)
+              if (opt._tag === "None") return
+              const peer = opt.value
+              const payload = {
+                v: OBSERVATION_VERSION,
+                cursor: entry.seq,
+                entries: [
+                  {
+                    seq: entry.seq,
+                    session_id: entry.session_id,
+                    revision: entry.revision,
+                    kind: entry.kind,
+                    time: entry.time,
+                  },
+                ],
+              }
+              yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(
+                Effect.catch(() => Effect.void),
+                Effect.catchDefect(() => Effect.void),
+              )
+            }).pipe(
+              Effect.catch(() => Effect.void),
+              Effect.catchDefect(() => Effect.void),
+            )
+          }
           return succeeded
         }).pipe(Effect.ensuring(leaseRelease))
         return txInnerResult
