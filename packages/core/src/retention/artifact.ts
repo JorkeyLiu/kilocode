@@ -122,6 +122,38 @@ export function assertFamilyWriteEffect(prefix: string[]) {
   })
 }
 
+export function isStrictFamilyKind(kind: string): boolean {
+  return isFamilyKind(kind)
+}
+
+export function assertStrictFamilyWrite(prefix: string[]): void {
+  if (prefix.length === 0)
+    throw new UnregisteredArtifactError({
+      prefix,
+      message: `Unregistered artifact write blocked: (empty) — registry entry required`,
+    })
+  const root = prefix[0]!
+  if (isFamilyKind(root)) return
+  throw new UnregisteredArtifactError({
+    prefix,
+    message: `Unregistered session-owned artifact write blocked: ${prefix.join("/")} — strict family registry required`,
+  })
+}
+
+export function assertStrictFamilyWriteEffect(prefix: string[]) {
+  if (prefix.length === 0)
+    return new UnregisteredArtifactError({
+      prefix,
+      message: `Unregistered artifact write blocked: (empty) — registry entry required`,
+    })
+  const root = prefix[0]!
+  if (isFamilyKind(root)) return { _tag: "ok" as const }
+  return new UnregisteredArtifactError({
+    prefix,
+    message: `Unregistered session-owned artifact write blocked: ${prefix.join("/")} — strict family registry required`,
+  })
+}
+
 export function listRegisteredFamilyKinds(): string[] {
   return [...FamilyArtifactKind]
 }

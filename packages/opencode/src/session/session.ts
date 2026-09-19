@@ -65,7 +65,7 @@ import {
 import fs from "node:fs/promises"
 import { ForkSeam } from "@/kilocode/session/fork-seam"
 import { baseKey, cumulativeSessionDiff } from "@/kilocode/session-portability/cumulative-diff"
-import { isClaimedWriteError, storageFileForKey, writeExclusiveJson } from "@/storage/claimed-file"
+import { isClaimedWriteError, storageFileForKey, writeFamilyExclusiveJson } from "@/storage/claimed-file"
 import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 
 const log = Log.create({ service: "session" })
@@ -1109,6 +1109,7 @@ export const layer: Layer.Layer<
 
         // Clone messages/parts
         const idMap = new Map<string, MessageID>()
+        // filterMessagesForFork(msgs - kernel delegation)
         const filtered = filterMessagesForFork(
           msgs as unknown as Array<{ id: string }>,
           input.messageID as unknown as string | null,
@@ -1168,7 +1169,7 @@ export const layer: Layer.Layer<
           const secondKey = ["session_diff", newIdStr] as unknown as string[]
           if (ForkSeam.failFirstDiffWrite) return yield* Effect.fail(new Error("injected first diff write failure"))
           try {
-            yield* Effect.promise(() => writeExclusiveJson(storageFileForKey(firstKey, Global.Path.data), baseForDiff))
+            yield* Effect.promise(() => writeFamilyExclusiveJson(firstKey, baseForDiff, Global.Path.data))
             ownedBase = true
           } catch (e) {
             if (isClaimedWriteError(e)) {
@@ -1230,7 +1231,7 @@ export const layer: Layer.Layer<
             return yield* Effect.fail(new Error("injected second diff write failure"))
           }
           try {
-            yield* Effect.promise(() => writeExclusiveJson(storageFileForKey(secondKey, Global.Path.data), baseForDiff))
+            yield* Effect.promise(() => writeFamilyExclusiveJson(secondKey, baseForDiff, Global.Path.data))
             ownedDiff = true
           } catch (e) {
             if (isClaimedWriteError(e)) {

@@ -4,7 +4,7 @@ import { Snapshot } from "@/snapshot"
 import { NotFoundError, Storage } from "@/storage/storage"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import type { SessionID } from "@/session/schema"
-import { isClaimedWriteError, storageFileForKey, writeExclusiveJson } from "@/storage/claimed-file"
+import { isClaimedWriteError, storageFileForKey, writeFamilyExclusiveJson } from "@/storage/claimed-file"
 
 export type PortableDiff = Snapshot.FileDiff & {
   after?: string
@@ -75,9 +75,9 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
   return Effect.promise(() =>
     runtime.runPromise((storage) =>
       Effect.gen(function* () {
-        const local = yield* storage.read<PortableDiff[]>(["session_diff", String(sourceID)]).pipe(
-          Effect.catchIf(isNotFound, () => Effect.succeed([] as PortableDiff[])),
-        )
+        const local = yield* storage
+          .read<PortableDiff[]>(["session_diff", String(sourceID)])
+          .pipe(Effect.catchIf(isNotFound, () => Effect.succeed([] as PortableDiff[])))
         const base = yield* cumulativeSessionDiff(storage, sourceID, local)
         if (base.length === 0) return
         const firstKey = baseKey(targetID)
@@ -98,16 +98,24 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
         let ownedSecond = false
         yield* Effect.gen(function* () {
           if (seam.failFirstDiffWrite) return yield* Effect.fail(new Error("injected first diff write failure"))
-          yield* Effect.promise(() => writeExclusiveJson(storageFileForKey(firstKey), base)).pipe(
+          yield* Effect.promise(() => writeFamilyExclusiveJson(firstKey, base)).pipe(
             Effect.catch((e) => {
               if (isClaimedWriteError(e)) {
                 ownedFirst = true
-                const claimed = e as unknown as { handle: { cleanup: () => Promise<boolean> }; cause: unknown; target: string }
+                const claimed = e as unknown as {
+                  handle: { cleanup: () => Promise<boolean> }
+                  cause: unknown
+                  target: string
+                }
                 const original = claimed.cause ?? e
                 return Effect.promise(() => claimed.handle.cleanup()).pipe(
                   Effect.flatMap((ok) => {
                     if (ok) ownedFirst = false
-                    else Effect.logWarning("carryForkDiff claimed first cleanup failed (retained)", { target: claimed.target, cause: String(original) })
+                    else
+                      Effect.logWarning("carryForkDiff claimed first cleanup failed (retained)", {
+                        target: claimed.target,
+                        cause: String(original),
+                      })
                     return Effect.fail(original)
                   }),
                   Effect.catch(() => Effect.fail(original)),
@@ -119,11 +127,15 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
           )
           ownedFirst = true
           if (seam.failSecondDiffWrite) return yield* Effect.fail(new Error("injected second diff write failure"))
-          yield* Effect.promise(() => writeExclusiveJson(storageFileForKey(secondKey), base)).pipe(
+          yield* Effect.promise(() => writeFamilyExclusiveJson(secondKey, base)).pipe(
             Effect.catch((e) => {
               if (isClaimedWriteError(e)) {
                 ownedSecond = true
-                const claimed = e as unknown as { handle: { cleanup: () => Promise<boolean> }; cause: unknown; target: string }
+                const claimed = e as unknown as {
+                  handle: { cleanup: () => Promise<boolean> }
+                  cause: unknown
+                  target: string
+                }
                 const original = claimed.cause ?? e
                 return Effect.promise(() => claimed.handle.cleanup()).pipe(
                   Effect.flatMap((ok) => {
@@ -143,7 +155,11 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
             Effect.gen(function* () {
               // If err was already a claimed error that was handled above, owned flags already reflect cleanup; but we still need to handle partial ownedFirst cleanup for second failure
               if (isClaimedWriteError(err)) {
-                const claimed = err as unknown as { handle: { cleanup: () => Promise<boolean> }; cause: unknown; target: string }
+                const claimed = err as unknown as {
+                  handle: { cleanup: () => Promise<boolean> }
+                  cause: unknown
+                  target: string
+                }
                 const original = claimed.cause ?? err
                 // This path is for unexpected claimed errors not already handled (e.g., second write claimed)
                 const isSecond = claimed.target.includes(String(secondKey[1] ?? ""))
@@ -151,8 +167,18 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
                 else ownedFirst = true
                 const okClaimed = yield* Effect.promise(() => claimed.handle.cleanup()).pipe(
                   Effect.map((v) => v as boolean),
-                  Effect.catch((e) => Effect.logWarning("carryForkDiff claimed cleanup failed", { target: claimed.target, cause: String(e) }).pipe(Effect.as(false as const))),
-                  Effect.catchDefect((e) => Effect.logWarning("carryForkDiff claimed cleanup defect", { target: claimed.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                  Effect.catch((e) =>
+                    Effect.logWarning("carryForkDiff claimed cleanup failed", {
+                      target: claimed.target,
+                      cause: String(e),
+                    }).pipe(Effect.as(false as const)),
+                  ),
+                  Effect.catchDefect((e) =>
+                    Effect.logWarning("carryForkDiff claimed cleanup defect", {
+                      target: claimed.target,
+                      cause: String(e),
+                    }).pipe(Effect.as(false as const)),
+                  ),
                 )
                 if (okClaimed) {
                   if (isSecond) ownedSecond = false
@@ -162,8 +188,18 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
                 if (isSecond && ownedFirst) {
                   const ok = yield* Effect.promise(() => fs.rm(storageFileForKey(firstKey), { force: true })).pipe(
                     Effect.map(() => true as const),
-                    Effect.catch((e) => Effect.logWarning("carryForkDiff cleanup first failed", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
-                    Effect.catchDefect((e) => Effect.logWarning("carryForkDiff cleanup first defect", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                    Effect.catch((e) =>
+                      Effect.logWarning("carryForkDiff cleanup first failed", {
+                        target: String(firstKey),
+                        cause: String(e),
+                      }).pipe(Effect.as(false as const)),
+                    ),
+                    Effect.catchDefect((e) =>
+                      Effect.logWarning("carryForkDiff cleanup first defect", {
+                        target: String(firstKey),
+                        cause: String(e),
+                      }).pipe(Effect.as(false as const)),
+                    ),
                   )
                   if (ok) ownedFirst = false
                 }
@@ -172,16 +208,36 @@ export function carryForkDiff(sourceID: SessionID | string, targetID: SessionID 
               if (ownedFirst) {
                 const ok = yield* Effect.promise(() => fs.rm(storageFileForKey(firstKey), { force: true })).pipe(
                   Effect.map(() => true as const),
-                  Effect.catch((e) => Effect.logWarning("carryForkDiff cleanup first failed", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
-                  Effect.catchDefect((e) => Effect.logWarning("carryForkDiff cleanup first defect", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                  Effect.catch((e) =>
+                    Effect.logWarning("carryForkDiff cleanup first failed", {
+                      target: String(firstKey),
+                      cause: String(e),
+                    }).pipe(Effect.as(false as const)),
+                  ),
+                  Effect.catchDefect((e) =>
+                    Effect.logWarning("carryForkDiff cleanup first defect", {
+                      target: String(firstKey),
+                      cause: String(e),
+                    }).pipe(Effect.as(false as const)),
+                  ),
                 )
                 if (ok) ownedFirst = false
               }
               if (ownedSecond) {
                 const ok = yield* Effect.promise(() => fs.rm(storageFileForKey(secondKey), { force: true })).pipe(
                   Effect.map(() => true as const),
-                  Effect.catch((e) => Effect.logWarning("carryForkDiff cleanup second failed", { target: String(secondKey), cause: String(e) }).pipe(Effect.as(false as const))),
-                  Effect.catchDefect((e) => Effect.logWarning("carryForkDiff cleanup second defect", { target: String(secondKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                  Effect.catch((e) =>
+                    Effect.logWarning("carryForkDiff cleanup second failed", {
+                      target: String(secondKey),
+                      cause: String(e),
+                    }).pipe(Effect.as(false as const)),
+                  ),
+                  Effect.catchDefect((e) =>
+                    Effect.logWarning("carryForkDiff cleanup second defect", {
+                      target: String(secondKey),
+                      cause: String(e),
+                    }).pipe(Effect.as(false as const)),
+                  ),
                 )
                 if (ok) ownedSecond = false
               }

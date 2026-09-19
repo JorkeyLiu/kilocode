@@ -3,6 +3,7 @@ import path from "node:path"
 import { xdgData } from "xdg-basedir"
 import { ForkSeam } from "@/kilocode/session/fork-seam"
 import * as Log from "@opencode-ai/core/util/log"
+import * as Artifact from "@opencode-ai/core/retention/artifact"
 
 const log = Log.create({ service: "claimed-file" })
 
@@ -96,4 +97,10 @@ export function storageFileForKey(key: string[], baseDir?: string): string {
   // Callers may inject baseDir (e.g., Global.Path.data) to preserve test isolation.
   const base = baseDir ?? defaultDataDir()
   return path.join(base, "storage", ...key) + ".json"
+}
+
+export async function writeFamilyExclusiveJson(key: string[], content: unknown, baseDir?: string): Promise<void> {
+  Artifact.assertStrictFamilyWrite(key)
+  const target = storageFileForKey(key, baseDir)
+  return writeExclusiveJson(target, content)
 }
