@@ -2706,6 +2706,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (this.canonicalConfig) {
         // Canonical selectors are handled via canonical materialization path;
         // reconcile them in background without blocking global data-ready.
+        // Skills/commands keep their existing private-first fetch but also
+        // stay off the dataReady gate; they publish in background after the
+        // gate so the first screen never waits for their SDK retry round.
         void Promise.all([
           this.fetchAndSendProviders().catch((e) =>
             console.error("[Kilo New] fetchAndSendProviders background failed:", e),
@@ -2713,7 +2716,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendAgents().catch((e) => console.error("[Kilo New] fetchAndSendAgents background failed:", e)),
           this.fetchAndSendConfig().catch((e) => console.error("[Kilo New] fetchAndSendConfig background failed:", e)),
         ])
-        await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands()])
       } else {
         await Promise.all([
           this.fetchAndSendProviders(),
@@ -2727,6 +2729,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // P0 perf: the current global readiness gate (LOCK-012: P0 may measure
       // the current gate; LOCK-PERF-4 targets action-specific gates instead).
       p0Stage("dataReady.done")
+      if (this.canonicalConfig) {
+        void this.fetchAndSendSkills().catch((e) =>
+          console.error("[Kilo New] fetchAndSendSkills background failed:", e),
+        )
+        void this.fetchAndSendCommands().catch((e) =>
+          console.error("[Kilo New] fetchAndSendCommands background failed:", e),
+        )
+      }
 
       // First-screen hydration: independent session-status seed, git-status
       // probe, and sync-only settings pushes run after the readiness gate so
