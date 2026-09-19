@@ -21,11 +21,7 @@ import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
 import { resolveReloadDirectory } from "./reload-directory"
-import {
-  RELOAD_CONFLICT_WARNING,
-  RELOAD_FAILED_ERROR,
-  requestInstanceReload,
-} from "./kilo-provider/instance-reload"
+import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, requestInstanceReload } from "./kilo-provider/instance-reload"
 import { CanonicalConfigService } from "./config/service"
 import { PrivateConvergenceAdapter } from "./config/convergence"
 import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
@@ -50,7 +46,12 @@ type RestoreState = {
 
 type FixtureRawProvider = { id?: unknown; name?: unknown; hasCredential?: unknown; models?: unknown }
 type FixtureCanonicalModel = { id: string; name: string; variants?: Record<string, unknown> }
-type FixtureCanonicalProvider = { id: string; name: string; hasCredential: boolean; models: Record<string, FixtureCanonicalModel> }
+type FixtureCanonicalProvider = {
+  id: string
+  name: string
+  hasCredential: boolean
+  models: Record<string, FixtureCanonicalModel>
+}
 
 function fixtureModelView(mid: string, m: unknown): FixtureCanonicalModel {
   const view = m as { id?: unknown; name?: unknown; variants?: unknown }
@@ -135,8 +136,7 @@ function fixtureSyntheticAgents(providerID: string, modelID: string): FixtureCan
 function fixtureAgentView(entry: Record<string, unknown>): FixtureCanonicalAgentView | null {
   const name = typeof entry.name === "string" ? entry.name : ""
   if (name.length === 0) return null
-  const displayName =
-    typeof entry.displayName === "string" && entry.displayName.length > 0 ? entry.displayName : name
+  const displayName = typeof entry.displayName === "string" && entry.displayName.length > 0 ? entry.displayName : name
   const description = typeof entry.description === "string" ? entry.description : ""
   const mode = entry.mode === "subagent" || entry.mode === "all" ? entry.mode : "primary"
   const hidden = entry.hidden === true
@@ -359,7 +359,11 @@ export function activate(context: vscode.ExtensionContext) {
       const epoch = connectionService.getPrivateEpoch()
       return {
         request: (method: string, params: unknown) => {
-          if (method !== "config/convergence/acquire" && method !== "config/convergence/resolve" && method !== "config/convergence/observe")
+          if (
+            method !== "config/convergence/acquire" &&
+            method !== "config/convergence/resolve" &&
+            method !== "config/convergence/observe"
+          )
             return Promise.reject(new Error(`unsupported convergence method ${method}`))
           if (connectionService.getPrivatePeer() !== peer || connectionService.getPrivateEpoch() !== epoch)
             return Promise.reject(new Error("convergence epoch changed"))
@@ -482,7 +486,8 @@ export function activate(context: vscode.ExtensionContext) {
   const privateSessionReader = {
     isEnabled: () => privateObservation.isEnabled(),
     isStarted: () => privateObservation.isStarted(),
-    list: (input: { directory: string; archived?: boolean; cursor?: string; limit?: number }) => privateObservation.list(input) as Promise<unknown>,
+    list: (input: { directory: string; archived?: boolean; cursor?: string; limit?: number }) =>
+      privateObservation.list(input) as Promise<unknown>,
     get: (input: { directory: string; sessionId: string }) => privateObservation.get(input) as Promise<unknown>,
     messages: (input: { directory: string; sessionId: string; limit: number; cursor?: string }) =>
       privateObservation.messages(input) as Promise<unknown>,
@@ -793,21 +798,27 @@ export function activate(context: vscode.ExtensionContext) {
         return canonicalConfig.seedFixtureProviderCredential("e2e-local", "e2e-fixture-key")
       }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationStatus", async () => {
-        const dbPath = (() => {
+        const canonicalDbPath = (() => {
           try {
             return resolveCanonicalDbPath()
           } catch (e) {
             return `error:${String(e)}`
           }
         })()
-        const host = privateObservation.getHost()
+        const status = privateObservation.getStatus()
         return {
-          enabled: privateObservation.isEnabled(),
-          hostState: privateObservation.getHostState(),
-          pid: host?.getPid(),
-          isStarted: privateObservation.isStarted(),
+          enabled: status.enabled,
+          hostState: status.hostState,
+          pid: status.pid,
+          isStarted: status.started,
+          available: status.available,
+          epoch: status.epoch,
+          pendingShutdown: status.pendingShutdown,
+          pendingPid: status.pendingPid,
+          disposed: status.disposed,
+          dbPath: status.dbPath,
+          canonicalDbPath,
           persistedCursor: privateObservation.getPersistedCursor(),
-          dbPath,
           testBridge: isE2EFixtureEnabled(),
           envDb: process.env.KILO_DB ?? null,
         }

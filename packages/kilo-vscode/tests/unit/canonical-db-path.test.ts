@@ -70,4 +70,44 @@ describe("canonical-db-path R9 production-enablement resolver", () => {
     expect(() => resolveCanonicalDataDir({ env: {}, homedir: "" })).toThrow()
     expect(() => resolveCanonicalDbPath({ env: {}, homedir: "" })).toThrow()
   })
+
+  it("strict canonical absolute: relative XDG_DATA_HOME is ignored, falls back to homedir absolute (fail-closed for relative identity)", () => {
+    const envRel = { XDG_DATA_HOME: "relative/xdg" } as NodeJS.ProcessEnv
+    const home = "/home/tester"
+    expect(resolveCanonicalDbPath({ env: envRel, homedir: home })).toBe(
+      path.join(home, ".local", "share", "kilo", "kilo.db"),
+    )
+    expect(path.isAbsolute(resolveCanonicalDbPath({ env: envRel, homedir: home }))).toBe(true)
+    const envRelLf = { XDG_DATA_HOME: "relative/xdg\n" } as NodeJS.ProcessEnv
+    expect(resolveCanonicalDbPath({ env: envRelLf, homedir: home })).toBe(
+      path.join(home, ".local", "share", "kilo", "kilo.db"),
+    )
+  })
+
+  it("rejects when resolved base would be relative (relative homedir without absolute XDG, fail-closed)", () => {
+    expect(() => resolveCanonicalDataDir({ env: {}, homedir: "relative/home" })).toThrow()
+    expect(() => resolveCanonicalDbPath({ env: {}, homedir: "relative/home" })).toThrow()
+    expect(() =>
+      resolveCanonicalDataDir({
+        env: { XDG_DATA_HOME: "relative/xdg" } as NodeJS.ProcessEnv,
+        homedir: "relative/home",
+      }),
+    ).toThrow()
+  })
+
+  it("always returns absolute canonical path ending with kilo/kilo.db, never config or globalStorage, when inputs absolute", () => {
+    const cases: Array<{ env: NodeJS.ProcessEnv; homedir: string }> = [
+      { env: { XDG_DATA_HOME: "/tmp/abs1" } as NodeJS.ProcessEnv, homedir: "/home/a" },
+      { env: {} as NodeJS.ProcessEnv, homedir: "/home/b" },
+      { env: { XDG_DATA_HOME: "/var/data\n" } as NodeJS.ProcessEnv, homedir: "/home/c\r\n" },
+    ]
+    for (const c of cases) {
+      const p = resolveCanonicalDbPath(c)
+      expect(path.isAbsolute(p)).toBe(true)
+      expect(p.endsWith(path.join("kilo", "kilo.db"))).toBe(true)
+      expect(p).not.toContain("globalStorage")
+      expect(p).not.toContain(".config/kilo")
+      expect(path.basename(p)).toBe("kilo.db")
+    }
+  })
 })

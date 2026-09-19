@@ -27,9 +27,11 @@ export function resolveCanonicalDataDir(opts?: { env?: NodeJS.ProcessEnv; homedi
   const home = opts?.homedir ?? os.homedir()
   const raw = env.XDG_DATA_HOME
   const cleaned = clean(raw)
-  // Mirrors xdg-basedir: env.XDG_DATA_HOME || homedir/.local/share
-  const base = cleaned && cleaned.length > 0 ? cleaned : home ? path.join(clean(home)!, ".local", "share") : undefined
+  // Strictly canonical absolute: only absolute XDG is accepted, mirrors xdg-basedir with absolute guard
+  const xdgAbsolute = cleaned && cleaned.length > 0 && path.isAbsolute(cleaned) ? cleaned : undefined
+  const base = xdgAbsolute ?? (home ? path.join(clean(home)!, ".local", "share") : undefined)
   if (!base) throw new Error("Unable to resolve canonical data dir: no XDG_DATA_HOME and no homedir")
+  if (!path.isAbsolute(base)) throw new Error("Unable to resolve canonical data dir: base is not absolute")
   return path.join(base, "kilo")
 }
 

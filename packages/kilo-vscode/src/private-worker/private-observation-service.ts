@@ -77,6 +77,30 @@ export function isPrivateObservationGateEnabled(opts: PrivateObservationServiceO
   return opts.enabled === true && typeof opts.dbPath === "string" && isAbsolute(opts.dbPath)
 }
 
+/** Verifiable runtime status probe for cutover pre-unit — pure snapshot of existing real state. */
+export interface PrivateObservationRuntimeStatus {
+  /** Explicit gate enabled (fail-closed, absolute dbPath required). */
+  enabled: boolean
+  /** Host has been started and is open. */
+  started: boolean
+  /** Current host transport state (open/closed). */
+  hostState: string
+  /** Canonical absolute dbPath when enabled (absolute, channel-disabled identity), otherwise undefined (fail-closed). */
+  dbPath: string | undefined
+  /** Private availability — equals started && hostState === "open" (no second store). */
+  available: boolean
+  /** Monotonic epoch — increments only on successful host start (initialize/reconnect success), stable across failures/pending. */
+  epoch: number
+  /** Whether a still-live old child is retained in explicit pending-shutdown ownership (exact PID alive). */
+  pendingShutdown: boolean
+  /** Whether the service has been disposed. */
+  disposed: boolean
+  /** Current exact PID when started, undefined otherwise. */
+  pid?: number
+  /** Pending exact PID when pendingShutdown true, undefined otherwise. */
+  pendingPid?: number
+}
+
 export class PrivateObservationService implements Disposable {
   private host: PrivateWorkerHost | null = null
   /** Explicit owner for still-live old child when bounded shutdown times out — no orphan, explicit disposal. Ownership is based on actual child exit (proc exitCode), not host state. */
@@ -85,6 +109,7 @@ export class PrivateObservationService implements Disposable {
   private initPromise: Promise<unknown> | null = null
   private reconnectPromise: Promise<unknown> | null = null
   private disposed = false
+  private epoch = 0
   private readonly consumer: ((method: string, params: unknown) => void) | undefined
   private readonly opts: PrivateObservationServiceOptions
   private readonly cursorStore: ObservationCursorStore | undefined
@@ -189,6 +214,42 @@ export class PrivateObservationService implements Disposable {
   getHostState(): string {
     if (this.host) return this.host.getState()
     return "closed"
+  }
+
+  /** Monotonic epoch — increments only on successful host start. */
+  getEpoch(): number {
+    return this.epoch
+  }
+
+  /** Private availability — equals isStarted() (host open). */
+  getAvailable(): boolean {
+    return this.isStarted() && this.getHostState() === "open"
+  }
+
+  /** Canonical absolute dbPath when gate enabled, otherwise undefined (fail-closed probe). */
+  getCanonicalDbPath(): string | undefined {
+    if (!this.isEnabled()) return undefined
+    const p = this.opts.dbPath
+    return typeof p === "string" && isAbsolute(p) ? p : undefined
+  }
+
+  /** Verifiable runtime status snapshot — pure snapshot of existing real state, no side effects. */
+  getStatus(): PrivateObservationRuntimeStatus {
+    this.clearPendingIfExited()
+    const pendingAlive = this.isPendingAlive()
+    const pendingPid = pendingAlive ? (this.pendingShutdownProc ?? this.pendingShutdownHost?.getProc())?.pid : undefined
+    return {
+      enabled: this.isEnabled(),
+      started: this.isStarted(),
+      hostState: this.getHostState(),
+      dbPath: this.getCanonicalDbPath(),
+      available: this.getAvailable(),
+      epoch: this.epoch,
+      pendingShutdown: pendingAlive,
+      disposed: this.disposed,
+      pid: this.host?.getPid(),
+      pendingPid,
+    }
   }
 
   /** Direct host access for tests (null when gate off or not started). */
@@ -405,6 +466,7 @@ export class PrivateObservationService implements Disposable {
     try {
       // Suppressed: host.start internal timeout dispose must not invoke lifecycle hook; external close after success still fires because suppress is scoped to this await.
       const res = await this.runSuppressedAsync(() => host.start())
+      this.epoch += 1
       return res
     } catch (e) {
       console.warn("[Kilo] PrivateObservationService initialize failed:", e)
@@ -526,14 +588,23 @@ export class PrivateObservationService implements Disposable {
   /** Delegate observation/get — versioned directory-scoped single session projection, no InstanceRef/drain-control. */
   async get(input: { directory: string; sessionId: string }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
-    const payload: Record<string, unknown> = { v: OBSERVATION_VERSION, directory: input.directory, sessionId: input.sessionId }
+    const payload: Record<string, unknown> = {
+      v: OBSERVATION_VERSION,
+      directory: input.directory,
+      sessionId: input.sessionId,
+    }
     return this.host.request(OBSERVATION_METHODS.GET, payload)
   }
 
   /** Delegate observation/messages — bounded raw storage-stripped page, no InstanceRef/drain-control. */
   async messages(input: { directory: string; sessionId: string; limit: number; cursor?: string }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
-    const payload: Record<string, unknown> = { v: OBSERVATION_VERSION, directory: input.directory, sessionId: input.sessionId, limit: input.limit }
+    const payload: Record<string, unknown> = {
+      v: OBSERVATION_VERSION,
+      directory: input.directory,
+      sessionId: input.sessionId,
+      limit: input.limit,
+    }
     if (input.cursor !== undefined) payload.cursor = input.cursor
     return this.host.request(OBSERVATION_METHODS.MESSAGES, payload)
   }
