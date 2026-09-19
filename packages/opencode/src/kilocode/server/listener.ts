@@ -1,6 +1,7 @@
 import { AppLayer } from "@/effect/app-runtime"
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { Context, Effect, Layer, Scope } from "effect"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 /**
  * Build one standalone listener.
@@ -46,10 +47,14 @@ export function build<A, E, R>(
   // app inside `layer`) would fresh the canonical services per listener and
   // break HTTP<->fd shared ownership.
   return Effect.gen(function* () {
+    const appTimer = P0Perf.span("app_layer_build") // kilocode_change - P0 instrumentation
     const appCtx = yield* Layer.buildWithMemoMap(app, memoMap, scope)
+    appTimer.end()
+    const transportTimer = P0Perf.span("transport_build_bind") // kilocode_change - P0 instrumentation
     const ctx = yield* Layer.buildWithMemoMap(Layer.fresh(layer), memoMap, scope).pipe(
       Effect.provide(Layer.succeedContext(appCtx as Context.Context<R>)),
     )
+    transportTimer.end()
     return { ctx, appCtx } as { ctx: Context.Context<A>; appCtx: Context.Context<unknown> }
   })
 }

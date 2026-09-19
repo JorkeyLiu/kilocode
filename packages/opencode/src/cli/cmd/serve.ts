@@ -16,11 +16,15 @@ export const ServeCommand = effectCmd({
   instance: false, // kilocode_change
   handler: Effect.fn("Cli.serve")(function* (args) {
     P0Perf.mark("serve_cli_entry", { id: String(process.pid) }) // kilocode_change - P0 instrumentation
+    const modTimer = P0Perf.span("server_module_import") // kilocode_change - P0 instrumentation
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
+    modTimer.end()
     if (!Flag.KILO_SERVER_PASSWORD) {
       console.log("Warning: KILO_SERVER_PASSWORD is not set; server is unsecured.")
     }
+    const netTimer = P0Perf.span("resolve_network_options") // kilocode_change - P0 instrumentation
     const opts = yield* resolveNetworkOptions(args)
+    netTimer.end()
     const server = yield* Effect.promise(() => Server.listen(opts))
 
     // kilocode_change start - fd3/fd4 private carrier (no stdout framing)
@@ -36,7 +40,9 @@ export const ServeCommand = effectCmd({
         // continues carrier-less and still publishes the HTTP port below. A
         // late install completion reconciles through the carrier state
         // machine (exact release + notify).
+        const waitTimer = P0Perf.span("fd_carrier_wait") // kilocode_change - P0 instrumentation
         const result = yield* Effect.promise(() => mod.awaitCarrierReady(started))
+        waitTimer.end({ meta: { status: result.status } })
         if (result.status === "ready") fdCarrier = started
       }
     } catch (err) {

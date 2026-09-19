@@ -198,8 +198,17 @@ export namespace KiloCli {
     await (deps?.migrateLegacy ??
       (() =>
         migrateLegacyKiloAuth(
-          async () => (await AppRuntime.runPromise(Auth.Service.use((s) => s.get("kilo")))) !== undefined,
-          async (auth) => AppRuntime.runPromise(Auth.Service.use((s) => s.set("kilo", auth))),
+          async () => {
+            const hasTimer = P0Perf.span("auth_has_check") // kilocode_change - P0 instrumentation
+            const has = (await AppRuntime.runPromise(Auth.Service.use((s) => s.get("kilo")))) !== undefined
+            hasTimer.end()
+            return has
+          },
+          async (auth) => {
+            const saveTimer = P0Perf.span("legacy_auth_save") // kilocode_change - P0 instrumentation
+            await AppRuntime.runPromise(Auth.Service.use((s) => s.set("kilo", auth)))
+            saveTimer.end()
+          },
         )))()
     legacyTimer.end()
 
