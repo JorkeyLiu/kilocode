@@ -798,7 +798,8 @@ export const layer: Layer.Layer<
             }
             const workspaceKey = hasInstance ? yield* InstanceState.directory : undefined
             yield* Effect.promise(() => SessionExport.onSessionClose(sessionID, workspaceKey))
-            yield* events.remove(sessionID)
+            // Event/EventSequence deletion is now atomic within the canonical
+            // Retention transaction (BEGIN IMMEDIATE) below — no independent events.remove.
             const now = Date.now()
             const familyIDs = options?.tombstone
               ? yield* Retention.deleteFamilyWithDeleteTombstoneUnprotected(db, sessionID, now, {

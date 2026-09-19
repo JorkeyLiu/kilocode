@@ -3,6 +3,7 @@ import { sql, eq, inArray } from "drizzle-orm"
 import { Database } from "../database/database"
 import { SessionTable, SessionDeleteTombstoneTable } from "../session/sql"
 import { RetentionObligationTable } from "./sql"
+import { EventSequenceTable, EventTable } from "../event/sql"
 import * as Artifact from "./artifact"
 import * as Changefeed from "./changefeed"
 import { ID as SessionID } from "../session/schema"
@@ -45,7 +46,9 @@ function sessionIdInArray(ids: string[]) {
 export function familyQuery(db: Database.Interface["db"], rootID: string) {
   return Effect.gen(function* () {
     const rows = yield* db
-      .all<{ id: string }>(
+      .all<{
+        id: string
+      }>(
         sql`WITH RECURSIVE family(id) AS (SELECT id FROM ${SessionTable} WHERE id = ${rootID} UNION ALL SELECT s.id FROM ${SessionTable} s JOIN family f ON s.parent_id = f.id) SELECT id FROM family`,
       )
       .pipe(Effect.orDie)
@@ -127,14 +130,12 @@ export function eligibleFamilies(
 
 type Tx = Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0]
 
-function deleteFamilyCanonicalTx(
-  tx: Tx,
-  rootID: string,
-  now: number,
-) {
+function deleteFamilyCanonicalTx(tx: Tx, rootID: string, now: number) {
   return Effect.gen(function* () {
     const raw = yield* tx
-      .all<{ id: string }>(
+      .all<{
+        id: string
+      }>(
         sql`WITH RECURSIVE family(id) AS (SELECT id FROM ${SessionTable} WHERE id = ${rootID} UNION ALL SELECT s.id FROM ${SessionTable} s JOIN family f ON s.parent_id = f.id) SELECT id FROM family`,
       )
       .pipe(Effect.orDie)
@@ -151,6 +152,13 @@ function deleteFamilyCanonicalTx(
       const finalRev = row.rev + 1
       yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
     }
+    // Include Event/EventSequence removal in the same BEGIN IMMEDIATE transaction
+    yield* tx.delete(EventTable).where(inArray(EventTable.aggregate_id, actualIds)).run().pipe(Effect.orDie)
+    yield* tx
+      .delete(EventSequenceTable)
+      .where(inArray(EventSequenceTable.aggregate_id, actualIds))
+      .run()
+      .pipe(Effect.orDie)
     yield* tx
       .insert(RetentionObligationTable)
       .values({ family_root_id: rootID, session_ids: actualIds, time_created: now })
@@ -161,11 +169,7 @@ function deleteFamilyCanonicalTx(
   })
 }
 
-export function deleteFamilyUnprotected(
-  db: Database.Interface["db"],
-  rootID: string,
-  now: number,
-) {
+export function deleteFamilyUnprotected(db: Database.Interface["db"], rootID: string, now: number) {
   return db.transaction((tx) => deleteFamilyCanonicalTx(tx, rootID, now), { behavior: "immediate" })
 }
 
@@ -187,7 +191,9 @@ export function deleteFamilyWithDeleteTombstoneUnprotected(
     message: string
   },
 ) {
-  return db.transaction((tx) => deleteFamilyWithDeleteTombstoneTx(tx, rootID, now, tombstone), { behavior: "immediate" })
+  return db.transaction((tx) => deleteFamilyWithDeleteTombstoneTx(tx, rootID, now, tombstone), {
+    behavior: "immediate",
+  })
 }
 
 function deleteFamilyWithDeleteTombstoneTx(
@@ -210,7 +216,9 @@ function deleteFamilyWithDeleteTombstoneTx(
 ) {
   return Effect.gen(function* () {
     const raw = yield* tx
-      .all<{ id: string }>(
+      .all<{
+        id: string
+      }>(
         sql`WITH RECURSIVE family(id) AS (SELECT id FROM ${SessionTable} WHERE id = ${rootID} UNION ALL SELECT s.id FROM ${SessionTable} s JOIN family f ON s.parent_id = f.id) SELECT id FROM family`,
       )
       .pipe(Effect.orDie)
@@ -227,6 +235,19 @@ function deleteFamilyWithDeleteTombstoneTx(
       const finalRev = row.rev + 1
       yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
     }
+    // Include Event/EventSequence removal atomically before canonical commit checks
+    yield* tx.delete(EventTable).where(inArray(EventTable.aggregate_id, actualIds)).run().pipe(Effect.orDie)
+    yield* tx
+      .delete(EventSequenceTable)
+      .where(inArray(EventSequenceTable.aggregate_id, actualIds))
+      .run()
+      .pipe(Effect.orDie)
+    // test-only seam: fail inside canonical delete transaction before commit (after event removal, to prove rollback)
+    if (
+      (globalThis as unknown as { __dispatchAtomicSeam?: { failDeleteInsideTx?: boolean } }).__dispatchAtomicSeam
+        ?.failDeleteInsideTx
+    )
+      yield* Effect.die(new Error("injected delete tx failure"))
     yield* tx
       .insert(RetentionObligationTable)
       .values({ family_root_id: rootID, session_ids: actualIds, time_created: now })
@@ -266,7 +287,9 @@ export function deleteFamilyTransaction(
     (tx) =>
       Effect.gen(function* () {
         const raw = yield* tx
-          .all<{ id: string }>(
+          .all<{
+            id: string
+          }>(
             sql`WITH RECURSIVE family(id) AS (SELECT id FROM ${SessionTable} WHERE id = ${family.rootID} UNION ALL SELECT s.id FROM ${SessionTable} s JOIN family f ON s.parent_id = f.id) SELECT id FROM family`,
           )
           .pipe(Effect.orDie)
@@ -287,8 +310,19 @@ export function deleteFamilyTransaction(
         }
         for (const row of rows) {
           const finalRev = row.rev + 1
-          yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
+          yield* Changefeed.appendTx(tx, {
+            session_id: row.id as string,
+            revision: finalRev,
+            kind: "deleted",
+            time: now,
+          })
         }
+        yield* tx.delete(EventTable).where(inArray(EventTable.aggregate_id, actualIds)).run().pipe(Effect.orDie)
+        yield* tx
+          .delete(EventSequenceTable)
+          .where(inArray(EventSequenceTable.aggregate_id, actualIds))
+          .run()
+          .pipe(Effect.orDie)
         yield* tx
           .insert(RetentionObligationTable)
           .values({ family_root_id: family.rootID, session_ids: actualIds, time_created: now })
@@ -327,9 +361,13 @@ export function replayObligations(
 ) {
   return Effect.gen(function* () {
     const rows = yield* db
-      .all<{ id: number; family_root_id: string; session_ids: unknown; time_created: number; attempts: number }>(
-        sql`SELECT id, family_root_id, session_ids, time_created, attempts FROM retention_obligation`,
-      )
+      .all<{
+        id: number
+        family_root_id: string
+        session_ids: unknown
+        time_created: number
+        attempts: number
+      }>(sql`SELECT id, family_root_id, session_ids, time_created, attempts FROM retention_obligation`)
       .pipe(Effect.orDie)
     for (const row of rows) {
       const raw: unknown = row.session_ids
@@ -337,14 +375,18 @@ export function replayObligations(
       if (malformed !== null || ids === null) {
         const reason = malformed ?? "malformed obligation"
         yield* Effect.logWarning(`replayObligations malformed ${row.id}: ${reason}`)
-        yield* db.run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE id = ${row.id}`).pipe(Effect.orDie)
+        yield* db
+          .run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE id = ${row.id}`)
+          .pipe(Effect.orDie)
         continue
       }
       const keys = Artifact.familyArtifactsForFamily(ids)
       const exit = yield* deleter(keys).pipe(Effect.exit)
       if (exit._tag === "Failure") {
         yield* Effect.logWarning(`replayObligations deleter failed ${row.id}`, { cause: String(exit.cause) })
-        yield* db.run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE id = ${row.id}`).pipe(Effect.orDie)
+        yield* db
+          .run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE id = ${row.id}`)
+          .pipe(Effect.orDie)
         continue
       }
       yield* db.delete(RetentionObligationTable).where(eq(RetentionObligationTable.id, row.id)).run().pipe(Effect.orDie)
@@ -371,6 +413,7 @@ export function physicalBytes(opts: {
 
 export function artifactBytesForFamily(sessionIDs: string[], sizeOf: (key: string[]) => number): number {
   let sum = 0
-  for (const id of sessionIDs) for (const kind of Artifact.familyKinds()) sum += sizeOf([...Artifact.familyPrefix(kind), id])
+  for (const id of sessionIDs)
+    for (const kind of Artifact.familyKinds()) sum += sizeOf([...Artifact.familyPrefix(kind), id])
   return sum
 }

@@ -14,6 +14,7 @@ import { Session } from "@/session/session"
 import { Log } from "@opencode-ai/core/util/log"
 import { InstanceRef } from "@/effect/instance-ref"
 import { acquireDrainControl } from "@/kilocode/server/drain-control-acquire"
+import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
 
 export const VERSION = 1 as const
 export const OP = "session/delete" as const
@@ -56,7 +57,11 @@ export interface SessionDeleteFailed {
   op: typeof OP
   idempotencyKey: string
   status: "failed"
-  outcome: { type: "failed"; time: number; failure: { code: string; message: string; retryable: boolean; detail?: string } }
+  outcome: {
+    type: "failed"
+    time: number
+    failure: { code: string; message: string; retryable: boolean; detail?: string }
+  }
   accepted: boolean
   failure: { code: string; message: string; retryable: boolean; detail?: string }
   revision?: Revision
@@ -84,9 +89,11 @@ export function validateRequest(raw: unknown): SessionDeleteRequest {
   const ctx = o.context
   if (ctx === null || typeof ctx !== "object" || Array.isArray(ctx)) throw new Error("context must be object")
   const c = ctx as Record<string, unknown>
-  if (typeof c.directory !== "string" || !isAbsolute(c.directory)) throw new Error("context.directory must be absolute path")
+  if (typeof c.directory !== "string" || !isAbsolute(c.directory))
+    throw new Error("context.directory must be absolute path")
   canonicalDirectory(c.directory as string)
-  if (typeof c.sessionId !== "string" || !Schema.is(SessionID)(c.sessionId)) throw new Error("context.sessionId must be SessionID")
+  if (typeof c.sessionId !== "string" || !Schema.is(SessionID)(c.sessionId))
+    throw new Error("context.sessionId must be SessionID")
   if (!("parentSessionId" in c) || c.parentSessionId !== null) throw new Error("context.parentSessionId must be null")
   if ("parentSessionId" in c && c.parentSessionId !== null && c.parentSessionId !== undefined) {
     if (typeof c.parentSessionId !== "string" || !Schema.is(SessionID)(c.parentSessionId as string))
@@ -99,14 +106,16 @@ export function validateRequest(raw: unknown): SessionDeleteRequest {
     if (!isSafeInt(c.sessionRevision)) throw new Error("context.sessionRevision must be integer >=0")
   }
   const payload = o.payload
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("payload must be object")
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload))
+    throw new Error("payload must be object")
   const p = payload as Record<string, unknown>
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
   for (const k of Object.keys(o)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
   for (const k of Object.keys(c)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
   for (const k of Object.keys(p)) throw new Error(`unexpected payload field ${k}`)
-  if (c.parentSessionId !== null && c.parentSessionId !== undefined) throw new Error("parentSessionId must be null for delete")
+  if (c.parentSessionId !== null && c.parentSessionId !== undefined)
+    throw new Error("parentSessionId must be null for delete")
   try {
     SessionOperation.parseDeleteOpIdForSession(o.opId as string, c.sessionId as string)
   } catch (e) {
@@ -191,9 +200,10 @@ export interface SessionDeleteDispatch {
   readonly dispatchPrivate: (request: unknown) => Effect.Effect<SessionDeleteResult, unknown, unknown>
 }
 
-export class SessionDeleteDispatchService extends Context.Service<SessionDeleteDispatchService, SessionDeleteDispatch>()(
-  "SessionDeleteDispatch",
-) {}
+export class SessionDeleteDispatchService extends Context.Service<
+  SessionDeleteDispatchService,
+  SessionDeleteDispatch
+>()("SessionDeleteDispatch") {}
 
 const log = Log.create({ service: "sessionDelete" })
 
@@ -268,7 +278,11 @@ export const layer = Layer.effect(
           op: OP,
           idempotencyKey,
           status: "failed",
-          outcome: { type: "failed", time, failure: { code: "validation.failed", message: failure.message, retryable: false } },
+          outcome: {
+            type: "failed",
+            time,
+            failure: { code: "validation.failed", message: failure.message, retryable: false },
+          },
           accepted: false,
           failure: { code: "validation.failed", message: failure.message, retryable: false },
         } satisfies SessionDeleteFailed
@@ -286,12 +300,27 @@ export const layer = Layer.effect(
           Effect.map((v) => ({ tag: "ok" as const, value: v })),
           Effect.catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err)
-            const isFence = (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild" || msg.includes("Instance is unavailable")
-            return Effect.succeed({ tag: "fail" as const, error: buildFailed(req, isFence ? "InstanceUnavailableDuringConfigRebuild" : "internal", msg, isFence, false, undefined) })
+            const isFence =
+              (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild" ||
+              msg.includes("Instance is unavailable")
+            return Effect.succeed({
+              tag: "fail" as const,
+              error: buildFailed(
+                req,
+                isFence ? "InstanceUnavailableDuringConfigRebuild" : "internal",
+                msg,
+                isFence,
+                false,
+                undefined,
+              ),
+            })
           }),
           Effect.catchDefect((defect: unknown) => {
             const msg = defect instanceof Error ? defect.message : String(defect)
-            return Effect.succeed({ tag: "fail" as const, error: buildFailed(req, "internal", msg, false, false, undefined) })
+            return Effect.succeed({
+              tag: "fail" as const,
+              error: buildFailed(req, "internal", msg, false, false, undefined),
+            })
           }),
         )
         if ((acquired as { tag: string }).tag === "fail") return (acquired as { error: SessionDeleteFailed }).error
@@ -301,7 +330,9 @@ export const layer = Layer.effect(
       }
 
       const inner = Effect.gen(function* () {
-        const tombstone = yield* SessionOperation.getSessionDeleteByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)
+        const tombstone = yield* SessionOperation.getSessionDeleteByIdempotencyHash(db, sessionId, hash).pipe(
+          Effect.orDie,
+        )
         if (tombstone) {
           const conflict = SessionOperation.isSessionDeleteConflict(tombstone, {
             opId: req.opId,
@@ -314,7 +345,14 @@ export const layer = Layer.effect(
             const curRev = yield* readRevOmit(sessionId)
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(curRev, curCfg)
-            return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
+            return buildFailed(
+              req,
+              "conflict",
+              "idempotencyKey conflict: different operation facts with same key",
+              false,
+              false,
+              revision,
+            )
           }
           if (tombstone.outcome === "succeeded") {
             const curRev = yield* readRevOmit(sessionId)
@@ -336,7 +374,15 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
         if (!sessionRow) {
           const cfgEither = yield* readConfigVer(canonDir)
-          if (isLeft(cfgEither)) return buildFailed(req, "internal", "config version read failed", false, false, makeRevision(undefined, undefined))
+          if (isLeft(cfgEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(undefined, undefined),
+            )
           const cfgVer = rightValue(cfgEither) as number | undefined
           const revision = makeRevision(undefined, cfgVer)
           return buildFailed(req, "session.not_found", `session not found ${sessionId}`, false, false, revision)
@@ -344,13 +390,36 @@ export const layer = Layer.effect(
         const canonicalStored = canonicalDirectory(sessionRow.directory)
         if (canonicalStored !== canonDir) {
           const revEither = yield* readSessionRev(sessionId)
-          if (isLeft(revEither)) return buildFailed(req, "internal", "revision read failed", false, false, makeRevision(undefined, undefined))
+          if (isLeft(revEither))
+            return buildFailed(
+              req,
+              "internal",
+              "revision read failed",
+              false,
+              false,
+              makeRevision(undefined, undefined),
+            )
           const cfgEither = yield* readConfigVer(canonDir)
-          if (isLeft(cfgEither)) return buildFailed(req, "internal", "config version read failed", false, false, makeRevision(rightValue(revEither) as number | undefined, undefined))
+          if (isLeft(cfgEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(rightValue(revEither) as number | undefined, undefined),
+            )
           const curRev = rightValue(revEither) as number | undefined
           const cfgVer = rightValue(cfgEither) as number | undefined
           const revision = makeRevision(curRev, cfgVer)
-          return buildFailed(req, "scope_mismatch", `directory mismatch for session ${sessionId}`, false, false, revision)
+          return buildFailed(
+            req,
+            "scope_mismatch",
+            `directory mismatch for session ${sessionId}`,
+            false,
+            false,
+            revision,
+          )
         }
 
         const existingOpId = yield* SessionOperation.get(db, req.opId).pipe(Effect.orDie)
@@ -358,7 +427,14 @@ export const layer = Layer.effect(
           const curRev = yield* readRevOmit(sessionId)
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = makeRevision(curRev, curCfg)
-          return buildFailed(req, "conflict", "opId already exists with different idempotencyKey", false, false, revision)
+          return buildFailed(
+            req,
+            "conflict",
+            "opId already exists with different idempotencyKey",
+            false,
+            false,
+            revision,
+          )
         }
 
         const needsConfigLease = req.context.configVersion !== undefined
@@ -366,34 +442,96 @@ export const layer = Layer.effect(
           const curRev = yield* readRevOmit(sessionId)
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = makeRevision(curRev, curCfg)
-          return buildFailed(req, "InstanceUnavailableDuringConfigRebuild", "instance unavailable during config rebuild", true, false, revision)
+          return buildFailed(
+            req,
+            "InstanceUnavailableDuringConfigRebuild",
+            "instance unavailable during config rebuild",
+            true,
+            false,
+            revision,
+          )
         }
         const leaseRelease: Effect.Effect<void> = needsConfigLease ? yield* gate.acquire(canonDir) : Effect.void
 
         const txResult: SessionDeleteResult = yield* Effect.gen(function* () {
           const revEither = yield* readSessionRev(sessionId)
-          if (isLeft(revEither)) return buildFailed(req, "internal", "revision read failed", false, false, makeRevision(undefined, undefined)) as unknown as SessionDeleteResult
+          if (isLeft(revEither))
+            return buildFailed(
+              req,
+              "internal",
+              "revision read failed",
+              false,
+              false,
+              makeRevision(undefined, undefined),
+            ) as unknown as SessionDeleteResult
           const cfgEither = yield* readConfigVer(canonDir)
-          if (isLeft(cfgEither)) return buildFailed(req, "internal", "config version read failed", false, false, makeRevision(rightValue(revEither) as number | undefined, undefined)) as unknown as SessionDeleteResult
+          if (isLeft(cfgEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(rightValue(revEither) as number | undefined, undefined),
+            ) as unknown as SessionDeleteResult
           const actualSessionRev = rightValue(revEither) as number | undefined
           const currentConfigVer = rightValue(cfgEither) as number | undefined
-          if (req.context.sessionRevision !== undefined && actualSessionRev !== undefined && req.context.sessionRevision < actualSessionRev) {
+          if (
+            req.context.sessionRevision !== undefined &&
+            actualSessionRev !== undefined &&
+            req.context.sessionRevision < actualSessionRev
+          ) {
             const revision = makeRevision(actualSessionRev, currentConfigVer)
-            return buildFailed(req, "stale", "stale sessionRevision", false, false, revision) as unknown as SessionDeleteResult
+            return buildFailed(
+              req,
+              "stale",
+              "stale sessionRevision",
+              false,
+              false,
+              revision,
+            ) as unknown as SessionDeleteResult
           }
           const cfgBeforeEither = yield* readConfigVer(canonDir)
-          if (isLeft(cfgBeforeEither)) return buildFailed(req, "internal", "config version read failed", false, false, makeRevision(actualSessionRev, currentConfigVer)) as unknown as SessionDeleteResult
+          if (isLeft(cfgBeforeEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(actualSessionRev, currentConfigVer),
+            ) as unknown as SessionDeleteResult
           const configBeforeTx = rightValue(cfgBeforeEither) as number | undefined
           const effectiveConfigBeforeTx = configBeforeTx ?? currentConfigVer
           if (req.context.configVersion !== undefined && effectiveConfigBeforeTx === undefined) {
-            return buildFailed(req, "internal", "config version unavailable", false, false, makeRevision(actualSessionRev, currentConfigVer)) as unknown as SessionDeleteResult
+            return buildFailed(
+              req,
+              "internal",
+              "config version unavailable",
+              false,
+              false,
+              makeRevision(actualSessionRev, currentConfigVer),
+            ) as unknown as SessionDeleteResult
           }
-          if (req.context.configVersion !== undefined && effectiveConfigBeforeTx !== undefined && req.context.configVersion < effectiveConfigBeforeTx) {
+          if (
+            req.context.configVersion !== undefined &&
+            effectiveConfigBeforeTx !== undefined &&
+            req.context.configVersion < effectiveConfigBeforeTx
+          ) {
             const revision = makeRevision(actualSessionRev, effectiveConfigBeforeTx)
-            return buildFailed(req, "stale", "stale configVersion", false, false, revision) as unknown as SessionDeleteResult
+            return buildFailed(
+              req,
+              "stale",
+              "stale configVersion",
+              false,
+              false,
+              revision,
+            ) as unknown as SessionDeleteResult
           }
 
-          const tombInside = yield* SessionOperation.getSessionDeleteByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)
+          const tombInside = yield* SessionOperation.getSessionDeleteByIdempotencyHash(db, sessionId, hash).pipe(
+            Effect.orDie,
+          )
           if (tombInside) {
             const conflictInside = SessionOperation.isSessionDeleteConflict(tombInside, {
               opId: req.opId,
@@ -405,7 +543,14 @@ export const layer = Layer.effect(
             if (conflictInside) {
               const curRev = yield* readRevOmit(sessionId)
               const curCfg = yield* readCfgOmit(canonDir)
-              return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(curRev, curCfg)) as unknown as SessionDeleteResult
+              return buildFailed(
+                req,
+                "conflict",
+                "idempotencyKey conflict: different operation facts with same key",
+                false,
+                false,
+                makeRevision(curRev, curCfg),
+              ) as unknown as SessionDeleteResult
             }
             if (tombInside.outcome === "succeeded") {
               const curRev = yield* readRevOmit(sessionId)
@@ -414,9 +559,17 @@ export const layer = Layer.effect(
             }
             const curRev = yield* readRevOmit(sessionId)
             const curCfg = yield* readCfgOmit(canonDir)
-            return buildFailed(req, tombInside.code, tombInside.message, false, false, makeRevision(curRev, curCfg)) as unknown as SessionDeleteResult
+            return buildFailed(
+              req,
+              tombInside.code,
+              tombInside.message,
+              false,
+              false,
+              makeRevision(curRev, curCfg),
+            ) as unknown as SessionDeleteResult
           }
 
+          if (DispatchAtomicSeam.failDeleteBeforeTx) yield* Effect.die(new Error("injected delete before-tx failure"))
           const sessionSvc = yield* Session.Service
           const exit = yield* sessionSvc
             .remove(sessionId, {
@@ -436,22 +589,48 @@ export const layer = Layer.effect(
             const err = (cause as unknown as { error?: unknown })?.error ?? cause
             const msg = err instanceof Error ? err.message : String(err)
             const causeStr = String(cause)
-            const isUnique = msg.includes("UNIQUE") || msg.includes("unique") || causeStr.includes("UNIQUE") || causeStr.includes("unique") || msg.includes("SQLITE_CONSTRAINT")
+            const isUnique =
+              msg.includes("UNIQUE") ||
+              msg.includes("unique") ||
+              causeStr.includes("UNIQUE") ||
+              causeStr.includes("unique") ||
+              msg.includes("SQLITE_CONSTRAINT")
             if (isUnique) {
               const curRev = yield* readRevOmit(sessionId)
               const curCfg = yield* readCfgOmit(canonDir)
-              return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(curRev, curCfg)) as unknown as SessionDeleteResult
+              return buildFailed(
+                req,
+                "conflict",
+                "idempotencyKey conflict: different operation facts with same key",
+                false,
+                false,
+                makeRevision(curRev, curCfg),
+              ) as unknown as SessionDeleteResult
             }
             const isNotFound = msg.includes("not found") || causeStr.includes("NotFound")
             if (isNotFound) {
               const cfgEither2 = yield* readConfigVer(canonDir)
               const cfgVer2 = isLeft(cfgEither2) ? undefined : (rightValue(cfgEither2) as number | undefined)
               const revision = makeRevision(undefined, cfgVer2)
-              return buildFailed(req, "session.not_found", `session not found ${sessionId}`, false, false, revision) as unknown as SessionDeleteResult
+              return buildFailed(
+                req,
+                "session.not_found",
+                `session not found ${sessionId}`,
+                false,
+                false,
+                revision,
+              ) as unknown as SessionDeleteResult
             }
             const curRev = yield* readRevOmit(sessionId)
             const curCfg = yield* readCfgOmit(canonDir)
-            return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionDeleteResult
+            return buildFailed(
+              req,
+              "internal",
+              msg,
+              false,
+              false,
+              makeRevision(curRev, curCfg),
+            ) as unknown as SessionDeleteResult
           }
 
           const revAfter = yield* readRevOmit(sessionId)
@@ -471,7 +650,11 @@ export const layer = Layer.effect(
             const latestCfg = isLeft(cfgEither) ? undefined : (rightValue(cfgEither) as number | undefined)
             const revision = makeRevision(latestRev, latestCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)),
+            ),
+          ),
         ),
         Effect.catch((cause: unknown) =>
           Effect.gen(function* () {
@@ -482,10 +665,15 @@ export const layer = Layer.effect(
             const latestCfg = isLeft(cfgEither) ? undefined : (rightValue(cfgEither) as number | undefined)
             const revision = makeRevision(latestRev, latestCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)),
+            ),
+          ),
         ),
       )
-      if (drainCtx !== undefined) return yield* inner.pipe(Effect.provideService(InstanceRef, drainCtx as never), Effect.ensuring(drainRelease))
+      if (drainCtx !== undefined)
+        return yield* inner.pipe(Effect.provideService(InstanceRef, drainCtx as never), Effect.ensuring(drainRelease))
       return yield* inner.pipe(Effect.ensuring(drainRelease))
     })
 
@@ -523,7 +711,11 @@ export const layer = Layer.effect(
           op: OP,
           idempotencyKey,
           status: "failed",
-          outcome: { type: "failed", time, failure: { code: "validation.failed", message: failure.message, retryable: false } },
+          outcome: {
+            type: "failed",
+            time,
+            failure: { code: "validation.failed", message: failure.message, retryable: false },
+          },
           accepted: false,
           failure: { code: "validation.failed", message: failure.message, retryable: false },
         } satisfies SessionDeleteFailed
@@ -534,7 +726,9 @@ export const layer = Layer.effect(
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
 
       const inner = Effect.gen(function* () {
-        const tombstone = yield* SessionOperation.getSessionDeleteByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)
+        const tombstone = yield* SessionOperation.getSessionDeleteByIdempotencyHash(db, sessionId, hash).pipe(
+          Effect.orDie,
+        )
         if (!tombstone) {
           const curRev = yield* readRevOmit(sessionId)
           const curCfg = yield* readCfgOmit(canonDir)
@@ -552,7 +746,14 @@ export const layer = Layer.effect(
           const curRev = yield* readRevOmit(sessionId)
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = makeRevision(curRev, curCfg)
-          return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
+          return buildFailed(
+            req,
+            "conflict",
+            "idempotencyKey conflict: different operation facts with same key",
+            false,
+            false,
+            revision,
+          )
         }
         if (tombstone.outcome === "succeeded") {
           const curRev = yield* readRevOmit(sessionId)
@@ -574,7 +775,11 @@ export const layer = Layer.effect(
             const latestCfg = isLeft(cfgEither) ? undefined : (rightValue(cfgEither) as number | undefined)
             const revision = makeRevision(latestRev, latestCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)),
+            ),
+          ),
         ),
         Effect.catch((cause: unknown) =>
           Effect.gen(function* () {
@@ -585,7 +790,11 @@ export const layer = Layer.effect(
             const latestCfg = isLeft(cfgEither) ? undefined : (rightValue(cfgEither) as number | undefined)
             const revision = makeRevision(latestRev, latestCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)),
+            ),
+          ),
         ),
       )
       return yield* inner

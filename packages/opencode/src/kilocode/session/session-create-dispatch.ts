@@ -25,6 +25,7 @@ import { KiloSession } from "@/kilocode/session"
 import * as SandboxPolicy from "@/kilocode/sandbox/policy"
 import { sessionPath } from "@/kilocode/session/fork"
 import * as Changefeed from "@opencode-ai/core/retention/changefeed"
+import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
 
 export const VERSION = 1 as const
 export const OP = "session/create" as const
@@ -75,7 +76,11 @@ export interface SessionCreateFailed {
   op: typeof OP
   idempotencyKey: string
   status: "failed"
-  outcome: { type: "failed"; time: number; failure: { code: string; message: string; retryable: boolean; detail?: string } }
+  outcome: {
+    type: "failed"
+    time: number
+    failure: { code: string; message: string; retryable: boolean; detail?: string }
+  }
   accepted: boolean
   failure: { code: string; message: string; retryable: boolean; detail?: string }
   revision?: Revision
@@ -128,7 +133,8 @@ export function validateRequest(raw: unknown): SessionCreateRequest {
   const ctx = o.context
   if (ctx === null || typeof ctx !== "object" || Array.isArray(ctx)) throw new Error("context must be object")
   const c = ctx as Record<string, unknown>
-  if (typeof c.directory !== "string" || !isAbsolute(c.directory)) throw new Error("context.directory must be absolute path")
+  if (typeof c.directory !== "string" || !isAbsolute(c.directory))
+    throw new Error("context.directory must be absolute path")
   canonicalDirectory(c.directory as string)
   if ("parentSessionId" in c && c.parentSessionId !== null && c.parentSessionId !== undefined) {
     if (typeof c.parentSessionId !== "string" || !Schema.is(SessionID)(c.parentSessionId as string))
@@ -138,7 +144,8 @@ export function validateRequest(raw: unknown): SessionCreateRequest {
     if (!isSafeInt(c.configVersion)) throw new Error("context.configVersion must be integer >=0")
   }
   const payload = o.payload
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new Error("payload must be object")
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload))
+    throw new Error("payload must be object")
   const p = payload as Record<string, unknown>
   if ("title" in p && p.title !== null && p.title !== undefined) {
     if (typeof p.title !== "string") throw new Error("payload.title must be string")
@@ -152,13 +159,27 @@ export function validateRequest(raw: unknown): SessionCreateRequest {
   for (const k of Object.keys(o)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   const allowedCtx = new Set(["directory", "parentSessionId", "configVersion"])
   for (const k of Object.keys(c)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
-  const allowedPayload = new Set(["title", "parentID", "agent", "model", "metadata", "permission", "platform", "workspaceID", "sandboxInheritanceToken"])
+  const allowedPayload = new Set([
+    "title",
+    "parentID",
+    "agent",
+    "model",
+    "metadata",
+    "permission",
+    "platform",
+    "workspaceID",
+    "sandboxInheritanceToken",
+  ])
   for (const k of Object.keys(p)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
-  if ("agent" in p && p.agent !== null && p.agent !== undefined && typeof p.agent !== "string") throw new Error("payload.agent must be string or null")
-  if ("platform" in p && p.platform !== null && p.platform !== undefined && typeof p.platform !== "string") throw new Error("payload.platform must be string or null")
-  if ("workspaceID" in p && p.workspaceID !== null && p.workspaceID !== undefined && typeof p.workspaceID !== "string") throw new Error("payload.workspaceID must be string or null")
+  if ("agent" in p && p.agent !== null && p.agent !== undefined && typeof p.agent !== "string")
+    throw new Error("payload.agent must be string or null")
+  if ("platform" in p && p.platform !== null && p.platform !== undefined && typeof p.platform !== "string")
+    throw new Error("payload.platform must be string or null")
+  if ("workspaceID" in p && p.workspaceID !== null && p.workspaceID !== undefined && typeof p.workspaceID !== "string")
+    throw new Error("payload.workspaceID must be string or null")
   if ("sandboxInheritanceToken" in p && p.sandboxInheritanceToken !== null && p.sandboxInheritanceToken !== undefined) {
-    if (typeof p.sandboxInheritanceToken !== "string") throw new Error("payload.sandboxInheritanceToken must be string or null")
+    if (typeof p.sandboxInheritanceToken !== "string")
+      throw new Error("payload.sandboxInheritanceToken must be string or null")
     // Durable create does not yet support sandbox inheritance via token; explicitly reject rather than silently ignore.
     // Supported path is legacy Session.create (non-durable) which consumes via SandboxInheritance. Durable token support requires product decision on idempotency/grant lifecycle.
     throw new Error("payload.sandboxInheritanceToken not supported for durable create")
@@ -167,10 +188,12 @@ export function validateRequest(raw: unknown): SessionCreateRequest {
     if (typeof p.model !== "object" || Array.isArray(p.model)) throw new Error("payload.model must be object or null")
     const m = p.model as Record<string, unknown>
     if (typeof m.id !== "string" || m.id.length === 0) throw new Error("payload.model.id must be non-empty string")
-    if (typeof m.providerID !== "string" || m.providerID.length === 0) throw new Error("payload.model.providerID must be non-empty string")
+    if (typeof m.providerID !== "string" || m.providerID.length === 0)
+      throw new Error("payload.model.providerID must be non-empty string")
   }
   if ("metadata" in p && p.metadata !== null && p.metadata !== undefined) {
-    if (typeof p.metadata !== "object" || Array.isArray(p.metadata)) throw new Error("payload.metadata must be object or null")
+    if (typeof p.metadata !== "object" || Array.isArray(p.metadata))
+      throw new Error("payload.metadata must be object or null")
   }
   if ("permission" in p && p.permission !== null && p.permission !== undefined) {
     if (!Array.isArray(p.permission)) throw new Error("payload.permission must be array or null")
@@ -189,7 +212,8 @@ export function validateRequest(raw: unknown): SessionCreateRequest {
   } catch (e) {
     throw new Error(e instanceof Error ? e.message : String(e))
   }
-  if (c.parentSessionId !== null && c.parentSessionId !== undefined) throw new Error("parentSessionId must be null for sessionCreate")
+  if (c.parentSessionId !== null && c.parentSessionId !== undefined)
+    throw new Error("parentSessionId must be null for sessionCreate")
   return o as unknown as SessionCreateRequest
 }
 
@@ -229,7 +253,11 @@ function buildFailed(
   } as SessionCreateFailed
 }
 
-function buildSucceeded(req: SessionCreateRequest, data: Session.Info, revision: Revision | undefined): SessionCreateSucceeded {
+function buildSucceeded(
+  req: SessionCreateRequest,
+  data: Session.Info,
+  revision: Revision | undefined,
+): SessionCreateSucceeded {
   const time = Date.now()
   return {
     v: VERSION,
@@ -245,7 +273,11 @@ function buildSucceeded(req: SessionCreateRequest, data: Session.Info, revision:
   } as SessionCreateSucceeded
 }
 
-function buildPrivateSucceeded(req: SessionCreateRequest, data: Session.Info, revision: Revision | undefined): SessionCreatePrivateSucceeded {
+function buildPrivateSucceeded(
+  req: SessionCreateRequest,
+  data: Session.Info,
+  revision: Revision | undefined,
+): SessionCreatePrivateSucceeded {
   const time = Date.now()
   return {
     v: VERSION,
@@ -268,7 +300,9 @@ function makeRevision(session: number | undefined, config: number | undefined): 
 function snapshotToInfo(snapshot: unknown): Session.Info | undefined {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return undefined
   try {
-    const info = Session.fromRow(snapshot as unknown as Parameters<typeof Session.fromRow>[0]) as unknown as Session.Info
+    const info = Session.fromRow(
+      snapshot as unknown as Parameters<typeof Session.fromRow>[0],
+    ) as unknown as Session.Info
     const cleaned = JSON.parse(JSON.stringify(info))
     Schema.decodeUnknownSync(Session.Info)(cleaned)
     return info
@@ -282,7 +316,10 @@ export interface SessionCreateDispatch {
   readonly dispatchPrivate: (request: unknown) => Effect.Effect<SessionCreatePrivateResult, unknown, unknown>
 }
 
-export class SessionCreateDispatchService extends Context.Service<SessionCreateDispatchService, SessionCreateDispatch>()("SessionCreateDispatch") {}
+export class SessionCreateDispatchService extends Context.Service<
+  SessionCreateDispatchService,
+  SessionCreateDispatch
+>()("SessionCreateDispatch") {}
 
 const log = Log.create({ service: "sessionCreate" })
 
@@ -344,7 +381,11 @@ export const layer = Layer.effect(
           op: OP,
           idempotencyKey,
           status: "failed",
-          outcome: { type: "failed", time, failure: { code: "validation.failed", message: failure.message, retryable: false } },
+          outcome: {
+            type: "failed",
+            time,
+            failure: { code: "validation.failed", message: failure.message, retryable: false },
+          },
           accepted: false,
           failure: { code: "validation.failed", message: failure.message, retryable: false },
         } satisfies SessionCreateFailed
@@ -357,7 +398,9 @@ export const layer = Layer.effect(
 
       const inner = Effect.gen(function* () {
         // replay/conflict check before freshness
-        const existing = yield* SessionOperation.getSessionCreateByIdempotencyHash(db, hash, canonDir).pipe(Effect.orDie)
+        const existing = yield* SessionOperation.getSessionCreateByIdempotencyHash(db, hash, canonDir).pipe(
+          Effect.orDie,
+        )
         if (existing) {
           const conflict = SessionOperation.isSessionCreateConflict(existing, {
             opId: req.opId,
@@ -370,11 +413,20 @@ export const layer = Layer.effect(
           if (conflict) {
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(undefined, curCfg)
-            return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
+            return buildFailed(
+              req,
+              "conflict",
+              "idempotencyKey conflict: different operation facts with same key",
+              false,
+              false,
+              revision,
+            )
           }
           if (existing.outcome === "succeeded") {
             const hasSnap = Object.hasOwn(existing as object, "resultSnapshot")
-            const persisted = hasSnap ? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot) : undefined
+            const persisted = hasSnap
+              ? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+              : undefined
             if (hasSnap && !persisted) {
               const curCfg = yield* readCfgOmit(canonDir)
               const revision = makeRevision((existing as unknown as { revision: number }).revision, curCfg)
@@ -401,40 +453,102 @@ export const layer = Layer.effect(
         if (existingOpId) {
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = makeRevision(undefined, curCfg)
-          return buildFailed(req, "conflict", "opId already exists with different idempotencyKey", false, false, revision)
+          return buildFailed(
+            req,
+            "conflict",
+            "opId already exists with different idempotencyKey",
+            false,
+            false,
+            revision,
+          )
         }
 
         const needsConfigLease = req.context.configVersion !== undefined
         if (needsConfigLease && gate.isBarrierActive(canonDir)) {
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = makeRevision(undefined, curCfg)
-          return buildFailed(req, "InstanceUnavailableDuringConfigRebuild", "instance unavailable during config rebuild", true, false, revision)
+          return buildFailed(
+            req,
+            "InstanceUnavailableDuringConfigRebuild",
+            "instance unavailable during config rebuild",
+            true,
+            false,
+            revision,
+          )
         }
         const leaseRelease: Effect.Effect<void> = needsConfigLease ? yield* gate.acquire(canonDir) : Effect.void
 
         const txResult: SessionCreateResult = yield* Effect.gen(function* () {
           const cfgEither = yield* readConfigVer(canonDir)
-          if (isLeft(cfgEither)) return buildFailed(req, "internal", "config version read failed", false, false, makeRevision(undefined, undefined)) as unknown as SessionCreateResult
+          if (isLeft(cfgEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(undefined, undefined),
+            ) as unknown as SessionCreateResult
           const currentConfigVer = rightValue(cfgEither) as number | undefined
           const cfgBeforeEither = yield* readConfigVer(canonDir)
-          if (isLeft(cfgBeforeEither)) return buildFailed(req, "internal", "config version read failed", false, false, makeRevision(undefined, currentConfigVer)) as unknown as SessionCreateResult
+          if (isLeft(cfgBeforeEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(undefined, currentConfigVer),
+            ) as unknown as SessionCreateResult
           const configBeforeTx = rightValue(cfgBeforeEither) as number | undefined
           const effectiveConfigBeforeTx = configBeforeTx ?? currentConfigVer
           if (req.context.configVersion !== undefined && effectiveConfigBeforeTx === undefined) {
-            return buildFailed(req, "internal", "config version unavailable", false, false, makeRevision(undefined, currentConfigVer)) as unknown as SessionCreateResult
+            return buildFailed(
+              req,
+              "internal",
+              "config version unavailable",
+              false,
+              false,
+              makeRevision(undefined, currentConfigVer),
+            ) as unknown as SessionCreateResult
           }
-          if (req.context.configVersion !== undefined && effectiveConfigBeforeTx !== undefined && req.context.configVersion < effectiveConfigBeforeTx) {
+          if (
+            req.context.configVersion !== undefined &&
+            effectiveConfigBeforeTx !== undefined &&
+            req.context.configVersion < effectiveConfigBeforeTx
+          ) {
             const revision = makeRevision(undefined, effectiveConfigBeforeTx)
-            return buildFailed(req, "stale", "stale configVersion", false, false, revision) as unknown as SessionCreateResult
+            return buildFailed(
+              req,
+              "stale",
+              "stale configVersion",
+              false,
+              false,
+              revision,
+            ) as unknown as SessionCreateResult
           }
 
           const targetCtx = yield* instanceStore.load({ directory: canonDir })
 
-          type TxOut = { result: SessionCreateResult; event?: unknown; sideEffect?: { newId: string; parentID?: string; parentDir?: string; platform?: string | null; targetCtx: unknown } }
+          type TxOut = {
+            result: SessionCreateResult
+            event?: unknown
+            sideEffect?: {
+              newId: string
+              parentID?: string
+              parentDir?: string
+              platform?: string | null
+              targetCtx: unknown
+            }
+          }
           const txOut: TxOut = yield* db.transaction(
             (tx) =>
               Effect.gen(function* () {
-                const already = yield* SessionOperation.getSessionCreateByIdempotencyHashTx(tx as unknown as typeof db, hash, canonDir)
+                const already = yield* SessionOperation.getSessionCreateByIdempotencyHashTx(
+                  tx as unknown as typeof db,
+                  hash,
+                  canonDir,
+                )
                 if (already) {
                   const c = SessionOperation.isSessionCreateConflict(already, {
                     opId: req.opId,
@@ -446,51 +560,140 @@ export const layer = Layer.effect(
                   })
                   if (c) {
                     const curCfg = yield* readCfgOmit(canonDir)
-                    return { result: buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(undefined, curCfg)) } as unknown as TxOut
+                    return {
+                      result: buildFailed(
+                        req,
+                        "conflict",
+                        "idempotencyKey conflict: different operation facts with same key",
+                        false,
+                        false,
+                        makeRevision(undefined, curCfg),
+                      ),
+                    } as unknown as TxOut
                   }
                   if (already.outcome === "succeeded") {
                     const hasSnap = Object.hasOwn(already as object, "resultSnapshot")
-                    const persisted = hasSnap ? snapshotToInfo((already as unknown as { resultSnapshot: unknown }).resultSnapshot) : undefined
+                    const persisted = hasSnap
+                      ? snapshotToInfo((already as unknown as { resultSnapshot: unknown }).resultSnapshot)
+                      : undefined
                     if (hasSnap && !persisted) {
                       const curCfg = yield* readCfgOmit(canonDir)
-                      return { result: buildFailed(req, "internal", "invalid persisted snapshot", false, false, makeRevision((already as unknown as { revision: number }).revision, curCfg)) } as unknown as TxOut
+                      return {
+                        result: buildFailed(
+                          req,
+                          "internal",
+                          "invalid persisted snapshot",
+                          false,
+                          false,
+                          makeRevision((already as unknown as { revision: number }).revision, curCfg),
+                        ),
+                      } as unknown as TxOut
                     }
                     if (persisted) {
                       const persistedRev = (already as unknown as { revision: number }).revision
                       const curCfg = yield* readCfgOmit(canonDir)
-                      return { result: buildSucceeded(req, persisted as unknown as Session.Info, makeRevision(persistedRev, curCfg)) } as unknown as TxOut
+                      return {
+                        result: buildSucceeded(
+                          req,
+                          persisted as unknown as Session.Info,
+                          makeRevision(persistedRev, curCfg),
+                        ),
+                      } as unknown as TxOut
                     }
                     {
                       const curCfg = yield* readCfgOmit(canonDir)
-                      return { result: buildFailed(req, "internal", "missing persisted snapshot for replay", false, false, makeRevision(undefined, curCfg)) } as unknown as TxOut
+                      return {
+                        result: buildFailed(
+                          req,
+                          "internal",
+                          "missing persisted snapshot for replay",
+                          false,
+                          false,
+                          makeRevision(undefined, curCfg),
+                        ),
+                      } as unknown as TxOut
                     }
                   }
                   {
                     const curCfg = yield* readCfgOmit(canonDir)
-                    return { result: buildFailed(req, already.code, already.message, false, false, makeRevision(undefined, curCfg)) } as unknown as TxOut
+                    return {
+                      result: buildFailed(
+                        req,
+                        already.code,
+                        already.message,
+                        false,
+                        false,
+                        makeRevision(undefined, curCfg),
+                      ),
+                    } as unknown as TxOut
                   }
                 }
                 const opExists = yield* SessionOperation.getTx(tx as unknown as typeof db, req.opId)
                 if (opExists) {
                   const curCfg = yield* readCfgOmit(canonDir)
-                  return { result: buildFailed(req, "conflict", "opId already exists with different idempotencyKey", false, false, makeRevision(undefined, curCfg)) } as unknown as TxOut
+                  return {
+                    result: buildFailed(
+                      req,
+                      "conflict",
+                      "opId already exists with different idempotencyKey",
+                      false,
+                      false,
+                      makeRevision(undefined, curCfg),
+                    ),
+                  } as unknown as TxOut
                 }
 
-                const cfgInsideEither = yield* (getConfigVer(canonDir) as unknown as Effect.Effect<unknown, unknown, unknown>).pipe(
+                const cfgInsideEither = yield* (
+                  getConfigVer(canonDir) as unknown as Effect.Effect<unknown, unknown, unknown>
+                ).pipe(
                   Effect.map((v) => ({ _tag: "Right" as const, right: v as number | undefined })),
                   Effect.catch((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
                   Effect.catchDefect((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
-                ) as unknown as Effect.Effect<{ _tag: "Right"; right: number | undefined } | { _tag: "Left"; left: unknown }>
+                ) as unknown as Effect.Effect<
+                  { _tag: "Right"; right: number | undefined } | { _tag: "Left"; left: unknown }
+                >
                 if ((cfgInsideEither as unknown as { _tag: string })._tag === "Left") {
-                  return { result: buildFailed(req, "internal", "config version read failed inside tx", false, false, makeRevision(undefined, undefined)) } as unknown as TxOut
+                  return {
+                    result: buildFailed(
+                      req,
+                      "internal",
+                      "config version read failed inside tx",
+                      false,
+                      false,
+                      makeRevision(undefined, undefined),
+                    ),
+                  } as unknown as TxOut
                 }
-                const cfgInside: number | undefined = (cfgInsideEither as unknown as { right: number | undefined }).right
+                const cfgInside: number | undefined = (cfgInsideEither as unknown as { right: number | undefined })
+                  .right
                 const effectiveInside = cfgInside ?? effectiveConfigBeforeTx
                 if (req.context.configVersion !== undefined && effectiveInside === undefined) {
-                  return { result: buildFailed(req, "internal", "config version unavailable inside tx", false, false, makeRevision(undefined, undefined)) } as unknown as TxOut
+                  return {
+                    result: buildFailed(
+                      req,
+                      "internal",
+                      "config version unavailable inside tx",
+                      false,
+                      false,
+                      makeRevision(undefined, undefined),
+                    ),
+                  } as unknown as TxOut
                 }
-                if (req.context.configVersion !== undefined && effectiveInside !== undefined && req.context.configVersion < effectiveInside) {
-                  return { result: buildFailed(req, "stale", "stale configVersion", false, false, makeRevision(undefined, effectiveInside)) } as unknown as TxOut
+                if (
+                  req.context.configVersion !== undefined &&
+                  effectiveInside !== undefined &&
+                  req.context.configVersion < effectiveInside
+                ) {
+                  return {
+                    result: buildFailed(
+                      req,
+                      "stale",
+                      "stale configVersion",
+                      false,
+                      false,
+                      makeRevision(undefined, effectiveInside),
+                    ),
+                  } as unknown as TxOut
                 }
 
                 // create session row
@@ -501,8 +704,23 @@ export const layer = Layer.effect(
                 // parent validation
                 let parentRow: unknown = null
                 if (parentID) {
-                  const prow = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, parentID as unknown as SessionID)).get().pipe(Effect.orDie)
-                  if (!prow) return { result: buildFailed(req, "validation.failed", `parent session not found ${parentID}`, false, false, makeRevision(undefined, effectiveInside)) } as unknown as TxOut
+                  const prow = yield* tx
+                    .select()
+                    .from(SessionTable)
+                    .where(eq(SessionTable.id, parentID as unknown as SessionID))
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!prow)
+                    return {
+                      result: buildFailed(
+                        req,
+                        "validation.failed",
+                        `parent session not found ${parentID}`,
+                        false,
+                        false,
+                        makeRevision(undefined, effectiveInside),
+                      ),
+                    } as unknown as TxOut
                   parentRow = prow
                 }
                 const agent = (req.payload.agent as string | null) ?? null
@@ -514,7 +732,8 @@ export const layer = Layer.effect(
                 const newRow: Record<string, unknown> = {
                   id: newId,
                   project_id: targetCtx.project.id,
-                  workspace_id: workspaceID ?? (parentRow as unknown as { workspace_id: string | null })?.workspace_id ?? null,
+                  workspace_id:
+                    workspaceID ?? (parentRow as unknown as { workspace_id: string | null })?.workspace_id ?? null,
                   parent_id: parentID ?? null,
                   slug,
                   directory: canonDir,
@@ -556,23 +775,48 @@ export const layer = Layer.effect(
                   .onConflictDoNothing()
                   .run()
                   .pipe(Effect.orDie)
-                yield* tx.insert(SessionTable).values(newRow as unknown as typeof SessionTable.$inferInsert).run().pipe(Effect.orDie)
+                yield* tx
+                  .insert(SessionTable)
+                  .values(newRow as unknown as typeof SessionTable.$inferInsert)
+                  .run()
+                  .pipe(Effect.orDie)
                 yield* Changefeed.appendTx(tx as unknown as typeof db, {
                   session_id: newId,
                   revision: 0,
                   kind: "changed",
                   time: now,
                 })
-                const inserted = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, newId)).get().pipe(Effect.orDie)
+                const inserted = yield* tx
+                  .select()
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, newId))
+                  .get()
+                  .pipe(Effect.orDie)
                 if (!inserted) yield* Effect.die(new Error("created session missing after insert"))
                 const insertedNonNull = inserted as typeof inserted & { workspace_id: string | null; directory: string }
-                const info = Session.fromRow(insertedNonNull as unknown as Parameters<typeof Session.fromRow>[0]) as unknown as Session.Info
+                const info = Session.fromRow(
+                  insertedNonNull as unknown as Parameters<typeof Session.fromRow>[0],
+                ) as unknown as Session.Info
                 const loc = new Location.Info({
                   directory: AbsolutePath.make(canonDir),
-                  ...(insertedNonNull.workspace_id ? { workspaceID: insertedNonNull.workspace_id as unknown as WorkspaceV2.ID } : {}),
-                  project: { id: ProjectV2.ID.make(targetCtx.project.id), directory: AbsolutePath.make(targetCtx.worktree) },
+                  ...(insertedNonNull.workspace_id
+                    ? { workspaceID: insertedNonNull.workspace_id as unknown as WorkspaceV2.ID }
+                    : {}),
+                  project: {
+                    id: ProjectV2.ID.make(targetCtx.project.id),
+                    directory: AbsolutePath.make(targetCtx.worktree),
+                  },
                 })
-                const event = yield* (events as unknown as { recordProjectedTx: (tx: unknown, type: unknown, data: unknown, opts: unknown) => Effect.Effect<unknown> }).recordProjectedTx(
+                const event = yield* (
+                  events as unknown as {
+                    recordProjectedTx: (
+                      tx: unknown,
+                      type: unknown,
+                      data: unknown,
+                      opts: unknown,
+                    ) => Effect.Effect<unknown>
+                  }
+                ).recordProjectedTx(
                   tx as unknown as never,
                   SessionV1.Event.Created,
                   { sessionID: newId, info },
@@ -597,24 +841,58 @@ export const layer = Layer.effect(
                   parentID: parentID ?? null,
                   createdSessionId: newId,
                 }
-                const opRec = yield* SessionOperation.insertSessionCreateSucceededTx(tx as unknown as typeof db, newId as unknown as SessionID, record, meta, snapshotJson)
+                const opRec = yield* SessionOperation.insertSessionCreateSucceededTx(
+                  tx as unknown as typeof db,
+                  newId as unknown as SessionID,
+                  record,
+                  meta,
+                  snapshotJson,
+                )
                 const opInfo = snapshotToInfo((opRec as unknown as { resultSnapshot: unknown }).resultSnapshot)
                 if (!opInfo) yield* Effect.die(new Error("invalid snapshot after create insert"))
+                if (DispatchAtomicSeam.failCreateInsideTx) yield* Effect.die(new Error("injected create tx failure"))
                 return {
-                  result: buildSucceeded(req, opInfo as unknown as Session.Info, makeRevision((opRec as unknown as { revision: number }).revision, effectiveInside)),
+                  result: buildSucceeded(
+                    req,
+                    opInfo as unknown as Session.Info,
+                    makeRevision((opRec as unknown as { revision: number }).revision, effectiveInside),
+                  ),
                   event,
-                  sideEffect: { newId, parentID, parentDir: parentRow ? (parentRow as unknown as { directory: string }).directory : undefined, platform, targetCtx },
+                  sideEffect: {
+                    newId,
+                    parentID,
+                    parentDir: parentRow ? (parentRow as unknown as { directory: string }).directory : undefined,
+                    platform,
+                    targetCtx,
+                  },
                 } as unknown as TxOut
               }),
             { behavior: "immediate" },
           )
-          const side = (txOut as unknown as { sideEffect?: { newId: string; parentID?: string; parentDir?: string; platform?: string | null; targetCtx: unknown } }).sideEffect
+          const side = (
+            txOut as unknown as {
+              sideEffect?: {
+                newId: string
+                parentID?: string
+                parentDir?: string
+                platform?: string | null
+                targetCtx: unknown
+              }
+            }
+          ).sideEffect
           if (side) {
             yield* Effect.sync(() => {
               try {
-                KiloSession.register({ id: side.newId as unknown as SessionID, parentID: side.parentID as unknown as SessionID | undefined, platform: side.platform ?? undefined })
+                KiloSession.register({
+                  id: side.newId as unknown as SessionID,
+                  parentID: side.parentID as unknown as SessionID | undefined,
+                  platform: side.platform ?? undefined,
+                })
               } catch (e) {
-                log.warn("sessionCreate post-commit register failed", { error: e instanceof Error ? e.message : String(e), newId: side.newId })
+                log.warn("sessionCreate post-commit register failed", {
+                  error: e instanceof Error ? e.message : String(e),
+                  newId: side.newId,
+                })
               }
             })
             // Post-commit sandbox inheritance is best-effort and does NOT affect persisted result_snapshot/revision.
@@ -625,19 +903,29 @@ export const layer = Layer.effect(
                 Effect.catch(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)),
                 Effect.catchDefect(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)),
               )
-              const inheritResult = yield* SandboxPolicy.inherit(side.parentID as unknown as SessionID, side.newId as unknown as SessionID, fallback as unknown as Omit<SandboxPolicy.Snapshot, "version"> | undefined, side.parentDir).pipe(Effect.exit)
+              const inheritResult = yield* SandboxPolicy.inherit(
+                side.parentID as unknown as SessionID,
+                side.newId as unknown as SessionID,
+                fallback as unknown as Omit<SandboxPolicy.Snapshot, "version"> | undefined,
+                side.parentDir,
+              ).pipe(Effect.exit)
               if (inheritResult._tag === "Failure") {
                 const cause = inheritResult.cause
-                log.warn("sessionCreate post-commit inherit failed (best-effort, session retained)", { cause: String(cause), newId: side.newId })
+                log.warn("sessionCreate post-commit inherit failed (best-effort, session retained)", {
+                  cause: String(cause),
+                  newId: side.newId,
+                })
               }
             }
           }
           if ((txOut as unknown as { event?: unknown }).event) {
             const ev = (txOut as unknown as { event: unknown }).event
-            yield* (events as unknown as { notifyCommitted: (e: unknown) => Effect.Effect<void> }).notifyCommitted(ev).pipe(
-              Effect.catch(() => Effect.void),
-              Effect.catchDefect(() => Effect.void),
-            )
+            yield* (events as unknown as { notifyCommitted: (e: unknown) => Effect.Effect<void> })
+              .notifyCommitted(ev)
+              .pipe(
+                Effect.catch(() => Effect.void),
+                Effect.catchDefect(() => Effect.void),
+              )
           }
           return (txOut as unknown as { result: SessionCreateResult }).result
         }).pipe(Effect.ensuring(leaseRelease))
@@ -649,7 +937,11 @@ export const layer = Layer.effect(
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(undefined, curCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)),
+            ),
+          ),
         ),
         Effect.catch((cause: unknown) =>
           Effect.gen(function* () {
@@ -657,7 +949,11 @@ export const layer = Layer.effect(
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(undefined, curCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)),
+            ),
+          ),
         ),
       )
       return yield* inner
@@ -697,7 +993,11 @@ export const layer = Layer.effect(
           op: OP,
           idempotencyKey,
           status: "failed",
-          outcome: { type: "failed", time, failure: { code: "validation.failed", message: failure.message, retryable: false } },
+          outcome: {
+            type: "failed",
+            time,
+            failure: { code: "validation.failed", message: failure.message, retryable: false },
+          },
           accepted: false,
           failure: { code: "validation.failed", message: failure.message, retryable: false },
         } satisfies SessionCreateFailed
@@ -709,7 +1009,9 @@ export const layer = Layer.effect(
       const parentID = req.payload.parentID ? (req.payload.parentID as string) : undefined
 
       const inner = Effect.gen(function* () {
-        const existing = yield* SessionOperation.getSessionCreateByIdempotencyHash(db, hash, canonDir).pipe(Effect.orDie)
+        const existing = yield* SessionOperation.getSessionCreateByIdempotencyHash(db, hash, canonDir).pipe(
+          Effect.orDie,
+        )
         const existingOpId = yield* SessionOperation.get(db, req.opId).pipe(Effect.orDie)
         if (existing) {
           const conflict = SessionOperation.isSessionCreateConflict(existing, {
@@ -723,11 +1025,20 @@ export const layer = Layer.effect(
           if (conflict) {
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(undefined, curCfg)
-            return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
+            return buildFailed(
+              req,
+              "conflict",
+              "idempotencyKey conflict: different operation facts with same key",
+              false,
+              false,
+              revision,
+            )
           }
           if (existing.outcome === "succeeded") {
             const hasSnap = Object.hasOwn(existing as object, "resultSnapshot")
-            const persisted = hasSnap ? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot) : undefined
+            const persisted = hasSnap
+              ? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+              : undefined
             if (hasSnap && !persisted) {
               const curCfg = yield* readCfgOmit(canonDir)
               const persistedRev = (existing as unknown as { revision: number }).revision
@@ -752,7 +1063,14 @@ export const layer = Layer.effect(
         if (existingOpId) {
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = makeRevision(undefined, curCfg)
-          return buildFailed(req, "conflict", "opId already exists with different idempotencyKey", false, false, revision)
+          return buildFailed(
+            req,
+            "conflict",
+            "opId already exists with different idempotencyKey",
+            false,
+            false,
+            revision,
+          )
         }
         const curCfg = yield* readCfgOmit(canonDir)
         const revision = makeRevision(undefined, curCfg)
@@ -764,7 +1082,11 @@ export const layer = Layer.effect(
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(undefined, curCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(defect), false, false, undefined)),
+            ),
+          ),
         ),
         Effect.catch((cause: unknown) =>
           Effect.gen(function* () {
@@ -772,7 +1094,11 @@ export const layer = Layer.effect(
             const curCfg = yield* readCfgOmit(canonDir)
             const revision = makeRevision(undefined, curCfg)
             return buildFailed(req, "internal", msg, false, false, revision)
-          }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)))),
+          }).pipe(
+            Effect.catchDefect(() =>
+              Effect.succeed(buildFailed(req, "internal", String(cause), false, false, undefined)),
+            ),
+          ),
         ),
       )
       const out = yield* inner
