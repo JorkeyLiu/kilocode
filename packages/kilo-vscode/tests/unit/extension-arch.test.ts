@@ -214,3 +214,36 @@ describe("KiloProvider — remote focus lifecycle", () => {
     expect(provider).not.toContain("kilo-code.new.sidebarVisible")
   })
 })
+
+describe("Extension — background backend prewarm", () => {
+  const ext = fs.readFileSync(EXTENSION_FILE, "utf-8")
+  const activate = ext.slice(ext.indexOf("export function activate"))
+
+  it("prewarms the shared connection only when a workspace is open", () => {
+    expect(activate).toContain("vscode.workspace.workspaceFolders?.[0]?.uri.fsPath")
+    expect(activate).toContain("connectionService.connect(root)")
+    // No-workspace windows must skip prewarm so resolveServerCwd never falls
+    // back to globalStorage ahead of the later workspace root.
+    expect(activate).toContain("if (root)")
+  })
+
+  it("fire-and-forgets without blocking activate.done and logs failures without user errors", () => {
+    expect(activate).toContain("connectionService.connect(root).catch((err) => {")
+    expect(activate).toContain("background backend prewarm failed")
+    const warmIdx = activate.indexOf("connectionService.connect(root)")
+    const doneIdx = activate.indexOf('p0Stage("activate.done")')
+    expect(warmIdx).toBeGreaterThan(-1)
+    expect(doneIdx).toBeGreaterThan(-1)
+    expect(warmIdx).toBeLessThan(doneIdx)
+    expect(activate.slice(warmIdx, warmIdx + 200)).not.toContain("await connectionService.connect")
+    expect(activate).not.toContain("background backend prewarm failed\", err)\n    })\n    vscode.window.showErrorMessage")
+  })
+
+  it("keeps prewarm out of the UI connection gate and process ownership", () => {
+    // Prewarm is a background hint, not a gate: no workspace-change listener
+    // is added here (later UI connect() refreshes directory tracking itself).
+    expect(activate).not.toContain("onDidChangeWorkspaceFolders")
+    // Dispose stays subscription-owned; prewarm adds no new process owner.
+    expect(activate).toContain("void connectionService.dispose()")
+  })
+})

@@ -958,6 +958,21 @@ export function activate(context: vscode.ExtensionContext) {
     },
   })
 
+  // Background backend prewarm (not a UI connection gate): with a workspace
+  // open, start `kilo serve` spawn/port/SSE early so the first Agent Manager
+  // open reuses the shared singleflight in connectionService.connect instead
+  // of cold-starting. Fire-and-forget without blocking activate.done; a later
+  // UI connect() reuses the same promise and refreshes directory tracking
+  // with its own fresh root, so no workspace-change listener is added here.
+  // No workspace means no prewarm: resolveServerCwd would fall back to
+  // globalStorage and pollute the later workspace root.
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  if (root) {
+    connectionService.connect(root).catch((err) => {
+      console.warn("[Kilo New] background backend prewarm failed:", err)
+    })
+  }
+
   p0Stage("activate.done")
 }
 
