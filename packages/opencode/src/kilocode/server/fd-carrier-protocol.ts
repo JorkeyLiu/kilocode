@@ -75,6 +75,10 @@ export const FD_CAPABILITIES = [
   "config/convergence/observe",
   "transport/health",
   "session/e2eRevertSeed",
+  "session/e2eSandboxTokenIssue",
+  "session/e2eSandboxPolicyRead",
+  "session/e2eSandboxSet",
+  "session/e2eSandboxGrantRead",
 ] as const
 
 export const OBSERVATION_CHANGED_REVERSE_CAPABILITY = "observation/changed" as const
@@ -200,7 +204,7 @@ export function validateInitialize(params: unknown): { reverseCapabilities: Reve
 }
 
 export function buildInitializeResult(): FdInitializeResult {
-  const caps = isE2EFixtureEnabled() ? [...FD_CAPABILITIES] : FD_CAPABILITIES.filter((c) => c !== "session/e2eRevertSeed")
+  const caps = isE2EFixtureEnabled() ? [...FD_CAPABILITIES] : FD_CAPABILITIES.filter((c) => c !== "session/e2eRevertSeed" && c !== "session/e2eSandboxTokenIssue" && c !== "session/e2eSandboxPolicyRead" && c !== "session/e2eSandboxSet" && c !== "session/e2eSandboxGrantRead")
   return {
     protocol: { name: FD_PROTOCOL_NAME, major: FD_PROTOCOL_MAJOR, minor: FD_PROTOCOL_MINOR },
     protocolVersion: FD_PROTOCOL_VERSION,

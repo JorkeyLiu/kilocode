@@ -662,7 +662,7 @@ export const layer = Layer.effect(
               }
               for (const src of inheritSources) {
                 const fallback = yield* SandboxPolicy.peek(src.dir, src.id as unknown as SessionID).pipe(Effect.catch(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)), Effect.catchDefect(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)))
-                const inheritResult = yield* SandboxPolicy.inherit(src.id as unknown as SessionID, side.newId as unknown as SessionID, fallback as unknown as Omit<SandboxPolicy.Snapshot, "version"> | undefined, src.dir).pipe(Effect.exit)
+                const inheritResult = yield* instanceStore.provide({ directory: canonDir }, SandboxPolicy.inherit(src.id as unknown as SessionID, side.newId as unknown as SessionID, fallback as unknown as Omit<SandboxPolicy.Snapshot, "version"> | undefined, src.dir)).pipe(Effect.exit)
                 if (inheritResult._tag === "Failure") { const cause = inheritResult.cause; log.warn("sessionCreate post-commit inherit failed (best-effort, session retained)", { cause: String(cause), newId: side.newId }) }
               }
             }

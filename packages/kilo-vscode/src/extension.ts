@@ -977,6 +977,53 @@ export function activate(context: vscode.ExtensionContext) {
           title: typeof o.title === "string" ? (o.title as string) : undefined,
           parentSessionId: typeof o.parentSessionId === "string" ? (o.parentSessionId as string) : null,
           token: typeof o.token === "string" ? (o.token as string) : undefined,
+          sandboxInheritanceToken: typeof o.sandboxInheritanceToken === "string" ? (o.sandboxInheritanceToken as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sandboxChildCreate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sandboxInheritanceToken || typeof o.sandboxInheritanceToken !== "string") throw new Error("sandboxInheritanceToken required")
+        return connectionService.fixtureSandboxChildCreate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          title: typeof o.title === "string" ? (o.title as string) : undefined,
+          sandboxInheritanceToken: o.sandboxInheritanceToken as string,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sandboxChildReplay", async () => {
+        return connectionService.fixtureSandboxChildReplay()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sandboxTokenIssue", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sourceSessionId || typeof o.sourceSessionId !== "string") throw new Error("sourceSessionId required")
+        return connectionService.fixtureE2ESandboxTokenIssue({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sourceSessionId: o.sourceSessionId as string,
+          sourceDirectory: typeof o.sourceDirectory === "string" ? (o.sourceDirectory as string) : undefined,
+          count: typeof o.count === "number" ? (o.count as number) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sandboxPolicyRead", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        return connectionService.fixtureE2ESandboxPolicyRead({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sandboxSet", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        return connectionService.fixtureE2ESandboxSet({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sandboxGrantRead", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.hash || typeof o.hash !== "string") throw new Error("hash required")
+        return connectionService.fixtureE2ESandboxGrantRead({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          hash: o.hash as string,
         })
       }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionCreateReplay", async () => {

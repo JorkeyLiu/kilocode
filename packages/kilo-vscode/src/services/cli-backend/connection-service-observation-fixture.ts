@@ -23,6 +23,16 @@ import type {
 } from "./serve-private-peer"
 import type { ServePrivateRevertRequest, ServePrivateRevertResult, ServePrivateUnrevertRequest, ServePrivateUnrevertResult } from "./serve-private-revert-contract"
 import type { E2ERevertSeedRequest, E2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
+import type {
+  E2ESandboxGrantReadRequest,
+  E2ESandboxGrantReadResult,
+  E2ESandboxPolicyReadRequest,
+  E2ESandboxPolicyReadResult,
+  E2ESandboxSetRequest,
+  E2ESandboxSetResult,
+  E2ESandboxTokenIssueRequest,
+  E2ESandboxTokenIssueResult,
+} from "./serve-private-e2e-sandbox"
 
 interface Deps {
   getPeer: () => ServePrivatePeer | null
@@ -34,6 +44,10 @@ interface Deps {
   revertWithHandle: (req: ServePrivateRevertRequest) => { promise: Promise<ServePrivateRevertResult> }
   unrevertWithHandle: (req: ServePrivateUnrevertRequest) => { promise: Promise<ServePrivateUnrevertResult> }
   e2eRevertSeedWithHandle: (req: E2ERevertSeedRequest) => { promise: Promise<E2ERevertSeedResult> }
+  e2eSandboxTokenIssueWithHandle: (req: E2ESandboxTokenIssueRequest) => { promise: Promise<E2ESandboxTokenIssueResult> }
+  e2eSandboxPolicyReadWithHandle: (req: E2ESandboxPolicyReadRequest) => { promise: Promise<E2ESandboxPolicyReadResult> }
+  e2eSandboxSetWithHandle: (req: E2ESandboxSetRequest) => { promise: Promise<E2ESandboxSetResult> }
+  e2eSandboxGrantReadWithHandle: (req: E2ESandboxGrantReadRequest) => { promise: Promise<E2ESandboxGrantReadResult> }
   getCurrentDirectory: () => string | undefined
   getRootDirectory: () => string | undefined
 }
@@ -50,7 +64,13 @@ function resolveDirectory(inputDir: string | undefined, deps: Deps): string {
   return dir
 }
 
-function buildCreateRequest(dir: string, token: string, title: string, parentSessionId: string | null): ServePrivateCreateRequest {
+function buildCreateRequest(
+  dir: string,
+  token: string,
+  title: string,
+  parentSessionId: string | null,
+  sandboxInheritanceToken?: string,
+): ServePrivateCreateRequest {
   const opId = `create:${token}`
   const idempotencyKey = `create:${token}`
   const requestId = crypto.randomUUID()
@@ -61,7 +81,77 @@ function buildCreateRequest(dir: string, token: string, title: string, parentSes
     op: "session/create",
     idempotencyKey,
     context: { directory: dir, parentSessionId: null },
-    payload: { ...(title ? { title } : {}), ...(parentSessionId ? { parentID: parentSessionId } : {}) },
+    payload: {
+      ...(title ? { title } : {}),
+      ...(parentSessionId ? { parentID: parentSessionId } : {}),
+      ...(sandboxInheritanceToken ? { sandboxInheritanceToken } : {}),
+    },
+  }
+}
+
+function buildE2ESandboxTokenIssueRequest(
+  dir: string,
+  token: string,
+  sourceSessionId: string,
+  sourceDirectory: string,
+  count: number,
+): E2ESandboxTokenIssueRequest {
+  const opId = `e2eSandboxTokenIssue:${token}`
+  const idempotencyKey = `e2eSandboxTokenIssue:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/e2eSandboxTokenIssue",
+    idempotencyKey,
+    context: { directory: dir },
+    payload: { sourceSessionId, sourceDirectory, count },
+  }
+}
+
+function buildE2ESandboxPolicyReadRequest(dir: string, token: string, sessionId: string): E2ESandboxPolicyReadRequest {
+  const opId = `e2eSandboxPolicyRead:${token}`
+  const idempotencyKey = `e2eSandboxPolicyRead:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/e2eSandboxPolicyRead",
+    idempotencyKey,
+    context: { directory: dir },
+    payload: { sessionId },
+  }
+}
+
+function buildE2ESandboxSetRequest(dir: string, token: string, sessionId: string): E2ESandboxSetRequest {
+  const opId = `e2eSandboxSet:${token}`
+  const idempotencyKey = `e2eSandboxSet:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/e2eSandboxSet",
+    idempotencyKey,
+    context: { directory: dir },
+    payload: { sessionId },
+  }
+}
+
+function buildE2ESandboxGrantReadRequest(dir: string, token: string, hash: string): E2ESandboxGrantReadRequest {
+  const opId = `e2eSandboxGrantRead:${token}`
+  const idempotencyKey = `e2eSandboxGrantRead:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/e2eSandboxGrantRead",
+    idempotencyKey,
+    context: { directory: dir },
+    payload: { hash },
   }
 }
 
@@ -164,6 +254,8 @@ export class ConnectionObservationFixture {
   private fixUnrevertReqs = new Map<string, ServePrivateUnrevertRequest>()
   private fixSeedReq: E2ERevertSeedRequest | null = null
   private fixSeedInfo: { sessionId: string; messageId: string; partId: string } | null = null
+  private fixSandboxReq: ServePrivateCreateRequest | null = null
+  private fixSandboxSecondReq: ServePrivateCreateRequest | null = null
 
   constructor(private readonly deps: Deps) {}
 
@@ -182,7 +274,7 @@ export class ConnectionObservationFixture {
     return true
   }
 
-  async create(input?: { directory?: string; title?: string; parentSessionId?: string | null; token?: string }): Promise<{
+  async create(input?: { directory?: string; title?: string; parentSessionId?: string | null; token?: string; sandboxInheritanceToken?: string }): Promise<{
     opId: string
     idempotencyKey: string
     requestId: string
@@ -197,12 +289,136 @@ export class ConnectionObservationFixture {
     if (typeof token !== "string" || token.length === 0 || token.includes(":")) throw new Error("token invalid")
     const title = input?.title ?? `E2E Obs Prod ${token.slice(0, 8)}`
     const parentSessionId = input?.parentSessionId ?? null
-    const req = buildCreateRequest(dir, token, title, parentSessionId)
+    const req = buildCreateRequest(dir, token, title, parentSessionId, input?.sandboxInheritanceToken)
     this.fixCreateReq = req
     const handle = this.deps.createWithHandle(req)
     const result = await handle.promise
     const sid = (result as { data?: { session?: { id?: string } } }).data?.session?.id as string | undefined
     return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, ...(sid ? { sessionId: sid } : {}) }
+  }
+
+  async createSandboxChild(input: { directory?: string; title?: string; sandboxInheritanceToken: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateCreateResult
+    sessionId?: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sandboxChild requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.sandboxInheritanceToken || typeof input.sandboxInheritanceToken !== "string" || !/^si-/.test(input.sandboxInheritanceToken))
+      throw new Error("sandboxInheritanceToken invalid")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = crypto.randomUUID()
+    const title = input.title ?? `E2E Sandbox Child ${token.slice(0, 8)}`
+    const req = buildCreateRequest(dir, token, title, null, input.sandboxInheritanceToken)
+    const isFirst = !this.fixSandboxReq
+    if (isFirst) this.fixSandboxReq = req
+    else if (!this.fixSandboxSecondReq) this.fixSandboxSecondReq = req
+    const handle = this.deps.createWithHandle(req)
+    const result = await handle.promise
+    const sid = (result as { data?: { session?: { id?: string } } }).data?.session?.id as string | undefined
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, ...(sid ? { sessionId: sid } : {}) }
+  }
+
+  async replaySandbox(): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateCreateResult
+    sessionId?: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sandbox replay requires KILO_E2E_FIXTURE")
+    const stored = this.fixSandboxReq
+    if (!stored) throw new Error("no stored sandbox create to replay")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const handle = this.deps.createWithHandle(stored)
+    const result = await handle.promise
+    const sid = (result as { data?: { session?: { id?: string } } }).data?.session?.id as string | undefined
+    return {
+      opId: stored.opId,
+      idempotencyKey: stored.idempotencyKey,
+      requestId: stored.requestId,
+      directory: stored.context.directory,
+      result,
+      ...(sid ? { sessionId: sid } : {}),
+    }
+  }
+
+  async sandboxTokenIssue(input: { directory?: string; sourceSessionId: string; sourceDirectory?: string; count?: number }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: E2ESandboxTokenIssueResult
+    token?: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sandboxTokenIssue requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const sourceDir = input.sourceDirectory ? resolveDirectory(input.sourceDirectory, this.deps) : dir
+    const count = input.count ?? 2
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 2) throw new Error("count must be >=2")
+    const token = crypto.randomUUID()
+    const req = buildE2ESandboxTokenIssueRequest(dir, token, input.sourceSessionId, sourceDir, count)
+    const handle = this.deps.e2eSandboxTokenIssueWithHandle(req)
+    const result = await handle.promise
+    const tok = (result as { data?: { token?: string } }).data?.token as string | undefined
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, ...(tok ? { token: tok } : {}) }
+  }
+
+  async sandboxPolicyRead(input: { directory?: string; sessionId: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: E2ESandboxPolicyReadResult
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sandboxPolicyRead requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = crypto.randomUUID()
+    const req = buildE2ESandboxPolicyReadRequest(dir, token, input.sessionId)
+    const handle = this.deps.e2eSandboxPolicyReadWithHandle(req)
+    const result = await handle.promise
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result }
+  }
+
+  async sandboxSet(input: { directory?: string; sessionId: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: E2ESandboxSetResult
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sandboxSet requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = crypto.randomUUID()
+    const req = buildE2ESandboxSetRequest(dir, token, input.sessionId)
+    const handle = this.deps.e2eSandboxSetWithHandle(req)
+    const result = await handle.promise
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result }
+  }
+
+  async sandboxGrantRead(input: { directory?: string; hash: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: E2ESandboxGrantReadResult
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sandboxGrantRead requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.hash || typeof input.hash !== "string" || !/^[0-9a-f]{64}$/i.test(input.hash)) throw new Error("hash must be 64 hex")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = crypto.randomUUID()
+    const req = buildE2ESandboxGrantReadRequest(dir, token, input.hash.toLowerCase())
+    const handle = this.deps.e2eSandboxGrantReadWithHandle(req)
+    const result = await handle.promise
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result }
   }
 
   async replay(): Promise<{

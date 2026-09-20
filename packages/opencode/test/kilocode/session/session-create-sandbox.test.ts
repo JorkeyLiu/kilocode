@@ -9,6 +9,7 @@ import { resetDatabase } from "../../fixture/db"
 import { disposeAllInstances, provideInstance, tmpdir } from "../../fixture/fixture"
 import { AppRuntime } from "../../../src/effect/app-runtime"
 import * as SandboxInheritance from "../../../src/kilocode/sandbox/inheritance"
+import { SandboxStore } from "../../../src/kilocode/sandbox/store"
 import * as Log from "@opencode-ai/core/util/log"
 import { DispatchAtomicSeam } from "../../../src/kilocode/session/dispatch-atomic-seam"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
@@ -401,6 +402,58 @@ describe("sessionCreate sandbox inheritance durable", () => {
       expect(rPriv2.status).toBe("failed")
       expect(rPriv2.failure.code).toBe("conflict")
       expect(SandboxInheritance._getReservation(opId)).toBeUndefined()
+    }),
+  )
+
+  it.live("cross-directory token only writes to target canonDir", () =>
+    Effect.gen(function* () {
+      const tmpA = yield* Effect.promise(() => tmpdir({ git: true, retain: true })) as any
+      const tmpB = yield* Effect.promise(() => tmpdir({ git: true, retain: true })) as any
+      const dirA = tmpA.path
+      const dirB = tmpB.path
+      const srcOp = SessionOperation.createId("src-cross-" + Math.random().toString(36).slice(2, 6))
+      const srcReq = { v: 1, requestId: "req-src-cross", opId: srcOp, op: "session/create", idempotencyKey: srcOp, context: { directory: dirA, parentSessionId: null }, payload: { title: "src" } }
+      const srcRes = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(srcReq) })))) as any
+      expect(srcRes.status).toBe("succeeded")
+      const srcId = srcRes.data.id as string
+      const snap = { enabled: true, mode: "deny" as const, allowedHosts: [] as string[], writablePaths: [] as string[], version: 0 }
+      yield* Effect.promise(() => SandboxStore.write(dirA, srcId as never, snap))
+      const token = SandboxInheritance.issue({ sessionID: srcId as never, directory: dirA, count: 2 })
+      const opId = SessionOperation.createId("cross-" + Math.random().toString(36).slice(2, 6))
+      const req = { v: 1, requestId: "req-cross", opId, op: "session/create", idempotencyKey: opId, context: { directory: dirB, parentSessionId: null }, payload: { title: "child", sandboxInheritanceToken: token } }
+      const res = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dirB)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(req) })))) as any
+      expect(res.status).toBe("succeeded")
+      const childId = res.data.id as string
+      const targetSnap = yield* Effect.promise(() => SandboxStore.read(dirB, childId as never).catch(() => undefined)) as unknown as { enabled: boolean; mode: string } | undefined
+      expect(targetSnap).toBeDefined()
+      expect(targetSnap!.enabled).toBe(snap.enabled)
+      expect(targetSnap!.mode).toBe(snap.mode)
+      const wrongSnap = yield* Effect.promise(() => SandboxStore.read(dirA, childId as never).catch(() => undefined)) as unknown as unknown
+      expect(wrongSnap).toBeUndefined()
+      // ensure grant remaining decremented
+      expect(SandboxInheritance._getGrant(token)?.remaining).toBe(1)
+    }),
+  )
+
+  it.live("normal parent create retains inheritance regression", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true })) as any
+      const dir = tmp.path
+      const parentOp = SessionOperation.createId("parent-reg-" + Math.random().toString(36).slice(2, 6))
+      const parentReq = { v: 1, requestId: "req-parent-reg", opId: parentOp, op: "session/create", idempotencyKey: parentOp, context: { directory: dir, parentSessionId: null }, payload: { title: "parent" } }
+      const parentRes = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(parentReq) })))) as any
+      expect(parentRes.status).toBe("succeeded")
+      const parentId = parentRes.data.id as string
+      const snap = { enabled: true, mode: "deny" as const, allowedHosts: [] as string[], writablePaths: [] as string[], version: 0 }
+      yield* Effect.promise(() => SandboxStore.write(dir, parentId as never, snap))
+      const childOp = SessionOperation.createId("child-reg-" + Math.random().toString(36).slice(2, 6))
+      const childReq = { v: 1, requestId: "req-child-reg", opId: childOp, op: "session/create", idempotencyKey: childOp, context: { directory: dir, parentSessionId: null }, payload: { title: "child", parentID: parentId } }
+      const childRes = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(childReq) })))) as any
+      expect(childRes.status).toBe("succeeded")
+      const childId = childRes.data.id as string
+      const childSnap = yield* Effect.promise(() => SandboxStore.read(dir, childId as never).catch(() => undefined)) as unknown as { enabled: boolean } | undefined
+      expect(childSnap).toBeDefined()
+      expect(childSnap!.enabled).toBe(true)
     }),
   )
 })

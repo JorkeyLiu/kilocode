@@ -805,6 +805,7 @@ interface ScenarioFlags {
   runObservationProducerDelete: boolean
   runObservationProducerFork: boolean
   runObservationProducerRevert: boolean
+  runObservationProducerSandbox: boolean
 }
 
 /**
@@ -900,9 +901,17 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // Validates fresh revert/unrevert each single five-key changed at revision+1, seq+1, exactly once refresh/ack, plus
     // idempotent replay and no-op unrevert.
     runObservationProducerRevert: scenario === "observation-producer-revert",
+    // observation-producer-sandbox is focused-only: bounded live E2E proof for
+    // source private create -> token issue count 2 -> child private create with
+    // sandboxInheritanceToken via privateCreateWithHandle -> fd3/fd4 dispatch,
+    // strict changed@0, child inherits source policy, exactly once refresh/ack,
+    // replay same child no new seq/no remaining deduction, second distinct child
+    // with same token proves remaining semantics.
+    runObservationProducerSandbox: scenario === "observation-producer-sandbox",
   }
 }
 
+// eslint-disable-next-line complexity -- run orchestrates scenario flags and bounded boundaries atomically
 export async function run(): Promise<void> {
   const scratch = process.env.KILO_E2E_SCRATCH
   const fixtureId = process.env.KILO_E2E_FIXTURE_ID
@@ -933,11 +942,12 @@ export async function run(): Promise<void> {
     "observation-producer-delete",
     "observation-producer-fork",
     "observation-producer-revert",
+    "observation-producer-sandbox",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox (default: all)",
     )
   }
   const {
@@ -960,6 +970,7 @@ export async function run(): Promise<void> {
     runObservationProducerDelete,
     runObservationProducerFork,
     runObservationProducerRevert,
+    runObservationProducerSandbox,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1252,6 +1263,11 @@ export async function run(): Promise<void> {
   // --- observation-producer-revert bounded live E2E proof (focused only) ---
   if (runObservationProducerRevert) {
     await serviceObservationProducerRevertBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- observation-producer-sandbox bounded live E2E proof (focused only) ---
+  if (runObservationProducerSandbox) {
+    await serviceObservationProducerSandboxBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {
@@ -3790,6 +3806,13 @@ const CMD_SESSION_REVERT_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionRever
 const CMD_SESSION_UNREVERT_PRIVATE = "kilo-code.new.e2eFixture.sessionUnrevertPrivate"
 const CMD_SESSION_UNREVERT_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionUnrevertPrivateReplay"
 const OBS_PROD_REVERT_BUDGET = 900_000
+const CMD_SANDBOX_TOKEN_ISSUE = "kilo-code.new.e2eFixture.sandboxTokenIssue"
+const CMD_SANDBOX_POLICY_READ = "kilo-code.new.e2eFixture.sandboxPolicyRead"
+const CMD_SANDBOX_SET = "kilo-code.new.e2eFixture.sandboxSet"
+const CMD_SANDBOX_CHILD_CREATE = "kilo-code.new.e2eFixture.sandboxChildCreate"
+const CMD_SANDBOX_CHILD_REPLAY = "kilo-code.new.e2eFixture.sandboxChildReplay"
+const CMD_SANDBOX_GRANT_READ = "kilo-code.new.e2eFixture.sandboxGrantRead"
+const OBS_PROD_SANDBOX_BUDGET = 900_000
 
 /**
  * Bounded live fd3/fd4 ServePrivatePeer observation/changed producer proof.
@@ -6114,5 +6137,382 @@ async function serviceObservationProducerRevertBoundary(
   while (Date.now() < deadline) {
     if (existsSync(join(scratch, "done"))) break
     await sleep(200)
+  }
+}
+
+// eslint-disable-next-line complexity -- E2E orchestration boundary: sandbox inheritance proof aggregates token issue, two child creates, policy reads, replay and telemetry
+async function serviceObservationProducerSandboxBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  try {
+  writeFileSync(join(scratch, "obs-prod-sandbox-step-0"), "start")
+  console.log("[obs-prod-sandbox] step 0 start")
+  const status0 = (await vscodeApi.commands.executeCommand(CMD_PROD_STATUS)) as Record<string, unknown>
+  writeFileSync(join(scratch, "obs-prod-sandbox-status.json"), JSON.stringify(status0, null, 2))
+  writeFileSync(join(scratch, "obs-prod-sandbox-step-1"), "status ok")
+  console.log("[obs-prod-sandbox] step 1 status ok")
+  try {
+    const cstate = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+    writeFileSync(join(scratch, "obs-prod-sandbox-cstate.json"), JSON.stringify(cstate, null, 2))
+  } catch (e) {
+    writeFileSync(join(scratch, "obs-prod-sandbox-cstate.json"), JSON.stringify({ error: String(e) }, null, 2))
+  }
+  let gate: Record<string, unknown> | null = null
+  let gateOk = false
+  let gateErr: string | undefined
+  try {
+    const gateRaw = readFileSync(join(scratch, "canonical-gate.json"), "utf8")
+    gate = JSON.parse(gateRaw) as Record<string, unknown>
+    gateErr = validateGateEvidence(gate)
+    gateOk = gateErr === undefined
+    writeFileSync(join(scratch, "obs-prod-sandbox-gate.json"), JSON.stringify({ gate, gateOk, gateErr }, null, 2))
+  } catch (e) {
+    gateErr = String(e)
+    writeFileSync(join(scratch, "obs-prod-sandbox-gate.json"), JSON.stringify({ error: gateErr }, null, 2))
+  }
+  const canonicalForEvidence = (() => {
+    try {
+      const raw = gate as Record<string, unknown> | null
+      const dr = raw?.dataRoot as string | undefined
+      const dp = (status0 as Record<string, unknown>).dbPath as string | undefined
+      return { dbPath: String(dp ?? ""), dataRoot: dr, gateOk, gateErr }
+    } catch {
+      return { dbPath: String((status0 as Record<string, unknown>).dbPath ?? ""), gateOk, gateErr }
+    }
+  })()
+  const peerReadyDeadline = Date.now() + 15_000
+  while (Date.now() < peerReadyDeadline) {
+    try {
+      const peerStat = (await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)) as { private: { available: boolean; state: string } }
+      if (peerStat?.private?.available) break
+    } catch {}
+    await sleep(200)
+  }
+  const dirForCreate = (() => {
+    const ws = vscodeApi.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (ws) return ws
+    return join(scratch, "workspace")
+  })()
+  const sourceTitle = `E2E Sandbox Source ${fixtureId.slice(0, 8)}`
+  const sourceRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_CREATE, { directory: dirForCreate, title: sourceTitle })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string } } }
+    sessionId?: string
+  }
+  if (sourceRes.result?.status !== "succeeded" || !sourceRes.sessionId) throw new Error(`source create failed: ${JSON.stringify(sourceRes.result).slice(0, 800)}`)
+  const sourceId = sourceRes.sessionId as string
+  await sleep(500)
+  // Ensure source has sandbox policy for inheritance proof
+  const setRes = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_SET, { directory: dirForCreate, sessionId: sourceId })) as { result: { status: string } }
+  console.log(`[obs-prod-sandbox] sandbox set for source ${sourceId} status=${(setRes as unknown as { result?: { status?: string } }).result?.status}`)
+  await sleep(300)
+  // Clear recorder/telemetry before child mutation so before baseline is clean
+  {
+    const snap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+    const tel = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number; count?: number } | null
+    if (tel && typeof tel.persistedCursor === "number" && tel.persistedCursor !== snap.cursor) {
+      await sleep(300)
+    }
+  }
+  await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_CLEAR)
+  await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY_CLEAR)
+  const beforeSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const beforeNext = typeof beforeSnapRaw.nextOrdinal === "number" ? beforeSnapRaw.nextOrdinal : 0
+  const beforeStart = typeof beforeSnapRaw.startOrdinal === "number" ? beforeSnapRaw.startOrdinal : beforeNext
+  const beforeTelemetryRaw = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; persistedCursor?: number } | null
+  const beforeTelemetryCount = beforeTelemetryRaw?.count ?? 0
+  const beforePersisted = (beforeTelemetryRaw?.persistedCursor ?? (status0 as Record<string, unknown>).persistedCursor) as number | undefined
+  const beforeSnapRes = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const beforeCursor = beforeSnapRes.cursor
+  // Issue token count 2 for source
+  const tokenRes = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_TOKEN_ISSUE, { directory: dirForCreate, sourceSessionId: sourceId, sourceDirectory: dirForCreate, count: 2 })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { token?: string; hash?: string; count?: number } }
+    token?: string
+  }
+  console.log(`[obs-prod-sandbox] token issue result=${JSON.stringify(tokenRes.result).slice(0, 500)} token=${tokenRes.token?.slice(0, 10)}`)
+  const token = (tokenRes.result as unknown as { data?: { token?: string } }).data?.token as string | undefined ?? tokenRes.token
+  if (!token || !/^si-/.test(token)) throw new Error(`token issue failed: ${JSON.stringify(tokenRes.result).slice(0, 800)}`)
+  const tokenHash = (tokenRes.result as unknown as { data?: { hash?: string } }).data?.hash as string | undefined
+  console.log(`[obs-prod-sandbox] token ok hash=${tokenHash?.slice(0, 8)}`)
+  // Child1 via private create with sandbox token
+  const childTitle = `E2E Sandbox Child ${fixtureId.slice(0, 8)}`
+  console.log(`[obs-prod-sandbox] creating child1 with token ${token.slice(0, 10)}`)
+  const childRes = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_CHILD_CREATE, { directory: dirForCreate, title: childTitle, sandboxInheritanceToken: token })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string } }; failure?: unknown }
+    sessionId?: string
+  }
+  const childSucceeded = childRes.result?.status === "succeeded" && childRes.result?.accepted === true && !!childRes.sessionId
+  console.log(`[obs-prod-sandbox] child1 succeeded=${childSucceeded} id=${childRes.sessionId} result=${JSON.stringify(childRes.result).slice(0, 500)}`)
+  if (!childSucceeded) throw new Error(`sandbox child create failed: ${JSON.stringify(childRes.result).slice(0, 800)}`)
+  const childId = childRes.sessionId as string
+  if (childId === sourceId) throw new Error("child must differ from source")
+  console.log("[obs-prod-sandbox] waiting 800ms for notification")
+  await sleep(800)
+  const afterSnap = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const all = Array.isArray(afterSnap.entries) ? afterSnap.entries : []
+  const afterEntries = all.filter((e) => typeof (e as Record<string, unknown>).ordinal === "number" && (e as Record<string, unknown>).ordinal as number >= beforeNext)
+  const envelope = afterEntries.length === 1 ? afterEntries[0] : afterEntries[afterEntries.length - 1] ?? null
+  console.log(`[obs-prod-sandbox] afterEntries=${afterEntries.length} envelope=${JSON.stringify(envelope)?.slice(0, 400)}`)
+  let notificationStrictValid = false
+  let notificationKind: string | undefined
+  let notificationSessionId: string | undefined
+  let notificationRevision: number | undefined
+  let notificationCursor: number | undefined
+  let notificationSeq: number | undefined
+  try {
+    const envRec = envelope as Record<string, unknown> | null
+    const params = (envRec?.params as unknown) ?? envelope
+    if (isValidObservationChangedNotification(params as unknown)) {
+      notificationStrictValid = true
+      const p = params as { v: string; cursor: number; entries: Array<Record<string, unknown>> }
+      notificationCursor = p.cursor
+      if (Array.isArray(p.entries) && p.entries.length === 1) {
+        const e = p.entries[0]!
+        notificationKind = String(e.kind)
+        notificationSessionId = String(e.session_id)
+        notificationRevision = e.revision as number
+        notificationSeq = e.seq as number
+      }
+    }
+  } catch {}
+  let contiguous = false
+  if (typeof notificationCursor === "number" && typeof notificationSeq === "number") {
+    if (notificationCursor === notificationSeq && notificationCursor === beforeCursor + 1) contiguous = true
+  }
+  let afterTelemetry: { count: number; lastAckCursor?: number; lastBaseline?: number; persistedCursor?: number } | null = null
+  const telemetryDeadline = Date.now() + 8000
+  while (Date.now() < telemetryDeadline) {
+    const t = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; persistedCursor?: number } | null
+    if (t && t.count === beforeTelemetryCount + 1 && typeof t.lastAckCursor === "number" && typeof t.lastBaseline === "number") {
+      afterTelemetry = t
+      break
+    }
+    if (t && t.count > beforeTelemetryCount && typeof t.lastAckCursor === "number") { afterTelemetry = t; break }
+    await sleep(200)
+  }
+  if (!afterTelemetry) afterTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; persistedCursor?: number } | null
+  if (afterTelemetry && afterTelemetry.count === beforeTelemetryCount + 1 && afterTelemetry.lastAckCursor === undefined) {
+    const extraDeadline = Date.now() + 3000
+    while (Date.now() < extraDeadline) {
+      const t2 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; persistedCursor?: number } | null
+      if (t2 && typeof t2.lastAckCursor === "number") { afterTelemetry = t2; break }
+      await sleep(200)
+    }
+  }
+  if (afterTelemetry && typeof notificationCursor === "number") {
+    const persistDeadline = Date.now() + 3000
+    while (Date.now() < persistDeadline) {
+      if (afterTelemetry.persistedCursor === notificationCursor) break
+      const t3 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; persistedCursor?: number } | null
+      if (t3) afterTelemetry = t3
+      if (afterTelemetry.persistedCursor === notificationCursor) break
+      await sleep(200)
+    }
+  }
+  const refreshAdvancedOnce = afterTelemetry ? afterTelemetry.count === beforeTelemetryCount + 1 : false
+  const ackCursorMatches = afterTelemetry?.lastAckCursor === notificationCursor
+  const baselineMatches = afterTelemetry?.lastBaseline === beforeCursor
+  console.log(`[obs-prod-sandbox] telemetry after count=${afterTelemetry?.count} before=${beforeTelemetryCount} lastAck=${afterTelemetry?.lastAckCursor} notifCursor=${notificationCursor} lastBaseline=${afterTelemetry?.lastBaseline} beforeCursor=${beforeCursor} advancedOnce=${refreshAdvancedOnce} ackMatch=${ackCursorMatches} baseMatch=${baselineMatches}`)
+  // Policy reads — fail-closed: both must be found, strict compare enabled/mode/hosts/writablePaths
+  const sourcePolicyRes = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_POLICY_READ, { directory: dirForCreate, sessionId: sourceId })) as { result: { status: string; accepted?: boolean; data?: { found?: boolean; snapshot?: unknown }; failure?: unknown } }
+  const childPolicyRes = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_POLICY_READ, { directory: dirForCreate, sessionId: childId })) as { result: { status: string; accepted?: boolean; data?: { found?: boolean; snapshot?: unknown }; failure?: unknown } }
+  const sourceFound = (sourcePolicyRes.result as unknown as { status?: string; data?: { found?: boolean } }).status === "succeeded" && (sourcePolicyRes.result as unknown as { data?: { found?: boolean } }).data?.found === true
+  const childFound = (childPolicyRes.result as unknown as { status?: string; data?: { found?: boolean } }).status === "succeeded" && (childPolicyRes.result as unknown as { data?: { found?: boolean } }).data?.found === true
+  const sourceSnap = (sourcePolicyRes.result as unknown as { data?: { snapshot?: unknown } }).data?.snapshot
+  const childSnap = (childPolicyRes.result as unknown as { data?: { snapshot?: unknown } }).data?.snapshot
+  let inheritValid = false
+  if (sourceFound && childFound && sourceSnap && childSnap && typeof sourceSnap === "object" && typeof childSnap === "object") {
+    const s = sourceSnap as Record<string, unknown>
+    const c = childSnap as Record<string, unknown>
+    const sHosts = Array.isArray(s.allowedHosts) ? s.allowedHosts : Array.isArray((s as Record<string, unknown>).hosts) ? (s as Record<string, unknown>).hosts : undefined
+    const cHosts = Array.isArray(c.allowedHosts) ? c.allowedHosts : Array.isArray((c as Record<string, unknown>).hosts) ? (c as Record<string, unknown>).hosts : undefined
+    const sh = sHosts !== undefined ? JSON.stringify(sHosts) : undefined
+    const ch = cHosts !== undefined ? JSON.stringify(cHosts) : undefined
+    const sWritable = Array.isArray(s.writablePaths) ? s.writablePaths : undefined
+    const cWritable = Array.isArray(c.writablePaths) ? c.writablePaths : undefined
+    const sw = sWritable !== undefined ? JSON.stringify(sWritable) : undefined
+    const cw = cWritable !== undefined ? JSON.stringify(cWritable) : undefined
+    // strict: enabled, mode, hosts, writablePaths must match exactly; missing any -> fail
+    if (typeof s.enabled === "boolean" && typeof c.enabled === "boolean" && typeof s.mode === "string" && typeof c.mode === "string" && sh !== undefined && ch !== undefined && sw !== undefined && cw !== undefined) {
+      inheritValid = c.enabled === s.enabled && c.mode === s.mode && ch === sh && cw === sw
+    } else {
+      inheritValid = false
+    }
+  } else {
+    inheritValid = false
+  }
+  console.log(`[obs-prod-sandbox] inherit check sourceFound=${sourceFound} childFound=${childFound} inheritValid=${inheritValid}`)
+  // Grant evidence: count=2 -> after child1 remaining=1
+  const grantAfterChild1Raw = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_GRANT_READ, { directory: dirForCreate, hash: tokenHash })) as { result: { status: string; data?: { found?: boolean; remaining?: number; hash?: string } } }
+  const grant1Remaining = (grantAfterChild1Raw.result as unknown as { data?: { remaining?: number } }).data?.remaining
+  const grant1Found = (grantAfterChild1Raw.result as unknown as { data?: { found?: boolean } }).data?.found
+  const grant1Hash = (grantAfterChild1Raw.result as unknown as { data?: { hash?: string } }).data?.hash
+  console.log(`[obs-prod-sandbox] grant after child1 found=${grant1Found} remaining=${grant1Remaining} hash=${grant1Hash?.slice(0, 8)}`)
+  // Replay same tuple
+  const replayRes = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_CHILD_REPLAY)) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string } } }
+    sessionId?: string
+  }
+  const replaySameSession = replayRes.sessionId === childId
+  const replaySucceeded = replayRes.result?.status === "succeeded" && replayRes.result?.accepted === true
+  await sleep(600)
+  const secondSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const secondAll = Array.isArray(secondSnapRaw.entries) ? secondSnapRaw.entries : []
+  const secondDelta = secondAll.filter((e) => typeof (e as Record<string, unknown>).ordinal === "number" && (e as Record<string, unknown>).ordinal as number >= (afterSnap?.nextOrdinal ?? beforeNext + 1))
+  const idempotentSecondNotifCount = secondDelta.length
+  const postReplaySnap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const postReplayTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number; count?: number } | null
+  // Grant after replay (idempotent) must still be 1
+  const grantAfterReplayRaw = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_GRANT_READ, { directory: dirForCreate, hash: tokenHash })) as { result: { status: string; data?: { found?: boolean; remaining?: number; hash?: string } } }
+  const grantReplayRemaining = (grantAfterReplayRaw.result as unknown as { data?: { remaining?: number } }).data?.remaining
+  const grantReplayFound = (grantAfterReplayRaw.result as unknown as { data?: { found?: boolean } }).data?.found
+  console.log(`[obs-prod-sandbox] grant after replay found=${grantReplayFound} remaining=${grantReplayRemaining}`)
+  // Second distinct child with same token -> remaining 0
+  const child2Title = `E2E Sandbox Child2 ${fixtureId.slice(0, 8)}`
+  const child2Res = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_CHILD_CREATE, { directory: dirForCreate, title: child2Title, sandboxInheritanceToken: token })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string } }; failure?: unknown }
+    sessionId?: string
+  }
+  const child2Succeeded = child2Res.result?.status === "succeeded" && child2Res.result?.accepted === true && !!child2Res.sessionId
+  const child2Id = child2Res.sessionId as string | undefined
+  console.log(`[obs-prod-sandbox] child2 succeeded=${child2Succeeded} id=${child2Id}`)
+  await sleep(800)
+  const secondAfterSnap = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const secondAll2 = Array.isArray(secondAfterSnap.entries) ? secondAfterSnap.entries : []
+  const secondFiltered = secondAll2.filter((e) => typeof (e as Record<string, unknown>).ordinal === "number" && (e as Record<string, unknown>).ordinal as number >= (secondSnapRaw.nextOrdinal ?? beforeNext))
+  let secondEnvelope: unknown = secondFiltered.length >= 1 ? secondFiltered[secondFiltered.length - 1] ?? null : null
+  let secondStrictValid = false
+  let secondCursor: number | undefined
+  if (secondEnvelope) {
+    const envRec = secondEnvelope as Record<string, unknown> | null
+    const params = (envRec?.params as unknown) ?? secondEnvelope
+    if (params && isValidObservationChangedNotification(params as unknown)) {
+      secondStrictValid = true
+      secondCursor = (params as { cursor: number }).cursor
+    }
+  }
+  console.log(`[obs-prod-sandbox] second child poll filtered=${secondFiltered.length} strictValid=${secondStrictValid} cursor=${secondCursor}`)
+  const grantAfterChild2Raw = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_GRANT_READ, { directory: dirForCreate, hash: tokenHash })) as { result: { status: string; data?: { found?: boolean; remaining?: number; hash?: string } } }
+  const grant2Remaining = (grantAfterChild2Raw.result as unknown as { data?: { remaining?: number } }).data?.remaining
+  const grant2Found = (grantAfterChild2Raw.result as unknown as { data?: { found?: boolean } }).data?.found
+  const grant2Hash = (grantAfterChild2Raw.result as unknown as { data?: { hash?: string } }).data?.hash
+  console.log(`[obs-prod-sandbox] grant after child2 found=${grant2Found} remaining=${grant2Remaining} hash=${grant2Hash?.slice(0, 8)}`)
+  // Third distinct child must fail validation.failed/invalid with no new session/operation/changefeed/notification
+  // Clear baseline to avoid polluting AgentManager refresh
+  await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_CLEAR)
+  await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY_CLEAR)
+  const beforeThirdSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const beforeThirdNext = typeof beforeThirdSnapRaw.nextOrdinal === "number" ? beforeThirdSnapRaw.nextOrdinal : 0
+  const beforeThirdTelemetryRaw = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; persistedCursor?: number } | null
+  const beforeThirdTelemetryCount = beforeThirdTelemetryRaw?.count ?? 0
+  const beforeThirdCursorRaw = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const beforeThirdCursor = beforeThirdCursorRaw.cursor
+  const child3Title = `E2E Sandbox Child3 ${fixtureId.slice(0, 8)}`
+  const child3Res = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_CHILD_CREATE, { directory: dirForCreate, title: child3Title, sandboxInheritanceToken: token })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; failure?: { code?: string; message?: string }; data?: unknown }
+    sessionId?: string
+  }
+  const child3Failed = child3Res.result?.status === "failed" && child3Res.result?.accepted === false
+  const child3Code = (child3Res.result as unknown as { failure?: { code?: string } }).failure?.code as string | undefined
+  const child3Valid = child3Failed && (child3Code === "validation.failed" || child3Code === "invalid" || String(child3Res.result?.failure ?? "").includes("validation"))
+  console.log(`[obs-prod-sandbox] child3 failed=${child3Failed} code=${child3Code} valid=${child3Valid} session=${child3Res.sessionId}`)
+  await sleep(700)
+  const afterThirdSnap = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const afterThirdAll = Array.isArray(afterThirdSnap.entries) ? afterThirdSnap.entries : []
+  const afterThirdDelta = afterThirdAll.filter((e) => typeof (e as Record<string, unknown>).ordinal === "number" && (e as Record<string, unknown>).ordinal as number >= beforeThirdNext)
+  const thirdNotifCount = afterThirdDelta.length
+  const afterThirdTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; persistedCursor?: number; lastAckCursor?: number } | null
+  const thirdRefreshAdvanced = afterThirdTelemetry ? afterThirdTelemetry.count !== beforeThirdTelemetryCount : false
+  const afterThirdCursorRaw = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const afterThirdCursor = afterThirdCursorRaw.cursor
+  const thirdCursorAdvanced = afterThirdCursor !== beforeThirdCursor
+  const grantAfterChild3Raw = (await vscodeApi.commands.executeCommand(CMD_SANDBOX_GRANT_READ, { directory: dirForCreate, hash: tokenHash })) as { result: { status: string; data?: { found?: boolean; remaining?: number } } }
+  const grant3Found = (grantAfterChild3Raw.result as unknown as { data?: { found?: boolean } }).data?.found
+  const grant3Remaining = (grantAfterChild3Raw.result as unknown as { data?: { remaining?: number } }).data?.remaining
+  console.log(`[obs-prod-sandbox] after third notifCount=${thirdNotifCount} refreshAdvanced=${thirdRefreshAdvanced} cursorAdvanced=${thirdCursorAdvanced} grantFound=${grant3Found} remaining=${grant3Remaining}`)
+  try {
+    writeFileSync(
+      join(scratch, "obs-prod-sandbox-debug.json"),
+      JSON.stringify(
+        { beforeNext, beforeCursor, afterEntries: afterEntries.length, notificationStrictValid, contiguous, refreshAdvancedOnce, tokenHash, inheritValid, sourceFound, childFound, grant1Remaining, grant1Found, grantReplayRemaining, grantReplayFound, replaySameSession, idempotentSecondNotifCount, child2Id, secondStrictValid, grant2Remaining, grant2Found, child3Valid, thirdNotifCount, thirdRefreshAdvanced, thirdCursorAdvanced, grant3Found, grant3Remaining },
+        null,
+        2,
+      ),
+    )
+  } catch {}
+  console.log("[obs-prod-sandbox] building evidence obj")
+  const evidence = {
+    scenario: "observation-producer-sandbox",
+    collectedAt: new Date().toISOString(),
+    pid: (status0 as Record<string, unknown>).pid ?? 0,
+    canonical: { dbPath: String((status0 as Record<string, unknown>).dbPath ?? ""), dataRoot: canonicalForEvidence.dataRoot, gateOk, gateErr, isolateOk: (() => { try { const dr = gate?.dataRoot as string | undefined; if (!dr) return undefined; return isIsolatedDataRoot(scratch, dr) } catch { return undefined } })() },
+    testBridge: (status0 as Record<string, unknown>).testBridge === true,
+    before: { cursor: beforeCursor, persisted: beforePersisted, startOrdinal: beforeStart, nextOrdinal: beforeNext, notifCount: 0, refreshCount: beforeTelemetryCount },
+    after: { cursor: notificationCursor ?? beforeCursor, persisted: afterTelemetry?.persistedCursor ?? beforePersisted, startOrdinal: afterSnap?.startOrdinal ?? beforeStart, nextOrdinal: afterSnap?.nextOrdinal ?? beforeNext, notifCount: afterEntries.length, refreshCount: afterTelemetry?.count ?? beforeTelemetryCount },
+    envelope,
+    notificationStrictValid,
+    envelopeValid: notificationStrictValid && afterEntries.length === 1 && notificationSessionId === childId && notificationKind === "changed",
+    contiguous,
+    ack: { requested: notificationCursor ?? beforeCursor + 1, persistedAfter: afterTelemetry?.persistedCursor, success: ackCursorMatches && baselineMatches },
+    refresh: { beforeCount: beforeTelemetryCount, afterCount: afterTelemetry?.count, advancedOnce: refreshAdvancedOnce, lastAckCursor: afterTelemetry?.lastAckCursor, lastBaseline: afterTelemetry?.lastBaseline },
+    source: { sessionId: sourceId, opId: sourceRes.opId },
+    tokenIssue: { token, hash: tokenHash, count: 2, sourceSessionId: sourceId },
+    grant: { afterChild1: { found: !!grant1Found, remaining: grant1Remaining, hash: grant1Hash ?? tokenHash }, afterReplay: { found: !!grantReplayFound, remaining: grantReplayRemaining }, afterChild2: { found: !!grant2Found, remaining: grant2Remaining, hash: grant2Hash ?? tokenHash }, afterChild3: { found: !!grant3Found, remaining: grant3Remaining } },
+    child: { opId: childRes.opId, requestId: childRes.requestId, directory: childRes.directory, privateSucceeded: childSucceeded, sessionId: childId },
+    sourcePolicy: { found: !!sourceFound, snapshot: sourceSnap, raw: sourcePolicyRes.result },
+    childPolicy: { found: !!childFound, snapshot: childSnap, raw: childPolicyRes.result },
+    inheritValid,
+    replay: { sameSession: replaySameSession, succeeded: replaySucceeded, opId: replayRes.opId, requestId: replayRes.requestId },
+    idempotentSecondNotifCount,
+    secondChild: { sessionId: child2Id ?? "", privateSucceeded: !!child2Succeeded, opId: child2Res.opId },
+    secondNotif: { strictValid: secondStrictValid, cursor: secondCursor, envelope: secondEnvelope },
+    thirdChild: { sessionId: child3Res.sessionId ?? "", failed: !!child3Failed, code: child3Code ?? "", valid: !!child3Valid, opId: child3Res.opId, notifCount: thirdNotifCount, refreshAdvanced: !!thirdRefreshAdvanced, cursorAdvanced: !!thirdCursorAdvanced, baseline: { beforeCursor, beforeNext: beforeThirdNext, beforeTelemetryCount } },
+    notification: { cursor: notificationCursor, seq: notificationSeq, session_id: notificationSessionId, kind: notificationKind, revision: notificationRevision },
+    postReplay: { cursor: postReplaySnap.cursor, persisted: postReplayTelemetry?.persistedCursor },
+    beforeStatus: status0,
+    afterTelemetry,
+    gate,
+  }
+  console.log("[obs-prod-sandbox] writing runtime-evidence")
+  writeFileSync(join(scratch, "obs-prod-sandbox-runtime-evidence"), JSON.stringify(evidence, null, 2))
+  console.log("[obs-prod-sandbox] writing ready marker")
+  writeFileSync(join(scratch, "obs-prod-sandbox-ready"), fixtureId)
+  const deadline = Date.now() + OBS_PROD_SANDBOX_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    await sleep(200)
+  }
+  } catch (err) {
+    console.error("[obs-prod-sandbox] boundary failed", String(err), err instanceof Error ? err.stack : "")
+    try {
+      writeFileSync(join(scratch, "obs-prod-sandbox-error.json"), JSON.stringify({ error: String(err), stack: err instanceof Error ? err.stack : undefined }, null, 2))
+      writeFileSync(join(scratch, "obs-prod-sandbox-ready"), `error:${String(err).slice(0, 200)}`)
+    } catch {}
+    throw err
   }
 }

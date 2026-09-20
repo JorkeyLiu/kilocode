@@ -292,10 +292,12 @@ import { assertObservationProducerUpdateLifecycle } from "./e2e-probe-observatio
 import { assertObservationProducerDeleteLifecycle } from "./e2e-probe-observation-producer-delete"
 import { assertObservationProducerForkLifecycle } from "./e2e-probe-observation-producer-fork"
 import { assertObservationProducerRevertLifecycle } from "./e2e-probe-observation-producer-revert"
+import { assertObservationProducerSandboxLifecycle } from "./e2e-probe-observation-producer-sandbox"
 import {
   OBSERVATION_PRODUCER_DELETE_SCENARIO,
   OBSERVATION_PRODUCER_FORK_SCENARIO,
   OBSERVATION_PRODUCER_REVERT_SCENARIO,
+  OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
   OBSERVATION_PRODUCER_SCENARIO,
   OBSERVATION_PRODUCER_UPDATE_SCENARIO,
   e2eTimeoutForScenario,
@@ -372,6 +374,7 @@ const SCENARIO_VALUES = [
   OBSERVATION_PRODUCER_DELETE_SCENARIO,
   OBSERVATION_PRODUCER_FORK_SCENARIO,
   OBSERVATION_PRODUCER_REVERT_SCENARIO,
+  OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -394,7 +397,8 @@ export function parseScenarios(value: string): Set<string> {
     value === OBSERVATION_PRODUCER_UPDATE_SCENARIO ||
     value === OBSERVATION_PRODUCER_DELETE_SCENARIO ||
     value === OBSERVATION_PRODUCER_FORK_SCENARIO ||
-    value === OBSERVATION_PRODUCER_REVERT_SCENARIO
+    value === OBSERVATION_PRODUCER_REVERT_SCENARIO ||
+    value === OBSERVATION_PRODUCER_SANDBOX_SCENARIO
   ) {
     return new Set([value])
   }
@@ -422,7 +426,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has(OBSERVATION_PRODUCER_UPDATE_SCENARIO) ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_DELETE_SCENARIO) ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_FORK_SCENARIO) ||
-    parseScenarios(value).has(OBSERVATION_PRODUCER_REVERT_SCENARIO)
+    parseScenarios(value).has(OBSERVATION_PRODUCER_REVERT_SCENARIO) ||
+    parseScenarios(value).has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO)
   )
 }
 
@@ -2615,6 +2620,10 @@ async function runScenario(
     await assertObservationProducerRevertLifecycle(browser, plan, scratch)
     console.log("[probe] observation-producer-revert lifecycle assertion passed")
   }
+  if (scenarios.has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO)) {
+    await assertObservationProducerSandboxLifecycle(browser, plan, scratch)
+    console.log("[probe] observation-producer-sandbox lifecycle assertion passed")
+  }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
     await runGcLifecycleBoundaries(browser, plan, scratch, workspace, lifecycleModel)
@@ -2715,6 +2724,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has(OBSERVATION_PRODUCER_DELETE_SCENARIO)) return "obs-prod-delete-ready"
   if (scenarios.has(OBSERVATION_PRODUCER_FORK_SCENARIO)) return "obs-prod-fork-ready"
   if (scenarios.has(OBSERVATION_PRODUCER_REVERT_SCENARIO)) return "obs-prod-revert-ready"
+  if (scenarios.has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO)) return "obs-prod-sandbox-ready"
   return "ready"
 }
 

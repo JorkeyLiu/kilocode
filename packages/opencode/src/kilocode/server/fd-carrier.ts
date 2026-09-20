@@ -2847,6 +2847,22 @@ export function createFdCarrier(
         const { handleE2ERevertSeed } = await import("./e2e-revert-seed-handler")
         return handleE2ERevertSeed(params)
       }
+      if (method === "session/e2eSandboxTokenIssue") {
+        const { handleE2ESandboxTokenIssue } = await import("./e2e-sandbox-handler")
+        return handleE2ESandboxTokenIssue(params)
+      }
+      if (method === "session/e2eSandboxPolicyRead") {
+        const { handleE2ESandboxPolicyRead } = await import("./e2e-sandbox-handler")
+        return handleE2ESandboxPolicyRead(params)
+      }
+      if (method === "session/e2eSandboxSet") {
+        const { handleE2ESandboxSet } = await import("./e2e-sandbox-handler")
+        return handleE2ESandboxSet(params)
+      }
+      if (method === "session/e2eSandboxGrantRead") {
+        const { handleE2ESandboxGrantRead } = await import("./e2e-sandbox-handler")
+        return handleE2ESandboxGrantRead(params)
+      }
       if (method === "session/prompt" || method === FD_PROMPT_OP) {
         try {
           validatePromptRequest(params)

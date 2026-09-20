@@ -6,6 +6,26 @@ import type { ChildProcess } from "child_process"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import type { E2ERevertSeedRequest, E2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
 import { validateE2ERevertSeedRequest, validateE2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
+import type {
+  E2ESandboxGrantReadRequest,
+  E2ESandboxGrantReadResult,
+  E2ESandboxPolicyReadRequest,
+  E2ESandboxPolicyReadResult,
+  E2ESandboxSetRequest,
+  E2ESandboxSetResult,
+  E2ESandboxTokenIssueRequest,
+  E2ESandboxTokenIssueResult,
+} from "./serve-private-e2e-sandbox"
+import {
+  validateE2ESandboxGrantReadRequest,
+  validateE2ESandboxGrantReadResult,
+  validateE2ESandboxPolicyReadRequest,
+  validateE2ESandboxPolicyReadResult,
+  validateE2ESandboxSetRequest,
+  validateE2ESandboxSetResult,
+  validateE2ESandboxTokenIssueRequest,
+  validateE2ESandboxTokenIssueResult,
+} from "./serve-private-e2e-sandbox"
 import {
   makeGetAmbiguous,
   normalizePrivateGetWire,
@@ -4400,6 +4420,138 @@ export class ServePrivatePeer {
           return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eRevertSeed", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "closed", retryable: false } }, accepted: false, failure: { code: "internal", message: "closed", retryable: false } } as unknown as E2ERevertSeedResult
         }
         return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eRevertSeed", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } }, accepted: false, failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } } as unknown as E2ERevertSeedResult
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  privateE2ESandboxTokenIssueWithHandle(req: E2ESandboxTokenIssueRequest): {
+    id: number
+    promise: Promise<E2ESandboxTokenIssueResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateE2ESandboxTokenIssueRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/e2eSandboxTokenIssue", req as unknown as Record<string, unknown>)
+    const promise = (async (): Promise<E2ESandboxTokenIssueResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxTokenIssue", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "stale", retryable: false } }, accepted: false, failure: { code: "internal", message: "stale", retryable: false } } as unknown as E2ESandboxTokenIssueResult
+        }
+        try {
+          return validateE2ESandboxTokenIssueResult(raw, req)
+        } catch {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxTokenIssue", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "invalid", retryable: false } }, accepted: false, failure: { code: "internal", message: "invalid", retryable: false } } as unknown as E2ESandboxTokenIssueResult
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxTokenIssue", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "closed", retryable: false } }, accepted: false, failure: { code: "internal", message: "closed", retryable: false } } as unknown as E2ESandboxTokenIssueResult
+        }
+        return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxTokenIssue", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } }, accepted: false, failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } } as unknown as E2ESandboxTokenIssueResult
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  privateE2ESandboxPolicyReadWithHandle(req: E2ESandboxPolicyReadRequest): {
+    id: number
+    promise: Promise<E2ESandboxPolicyReadResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateE2ESandboxPolicyReadRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/e2eSandboxPolicyRead", req as unknown as Record<string, unknown>)
+    const promise = (async (): Promise<E2ESandboxPolicyReadResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxPolicyRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "stale", retryable: false } }, accepted: false, failure: { code: "internal", message: "stale", retryable: false } } as unknown as E2ESandboxPolicyReadResult
+        }
+        try {
+          return validateE2ESandboxPolicyReadResult(raw, req)
+        } catch {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxPolicyRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "invalid", retryable: false } }, accepted: false, failure: { code: "internal", message: "invalid", retryable: false } } as unknown as E2ESandboxPolicyReadResult
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxPolicyRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "closed", retryable: false } }, accepted: false, failure: { code: "internal", message: "closed", retryable: false } } as unknown as E2ESandboxPolicyReadResult
+        }
+        return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxPolicyRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } }, accepted: false, failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } } as unknown as E2ESandboxPolicyReadResult
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  privateE2ESandboxSetWithHandle(req: E2ESandboxSetRequest): {
+    id: number
+    promise: Promise<E2ESandboxSetResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateE2ESandboxSetRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/e2eSandboxSet", req as unknown as Record<string, unknown>)
+    const promise = (async (): Promise<E2ESandboxSetResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxSet", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "stale", retryable: false } }, accepted: false, failure: { code: "internal", message: "stale", retryable: false } } as unknown as E2ESandboxSetResult
+        }
+        try {
+          return validateE2ESandboxSetResult(raw, req)
+        } catch {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxSet", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "invalid", retryable: false } }, accepted: false, failure: { code: "internal", message: "invalid", retryable: false } } as unknown as E2ESandboxSetResult
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxSet", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "closed", retryable: false } }, accepted: false, failure: { code: "internal", message: "closed", retryable: false } } as unknown as E2ESandboxSetResult
+        }
+        return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxSet", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } }, accepted: false, failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } } as unknown as E2ESandboxSetResult
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  privateE2ESandboxGrantReadWithHandle(req: E2ESandboxGrantReadRequest): {
+    id: number
+    promise: Promise<E2ESandboxGrantReadResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateE2ESandboxGrantReadRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/e2eSandboxGrantRead", req as unknown as Record<string, unknown>)
+    const promise = (async (): Promise<E2ESandboxGrantReadResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxGrantRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "stale", retryable: false } }, accepted: false, failure: { code: "internal", message: "stale", retryable: false } } as unknown as E2ESandboxGrantReadResult
+        }
+        try {
+          return validateE2ESandboxGrantReadResult(raw, req)
+        } catch {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxGrantRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "invalid", retryable: false } }, accepted: false, failure: { code: "internal", message: "invalid", retryable: false } } as unknown as E2ESandboxGrantReadResult
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxGrantRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "closed", retryable: false } }, accepted: false, failure: { code: "internal", message: "closed", retryable: false } } as unknown as E2ESandboxGrantReadResult
+        }
+        return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eSandboxGrantRead", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } }, accepted: false, failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } } as unknown as E2ESandboxGrantReadResult
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

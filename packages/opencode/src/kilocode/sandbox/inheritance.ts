@@ -109,3 +109,11 @@ export function _getReservation(opId: string): Reservation | undefined {
 export function _getGrant(token: string): Grant | undefined {
   return grants.get(token)
 }
+
+export function _findGrantByHash(hash: string): (Grant & { token: string }) | undefined {
+  const lower = hash.toLowerCase()
+  for (const [tok, g] of grants.entries()) {
+    if (createHash("sha256").update(tok).digest("hex").toLowerCase() === lower) return { ...g, token: tok }
+  }
+  return undefined
+}

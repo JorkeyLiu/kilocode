@@ -284,6 +284,10 @@ export class KiloConnectionService {
     revertWithHandle: (req) => this.privateRevertWithHandle(req as unknown as import("./serve-private-revert-contract").ServePrivateRevertRequest),
     unrevertWithHandle: (req) => this.privateUnrevertWithHandle(req as unknown as import("./serve-private-revert-contract").ServePrivateUnrevertRequest),
     e2eRevertSeedWithHandle: (req) => (this.privatePeer as unknown as { privateE2ERevertSeedWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ERevertSeedWithHandle(req as unknown as import("./serve-private-e2e-revert-seed").E2ERevertSeedRequest) as unknown as { promise: Promise<import("./serve-private-e2e-revert-seed").E2ERevertSeedResult> },
+    e2eSandboxTokenIssueWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxTokenIssueWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxTokenIssueWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxTokenIssueRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxTokenIssueResult> },
+    e2eSandboxPolicyReadWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxPolicyReadWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxPolicyReadWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxPolicyReadRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxPolicyReadResult> },
+    e2eSandboxSetWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxSetWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxSetWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxSetRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxSetResult> },
+    e2eSandboxGrantReadWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxGrantReadWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxGrantReadWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxGrantReadRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxGrantReadResult> },
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -3871,6 +3875,7 @@ export class KiloConnectionService {
     title?: string
     parentSessionId?: string | null
     token?: string
+    sandboxInheritanceToken?: string
   }): Promise<{
     opId: string
     idempotencyKey: string
@@ -3880,6 +3885,69 @@ export class KiloConnectionService {
     sessionId?: string
   }> {
     return this.observationFixture.create(input)
+  }
+
+  public async fixtureSandboxChildCreate(input: { directory?: string; title?: string; sandboxInheritanceToken: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateCreateResult
+    sessionId?: string
+  }> {
+    return this.observationFixture.createSandboxChild(input)
+  }
+
+  public async fixtureSandboxChildReplay(): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateCreateResult
+    sessionId?: string
+  }> {
+    return this.observationFixture.replaySandbox()
+  }
+
+  public async fixtureE2ESandboxTokenIssue(input: { directory?: string; sourceSessionId: string; sourceDirectory?: string; count?: number }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-e2e-sandbox").E2ESandboxTokenIssueResult
+    token?: string
+  }> {
+    return this.observationFixture.sandboxTokenIssue(input)
+  }
+
+  public async fixtureE2ESandboxPolicyRead(input: { directory?: string; sessionId: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-e2e-sandbox").E2ESandboxPolicyReadResult
+  }> {
+    return this.observationFixture.sandboxPolicyRead(input)
+  }
+
+  public async fixtureE2ESandboxSet(input: { directory?: string; sessionId: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-e2e-sandbox").E2ESandboxSetResult
+  }> {
+    return this.observationFixture.sandboxSet(input)
+  }
+
+  public async fixtureE2ESandboxGrantRead(input: { directory?: string; hash: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-e2e-sandbox").E2ESandboxGrantReadResult
+  }> {
+    return this.observationFixture.sandboxGrantRead(input)
   }
 
   public async fixtureSessionCreateReplay(): Promise<{
