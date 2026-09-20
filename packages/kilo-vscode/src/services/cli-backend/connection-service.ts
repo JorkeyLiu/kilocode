@@ -281,6 +281,9 @@ export class KiloConnectionService {
     updateWithHandle: (req) => this.privateSessionUpdateWithHandle(req as ServePrivateSessionUpdateRequest),
     deleteWithHandle: (req) => this.privateDeleteWithHandle(req as ServePrivateDeleteRequest),
     forkWithHandle: (req) => this.privateForkWithHandle(req as unknown as ServePrivateForkRequest),
+    revertWithHandle: (req) => this.privateRevertWithHandle(req as unknown as import("./serve-private-revert-contract").ServePrivateRevertRequest),
+    unrevertWithHandle: (req) => this.privateUnrevertWithHandle(req as unknown as import("./serve-private-revert-contract").ServePrivateUnrevertRequest),
+    e2eRevertSeedWithHandle: (req) => (this.privatePeer as unknown as { privateE2ERevertSeedWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ERevertSeedWithHandle(req as unknown as import("./serve-private-e2e-revert-seed").E2ERevertSeedRequest) as unknown as { promise: Promise<import("./serve-private-e2e-revert-seed").E2ERevertSeedResult> },
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -3956,5 +3959,62 @@ export class KiloConnectionService {
     childSessionId?: string
   }> {
     return this.observationFixture.replayFork(sessionId)
+  }
+
+  public async fixtureE2ERevertSeed(input?: { directory?: string; title?: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-e2e-revert-seed").E2ERevertSeedResult
+    sessionId: string
+    messageId: string
+    partId: string
+  }> {
+    return this.observationFixture.seedRevert(input)
+  }
+
+  public async fixtureSessionRevertPrivate(input: { directory?: string; sessionId: string; messageId: string; partId?: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-revert-contract").ServePrivateRevertResult
+    sessionId: string
+  }> {
+    return this.observationFixture.revert(input)
+  }
+
+  public async fixtureSessionRevertPrivateReplay(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-revert-contract").ServePrivateRevertResult
+    sessionId: string
+  }> {
+    return this.observationFixture.replayRevert(sessionId)
+  }
+
+  public async fixtureSessionUnrevertPrivate(input: { directory?: string; sessionId: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-revert-contract").ServePrivateUnrevertResult
+    sessionId: string
+  }> {
+    return this.observationFixture.unrevert(input)
+  }
+
+  public async fixtureSessionUnrevertPrivateReplay(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-revert-contract").ServePrivateUnrevertResult
+    sessionId: string
+  }> {
+    return this.observationFixture.replayUnrevert(sessionId)
   }
 }

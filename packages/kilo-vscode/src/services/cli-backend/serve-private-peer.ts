@@ -4,6 +4,8 @@ import { JsonRpcPeer } from "../../private-worker/peer"
 import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "../../private-worker/observation"
 import type { ChildProcess } from "child_process"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
+import type { E2ERevertSeedRequest, E2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
+import { validateE2ERevertSeedRequest, validateE2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
 import {
   makeGetAmbiguous,
   normalizePrivateGetWire,
@@ -4356,6 +4358,41 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeUnrevertAmbiguous(req, true)
         return makeUnrevertAmbiguous(req, true)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  // Fixture-only: session/e2eRevertSeed seeds a real message/part checkpoint for revert proof.
+  privateE2ERevertSeedWithHandle(req: E2ERevertSeedRequest): {
+    id: number
+    promise: Promise<E2ERevertSeedResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateE2ERevertSeedRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    // capability check uses the same FD_CAPABILITIES entry; pass through even if not advertised fail-closed will be caught as MethodNotFound
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/e2eRevertSeed", req as unknown as Record<string, unknown>)
+    const promise = (async (): Promise<E2ERevertSeedResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eRevertSeed", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "stale", retryable: false } }, accepted: false, failure: { code: "internal", message: "stale", retryable: false } } as unknown as E2ERevertSeedResult
+        }
+        try {
+          return validateE2ERevertSeedResult(raw, req)
+        } catch {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eRevertSeed", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "invalid", retryable: false } }, accepted: false, failure: { code: "internal", message: "invalid", retryable: false } } as unknown as E2ERevertSeedResult
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) {
+          return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eRevertSeed", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "closed", retryable: false } }, accepted: false, failure: { code: "internal", message: "closed", retryable: false } } as unknown as E2ERevertSeedResult
+        }
+        return { v: 1, requestId: req.requestId, opId: req.opId, op: "session/e2eRevertSeed", idempotencyKey: req.idempotencyKey, status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } }, accepted: false, failure: { code: "internal", message: String(e).slice(0, 200), retryable: false } } as unknown as E2ERevertSeedResult
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

@@ -8,6 +8,7 @@ import { SessionForkDispatchService } from "@/kilocode/session/session-fork-disp
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch"
 import { SessionRevertDispatchService } from "@/kilocode/session/session-revert-dispatch"
+import { isE2EFixtureEnabled } from "@/kilocode/config/e2e-provider"
 import { SessionPromptDispatchService, validateRequest as validatePromptRequest } from "@/kilocode/session/session-prompt-dispatch"
 import {
   SessionCommandDispatchService,
@@ -2841,6 +2842,10 @@ export function createFdCarrier(
           }
         }
         return result
+      }
+      if (method === "session/e2eRevertSeed") {
+        const { handleE2ERevertSeed } = await import("./e2e-revert-seed-handler")
+        return handleE2ERevertSeed(params)
       }
       if (method === "session/prompt" || method === FD_PROMPT_OP) {
         try {

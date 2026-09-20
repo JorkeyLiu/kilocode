@@ -1023,6 +1023,43 @@ export function activate(context: vscode.ExtensionContext) {
         if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
         return connectionService.fixtureSessionForkPrivateReplay(sessionId as string)
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionE2ERevertSeed", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        return (connectionService as unknown as { fixtureE2ERevertSeed: (i: unknown) => Promise<unknown> }).fixtureE2ERevertSeed({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          title: typeof o.title === "string" ? (o.title as string) : undefined,
+          token: typeof o.token === "string" ? (o.token as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionRevertPrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        if (!o.messageId || typeof o.messageId !== "string") throw new Error("messageId required")
+        return (connectionService as unknown as { fixtureSessionRevertPrivate: (i: unknown) => Promise<unknown> }).fixtureSessionRevertPrivate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+          messageId: o.messageId as string,
+          partId: typeof o.partId === "string" ? (o.partId as string) : undefined,
+          token: typeof o.token === "string" ? (o.token as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionRevertPrivateReplay", async (sessionId?: unknown) => {
+        if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+        return (connectionService as unknown as { fixtureSessionRevertPrivateReplay: (id: string) => Promise<unknown> }).fixtureSessionRevertPrivateReplay(sessionId as string)
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionUnrevertPrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        return (connectionService as unknown as { fixtureSessionUnrevertPrivate: (i: unknown) => Promise<unknown> }).fixtureSessionUnrevertPrivate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+          token: typeof o.token === "string" ? (o.token as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionUnrevertPrivateReplay", async (sessionId?: unknown) => {
+        if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+        return (connectionService as unknown as { fixtureSessionUnrevertPrivateReplay: (id: string) => Promise<unknown> }).fixtureSessionUnrevertPrivateReplay(sessionId as string)
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedSnapshot", async () => {
         return connectionService.fixturePrivateObservationChangedSnapshot()
       }),

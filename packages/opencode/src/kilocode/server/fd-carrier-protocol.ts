@@ -1,4 +1,5 @@
 import { ErrorCode } from "@/private-worker/json-rpc"
+import { isE2EFixtureEnabled } from "@/kilocode/config/e2e-provider"
 
 export const FD_PROTOCOL_NAME = "kilo-private"
 export const FD_PROTOCOL_MAJOR = 1
@@ -73,6 +74,7 @@ export const FD_CAPABILITIES = [
   "config/convergence/resolve",
   "config/convergence/observe",
   "transport/health",
+  "session/e2eRevertSeed",
 ] as const
 
 export const OBSERVATION_CHANGED_REVERSE_CAPABILITY = "observation/changed" as const
@@ -198,11 +200,12 @@ export function validateInitialize(params: unknown): { reverseCapabilities: Reve
 }
 
 export function buildInitializeResult(): FdInitializeResult {
+  const caps = isE2EFixtureEnabled() ? [...FD_CAPABILITIES] : FD_CAPABILITIES.filter((c) => c !== "session/e2eRevertSeed")
   return {
     protocol: { name: FD_PROTOCOL_NAME, major: FD_PROTOCOL_MAJOR, minor: FD_PROTOCOL_MINOR },
     protocolVersion: FD_PROTOCOL_VERSION,
     serverInfo: { name: FD_SERVER_NAME, version: FD_SERVER_VERSION },
-    capabilities: [...FD_CAPABILITIES],
+    capabilities: caps,
   }
 }
 

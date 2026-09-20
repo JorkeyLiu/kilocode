@@ -132,8 +132,8 @@ describe("P3.2 removal — custom Diff Viewer / Diff Virtual surfaces are absent
 
 describe("P3.2 preservation — retained H-12 and Agent Manager surfaces", () => {
   it("keeps KiloProvider session revert / unrevert through the SDK", () => {
-    expect(ext).toContain("this.client.session.revert")
-    expect(ext).toContain("this.client.session.unrevert")
+    expect(ext).toContain("revertSessionPrivateFirst")
+    expect(ext).toContain("unrevertSessionPrivateFirst")
     expect(ext).toContain('type: "sessionUpdated"')
   })
 

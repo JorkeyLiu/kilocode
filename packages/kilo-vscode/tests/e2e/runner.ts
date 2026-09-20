@@ -804,6 +804,7 @@ interface ScenarioFlags {
   runObservationProducerUpdate: boolean
   runObservationProducerDelete: boolean
   runObservationProducerFork: boolean
+  runObservationProducerRevert: boolean
 }
 
 /**
@@ -894,6 +895,11 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // -> ServePrivatePeer strict changed@0 validation -> AgentManager single refresh+ack.
     // Validates single five-key entry, revision 0, source not notified, parentID==source.
     runObservationProducerFork: scenario === "observation-producer-fork",
+    // observation-producer-revert is focused-only: bounded live E2E proof for
+    // revert + unrevert pair -> fd3/fd4 PrivatePeer -> ServePrivatePeer strict changed validation.
+    // Validates fresh revert/unrevert each single five-key changed at revision+1, seq+1, exactly once refresh/ack, plus
+    // idempotent replay and no-op unrevert.
+    runObservationProducerRevert: scenario === "observation-producer-revert",
   }
 }
 
@@ -926,11 +932,12 @@ export async function run(): Promise<void> {
     "observation-producer-update",
     "observation-producer-delete",
     "observation-producer-fork",
+    "observation-producer-revert",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert (default: all)",
     )
   }
   const {
@@ -952,6 +959,7 @@ export async function run(): Promise<void> {
     runObservationProducerUpdate,
     runObservationProducerDelete,
     runObservationProducerFork,
+    runObservationProducerRevert,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1239,6 +1247,11 @@ export async function run(): Promise<void> {
   // --- observation-producer-fork bounded live E2E proof (focused only) ---
   if (runObservationProducerFork) {
     await serviceObservationProducerForkBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- observation-producer-revert bounded live E2E proof (focused only) ---
+  if (runObservationProducerRevert) {
+    await serviceObservationProducerRevertBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {
@@ -3771,6 +3784,12 @@ const CMD_SESSION_DELETE_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionDelet
 const CMD_SESSION_FORK_PRIVATE = "kilo-code.new.e2eFixture.sessionForkPrivate"
 const CMD_SESSION_FORK_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionForkPrivateReplay"
 const OBS_PROD_FORK_BUDGET = 900_000
+const CMD_E2E_REVERT_SEED = "kilo-code.new.e2eFixture.sessionE2ERevertSeed"
+const CMD_SESSION_REVERT_PRIVATE = "kilo-code.new.e2eFixture.sessionRevertPrivate"
+const CMD_SESSION_REVERT_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionRevertPrivateReplay"
+const CMD_SESSION_UNREVERT_PRIVATE = "kilo-code.new.e2eFixture.sessionUnrevertPrivate"
+const CMD_SESSION_UNREVERT_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionUnrevertPrivateReplay"
+const OBS_PROD_REVERT_BUDGET = 900_000
 
 /**
  * Bounded live fd3/fd4 ServePrivatePeer observation/changed producer proof.
@@ -5532,6 +5551,566 @@ async function serviceObservationProducerForkBoundary(
   writeFileSync(join(scratch, "obs-prod-fork-runtime-evidence"), JSON.stringify(evidence, null, 2))
   writeFileSync(join(scratch, "obs-prod-fork-ready"), fixtureId)
   const deadline = Date.now() + OBS_PROD_FORK_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    await sleep(200)
+  }
+}
+
+// eslint-disable-next-line complexity -- E2E orchestration boundary: single scenario proof aggregates gate/peer/recorder/seed+revert+unrevert/telemetry/replay/no-op evidence; helpers would split atomic evidence flow
+async function serviceObservationProducerRevertBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  const status0 = (await vscodeApi.commands.executeCommand(CMD_PROD_STATUS)) as Record<string, unknown>
+  writeFileSync(join(scratch, "obs-prod-revert-status.json"), JSON.stringify(status0, null, 2))
+  try {
+    const cstate = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+    writeFileSync(join(scratch, "obs-prod-revert-cstate.json"), JSON.stringify(cstate, null, 2))
+  } catch (e) {
+    writeFileSync(join(scratch, "obs-prod-revert-cstate.json"), JSON.stringify({ error: String(e) }, null, 2))
+  }
+  let gate: Record<string, unknown> | null = null
+  let gateOk = false
+  let gateErr: string | undefined
+  try {
+    const gateRaw = readFileSync(join(scratch, "canonical-gate.json"), "utf8")
+    gate = JSON.parse(gateRaw) as Record<string, unknown>
+    gateErr = validateGateEvidence(gate)
+    gateOk = gateErr === undefined
+    writeFileSync(join(scratch, "obs-prod-revert-gate.json"), JSON.stringify({ gate, gateOk, gateErr }, null, 2))
+  } catch (e) {
+    gateErr = String(e)
+    writeFileSync(join(scratch, "obs-prod-revert-gate.json"), JSON.stringify({ error: gateErr }, null, 2))
+  }
+  const canonicalForEvidence = (() => {
+    try {
+      const raw = gate as Record<string, unknown> | null
+      const dr = raw?.dataRoot as string | undefined
+      const dp = (status0 as Record<string, unknown>).dbPath as string | undefined
+      return { dbPath: String(dp ?? ""), dataRoot: dr, gateOk, gateErr }
+    } catch {
+      return { dbPath: String((status0 as Record<string, unknown>).dbPath ?? ""), gateOk, gateErr }
+    }
+  })()
+  const peerReadyDeadline = Date.now() + 15_000
+  while (Date.now() < peerReadyDeadline) {
+    try {
+      const peerStat = (await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)) as { private: { available: boolean; state: string } }
+      if (peerStat?.private?.available) break
+    } catch {}
+    await sleep(200)
+  }
+  const dirForCreate = (() => {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (ws) return ws
+    return join(scratch, "workspace")
+  })()
+  // Ensure AgentManager panel is visible so observation/changed is not discarded (handleObservationChanged checks panel.visible)
+  try {
+    await vscodeApi.commands.executeCommand("workbench.view.extension.kilo-code")
+  } catch {}
+  try {
+    await vscodeApi.commands.executeCommand("kilo-code.new.AMO_showPanel")
+  } catch {}
+  await sleep(800)
+  // Trigger initial hydration if needed: requestState ensures hydrated before seed notification
+  try {
+    await vscodeApi.commands.executeCommand("kilo-code.new.e2eFixture.postToAgentManager", { type: "agentManager.requestState" } as unknown)
+  } catch {}
+  await sleep(800)
+  // Seed real checkpoint via e2eRevertSeed (session + user/assistant text)
+  const seedRes = (await vscodeApi.commands.executeCommand(CMD_E2E_REVERT_SEED, {
+    directory: dirForCreate,
+    title: `E2E Obs Revert Seed ${fixtureId.slice(0, 8)}`,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data: { sessionId: string; messageId: string; partId: string; revision: number; session: { id: string } } }
+    sessionId: string
+    messageId: string
+    partId: string
+  }
+  const seedOk = seedRes.result?.status === "succeeded" && seedRes.result?.accepted === true && !!seedRes.sessionId && !!seedRes.messageId
+  console.log(`[obs-prod-revert] seed ok=${seedOk} sessionId=${seedRes.sessionId} messageId=${seedRes.messageId} partId=${seedRes.partId}`)
+  if (!seedOk) throw new Error(`seedRevert not succeeded: ${JSON.stringify(seedRes.result).slice(0, 800)}`)
+  const sessionId = seedRes.sessionId as string
+  const messageId = seedRes.messageId as string
+  const partId = seedRes.partId as string
+  const seedRevision = seedRes.result.data.revision as number
+  console.log(`[obs-prod-revert] seed revision ${seedRevision} session ${sessionId} msg ${messageId}`)
+  await sleep(800)
+  let waitSeedNotif = 0
+  const waitSeedDeadline = Date.now() + 5000
+  while (Date.now() < waitSeedDeadline) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { entries: unknown[] }
+    if (Array.isArray(raw.entries) && raw.entries.length > 0) {
+      waitSeedNotif = raw.entries.length
+      break
+    }
+    await sleep(200)
+  }
+  console.log(`[obs-prod-revert] seed notif count before persist wait=${waitSeedNotif}`)
+  const persistWaitDeadline = Date.now() + 8000
+  while (Date.now() < persistWaitDeadline) {
+    const snap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+    const tel = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number } | null
+    if (tel && tel.persistedCursor === snap.cursor && snap.cursor >= 1) break
+    await sleep(200)
+  }
+  const persistedCheck = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number; count?: number } | null
+  const snapCheck = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  console.log(`[obs-prod-revert] persisted before clear=${persistedCheck?.persistedCursor} snapshot=${snapCheck.cursor} telCount=${persistedCheck?.count}`)
+  await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_CLEAR)
+  await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY_CLEAR)
+  // beforeRevert baseline
+  const beforeRevertSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const beforeRevertNext = typeof beforeRevertSnapRaw.nextOrdinal === "number" ? beforeRevertSnapRaw.nextOrdinal : 0
+  const beforeRevertStart = typeof beforeRevertSnapRaw.startOrdinal === "number" ? beforeRevertSnapRaw.startOrdinal : beforeRevertNext
+  const beforeRevertTelemetryRaw = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+  const beforeRevertTelemetryCount = beforeRevertTelemetryRaw?.count ?? 0
+  const beforeRevertPersisted = (beforeRevertTelemetryRaw?.persistedCursor ?? (status0 as Record<string, unknown>).persistedCursor) as number | undefined
+  const beforeRevertSnapRes = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const beforeRevertCursor = beforeRevertSnapRes.cursor
+  const beforeRevertRevision = seedRevision
+  console.log(`[obs-prod-revert] beforeRevert cursor=${beforeRevertCursor} next=${beforeRevertNext} persisted=${beforeRevertPersisted} revision=${beforeRevertRevision} session=${sessionId}`)
+  // fresh revert
+  const revertRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_REVERT_PRIVATE, {
+    directory: dirForCreate,
+    sessionId,
+    messageId,
+    partId,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean; data?: { session?: { id?: string; revert?: unknown } }; revision?: { session: number; config: number }; failure?: unknown }
+    sessionId: string
+  }
+  const revertSucceeded = revertRes.result?.status === "succeeded" && revertRes.result?.accepted === true && !revertRes.result.transportUnknown
+  console.log(`[obs-prod-revert] revert privateSucceeded=${revertSucceeded} session=${revertRes.sessionId} opId=${revertRes.opId} status=${revertRes.result.status} rev=${JSON.stringify(revertRes.result.revision)}`)
+  if (!revertSucceeded) throw new Error(`fixture sessionRevertPrivate not succeeded: ${JSON.stringify(revertRes.result).slice(0, 800)}`)
+  const revertResultRevision = (revertRes.result as { revision?: { session: number } }).revision?.session as number | undefined
+  if (typeof revertResultRevision !== "number") throw new Error(`revert result revision missing got ${JSON.stringify(revertRes.result.revision)}`)
+  if (revertResultRevision !== beforeRevertRevision + 1) throw new Error(`revert revision must be before+1 expected ${beforeRevertRevision + 1} got ${revertResultRevision}`)
+  let revertAfterSnap: { startOrdinal: number; nextOrdinal: number; entries: unknown[] } | null = null
+  let revertAfterEntries: unknown[] = []
+  let revertEnvelope: unknown = null
+  const revertPollDeadline = Date.now() + 8000
+  while (Date.now() < revertPollDeadline) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    const filtered = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= beforeRevertNext
+      return false
+    })
+    if (filtered.length === 1) {
+      revertAfterSnap = raw
+      revertAfterEntries = filtered
+      revertEnvelope = filtered[0]!
+      break
+    }
+    if (filtered.length > 1) throw new Error(`revert must produce exactly one notification, got ${filtered.length}`)
+    await sleep(200)
+  }
+  if (!revertAfterSnap) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+    revertAfterSnap = raw
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    revertAfterEntries = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= beforeRevertNext
+      return false
+    })
+    revertEnvelope = revertAfterEntries.length === 1 ? revertAfterEntries[0] : revertAfterEntries[revertAfterEntries.length - 1] ?? null
+  }
+  console.log(`[obs-prod-revert] revert after poll afterEntries=${revertAfterEntries.length} envelopePreview=${JSON.stringify(revertEnvelope)?.slice(0, 1500)}`)
+  if (revertAfterEntries.length !== 1) throw new Error(`revert must produce exactly one notification, got ${revertAfterEntries.length}`)
+  let revertStrictValid = false
+  let revertCursor: number | undefined
+  let revertSeq: number | undefined
+  let revertKind: string | undefined
+  let revertSession: string | undefined
+  let revertRevision: number | undefined
+  try {
+    const envRec = revertEnvelope as Record<string, unknown> | null
+    const params = (envRec?.params as unknown) ?? revertEnvelope
+    if (isValidObservationChangedNotification(params as unknown)) {
+      revertStrictValid = true
+      const p = params as { v: string; cursor: number; entries: Array<Record<string, unknown>> }
+      revertCursor = p.cursor
+      if (Array.isArray(p.entries) && p.entries.length === 1) {
+        const e = p.entries[0]!
+        revertKind = String(e.kind)
+        revertSession = String(e.session_id)
+        revertRevision = e.revision as number
+        revertSeq = e.seq as number
+      }
+    }
+  } catch (e) {
+    console.log(`[obs-prod-revert] revert validation error ${String(e).slice(0, 400)}`)
+  }
+  console.log(`[obs-prod-revert] revert strictValid=${revertStrictValid} cursor=${revertCursor} seq=${revertSeq} kind=${revertKind} sid=${revertSession} rev=${revertRevision}`)
+  let revertContiguous = false
+  if (typeof revertCursor === "number" && typeof revertSeq === "number") {
+    if (revertCursor === revertSeq && revertCursor === beforeRevertCursor + 1 && revertRevision === beforeRevertRevision + 1 && revertResultRevision === revertRevision) revertContiguous = true
+  }
+  console.log(`[obs-prod-revert] revert contiguous=${revertContiguous} beforeCursor=${beforeRevertCursor} revertCursor=${revertCursor} beforeRev=${beforeRevertRevision} revertRev=${revertRevision} resultRev=${revertResultRevision}`)
+  if (revertKind !== "changed") throw new Error(`revert kind must be changed got ${String(revertKind)}`)
+  if (revertSession !== sessionId) throw new Error(`revert session_id must equal ${sessionId} got ${String(revertSession)}`)
+  // wait telemetry for revert
+  let revertAfterTelemetry: { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null = null
+  const revertTelemetryDeadline = Date.now() + 8000
+  while (Date.now() < revertTelemetryDeadline) {
+    const t = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+    if (t && t.count === beforeRevertTelemetryCount + 1 && typeof t.lastAckCursor === "number" && typeof t.lastBaseline === "number") {
+      revertAfterTelemetry = t
+      break
+    }
+    if (t && t.count > beforeRevertTelemetryCount && typeof t.lastAckCursor === "number") {
+      revertAfterTelemetry = t
+      break
+    }
+    await sleep(200)
+  }
+  if (!revertAfterTelemetry) {
+    revertAfterTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+  }
+  if (revertAfterTelemetry && revertAfterTelemetry.count === beforeRevertTelemetryCount + 1 && revertAfterTelemetry.lastAckCursor === undefined) {
+    const extraDeadline = Date.now() + 3000
+    while (Date.now() < extraDeadline) {
+      const t2 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+      if (t2 && typeof t2.lastAckCursor === "number") {
+        revertAfterTelemetry = t2
+        break
+      }
+      await sleep(200)
+    }
+  }
+  if (revertAfterTelemetry && typeof revertCursor === "number") {
+    const persistDeadline = Date.now() + 3000
+    while (Date.now() < persistDeadline) {
+      if (revertAfterTelemetry.persistedCursor === revertCursor) break
+      const t3 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+      if (t3) revertAfterTelemetry = t3
+      if (revertAfterTelemetry.persistedCursor === revertCursor) break
+      await sleep(200)
+    }
+  }
+  console.log(`[obs-prod-revert] revert afterTelemetry=${JSON.stringify(revertAfterTelemetry)} beforeCount=${beforeRevertTelemetryCount} revertCursor=${revertCursor}`)
+  const revertAdvancedOnce = revertAfterTelemetry ? revertAfterTelemetry.count === beforeRevertTelemetryCount + 1 : false
+  const revertAckCursorMatches = revertAfterTelemetry?.lastAckCursor === revertCursor
+  const revertBaselineMatches = revertAfterTelemetry?.lastBaseline === beforeRevertCursor
+  console.log(`[obs-prod-revert] revert advancedOnce=${revertAdvancedOnce} ackMatches=${revertAckCursorMatches} baselineMatches=${revertBaselineMatches}`)
+  if (!revertAdvancedOnce) throw new Error(`revert refresh must advance exactly once, got before ${beforeRevertTelemetryCount} after ${revertAfterTelemetry?.count}`)
+  if (!revertAckCursorMatches || !revertBaselineMatches) throw new Error(`revert ack must match cursor/baseline ack=${revertAfterTelemetry?.lastAckCursor} baseline=${revertAfterTelemetry?.lastBaseline} expected cursor=${revertCursor} baseline=${beforeRevertCursor}`)
+  if (typeof revertCursor !== "number" || revertAfterTelemetry?.persistedCursor !== revertCursor) throw new Error(`revert persistedCursor must equal notificationCursor within deadline expected ${String(revertCursor)} got ${String(revertAfterTelemetry?.persistedCursor)}`)
+  // revert idempotent replay
+  const revertReplayRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_REVERT_PRIVATE_REPLAY, sessionId)) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean; data?: { session?: { id?: string } }; revision?: { session: number } }
+    sessionId: string
+  }
+  const revertReplaySameSession = revertReplayRes.sessionId === sessionId && (revertReplayRes.result.data?.session?.id ?? sessionId) === sessionId
+  const revertReplayRevision = (revertReplayRes.result as { revision?: { session: number } }).revision?.session as number | undefined
+  const revertReplaySameRevision = revertReplayRevision === revertResultRevision
+  const revertReplaySucceeded = revertReplayRes.result?.status === "succeeded" && revertReplayRes.result?.accepted === true
+  console.log(`[obs-prod-revert] revert replay sameSession=${revertReplaySameSession} sameRevision=${revertReplaySameRevision} succeeded=${revertReplaySucceeded} rev=${revertReplayRevision}`)
+  if (revertReplayRes.opId !== revertRes.opId || revertReplayRes.idempotencyKey !== revertRes.idempotencyKey || revertReplayRes.requestId !== revertRes.requestId) throw new Error(`revert replay tuple mismatch`)
+  if (!revertReplaySameSession || !revertReplaySameRevision || !revertReplaySucceeded) throw new Error(`revert replay must yield same session/revision and succeed`)
+  await sleep(600)
+  const revertSecondSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const revertSecondAll = Array.isArray(revertSecondSnapRaw.entries) ? revertSecondSnapRaw.entries : []
+  const revertSecondDelta = revertSecondAll.filter((e) => {
+    if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= (revertAfterSnap?.nextOrdinal ?? beforeRevertNext + 1)
+    return false
+  })
+  const revertIdempotentSecondNotifCount = revertSecondDelta.length
+  if (revertIdempotentSecondNotifCount !== 0) throw new Error(`revert idempotent second notif count must be 0, got ${revertIdempotentSecondNotifCount}`)
+  const postRevertReplaySnap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const postRevertReplayCursor = postRevertReplaySnap.cursor
+  if (postRevertReplayCursor !== revertCursor) throw new Error(`post-revert replay snapshot cursor must still equal notificationCursor expected ${revertCursor} got ${postRevertReplayCursor}`)
+  const postRevertReplayTel = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number } | null
+  const postRevertReplayPersisted = postRevertReplayTel?.persistedCursor
+  if (typeof postRevertReplayPersisted === "number" && postRevertReplayPersisted !== revertCursor) throw new Error(`post-revert replay persistedCursor must still equal ${revertCursor} got ${postRevertReplayPersisted}`)
+  // beforeUnrevert is afterRevert
+  const beforeUnrevertCursor = revertCursor as number
+  const beforeUnrevertRevision = revertResultRevision as number
+  const beforeUnrevertNext = revertAfterSnap?.nextOrdinal ?? beforeRevertNext + 1
+  const beforeUnrevertTelemetryCount = revertAfterTelemetry?.count ?? 0
+  const beforeUnrevertPersisted = revertAfterTelemetry?.persistedCursor
+  console.log(`[obs-prod-revert] beforeUnrevert cursor=${beforeUnrevertCursor} next=${beforeUnrevertNext} persisted=${beforeUnrevertPersisted} revision=${beforeUnrevertRevision}`)
+  // fresh unrevert
+  const unrevertRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_UNREVERT_PRIVATE, {
+    directory: dirForCreate,
+    sessionId,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean; data?: { session?: { id?: string } }; revision?: { session: number } }
+    sessionId: string
+  }
+  const unrevertSucceeded = unrevertRes.result?.status === "succeeded" && unrevertRes.result?.accepted === true && !unrevertRes.result.transportUnknown
+  console.log(`[obs-prod-revert] unrevert privateSucceeded=${unrevertSucceeded} opId=${unrevertRes.opId} rev=${JSON.stringify(unrevertRes.result.revision)}`)
+  if (!unrevertSucceeded) throw new Error(`fixture sessionUnrevertPrivate not succeeded: ${JSON.stringify(unrevertRes.result).slice(0, 800)}`)
+  const unrevertResultRevision = (unrevertRes.result as { revision?: { session: number } }).revision?.session as number | undefined
+  if (typeof unrevertResultRevision !== "number") throw new Error(`unrevert result revision missing`)
+  if (unrevertResultRevision !== beforeUnrevertRevision + 1) throw new Error(`unrevert revision must be before+1 expected ${beforeUnrevertRevision + 1} got ${unrevertResultRevision}`)
+  let unrevertAfterSnap: { startOrdinal: number; nextOrdinal: number; entries: unknown[] } | null = null
+  let unrevertAfterEntries: unknown[] = []
+  let unrevertEnvelope: unknown = null
+  const unrevertPollDeadline = Date.now() + 8000
+  while (Date.now() < unrevertPollDeadline) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    const filtered = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= beforeUnrevertNext
+      return false
+    })
+    if (filtered.length === 1) {
+      unrevertAfterSnap = raw
+      unrevertAfterEntries = filtered
+      unrevertEnvelope = filtered[0]!
+      break
+    }
+    if (filtered.length > 1) throw new Error(`unrevert must produce exactly one notification, got ${filtered.length}`)
+    await sleep(200)
+  }
+  if (!unrevertAfterSnap) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+    unrevertAfterSnap = raw
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    unrevertAfterEntries = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= beforeUnrevertNext
+      return false
+    })
+    unrevertEnvelope = unrevertAfterEntries.length === 1 ? unrevertAfterEntries[0] : unrevertAfterEntries[unrevertAfterEntries.length - 1] ?? null
+  }
+  console.log(`[obs-prod-revert] unrevert after poll afterEntries=${unrevertAfterEntries.length} envelopePreview=${JSON.stringify(unrevertEnvelope)?.slice(0, 1500)}`)
+  if (unrevertAfterEntries.length !== 1) throw new Error(`unrevert must produce exactly one notification, got ${unrevertAfterEntries.length}`)
+  let unrevertStrictValid = false
+  let unrevertCursor: number | undefined
+  let unrevertSeq: number | undefined
+  let unrevertKind: string | undefined
+  let unrevertSession: string | undefined
+  let unrevertRevision: number | undefined
+  try {
+    const envRec = unrevertEnvelope as Record<string, unknown> | null
+    const params = (envRec?.params as unknown) ?? unrevertEnvelope
+    if (isValidObservationChangedNotification(params as unknown)) {
+      unrevertStrictValid = true
+      const p = params as { v: string; cursor: number; entries: Array<Record<string, unknown>> }
+      unrevertCursor = p.cursor
+      if (Array.isArray(p.entries) && p.entries.length === 1) {
+        const e = p.entries[0]!
+        unrevertKind = String(e.kind)
+        unrevertSession = String(e.session_id)
+        unrevertRevision = e.revision as number
+        unrevertSeq = e.seq as number
+      }
+    }
+  } catch (e) {
+    console.log(`[obs-prod-revert] unrevert validation error ${String(e).slice(0, 400)}`)
+  }
+  console.log(`[obs-prod-revert] unrevert strictValid=${unrevertStrictValid} cursor=${unrevertCursor} seq=${unrevertSeq} kind=${unrevertKind} sid=${unrevertSession} rev=${unrevertRevision}`)
+  let unrevertContiguous = false
+  if (typeof unrevertCursor === "number" && typeof unrevertSeq === "number") {
+    if (unrevertCursor === unrevertSeq && unrevertCursor === beforeUnrevertCursor + 1 && unrevertRevision === beforeUnrevertRevision + 1 && unrevertResultRevision === unrevertRevision) unrevertContiguous = true
+  }
+  console.log(`[obs-prod-revert] unrevert contiguous=${unrevertContiguous} beforeCursor=${beforeUnrevertCursor} unrevertCursor=${unrevertCursor}`)
+  if (unrevertKind !== "changed") throw new Error(`unrevert kind must be changed got ${String(unrevertKind)}`)
+  if (unrevertSession !== sessionId) throw new Error(`unrevert session_id must equal ${sessionId} got ${String(unrevertSession)}`)
+  let unrevertAfterTelemetry: { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null = null
+  const unrevertTelemetryDeadline = Date.now() + 8000
+  while (Date.now() < unrevertTelemetryDeadline) {
+    const t = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+    if (t && t.count === beforeUnrevertTelemetryCount + 1 && typeof t.lastAckCursor === "number" && typeof t.lastBaseline === "number") {
+      unrevertAfterTelemetry = t
+      break
+    }
+    if (t && t.count > beforeUnrevertTelemetryCount && typeof t.lastAckCursor === "number") {
+      unrevertAfterTelemetry = t
+      break
+    }
+    await sleep(200)
+  }
+  if (!unrevertAfterTelemetry) {
+    unrevertAfterTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+  }
+  if (unrevertAfterTelemetry && unrevertAfterTelemetry.count === beforeUnrevertTelemetryCount + 1 && unrevertAfterTelemetry.lastAckCursor === undefined) {
+    const extraDeadline = Date.now() + 3000
+    while (Date.now() < extraDeadline) {
+      const t2 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+      if (t2 && typeof t2.lastAckCursor === "number") {
+        unrevertAfterTelemetry = t2
+        break
+      }
+      await sleep(200)
+    }
+  }
+  if (unrevertAfterTelemetry && typeof unrevertCursor === "number") {
+    const persistDeadline = Date.now() + 3000
+    while (Date.now() < persistDeadline) {
+      if (unrevertAfterTelemetry.persistedCursor === unrevertCursor) break
+      const t3 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count: number; lastAckCursor?: number; lastBaseline?: number; lastRefreshAt?: number; persistedCursor?: number } | null
+      if (t3) unrevertAfterTelemetry = t3
+      if (unrevertAfterTelemetry.persistedCursor === unrevertCursor) break
+      await sleep(200)
+    }
+  }
+  console.log(`[obs-prod-revert] unrevert afterTelemetry=${JSON.stringify(unrevertAfterTelemetry)} beforeCount=${beforeUnrevertTelemetryCount} unrevertCursor=${unrevertCursor}`)
+  const unrevertAdvancedOnce = unrevertAfterTelemetry ? unrevertAfterTelemetry.count === beforeUnrevertTelemetryCount + 1 : false
+  const unrevertAckMatches = unrevertAfterTelemetry?.lastAckCursor === unrevertCursor
+  const unrevertBaselineMatches = unrevertAfterTelemetry?.lastBaseline === beforeUnrevertCursor
+  console.log(`[obs-prod-revert] unrevert advancedOnce=${unrevertAdvancedOnce} ackMatches=${unrevertAckMatches} baselineMatches=${unrevertBaselineMatches}`)
+  if (!unrevertAdvancedOnce) throw new Error(`unrevert refresh must advance exactly once, got before ${beforeUnrevertTelemetryCount} after ${unrevertAfterTelemetry?.count}`)
+  if (!unrevertAckMatches || !unrevertBaselineMatches) throw new Error(`unrevert ack must match cursor/baseline ack=${unrevertAfterTelemetry?.lastAckCursor} baseline=${unrevertAfterTelemetry?.lastBaseline} expected cursor=${unrevertCursor} baseline=${beforeUnrevertCursor}`)
+  if (typeof unrevertCursor !== "number" || unrevertAfterTelemetry?.persistedCursor !== unrevertCursor) throw new Error(`unrevert persistedCursor must equal notificationCursor within deadline expected ${String(unrevertCursor)} got ${String(unrevertAfterTelemetry?.persistedCursor)}`)
+  // unrevert idempotent replay
+  const unrevertReplayRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_UNREVERT_PRIVATE_REPLAY, sessionId)) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean; data?: { session?: { id?: string } }; revision?: { session: number } }
+    sessionId: string
+  }
+  const unrevertReplaySameSession = unrevertReplayRes.sessionId === sessionId && (unrevertReplayRes.result.data?.session?.id ?? sessionId) === sessionId
+  const unrevertReplayRevision = (unrevertReplayRes.result as { revision?: { session: number } }).revision?.session as number | undefined
+  const unrevertReplaySameRevision = unrevertReplayRevision === unrevertResultRevision
+  const unrevertReplaySucceeded = unrevertReplayRes.result?.status === "succeeded" && unrevertReplayRes.result?.accepted === true
+  console.log(`[obs-prod-revert] unrevert replay sameSession=${unrevertReplaySameSession} sameRevision=${unrevertReplaySameRevision} succeeded=${unrevertReplaySucceeded}`)
+  if (unrevertReplayRes.opId !== unrevertRes.opId || unrevertReplayRes.idempotencyKey !== unrevertRes.idempotencyKey || unrevertReplayRes.requestId !== unrevertRes.requestId) throw new Error(`unrevert replay tuple mismatch`)
+  if (!unrevertReplaySameSession || !unrevertReplaySameRevision || !unrevertReplaySucceeded) throw new Error(`unrevert replay must yield same session/revision and succeed`)
+  await sleep(600)
+  const unrevertSecondSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const unrevertSecondAll = Array.isArray(unrevertSecondSnapRaw.entries) ? unrevertSecondSnapRaw.entries : []
+  const unrevertSecondDelta = unrevertSecondAll.filter((e) => {
+    if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= (unrevertAfterSnap?.nextOrdinal ?? beforeUnrevertNext + 1)
+    return false
+  })
+  const unrevertIdempotentSecondNotifCount = unrevertSecondDelta.length
+  if (unrevertIdempotentSecondNotifCount !== 0) throw new Error(`unrevert idempotent second notif count must be 0, got ${unrevertIdempotentSecondNotifCount}`)
+  const postUnrevertReplaySnap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const postUnrevertReplayCursor = postUnrevertReplaySnap.cursor
+  if (postUnrevertReplayCursor !== unrevertCursor) throw new Error(`post-unrevert replay snapshot cursor must still equal notificationCursor expected ${unrevertCursor} got ${postUnrevertReplayCursor}`)
+  const postUnrevertReplayTel = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number } | null
+  const postUnrevertReplayPersisted = postUnrevertReplayTel?.persistedCursor
+  if (typeof postUnrevertReplayPersisted === "number" && postUnrevertReplayPersisted !== unrevertCursor) throw new Error(`post-unrevert replay persistedCursor must still equal ${unrevertCursor} got ${postUnrevertReplayPersisted}`)
+  // no-op: second unrevert when no marker (fresh token)
+  const noOpBeforeCursor = postUnrevertReplayCursor
+  const noOpBeforePersisted = postUnrevertReplayPersisted
+  const noOpBeforeRefresh = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { count?: number } | null
+  const noOpBeforeCount = noOpBeforeRefresh?.count ?? unrevertAfterTelemetry?.count ?? 0
+  const noOpBeforeSnap = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const noOpBeforeNext = noOpBeforeSnap.nextOrdinal
+  const noOpRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_UNREVERT_PRIVATE, {
+    directory: dirForCreate,
+    sessionId,
+  })) as {
+    opId: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean }
+  }
+  const noOpSucceeded = noOpRes.result?.status === "succeeded" && noOpRes.result?.accepted === true && !noOpRes.result.transportUnknown
+  console.log(`[obs-prod-revert] noOp second unrevert succeeded=${noOpSucceeded} opId=${noOpRes.opId}`)
+  if (!noOpSucceeded) throw new Error(`noOp unrevert must succeed as operation-only, got ${JSON.stringify(noOpRes.result).slice(0, 400)}`)
+  await sleep(800)
+  const noOpAfterSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+  const noOpAfterAll = Array.isArray(noOpAfterSnapRaw.entries) ? noOpAfterSnapRaw.entries : []
+  const noOpDelta = noOpAfterAll.filter((e) => {
+    if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") return (e as Record<string, unknown>).ordinal as number >= noOpBeforeNext
+    return false
+  })
+  const noOpNotifCount = noOpDelta.length
+  if (noOpNotifCount !== 0) throw new Error(`noOp notifCount must be 0, got ${noOpNotifCount}`)
+  const noOpAfterCursorSnap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const noOpAfterCursor = noOpAfterCursorSnap.cursor
+  if (noOpAfterCursor !== noOpBeforeCursor) throw new Error(`noOp cursor must not advance expected ${noOpBeforeCursor} got ${noOpAfterCursor}`)
+  const noOpAfterTel = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number; count?: number } | null
+  const noOpAfterPersisted = noOpAfterTel?.persistedCursor
+  if (typeof noOpBeforePersisted !== "number") throw new Error(`noOp persisted before must be number, got ${String(noOpBeforePersisted)}`)
+  if (typeof noOpAfterPersisted !== "number") throw new Error(`noOp persisted after must be number, got ${String(noOpAfterPersisted)}`)
+  if (noOpAfterPersisted !== noOpBeforePersisted) throw new Error(`noOp persisted must not advance expected ${noOpBeforePersisted} got ${noOpAfterPersisted}`)
+  const noOpAfterCount = noOpAfterTel?.count ?? noOpBeforeCount
+  if (typeof noOpAfterCount !== "number" || typeof noOpBeforeCount !== "number") throw new Error(`noOp refresh count must be number before=${String(noOpBeforeCount)} after=${String(noOpAfterCount)}`)
+  if (noOpAfterCount !== noOpBeforeCount) throw new Error(`noOp refresh must not advance expected ${noOpBeforeCount} got ${noOpAfterCount}`)
+  const canonicalDbPath = String((status0 as Record<string, unknown>).dbPath ?? "")
+  try {
+    writeFileSync(join(scratch, "obs-prod-revert-debug.json"), JSON.stringify({
+      beforeRevertNext, beforeRevertCursor, beforeRevertPersisted, seedRevision, sessionId, messageId,
+      revertRes: { opId: revertRes.opId, requestId: revertRes.requestId, revision: revertResultRevision },
+      revertAfterEntries: revertAfterEntries.length,
+      revertEnvelopePreview: typeof revertEnvelope === "object" ? JSON.stringify(revertEnvelope).slice(0, 1500) : String(revertEnvelope).slice(0, 1500),
+      unrevertRes: { opId: unrevertRes.opId, revision: unrevertResultRevision },
+      unrevertAfterEntries: unrevertAfterEntries.length,
+      noOpNotifCount,
+      revertIdempotentSecondNotifCount,
+      unrevertIdempotentSecondNotifCount,
+    }, null, 2))
+  } catch {}
+  const evidence = {
+    scenario: "observation-producer-revert",
+    collectedAt: new Date().toISOString(),
+    pid: (status0 as Record<string, unknown>).pid ?? 0,
+    canonical: {
+      dbPath: canonicalDbPath,
+      dataRoot: canonicalForEvidence.dataRoot,
+      gateOk,
+      gateErr,
+      isolateOk: (() => {
+        try {
+          const dr = gate?.dataRoot as string | undefined
+          if (!dr) return undefined
+          return isIsolatedDataRoot(scratch, dr)
+        } catch {
+          return undefined
+        }
+      })(),
+    },
+    testBridge: (status0 as Record<string, unknown>).testBridge === true,
+    beforeRevert: { cursor: beforeRevertCursor, persisted: beforeRevertPersisted, startOrdinal: beforeRevertStart, nextOrdinal: beforeRevertNext, notifCount: 0, refreshCount: beforeRevertTelemetryCount, revision: beforeRevertRevision },
+    afterRevert: { cursor: revertCursor ?? beforeRevertCursor, persisted: revertAfterTelemetry?.persistedCursor ?? beforeRevertPersisted, startOrdinal: revertAfterSnap?.startOrdinal ?? beforeRevertStart, nextOrdinal: revertAfterSnap?.nextOrdinal ?? beforeRevertNext, notifCount: revertAfterEntries.length, refreshCount: revertAfterTelemetry?.count ?? beforeRevertTelemetryCount, revision: revertResultRevision },
+    revertEnvelope,
+    revertNotificationStrictValid: revertStrictValid,
+    revertContiguous,
+    revertAck: { requested: revertCursor ?? beforeRevertCursor + 1, persistedAfter: revertAfterTelemetry?.persistedCursor, success: revertAckCursorMatches && revertBaselineMatches },
+    revertRefresh: { beforeCount: beforeRevertTelemetryCount, afterCount: revertAfterTelemetry?.count, advancedOnce: revertAdvancedOnce, lastAckCursor: revertAfterTelemetry?.lastAckCursor, lastBaseline: revertAfterTelemetry?.lastBaseline },
+    revert: { opId: revertRes.opId, requestId: revertRes.requestId, directory: revertRes.directory, privateSucceeded: revertSucceeded, sessionId, messageId, partId, revision: revertResultRevision, seq: revertSeq },
+    revertNotification: { cursor: revertCursor, seq: revertSeq, session_id: revertSession, kind: revertKind, revision: revertRevision },
+    revertReplay: { sameSession: revertReplaySameSession, sameRevision: revertReplaySameRevision, succeeded: revertReplaySucceeded, opId: revertReplayRes.opId, requestId: revertReplayRes.requestId, snapshotCursor: postRevertReplayCursor, persistedCursor: postRevertReplayPersisted, revision: revertReplayRevision },
+    revertIdempotentSecondNotifCount,
+    beforeUnrevert: { cursor: beforeUnrevertCursor, persisted: beforeUnrevertPersisted, startOrdinal: revertAfterSnap?.startOrdinal ?? beforeRevertStart, nextOrdinal: beforeUnrevertNext, notifCount: 0, refreshCount: beforeUnrevertTelemetryCount, revision: beforeUnrevertRevision },
+    afterUnrevert: { cursor: unrevertCursor ?? beforeUnrevertCursor, persisted: unrevertAfterTelemetry?.persistedCursor ?? beforeUnrevertPersisted, startOrdinal: unrevertAfterSnap?.startOrdinal ?? beforeRevertStart, nextOrdinal: unrevertAfterSnap?.nextOrdinal ?? beforeUnrevertNext, notifCount: unrevertAfterEntries.length, refreshCount: unrevertAfterTelemetry?.count ?? beforeUnrevertTelemetryCount, revision: unrevertResultRevision },
+    unrevertEnvelope,
+    unrevertNotificationStrictValid: unrevertStrictValid,
+    unrevertContiguous,
+    unrevertAck: { requested: unrevertCursor ?? beforeUnrevertCursor + 1, persistedAfter: unrevertAfterTelemetry?.persistedCursor, success: unrevertAckMatches && unrevertBaselineMatches },
+    unrevertRefresh: { beforeCount: beforeUnrevertTelemetryCount, afterCount: unrevertAfterTelemetry?.count, advancedOnce: unrevertAdvancedOnce, lastAckCursor: unrevertAfterTelemetry?.lastAckCursor, lastBaseline: unrevertAfterTelemetry?.lastBaseline },
+    unrevert: { opId: unrevertRes.opId, requestId: unrevertRes.requestId, directory: unrevertRes.directory, privateSucceeded: unrevertSucceeded, sessionId, revision: unrevertResultRevision, seq: unrevertSeq },
+    unrevertNotification: { cursor: unrevertCursor, seq: unrevertSeq, session_id: unrevertSession, kind: unrevertKind, revision: unrevertRevision },
+    unrevertReplay: { sameSession: unrevertReplaySameSession, sameRevision: unrevertReplaySameRevision, succeeded: unrevertReplaySucceeded, opId: unrevertReplayRes.opId, requestId: unrevertReplayRes.requestId, snapshotCursor: postUnrevertReplayCursor, persistedCursor: postUnrevertReplayPersisted, revision: unrevertReplayRevision },
+    unrevertIdempotentSecondNotifCount,
+    postRevertReplayCursor,
+    postRevertReplayPersisted,
+    postUnrevertReplayCursor,
+    postUnrevertReplayPersisted,
+    noOp: { kind: "unrevert-no-marker", privateSucceeded: noOpSucceeded, notifCount: noOpNotifCount, cursorBefore: noOpBeforeCursor, cursorAfter: noOpAfterCursor, persistedBefore: noOpBeforePersisted, persistedAfter: noOpAfterPersisted, refreshBefore: noOpBeforeCount, refreshAfter: noOpAfterCount, refreshAdvanced: noOpAfterCount !== noOpBeforeCount },
+    expectedSessionId: sessionId,
+    expectedMessageId: messageId,
+    beforeStatus: status0,
+    gate,
+  }
+  writeFileSync(join(scratch, "obs-prod-revert-runtime-evidence"), JSON.stringify(evidence, null, 2))
+  writeFileSync(join(scratch, "obs-prod-revert-ready"), fixtureId)
+  const deadline = Date.now() + OBS_PROD_REVERT_BUDGET
   while (Date.now() < deadline) {
     if (existsSync(join(scratch, "done"))) break
     await sleep(200)

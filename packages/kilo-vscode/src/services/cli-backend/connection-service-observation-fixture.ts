@@ -21,6 +21,8 @@ import type {
   ServePrivateSessionUpdateRequest,
   ServePrivateSessionUpdateResult,
 } from "./serve-private-peer"
+import type { ServePrivateRevertRequest, ServePrivateRevertResult, ServePrivateUnrevertRequest, ServePrivateUnrevertResult } from "./serve-private-revert-contract"
+import type { E2ERevertSeedRequest, E2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
 
 interface Deps {
   getPeer: () => ServePrivatePeer | null
@@ -29,6 +31,9 @@ interface Deps {
   updateWithHandle: (req: ServePrivateSessionUpdateRequest) => { promise: Promise<ServePrivateSessionUpdateResult> }
   deleteWithHandle: (req: ServePrivateDeleteRequest) => { promise: Promise<ServePrivateDeleteResult> }
   forkWithHandle: (req: ServePrivateForkRequest) => { promise: Promise<ServePrivateForkResult> }
+  revertWithHandle: (req: ServePrivateRevertRequest) => { promise: Promise<ServePrivateRevertResult> }
+  unrevertWithHandle: (req: ServePrivateUnrevertRequest) => { promise: Promise<ServePrivateUnrevertResult> }
+  e2eRevertSeedWithHandle: (req: E2ERevertSeedRequest) => { promise: Promise<E2ERevertSeedResult> }
   getCurrentDirectory: () => string | undefined
   getRootDirectory: () => string | undefined
 }
@@ -105,11 +110,60 @@ function buildForkRequest(dir: string, sessionId: string, token: string): ServeP
   }
 }
 
+function buildRevertRequest(dir: string, sessionId: string, token: string, messageId: string, partId?: string): ServePrivateRevertRequest {
+  const opId = `revert:${sessionId}:${token}`
+  const idempotencyKey = `revert:${sessionId}:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/revert",
+    idempotencyKey,
+    context: { directory: dir, sessionId, parentSessionId: null },
+    payload: { ...(messageId ? { messageId } : {}), ...(partId ? { partId } : {}) },
+  }
+}
+
+function buildUnrevertRequest(dir: string, sessionId: string, token: string): ServePrivateUnrevertRequest {
+  const opId = `unrevert:${sessionId}:${token}`
+  const idempotencyKey = `unrevert:${sessionId}:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/unrevert",
+    idempotencyKey,
+    context: { directory: dir, sessionId, parentSessionId: null },
+    payload: {},
+  }
+}
+
+function buildE2ERevertSeedRequest(dir: string, token: string, title?: string): E2ERevertSeedRequest {
+  const opId = `e2eRevertSeed:${token}`
+  const idempotencyKey = `e2eRevertSeed:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/e2eRevertSeed",
+    idempotencyKey,
+    context: { directory: dir },
+    payload: { ...(title ? { title } : {}) },
+  }
+}
+
 export class ConnectionObservationFixture {
   private fixCreateReq: ServePrivateCreateRequest | null = null
   private fixUpdateReqs = new Map<string, ServePrivateSessionUpdateRequest>()
   private fixDeleteReqs = new Map<string, ServePrivateDeleteRequest>()
   private fixForkReqs = new Map<string, ServePrivateForkRequest>()
+  private fixRevertReqs = new Map<string, ServePrivateRevertRequest>()
+  private fixUnrevertReqs = new Map<string, ServePrivateUnrevertRequest>()
+  private fixSeedReq: E2ERevertSeedRequest | null = null
+  private fixSeedInfo: { sessionId: string; messageId: string; partId: string } | null = null
 
   constructor(private readonly deps: Deps) {}
 
@@ -328,5 +382,111 @@ export class ConnectionObservationFixture {
       sessionId,
       ...(child ? { childSessionId: child } : {}),
     }
+  }
+
+  async seedRevert(input?: { directory?: string; title?: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: E2ERevertSeedResult
+    sessionId: string
+    messageId: string
+    partId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture e2eRevertSeed requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const dir = resolveDirectory(input?.directory, this.deps)
+    const token = input?.token ?? crypto.randomUUID()
+    if (typeof token !== "string" || token.length === 0 || token.includes(":")) throw new Error("token invalid")
+    const req = buildE2ERevertSeedRequest(dir, token, input?.title)
+    this.fixSeedReq = req
+    const handle = this.deps.e2eRevertSeedWithHandle(req)
+    const result = await handle.promise
+    if (result.status !== "succeeded") throw new Error(`e2eRevertSeed not succeeded: ${JSON.stringify(result).slice(0, 400)}`)
+    const data = result.data as unknown as { sessionId: string; messageId: string; partId: string }
+    this.fixSeedInfo = { sessionId: data.sessionId, messageId: data.messageId, partId: data.partId }
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, sessionId: data.sessionId, messageId: data.messageId, partId: data.partId }
+  }
+
+  async revert(input: { directory?: string; sessionId: string; messageId: string; partId?: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateRevertResult
+    sessionId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionRevert requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.sessionId || typeof input.sessionId !== "string" || !input.sessionId.startsWith("ses")) throw new Error("sessionId must be ses*")
+    if (!input.messageId || typeof input.messageId !== "string" || !input.messageId.startsWith("msg")) throw new Error("messageId must be msg*")
+    if (input.token !== undefined && (typeof input.token !== "string" || input.token.length === 0 || input.token.includes(":"))) throw new Error("token invalid")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = input.token ?? crypto.randomUUID()
+    if (token.includes(":")) throw new Error("token invalid")
+    const req = buildRevertRequest(dir, input.sessionId, token, input.messageId, input.partId)
+    this.fixRevertReqs.set(input.sessionId, req)
+    const handle = this.deps.revertWithHandle(req)
+    const result = await handle.promise
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, sessionId: input.sessionId }
+  }
+
+  async replayRevert(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateRevertResult
+    sessionId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionRevert replay requires KILO_E2E_FIXTURE")
+    if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+    const stored = this.fixRevertReqs.get(sessionId)
+    if (!stored) throw new Error("no stored fixture revert identity to replay")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const handle = this.deps.revertWithHandle(stored)
+    const result = await handle.promise
+    return { opId: stored.opId, idempotencyKey: stored.idempotencyKey, requestId: stored.requestId, directory: stored.context.directory, result, sessionId }
+  }
+
+  async unrevert(input: { directory?: string; sessionId: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateUnrevertResult
+    sessionId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionUnrevert requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.sessionId || typeof input.sessionId !== "string" || !input.sessionId.startsWith("ses")) throw new Error("sessionId must be ses*")
+    if (input.token !== undefined && (typeof input.token !== "string" || input.token.length === 0 || input.token.includes(":"))) throw new Error("token invalid")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = input.token ?? crypto.randomUUID()
+    if (token.includes(":")) throw new Error("token invalid")
+    const req = buildUnrevertRequest(dir, input.sessionId, token)
+    this.fixUnrevertReqs.set(input.sessionId, req)
+    const handle = this.deps.unrevertWithHandle(req)
+    const result = await handle.promise
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, sessionId: input.sessionId }
+  }
+
+  async replayUnrevert(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateUnrevertResult
+    sessionId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionUnrevert replay requires KILO_E2E_FIXTURE")
+    if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+    const stored = this.fixUnrevertReqs.get(sessionId)
+    if (!stored) throw new Error("no stored fixture unrevert identity to replay")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const handle = this.deps.unrevertWithHandle(stored)
+    const result = await handle.promise
+    return { opId: stored.opId, idempotencyKey: stored.idempotencyKey, requestId: stored.requestId, directory: stored.context.directory, result, sessionId }
   }
 }
