@@ -189,7 +189,12 @@ export default [
     // delegation field and four public pass-through methods remain inline
     // (plus the required import). connection-service.ts measures 3889
     // lines, so 3890 is the smallest passing cap with headroom.
-    rules: { "max-lines": ["error", 3890] },
+    // Raised 3890 → 3940 for the `observation/changed` update producer:
+    // the new fixture-only sessionUpdate private bridge adds two thin
+    // delegation methods (update/replayUpdate) alongside the same
+    // observation fixture. connection-service.ts measures 3920 lines,
+    // so 3940 is the smallest passing cap with headroom.
+    rules: { "max-lines": ["error", 3940] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],
@@ -292,6 +297,13 @@ export default [
     // only the thin `onSkillChanged`/`skillHost` delegation plus the
     // `lastSkillFiles` scan state remain inline. Minimal cap for the file.
     rules: { "max-lines": ["error", 3080] },
+  },
+  {
+    files: ["script/e2e-probe-observation-producer.ts", "script/e2e-probe-observation-producer-update.ts"],
+    // Bounded live fd3/fd4 observation/changed producer proof — single orchestration
+    // function validates v1.0, five-key entries, cursor===seq, contiguous, kind/session/revision
+    // plus telemetry and replay. Helpers would split atomic evidence flow.
+    rules: { complexity: ["error", 40] },
   },
 
   eslintConfigPrettier,

@@ -982,6 +982,21 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionCreateReplay", async () => {
         return connectionService.fixtureSessionCreateReplay()
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionUpdatePrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        if (!o.title || typeof o.title !== "string") throw new Error("title required")
+        return connectionService.fixtureSessionUpdatePrivate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+          title: o.title as string,
+          token: typeof o.token === "string" ? (o.token as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionUpdatePrivateReplay", async (sessionId?: unknown) => {
+        if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+        return connectionService.fixtureSessionUpdatePrivateReplay(sessionId as string)
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedSnapshot", async () => {
         return connectionService.fixturePrivateObservationChangedSnapshot()
       }),

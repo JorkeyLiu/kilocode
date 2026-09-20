@@ -10,12 +10,19 @@ import * as crypto from "crypto"
 import * as fs from "node:fs"
 import * as vscode from "vscode"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
-import type { ServePrivateCreateRequest, ServePrivateCreateResult, ServePrivatePeer } from "./serve-private-peer"
+import type {
+  ServePrivateCreateRequest,
+  ServePrivateCreateResult,
+  ServePrivatePeer,
+  ServePrivateSessionUpdateRequest,
+  ServePrivateSessionUpdateResult,
+} from "./serve-private-peer"
 
 interface Deps {
   getPeer: () => ServePrivatePeer | null
   isAvailable: () => boolean
   createWithHandle: (req: ServePrivateCreateRequest) => { promise: Promise<ServePrivateCreateResult> }
+  updateWithHandle: (req: ServePrivateSessionUpdateRequest) => { promise: Promise<ServePrivateSessionUpdateResult> }
   getCurrentDirectory: () => string | undefined
   getRootDirectory: () => string | undefined
 }
@@ -47,8 +54,24 @@ function buildCreateRequest(dir: string, token: string, title: string, parentSes
   }
 }
 
+function buildUpdateRequest(dir: string, sessionId: string, token: string, title: string): ServePrivateSessionUpdateRequest {
+  const opId = `sessionUpdate:${sessionId}:${token}`
+  const idempotencyKey = `sessionUpdate:${sessionId}:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/update",
+    idempotencyKey,
+    context: { directory: dir, sessionId, parentSessionId: null },
+    payload: { title },
+  }
+}
+
 export class ConnectionObservationFixture {
   private fixCreateReq: ServePrivateCreateRequest | null = null
+  private fixUpdateReqs = new Map<string, ServePrivateSessionUpdateRequest>()
 
   constructor(private readonly deps: Deps) {}
 
@@ -112,6 +135,57 @@ export class ConnectionObservationFixture {
       directory: stored.context.directory,
       result,
       ...(sid ? { sessionId: sid } : {}),
+    }
+  }
+
+  async update(input: { directory?: string; sessionId: string; title?: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateSessionUpdateResult
+    sessionId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionUpdate requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.sessionId || typeof input.sessionId !== "string" || !input.sessionId.startsWith("ses"))
+      throw new Error("sessionId must be ses*")
+    if (input.token !== undefined && (typeof input.token !== "string" || input.token.length === 0 || input.token.includes(":")))
+      throw new Error("token invalid")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = input.token ?? crypto.randomUUID()
+    if (token.includes(":")) throw new Error("token invalid")
+    const title = input.title ?? `E2E Obs Update ${token.slice(0, 8)}`
+    if (typeof title !== "string" || title.trim().length === 0) throw new Error("title required")
+    const req = buildUpdateRequest(dir, input.sessionId, token, title)
+    this.fixUpdateReqs.set(input.sessionId, req)
+    const handle = this.deps.updateWithHandle(req)
+    const result = await handle.promise
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, sessionId: input.sessionId }
+  }
+
+  async replayUpdate(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateSessionUpdateResult
+    sessionId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionUpdate replay requires KILO_E2E_FIXTURE")
+    if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+    const stored = this.fixUpdateReqs.get(sessionId)
+    if (!stored) throw new Error("no stored fixture update identity to replay")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const handle = this.deps.updateWithHandle(stored)
+    const result = await handle.promise
+    return {
+      opId: stored.opId,
+      idempotencyKey: stored.idempotencyKey,
+      requestId: stored.requestId,
+      directory: stored.context.directory,
+      result,
+      sessionId,
     }
   }
 }

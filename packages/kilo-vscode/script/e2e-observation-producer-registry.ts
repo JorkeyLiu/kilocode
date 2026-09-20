@@ -6,8 +6,10 @@
  */
 
 export const OBSERVATION_PRODUCER_SCENARIO = "observation-producer" as const
+export const OBSERVATION_PRODUCER_UPDATE_SCENARIO = "observation-producer-update" as const
 
 const OBSERVATION_PRODUCER_TIMEOUT_MS = 1_200_000 as const
+const OBSERVATION_PRODUCER_UPDATE_TIMEOUT_MS = 1_200_000 as const
 
 const SCENARIO_TIMEOUTS: Record<string, number> = {
   "real-completed": 6_000_000,
@@ -17,6 +19,7 @@ const SCENARIO_TIMEOUTS: Record<string, number> = {
   "worktree-removal": 6_000_000,
   "r9-observation": 1_200_000,
   [OBSERVATION_PRODUCER_SCENARIO]: OBSERVATION_PRODUCER_TIMEOUT_MS,
+  [OBSERVATION_PRODUCER_UPDATE_SCENARIO]: OBSERVATION_PRODUCER_UPDATE_TIMEOUT_MS,
 }
 
 export function e2eTimeoutForScenario(scenario: string | undefined): number {

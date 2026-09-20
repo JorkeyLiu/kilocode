@@ -19,6 +19,8 @@
     "../../script/e2e-probe.ts",
     "../../script/e2e-probe-r9.ts",
     "../../script/e2e-probe-observation-producer.ts",
+    "../../script/e2e-probe-observation-producer-update.ts",
+    "../../script/e2e-observation-producer-registry.ts",
     "../../script/e2e-evidence.ts",
     "../../script/e2e-probe-dom.ts",
     "../../script/e2e-probe-restart.ts",

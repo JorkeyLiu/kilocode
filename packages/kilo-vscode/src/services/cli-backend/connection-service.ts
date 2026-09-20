@@ -278,6 +278,7 @@ export class KiloConnectionService {
     getPeer: () => this.privatePeer,
     isAvailable: () => this.isPrivateAvailable(),
     createWithHandle: (req) => this.privateCreateWithHandle(req as ServePrivateCreateRequest),
+    updateWithHandle: (req) => this.privateSessionUpdateWithHandle(req as ServePrivateSessionUpdateRequest),
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -3885,5 +3886,27 @@ export class KiloConnectionService {
     sessionId?: string
   }> {
     return this.observationFixture.replay()
+  }
+
+  public async fixtureSessionUpdatePrivate(input: { directory?: string; sessionId: string; title?: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateSessionUpdateResult
+    sessionId: string
+  }> {
+    return this.observationFixture.update(input)
+  }
+
+  public async fixtureSessionUpdatePrivateReplay(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateSessionUpdateResult
+    sessionId: string
+  }> {
+    return this.observationFixture.replayUpdate(sessionId)
   }
 }
