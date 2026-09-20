@@ -15,6 +15,8 @@ import type {
   ServePrivateCreateResult,
   ServePrivateDeleteRequest,
   ServePrivateDeleteResult,
+  ServePrivateForkRequest,
+  ServePrivateForkResult,
   ServePrivatePeer,
   ServePrivateSessionUpdateRequest,
   ServePrivateSessionUpdateResult,
@@ -26,6 +28,7 @@ interface Deps {
   createWithHandle: (req: ServePrivateCreateRequest) => { promise: Promise<ServePrivateCreateResult> }
   updateWithHandle: (req: ServePrivateSessionUpdateRequest) => { promise: Promise<ServePrivateSessionUpdateResult> }
   deleteWithHandle: (req: ServePrivateDeleteRequest) => { promise: Promise<ServePrivateDeleteResult> }
+  forkWithHandle: (req: ServePrivateForkRequest) => { promise: Promise<ServePrivateForkResult> }
   getCurrentDirectory: () => string | undefined
   getRootDirectory: () => string | undefined
 }
@@ -87,10 +90,26 @@ function buildDeleteRequest(dir: string, sessionId: string, token: string): Serv
   }
 }
 
+function buildForkRequest(dir: string, sessionId: string, token: string): ServePrivateForkRequest {
+  const opId = `fork:${sessionId}:${token}`
+  const idempotencyKey = `fork:${sessionId}:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/fork",
+    idempotencyKey,
+    context: { directory: dir, sessionId, parentSessionId: null },
+    payload: {},
+  }
+}
+
 export class ConnectionObservationFixture {
   private fixCreateReq: ServePrivateCreateRequest | null = null
   private fixUpdateReqs = new Map<string, ServePrivateSessionUpdateRequest>()
   private fixDeleteReqs = new Map<string, ServePrivateDeleteRequest>()
+  private fixForkReqs = new Map<string, ServePrivateForkRequest>()
 
   constructor(private readonly deps: Deps) {}
 
@@ -254,6 +273,60 @@ export class ConnectionObservationFixture {
       directory: stored.context.directory,
       result,
       sessionId,
+    }
+  }
+
+  async fork(input: { directory?: string; sessionId: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateForkResult
+    sessionId: string
+    childSessionId?: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionFork requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.sessionId || typeof input.sessionId !== "string" || !input.sessionId.startsWith("ses"))
+      throw new Error("sessionId must be ses*")
+    if (input.token !== undefined && (typeof input.token !== "string" || input.token.length === 0 || input.token.includes(":")))
+      throw new Error("token invalid")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const token = input.token ?? crypto.randomUUID()
+    if (token.includes(":")) throw new Error("token invalid")
+    const req = buildForkRequest(dir, input.sessionId, token)
+    this.fixForkReqs.set(input.sessionId, req)
+    const handle = this.deps.forkWithHandle(req)
+    const result = await handle.promise
+    const child = (result as { data?: { session?: { id?: string } } }).data?.session?.id as string | undefined
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, sessionId: input.sessionId, ...(child ? { childSessionId: child } : {}) }
+  }
+
+  async replayFork(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateForkResult
+    sessionId: string
+    childSessionId?: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionFork replay requires KILO_E2E_FIXTURE")
+    if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+    const stored = this.fixForkReqs.get(sessionId)
+    if (!stored) throw new Error("no stored fixture fork identity to replay")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const handle = this.deps.forkWithHandle(stored)
+    const result = await handle.promise
+    const child = (result as { data?: { session?: { id?: string } } }).data?.session?.id as string | undefined
+    return {
+      opId: stored.opId,
+      idempotencyKey: stored.idempotencyKey,
+      requestId: stored.requestId,
+      directory: stored.context.directory,
+      result,
+      sessionId,
+      ...(child ? { childSessionId: child } : {}),
     }
   }
 }

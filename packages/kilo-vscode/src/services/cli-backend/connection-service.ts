@@ -280,6 +280,7 @@ export class KiloConnectionService {
     createWithHandle: (req) => this.privateCreateWithHandle(req as ServePrivateCreateRequest),
     updateWithHandle: (req) => this.privateSessionUpdateWithHandle(req as ServePrivateSessionUpdateRequest),
     deleteWithHandle: (req) => this.privateDeleteWithHandle(req as ServePrivateDeleteRequest),
+    forkWithHandle: (req) => this.privateForkWithHandle(req as unknown as ServePrivateForkRequest),
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -3931,5 +3932,29 @@ export class KiloConnectionService {
     sessionId: string
   }> {
     return this.observationFixture.replayDelete(sessionId)
+  }
+
+  public async fixtureSessionForkPrivate(input: { directory?: string; sessionId: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateForkResult
+    sessionId: string
+    childSessionId?: string
+  }> {
+    return this.observationFixture.fork(input)
+  }
+
+  public async fixtureSessionForkPrivateReplay(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateForkResult
+    sessionId: string
+    childSessionId?: string
+  }> {
+    return this.observationFixture.replayFork(sessionId)
   }
 }

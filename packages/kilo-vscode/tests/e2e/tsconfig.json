@@ -21,6 +21,7 @@
     "../../script/e2e-probe-observation-producer.ts",
     "../../script/e2e-probe-observation-producer-update.ts",
     "../../script/e2e-probe-observation-producer-delete.ts",
+    "../../script/e2e-probe-observation-producer-fork.ts",
     "../../script/e2e-observation-producer-registry.ts",
     "../../script/e2e-evidence.ts",
     "../../script/e2e-probe-dom.ts",

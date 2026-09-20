@@ -8,10 +8,12 @@
 export const OBSERVATION_PRODUCER_SCENARIO = "observation-producer" as const
 export const OBSERVATION_PRODUCER_UPDATE_SCENARIO = "observation-producer-update" as const
 export const OBSERVATION_PRODUCER_DELETE_SCENARIO = "observation-producer-delete" as const
+export const OBSERVATION_PRODUCER_FORK_SCENARIO = "observation-producer-fork" as const
 
 const OBSERVATION_PRODUCER_TIMEOUT_MS = 1_200_000 as const
 const OBSERVATION_PRODUCER_UPDATE_TIMEOUT_MS = 1_200_000 as const
 const OBSERVATION_PRODUCER_DELETE_TIMEOUT_MS = 1_200_000 as const
+const OBSERVATION_PRODUCER_FORK_TIMEOUT_MS = 1_200_000 as const
 
 const SCENARIO_TIMEOUTS: Record<string, number> = {
   "real-completed": 6_000_000,
@@ -23,6 +25,7 @@ const SCENARIO_TIMEOUTS: Record<string, number> = {
   [OBSERVATION_PRODUCER_SCENARIO]: OBSERVATION_PRODUCER_TIMEOUT_MS,
   [OBSERVATION_PRODUCER_UPDATE_SCENARIO]: OBSERVATION_PRODUCER_UPDATE_TIMEOUT_MS,
   [OBSERVATION_PRODUCER_DELETE_SCENARIO]: OBSERVATION_PRODUCER_DELETE_TIMEOUT_MS,
+  [OBSERVATION_PRODUCER_FORK_SCENARIO]: OBSERVATION_PRODUCER_FORK_TIMEOUT_MS,
 }
 
 export function e2eTimeoutForScenario(scenario: string | undefined): number {
