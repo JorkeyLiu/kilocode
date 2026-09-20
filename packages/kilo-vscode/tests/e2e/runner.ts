@@ -141,6 +141,8 @@ import type {
   SessionCreatedMessage,
   SessionsLoadedMessage,
 } from "../../webview-ui/src/types/messages/extension-messages"
+import { isValidObservationChangedNotification } from "../../src/services/cli-backend/serve-private-peer"
+import { isIsolatedDataRoot, validateGateEvidence } from "../../script/e2e-canonical"
 
 const EXTENSION_ID = "kilocode.kilo-code"
 const CMD_OPEN = "kilo-code.new.agentManagerOpen"
@@ -799,6 +801,7 @@ interface ScenarioFlags {
   runCloudClawRemoval: boolean
   runP34Removal: boolean
   runR9Observation: boolean
+  runObservationProducer: boolean
 }
 
 /**
@@ -866,6 +869,13 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // reconnect, worker restart) against the canonical private observation
     // surface with exact-PID/file-marker evidence.
     runR9Observation: scenario === "r9-observation",
+    // observation-producer is focused-only: bounded live E2E proof for the
+    // real kilo serve SessionCreateDispatch.dispatch -> fd3/fd4 PrivatePeer ->
+    // ServePrivatePeer strict observation/changed validation ->
+    // Extension Host AgentManagerProvider consumer. Validates v1.0,
+    // cursor===last seq, contiguous seq from canonical baseline, five-key
+    // entries, kind/session/revision and ack via fd3/fd4 recorder.
+    runObservationProducer: scenario === "observation-producer",
   }
 }
 
@@ -894,11 +904,12 @@ export async function run(): Promise<void> {
     "cloud-claw-removal",
     "p3-4-removal",
     "r9-observation",
+    "observation-producer",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer (default: all)",
     )
   }
   const {
@@ -916,6 +927,7 @@ export async function run(): Promise<void> {
     runCloudClawRemoval,
     runP34Removal,
     runR9Observation,
+    runObservationProducer,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1183,6 +1195,11 @@ export async function run(): Promise<void> {
   // --- R9 private observation scenario (focused only) ---
   if (runR9Observation) {
     await serviceR9ObservationBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- observation-producer bounded live E2E proof (focused only) ---
+  if (runObservationProducer) {
+    await serviceObservationProducerBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {
@@ -3695,4 +3712,424 @@ async function serviceRealLifecycleBoundary(
     await sleep(200)
   }
   await writeLlmRequestsEvidence(vscodeApi, scratch, "real-lifecycle")
+}
+
+const CMD_PROD_STATUS = "kilo-code.new.e2eFixture.privateObservationStatus"
+const CMD_PROD_SNAPSHOT = "kilo-code.new.e2eFixture.privateObservationSnapshot"
+const CMD_SESSION_CREATE = "kilo-code.new.e2eFixture.sessionCreate"
+const CMD_SESSION_CREATE_REPLAY = "kilo-code.new.e2eFixture.sessionCreateReplay"
+const CMD_PEER_CHANGED_SNAP = "kilo-code.new.e2eFixture.privateObservationChangedSnapshot"
+const CMD_PEER_CHANGED_CLEAR = "kilo-code.new.e2eFixture.privateObservationChangedClear"
+const CMD_AM_TELEMETRY = "kilo-code.new.e2eFixture.agentManagerObservationRefreshTelemetry"
+const CMD_AM_TELEMETRY_CLEAR = "kilo-code.new.e2eFixture.agentManagerObservationRefreshClear"
+const OBS_PROD_BUDGET = 900_000
+
+/**
+ * Bounded live fd3/fd4 ServePrivatePeer observation/changed producer proof.
+ * Proves: real kilo serve SessionCreateDispatch.dispatch -> fd3/fd4 PrivatePeer
+ * -> ServePrivatePeer strict observation/changed validation (isValidObservationChangedNotification)
+ * -> Extension Host AgentManagerProvider consumer. Uses fixture-gated
+ * KiloConnectionService.fixtureSessionCreate over privateCreateWithHandle (no SDK fallback)
+ * and fixture-gated ServePrivatePeer recorder (post-validation, pre-consumer, 50 bounded).
+ */
+// eslint-disable-next-line complexity -- E2E orchestration boundary: single scenario proof aggregates gate/peer/recorder/create/telemetry/replay evidence; helpers would split atomic evidence flow
+async function serviceObservationProducerBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  const status0 = (await vscodeApi.commands.executeCommand(CMD_PROD_STATUS)) as Record<string, unknown>
+  writeFileSync(join(scratch, "obs-prod-status.json"), JSON.stringify(status0, null, 2))
+  try {
+    const cstate = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+    writeFileSync(join(scratch, "obs-prod-cstate.json"), JSON.stringify(cstate, null, 2))
+  } catch (e) {
+    writeFileSync(join(scratch, "obs-prod-cstate.json"), JSON.stringify({ error: String(e) }, null, 2))
+  }
+  let gate: Record<string, unknown> | null = null
+  let gateOk = false
+  let gateErr: string | undefined
+  try {
+    const gateRaw = readFileSync(join(scratch, "canonical-gate.json"), "utf8")
+    gate = JSON.parse(gateRaw) as Record<string, unknown>
+    gateErr = validateGateEvidence(gate)
+    gateOk = gateErr === undefined
+    writeFileSync(join(scratch, "obs-prod-gate.json"), JSON.stringify({ gate, gateOk, gateErr }, null, 2))
+  } catch (e) {
+    gateErr = String(e)
+    writeFileSync(join(scratch, "obs-prod-gate.json"), JSON.stringify({ error: gateErr }, null, 2))
+  }
+  // Capture canonical DB path and isolation evidence for probe
+  const canonicalForEvidence = (() => {
+    try {
+      const raw = gate as Record<string, unknown> | null
+      const dr = raw?.dataRoot as string | undefined
+      const dp = (status0 as Record<string, unknown>).dbPath as string | undefined
+      return { dbPath: String(dp ?? ""), dataRoot: dr, gateOk, gateErr }
+    } catch {
+      return { dbPath: String((status0 as Record<string, unknown>).dbPath ?? ""), gateOk, gateErr }
+    }
+  })()
+  // Wait for private peer to be available (fd3/fd4 negotiated) before mutation
+  const peerReadyDeadline = Date.now() + 15_000
+  while (Date.now() < peerReadyDeadline) {
+    try {
+      const peerStat = (await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)) as {
+        private: { available: boolean; state: string }
+      }
+      if (peerStat?.private?.available) break
+    } catch {}
+    await sleep(200)
+  }
+  // Clear fixture-gated ServePrivatePeer recorder and AgentManager telemetry before mutation
+  await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_CLEAR)
+  await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY_CLEAR)
+  const beforeSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+    startOrdinal: number
+    nextOrdinal: number
+    entries: unknown[]
+  }
+  const beforeNext = typeof beforeSnapRaw.nextOrdinal === "number" ? beforeSnapRaw.nextOrdinal : 0
+  const beforeStart = typeof beforeSnapRaw.startOrdinal === "number" ? beforeSnapRaw.startOrdinal : beforeNext
+  const beforeTelemetryRaw = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+    count: number
+    lastAckCursor?: number
+    lastBaseline?: number
+    lastRefreshAt?: number
+    persistedCursor?: number
+  } | null
+  const beforeTelemetryCount = beforeTelemetryRaw?.count ?? 0
+  const beforePersisted = (beforeTelemetryRaw?.persistedCursor ?? (status0 as Record<string, unknown>).persistedCursor) as number | undefined
+  // Canonical observation baseline cursor (via privateObservation snapshot, but split from notification validation)
+  const beforeSnapRes = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const beforeCursor = beforeSnapRes.cursor
+  // Owned isolated scratch/workspace directory for durable session/create
+  const dirForCreate = (() => {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (ws) return ws
+    return join(scratch, "workspace")
+  })()
+  // One real durable mutation via fixture-gated privateCreate over kilo serve fd3/fd4 (no SDK fallback)
+  const createTitle = `E2E Obs Prod ${fixtureId.slice(0, 8)}`
+  const createRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_CREATE, {
+    directory: dirForCreate,
+    title: createTitle,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: {
+      status: string
+      accepted: boolean
+      data?: { session?: { id?: string; title?: string } }
+      failure?: unknown
+      outcome?: unknown
+      transportUnknown?: boolean
+    }
+    sessionId?: string
+  }
+  const privateResultSucceeded = createRes.result?.status === "succeeded" && createRes.result?.accepted === true && !!createRes.sessionId
+  console.log(`[obs-prod] create privateResultSucceeded=${privateResultSucceeded} sessionId=${createRes.sessionId} opId=${createRes.opId} status=${createRes.result.status} accepted=${createRes.result.accepted}`)
+  if (!privateResultSucceeded) {
+    throw new Error(`fixture sessionCreate private result not succeeded: ${JSON.stringify(createRes.result).slice(0, 800)}`)
+  }
+  const expectedSessionId = createRes.sessionId as string
+  const afterCreateCursorHint = (() => {
+    // No second read to infer cursor; rely on recorder envelope cursor
+    return undefined as number | undefined
+  })()
+  void afterCreateCursorHint
+  console.log(`[obs-prod] polling recorder beforeNext=${beforeNext} beforeCursor=${beforeCursor}`)
+  // Poll ServePrivatePeer recorder for one envelope (post-validation, fd3/fd4 boundary)
+  let afterSnap: { startOrdinal: number; nextOrdinal: number; entries: unknown[] } | null = null
+  let afterEntries: unknown[] = []
+  let envelope: unknown = null
+  const pollDeadline = Date.now() + 8000
+  while (Date.now() < pollDeadline) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+      startOrdinal: number
+      nextOrdinal: number
+      entries: unknown[]
+    }
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    const filtered = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") {
+        return (e as Record<string, unknown>).ordinal as number >= beforeNext
+      }
+      return false
+    })
+    if (filtered.length >= 1) {
+      afterSnap = raw
+      afterEntries = filtered
+      envelope = filtered.length === 1 ? filtered[0] : filtered[filtered.length - 1] ?? null
+      break
+    }
+    await sleep(200)
+  }
+  if (!afterSnap) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+      startOrdinal: number
+      nextOrdinal: number
+      entries: unknown[]
+    }
+    afterSnap = raw
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    afterEntries = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") {
+        return (e as Record<string, unknown>).ordinal as number >= beforeNext
+      }
+      return false
+    })
+    envelope = afterEntries.length === 1 ? afterEntries[0] : afterEntries[afterEntries.length - 1] ?? null
+  }
+  console.log(`[obs-prod] after poll afterEntries=${afterEntries.length} afterSnap=${JSON.stringify(afterSnap)?.slice(0, 800)} envelopePreview=${JSON.stringify(envelope)?.slice(0, 1200)}`)
+  // Validate notification strictness via production helper (no duplicate validator)
+  let notificationStrictValid = false
+  let notificationKind: string | undefined
+  let notificationSessionId: string | undefined
+  let notificationRevision: number | undefined
+  let notificationCursor: number | undefined
+  let notificationSeq: number | undefined
+  try {
+    const envRec = envelope as Record<string, unknown> | null
+    const params = (envRec?.params as unknown) ?? envelope
+    if (isValidObservationChangedNotification(params as unknown)) {
+      notificationStrictValid = true
+      const p = params as { v: string; cursor: number; entries: Array<Record<string, unknown>> }
+      notificationCursor = p.cursor
+      if (Array.isArray(p.entries) && p.entries.length === 1) {
+        const e = p.entries[0]!
+        notificationKind = String(e.kind)
+        notificationSessionId = String(e.session_id)
+        notificationRevision = e.revision as number
+        notificationSeq = e.seq as number
+      }
+    }
+  } catch (e) {
+    console.log(`[obs-prod] notification validation error ${String(e).slice(0, 400)}`)
+  }
+  console.log(`[obs-prod] notificationStrictValid=${notificationStrictValid} cursor=${notificationCursor} seq=${notificationSeq} kind=${notificationKind} sid=${notificationSessionId} beforeCursor=${beforeCursor}`)
+  // Split changefeed read continuity check (independent of notification strictness)
+  let contiguous = false
+  if (typeof notificationCursor === "number" && typeof notificationSeq === "number") {
+    if (notificationCursor === notificationSeq && notificationCursor === beforeCursor + 1) contiguous = true
+  }
+  console.log(`[obs-prod] contiguous=${contiguous}`)
+  // Wait for AgentManager consumer refresh telemetry to advance exactly once (notification-driven)
+  let afterTelemetry: {
+    count: number
+    lastAckCursor?: number
+    lastBaseline?: number
+    lastRefreshAt?: number
+    persistedCursor?: number
+  } | null = null
+  const telemetryDeadline = Date.now() + 8000
+  while (Date.now() < telemetryDeadline) {
+    const t = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+      count: number
+      lastAckCursor?: number
+      lastBaseline?: number
+      lastRefreshAt?: number
+      persistedCursor?: number
+    } | null
+    if (t && t.count === beforeTelemetryCount + 1 && typeof t.lastAckCursor === "number" && typeof t.lastBaseline === "number") {
+      afterTelemetry = t
+      break
+    }
+    if (t && t.count > beforeTelemetryCount && typeof t.lastAckCursor === "number") {
+      afterTelemetry = t
+      break
+    }
+    await sleep(200)
+  }
+  if (!afterTelemetry) {
+    afterTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+      count: number
+      lastAckCursor?: number
+      lastBaseline?: number
+      lastRefreshAt?: number
+      persistedCursor?: number
+    } | null
+  }
+  // If telemetry count advanced but ack not yet set (refresh in progress), wait a bit more for ack to be recorded
+  if (afterTelemetry && afterTelemetry.count === beforeTelemetryCount + 1 && afterTelemetry.lastAckCursor === undefined) {
+    const extraDeadline = Date.now() + 3000
+    while (Date.now() < extraDeadline) {
+      const t2 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+        count: number
+        lastAckCursor?: number
+        lastBaseline?: number
+        lastRefreshAt?: number
+        persistedCursor?: number
+      } | null
+      if (t2 && typeof t2.lastAckCursor === "number") {
+        afterTelemetry = t2
+        break
+      }
+      await sleep(200)
+    }
+  }
+  // Wait for persisted cursor to advance to notification cursor (ack completed)
+  if (afterTelemetry && typeof notificationCursor === "number") {
+    const persistDeadline = Date.now() + 3000
+    while (Date.now() < persistDeadline) {
+      if (afterTelemetry.persistedCursor === notificationCursor) break
+      const t3 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+        count: number
+        lastAckCursor?: number
+        lastBaseline?: number
+        lastRefreshAt?: number
+        persistedCursor?: number
+      } | null
+      if (t3) afterTelemetry = t3
+      if (afterTelemetry.persistedCursor === notificationCursor) break
+      await sleep(200)
+    }
+  }
+  console.log(`[obs-prod] afterTelemetry=${JSON.stringify(afterTelemetry)} beforeCount=${beforeTelemetryCount} notificationCursor=${notificationCursor} beforeCursor=${beforeCursor}`)
+  const refreshAdvancedOnce = afterTelemetry ? afterTelemetry.count === beforeTelemetryCount + 1 : false
+  const ackCursorMatches = afterTelemetry?.lastAckCursor === notificationCursor
+  const baselineMatches = afterTelemetry?.lastBaseline === beforeCursor
+  console.log(`[obs-prod] refreshAdvancedOnce=${refreshAdvancedOnce} ackCursorMatches=${ackCursorMatches} baselineMatches=${baselineMatches}`)
+  // Replay exact same create identity and assert same result / no new notification
+  const replayRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_CREATE_REPLAY)) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string } } }
+    sessionId?: string
+  }
+  const replaySameSession = replayRes.sessionId === expectedSessionId
+  const replaySucceeded = replayRes.result?.status === "succeeded" && replayRes.result?.accepted === true
+  await sleep(600)
+  const secondSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+    startOrdinal: number
+    nextOrdinal: number
+    entries: unknown[]
+  }
+  const secondAll = Array.isArray(secondSnapRaw.entries) ? secondSnapRaw.entries : []
+  const secondDelta = secondAll.filter((e) => {
+    if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") {
+      return (e as Record<string, unknown>).ordinal as number >= (afterSnap?.nextOrdinal ?? beforeNext + 1)
+    }
+    return false
+  })
+  const idempotentSecondNotifCount = secondDelta.length
+  const canonicalDbPath = String((status0 as Record<string, unknown>).dbPath ?? "")
+  // Write bounded debug inside owned scratch (never /tmp)
+  try {
+    writeFileSync(
+      join(scratch, "obs-prod-debug.json"),
+      JSON.stringify(
+        {
+          beforeNext,
+          beforeCursor,
+          beforePersisted,
+          createRes: { opId: createRes.opId, requestId: createRes.requestId, sessionId: expectedSessionId, resultStatus: createRes.result.status },
+          afterEntriesCount: afterEntries.length,
+          envelopePreview: typeof envelope === "object" ? JSON.stringify(envelope).slice(0, 1200) : String(envelope).slice(0, 1200),
+          notificationStrictValid,
+          contiguous,
+          refreshBefore: beforeTelemetryCount,
+          refreshAfter: afterTelemetry?.count,
+          ackCursorMatches,
+          baselineMatches,
+          replaySameSession,
+          idempotentSecondNotifCount,
+        },
+        null,
+        2,
+      ),
+    )
+  } catch {}
+  const evidence = {
+    scenario: "observation-producer",
+    collectedAt: new Date().toISOString(),
+    pid: (status0 as Record<string, unknown>).pid ?? 0,
+    canonical: {
+      dbPath: canonicalDbPath,
+      dataRoot: canonicalForEvidence.dataRoot,
+      gateOk,
+      gateErr,
+      isolateOk: (() => {
+        try {
+          const dr = gate?.dataRoot as string | undefined
+          if (!dr) return undefined
+          return isIsolatedDataRoot(scratch, dr)
+        } catch {
+          return undefined
+        }
+      })(),
+    },
+    testBridge: (status0 as Record<string, unknown>).testBridge === true,
+    before: {
+      cursor: beforeCursor,
+      persisted: beforePersisted,
+      startOrdinal: beforeStart,
+      nextOrdinal: beforeNext,
+      notifCount: 0,
+      refreshCount: beforeTelemetryCount,
+    },
+    after: {
+      cursor: notificationCursor ?? beforeCursor,
+      persisted: afterTelemetry?.persistedCursor ?? beforePersisted,
+      startOrdinal: afterSnap?.startOrdinal ?? beforeStart,
+      nextOrdinal: afterSnap?.nextOrdinal ?? beforeNext,
+      notifCount: afterEntries.length,
+      refreshCount: afterTelemetry?.count ?? beforeTelemetryCount,
+    },
+    envelope,
+    // Split validations
+    notificationStrictValid,
+    contiguous,
+    // Legacy combined for probe compatibility (now split)
+    envelopeValid: notificationStrictValid && afterEntries.length === 1 && notificationSessionId === expectedSessionId && notificationKind === "changed",
+    ack: {
+      requested: notificationCursor ?? beforeCursor + 1,
+      persistedAfter: afterTelemetry?.persistedCursor,
+      success: ackCursorMatches && baselineMatches,
+    },
+    refresh: {
+      beforeCount: beforeTelemetryCount,
+      afterCount: afterTelemetry?.count,
+      advancedOnce: refreshAdvancedOnce,
+      lastAckCursor: afterTelemetry?.lastAckCursor,
+      lastBaseline: afterTelemetry?.lastBaseline,
+    },
+    idempotentSecondNotifCount,
+    expectedSessionId,
+    create: {
+      opId: createRes.opId,
+      requestId: createRes.requestId,
+      directory: createRes.directory,
+      title: createTitle,
+      privateSucceeded: privateResultSucceeded,
+      sessionId: expectedSessionId,
+    },
+    replay: {
+      sameSession: replaySameSession,
+      succeeded: replaySucceeded,
+      opId: replayRes.opId,
+      requestId: replayRes.requestId,
+    },
+    notification: {
+      cursor: notificationCursor,
+      seq: notificationSeq,
+      session_id: notificationSessionId,
+      kind: notificationKind,
+      revision: notificationRevision,
+    },
+    beforeStatus: status0,
+    afterTelemetry,
+    gate,
+  }
+  writeFileSync(join(scratch, "obs-prod-runtime-evidence"), JSON.stringify(evidence, null, 2))
+  writeFileSync(join(scratch, "obs-prod-ready"), fixtureId)
+  const deadline = Date.now() + OBS_PROD_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    await sleep(200)
+  }
 }

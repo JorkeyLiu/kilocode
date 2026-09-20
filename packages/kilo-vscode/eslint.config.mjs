@@ -180,7 +180,16 @@ export default [
     // `KiloViewers.update`; only the counter and its two emission points
     // remain inline. connection-service.ts measures 3818 lines, so 3818
     // is the smallest passing cap.
-    rules: { "max-lines": ["error", 3818] },
+    // Raised 3818 → 3890 for the `observation/changed` fixture bridge:
+    // the new fixture-only session-create/replay + ServePrivate recorder
+    // pass-through (bounded 50, monotonic ordinals, JSON-safe) must live
+    // alongside existing private parity branches per the shared-carrier
+    // convention. Core create/replay logic lives in
+    // connection-service-observation-fixture.ts; only the thin
+    // delegation field and four public pass-through methods remain inline
+    // (plus the required import). connection-service.ts measures 3889
+    // lines, so 3890 is the smallest passing cap with headroom.
+    rules: { "max-lines": ["error", 3890] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

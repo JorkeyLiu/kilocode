@@ -3,6 +3,7 @@ import { isAbsolute, normalize, resolve } from "path"
 import { JsonRpcPeer } from "../../private-worker/peer"
 import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "../../private-worker/observation"
 import type { ChildProcess } from "child_process"
+import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import {
   makeGetAmbiguous,
   normalizePrivateGetWire,
@@ -2803,6 +2804,9 @@ export class ServePrivatePeer {
   private healthPeer: JsonRpcPeer | null = null
   private healthEpoch: number | null = null
   private observationChangedHandler: ((method: string, params: unknown) => void) | null = null
+  private observationChangedRecord: Array<{ ordinal: number; method: string; params: unknown; receivedAt: number }> = []
+  private observationChangedNextOrdinal = 0
+  private observationChangedStartOrdinal = 0
 
   constructor(private readonly opts: ServePrivatePeerOptions) {
     if (opts.onObservationChanged) this.observationChangedHandler = opts.onObservationChanged
@@ -2810,6 +2814,42 @@ export class ServePrivatePeer {
 
   setObservationChangedHandler(handler: ((method: string, params: unknown) => void) | null): void {
     this.observationChangedHandler = handler
+  }
+
+  /** Fixture-gated bounded recorder for fd3/fd4 observation/changed — only after strict validation, JSON-safe, 50 entries */
+  private recordObservationChanged(method: string, params: unknown): void {
+    if (!isE2EFixtureEnabled()) return
+    let safe: unknown
+    try {
+      safe = JSON.parse(JSON.stringify(params))
+    } catch {
+      try {
+        safe = JSON.parse(JSON.stringify({ v: (params as Record<string, unknown>)?.v, cursor: (params as Record<string, unknown>)?.cursor, entries: (params as Record<string, unknown>)?.entries }))
+      } catch {
+        safe = null
+      }
+    }
+    const ordinal = this.observationChangedNextOrdinal++
+    this.observationChangedRecord.push({ ordinal, method, params: safe, receivedAt: Date.now() })
+    if (this.observationChangedRecord.length > 50) {
+      this.observationChangedRecord.shift()
+      this.observationChangedStartOrdinal++
+    }
+  }
+
+  getObservationChangedSnapshot(): { startOrdinal: number; nextOrdinal: number; entries: Array<{ ordinal: number; method: string; params: unknown; receivedAt: number }> } {
+    if (!isE2EFixtureEnabled()) return { startOrdinal: this.observationChangedStartOrdinal, nextOrdinal: this.observationChangedNextOrdinal, entries: [] }
+    return {
+      startOrdinal: this.observationChangedStartOrdinal,
+      nextOrdinal: this.observationChangedNextOrdinal,
+      entries: [...this.observationChangedRecord],
+    }
+  }
+
+  clearObservationChangedSnapshot(): void {
+    if (!isE2EFixtureEnabled()) return
+    this.observationChangedRecord = []
+    this.observationChangedStartOrdinal = this.observationChangedNextOrdinal
   }
 
   getEpoch(): number {
@@ -2902,6 +2942,7 @@ export class ServePrivatePeer {
     const onObservationChanged = (method: string, params: unknown): void => {
       if (method !== OBSERVATION_CHANGED_REVERSE_CAPABILITY) return
       if (!isValidObservationChangedNotification(params)) return
+      this.recordObservationChanged(method, params)
       try {
         this.observationChangedHandler?.(method, params)
       } catch {}

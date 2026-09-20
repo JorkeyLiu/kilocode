@@ -970,6 +970,30 @@ export function activate(context: vscode.ExtensionContext) {
         privateObservation.clearNotificationLog()
         return true
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionCreate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        return connectionService.fixtureSessionCreate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          title: typeof o.title === "string" ? (o.title as string) : undefined,
+          parentSessionId: typeof o.parentSessionId === "string" ? (o.parentSessionId as string) : null,
+          token: typeof o.token === "string" ? (o.token as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionCreateReplay", async () => {
+        return connectionService.fixtureSessionCreateReplay()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedSnapshot", async () => {
+        return connectionService.fixturePrivateObservationChangedSnapshot()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedClear", async () => {
+        return connectionService.fixturePrivateObservationChangedClear()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerObservationRefreshTelemetry", async () => {
+        return agentManagerProvider.fixtureGetObservationRefreshTelemetry()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerObservationRefreshClear", async () => {
+        return agentManagerProvider.fixtureClearObservationRefreshTelemetry()
+      }),
     )
   }
 

@@ -137,6 +137,10 @@ export class AgentManagerProvider implements Disposable {
   private refreshSessions: unknown | null = null
   private pendingChangedAckCursor: number | undefined
   private pendingChangedBaseline: number | undefined
+  private fixObsCount = 0
+  private fixObsAck: number | undefined
+  private fixObsBase: number | undefined
+  private fixObsAt: number | undefined
   // AgentManager-owned async activity that can emit catalog/durable updates
   // across a fixture phase: in-flight close handlers plus observation
   // refresh entry chains (including the stateReady prefix before the
@@ -1169,6 +1173,10 @@ export class AgentManagerProvider implements Disposable {
       this.pendingChangedBaseline = undefined
       return
     }
+    if (isE2EFixtureEnabled()) {
+      this.fixObsCount++
+      this.fixObsAt = Date.now()
+    }
     try {
       await sessions.refreshSessions()
     } catch {
@@ -1187,6 +1195,10 @@ export class AgentManagerProvider implements Disposable {
     this.pendingChangedBaseline = undefined
     if (latestAck === undefined || !this.coordinator) return
     if (latestBaseline === undefined) return
+    if (isE2EFixtureEnabled()) {
+      this.fixObsAck = latestAck
+      this.fixObsBase = latestBaseline
+    }
     try {
       const curNow = this.coordinator.getPersistedCursor()
       if (curNow === undefined || curNow !== latestBaseline || curNow > latestAck) return
@@ -1196,6 +1208,36 @@ export class AgentManagerProvider implements Disposable {
     try {
       await this.coordinator.ack(latestAck)
     } catch {}
+  }
+
+  fixtureGetObservationRefreshTelemetry(): {
+    count: number
+    lastAckCursor: number | undefined
+    lastBaseline: number | undefined
+    lastRefreshAt: number | undefined
+    persistedCursor: number | undefined
+  } | null {
+    if (!isE2EFixtureEnabled()) return null
+    let persisted: number | undefined
+    try {
+      persisted = this.coordinator?.getPersistedCursor()
+    } catch {}
+    return {
+      count: this.fixObsCount,
+      lastAckCursor: this.fixObsAck,
+      lastBaseline: this.fixObsBase,
+      lastRefreshAt: this.fixObsAt,
+      persistedCursor: persisted,
+    }
+  }
+
+  fixtureClearObservationRefreshTelemetry(): boolean {
+    if (!isE2EFixtureEnabled()) return false
+    this.fixObsCount = 0
+    this.fixObsAck = undefined
+    this.fixObsBase = undefined
+    this.fixObsAt = undefined
+    return true
   }
 
   private shouldWaitForState(m: AgentManagerInMessage): boolean {

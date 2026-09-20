@@ -1,0 +1,25 @@
+/**
+ * Observation-producer scenario registration helper.
+ * Extracted from script/e2e-probe.ts to keep that file under its max-lines cap.
+ * No production semantics changed: same SCENARIO value, same derived timeout,
+ * same canonical-storage and ready-marker semantics.
+ */
+
+export const OBSERVATION_PRODUCER_SCENARIO = "observation-producer" as const
+
+const OBSERVATION_PRODUCER_TIMEOUT_MS = 1_200_000 as const
+
+const SCENARIO_TIMEOUTS: Record<string, number> = {
+  "real-completed": 6_000_000,
+  "real-overflow": 1_200_000,
+  "real-restart": 6_000_000,
+  "real-lifecycle": 1_200_000,
+  "worktree-removal": 6_000_000,
+  "r9-observation": 1_200_000,
+  [OBSERVATION_PRODUCER_SCENARIO]: OBSERVATION_PRODUCER_TIMEOUT_MS,
+}
+
+export function e2eTimeoutForScenario(scenario: string | undefined): number {
+  if (!scenario) return 300_000
+  return SCENARIO_TIMEOUTS[scenario] ?? 300_000
+}

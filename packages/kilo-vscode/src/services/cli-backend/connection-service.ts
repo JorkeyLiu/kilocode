@@ -81,6 +81,7 @@ import type { ProjectCurrentContractRequest, ProjectCurrentWireOutcome } from ".
 import { wrapFindFilesOutcomeForOwner } from "./serve-private-find-files"
 import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-private-find-files-contract"
 import * as crypto from "crypto"
+import { ConnectionObservationFixture } from "./connection-service-observation-fixture"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
 import { wrapRemoteToggleOutcomeForOwner } from "./serve-private-remote-toggle"
@@ -272,6 +273,14 @@ export class KiloConnectionService {
     string,
     { opId: string; idempotencyKey: string; requestId: string; sessionId: string; title: string; directory: string }
   > | null = null
+
+  private readonly observationFixture = new ConnectionObservationFixture({
+    getPeer: () => this.privatePeer,
+    isAvailable: () => this.isPrivateAvailable(),
+    createWithHandle: (req) => this.privateCreateWithHandle(req as ServePrivateCreateRequest),
+    getCurrentDirectory: () => this.currentDirectory,
+    getRootDirectory: () => this.rootDirectory,
+  })
 
   private getReplayState(): Map<
     string,
@@ -3837,5 +3846,44 @@ export class KiloConnectionService {
       },
       revision,
     }
+  }
+
+  fixturePrivateObservationChangedSnapshot(): {
+    startOrdinal: number
+    nextOrdinal: number
+    entries: Array<{ ordinal: number; method: string; params: unknown; receivedAt: number }>
+  } {
+    return this.observationFixture.snapshot()
+  }
+
+  fixturePrivateObservationChangedClear(): boolean {
+    return this.observationFixture.clear()
+  }
+
+  public async fixtureSessionCreate(input?: {
+    directory?: string
+    title?: string
+    parentSessionId?: string | null
+    token?: string
+  }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateCreateResult
+    sessionId?: string
+  }> {
+    return this.observationFixture.create(input)
+  }
+
+  public async fixtureSessionCreateReplay(): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateCreateResult
+    sessionId?: string
+  }> {
+    return this.observationFixture.replay()
   }
 }

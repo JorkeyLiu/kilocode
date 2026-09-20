@@ -701,6 +701,7 @@
     "test:e2e:cloud-claw-removal": "KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs",
     "test:e2e:p3-4-removal": "KILO_E2E_SCENARIO=p3-4-removal node script/e2e-probe-launch.mjs",
     "test:e2e:r9-observation": "KILO_E2E_SCENARIO=r9-observation node script/e2e-probe-launch.mjs",
+    "test:e2e:observation-producer": "KILO_E2E_SCENARIO=observation-producer node script/e2e-probe-launch.mjs",
     "test:p0-bench": "node script/e2e-p0-bench-launch.mjs",
     "test:p0-bench:merge": "node script/p0-bench-merge-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",

@@ -287,6 +287,8 @@ import {
 } from "./e2e-probe-dom"
 import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-restart"
 import { assertR9ObservationLifecycle } from "./e2e-probe-r9"
+import { assertObservationProducerLifecycle } from "./e2e-probe-observation-producer"
+import { OBSERVATION_PRODUCER_SCENARIO, e2eTimeoutForScenario } from "./e2e-observation-producer-registry"
 import { runGcLifecycleBoundaries } from "./e2e-probe-lifecycle"
 import { repoRootFrom } from "./p0-bench/repo-root"
 import {
@@ -323,35 +325,11 @@ const root = process.env.KILO_E2E_ROOT ? resolve(process.env.KILO_E2E_ROOT) : re
 const repoRoot = repoRootFrom(root)
 const runnerEntry = join(root, "tests", "e2e", "runner.ts")
 const shouldBuild = !process.argv.includes("--no-build")
-// Watchdog for the whole probe run (outer bound). real-completed drives
-// completed turns through the real webview, then reopens the panel (H-7),
-// disconnects the MCP server (H-5), and runs H-12 Phase 9; its extension-host
-// runner declares a 5.4M ms service budget (REAL_COMPLETED_SERVICE_BUDGET in
-// tests/e2e/runner.ts), so the 300s default would kill a valid slow/retry-heavy
-// run before Phase 9. real-overflow declares a 900s service budget
-// (REAL_OVERFLOW_SERVICE_BUDGET) that a 600s watchdog could not outlive, and
-// real-restart declares 2.1M ms across its reload boundary. Derive wider
-// defaults ONLY for those scenarios (real-completed 100 min, real-overflow
-// 20 min, real-restart 100 min); every other scenario — including real-session,
-// whose service loop is bounded at 240s — keeps the 300s default, so the global
-// watchdog is not weakened. An explicit KILO_E2E_TIMEOUT always wins over the
-// derived default.
-const timeoutMs = Number(
-  process.env.KILO_E2E_TIMEOUT ??
-    (process.env.KILO_E2E_SCENARIO === "real-completed"
-      ? 6_000_000
-      : process.env.KILO_E2E_SCENARIO === "real-overflow"
-        ? 1_200_000
-        : process.env.KILO_E2E_SCENARIO === "real-restart"
-          ? 6_000_000
-          : process.env.KILO_E2E_SCENARIO === "real-lifecycle"
-            ? 1_200_000
-            : process.env.KILO_E2E_SCENARIO === "worktree-removal"
-              ? 6_000_000
-              : process.env.KILO_E2E_SCENARIO === "r9-observation"
-                ? 1_200_000
-                : 300_000),
-)
+// Watchdog for the whole probe run (outer bound). Scenarios with larger
+// service budgets get wider defaults via e2eTimeoutForScenario; unknown
+// scenarios keep the 300s default so the global watchdog is not weakened.
+// An explicit KILO_E2E_TIMEOUT always wins over the derived default.
+const timeoutMs = Number(process.env.KILO_E2E_TIMEOUT ?? e2eTimeoutForScenario(process.env.KILO_E2E_SCENARIO))
 
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
 // Code lifecycle; a focused value runs exactly that scenario. Unknown values
@@ -378,6 +356,7 @@ const SCENARIO_VALUES = [
   "cloud-claw-removal",
   "p3-4-removal",
   "r9-observation",
+  OBSERVATION_PRODUCER_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -395,7 +374,8 @@ export function parseScenarios(value: string): Set<string> {
     value === "worktree-removal" ||
     value === "cloud-claw-removal" ||
     value === "p3-4-removal" ||
-    value === "r9-observation"
+    value === "r9-observation" ||
+    value === OBSERVATION_PRODUCER_SCENARIO
   ) {
     return new Set([value])
   }
@@ -418,7 +398,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has("real-restart") ||
     parseScenarios(value).has("real-session") ||
     parseScenarios(value).has("real-lifecycle") ||
-    parseScenarios(value).has("r9-observation")
+    parseScenarios(value).has("r9-observation") ||
+    parseScenarios(value).has(OBSERVATION_PRODUCER_SCENARIO)
   )
 }
 
@@ -2591,6 +2572,10 @@ async function runScenario(
     await assertR9ObservationLifecycle(browser, plan, scratch)
     console.log("[probe] r9-observation lifecycle assertion passed")
   }
+  if (scenarios.has(OBSERVATION_PRODUCER_SCENARIO)) {
+    await assertObservationProducerLifecycle(browser, plan, scratch)
+    console.log("[probe] observation-producer lifecycle assertion passed")
+  }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
     await runGcLifecycleBoundaries(browser, plan, scratch, workspace, lifecycleModel)
@@ -2686,6 +2671,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("cloud-claw-removal")) return "cloud-claw-removal-ready"
   if (scenarios.has("p3-4-removal")) return "p3-4-removal-ready"
   if (scenarios.has("r9-observation")) return "r9-ready"
+  if (scenarios.has(OBSERVATION_PRODUCER_SCENARIO)) return "obs-prod-ready"
   return "ready"
 }
 
