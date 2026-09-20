@@ -1,4 +1,3 @@
-/* eslint-disable max-lines */
 /**
  * Extension Host E2E runner — child task open tab-order case, active-tab close
  * successor case, in-session per-agent variant memory case, and derived Topic
@@ -803,6 +802,7 @@ interface ScenarioFlags {
   runR9Observation: boolean
   runObservationProducer: boolean
   runObservationProducerUpdate: boolean
+  runObservationProducerDelete: boolean
 }
 
 /**
@@ -883,6 +883,11 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // -> AgentManager refresh+ack. Validates same five-key envelope plus
     // durable update:<sessionId>:<token> tuple and idempotent replay.
     runObservationProducerUpdate: scenario === "observation-producer-update",
+    // observation-producer-delete is focused-only: bounded live E2E proof for
+    // parent+child create -> SessionDeleteDispatch family delete -> fd3/fd4 PrivatePeer
+    // -> ServePrivatePeer strict deleted validation -> AgentManager single refresh+ack.
+    // Verifies entries cover parent+child with kind deleted, seq contiguous, cursor=last seq.
+    runObservationProducerDelete: scenario === "observation-producer-delete",
   }
 }
 
@@ -913,11 +918,12 @@ export async function run(): Promise<void> {
     "r9-observation",
     "observation-producer",
     "observation-producer-update",
+    "observation-producer-delete",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete (default: all)",
     )
   }
   const {
@@ -937,6 +943,7 @@ export async function run(): Promise<void> {
     runR9Observation,
     runObservationProducer,
     runObservationProducerUpdate,
+    runObservationProducerDelete,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1214,6 +1221,11 @@ export async function run(): Promise<void> {
   // --- observation-producer-update bounded live E2E proof (focused only) ---
   if (runObservationProducerUpdate) {
     await serviceObservationProducerUpdateBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- observation-producer-delete bounded live E2E proof (focused only) ---
+  if (runObservationProducerDelete) {
+    await serviceObservationProducerDeleteBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {
@@ -3740,6 +3752,9 @@ const CMD_AM_TELEMETRY = "kilo-code.new.e2eFixture.agentManagerObservationRefres
 const CMD_AM_TELEMETRY_CLEAR = "kilo-code.new.e2eFixture.agentManagerObservationRefreshClear"
 const OBS_PROD_BUDGET = 900_000
 const OBS_PROD_UPDATE_BUDGET = 900_000
+const OBS_PROD_DELETE_BUDGET = 900_000
+const CMD_SESSION_DELETE_PRIVATE = "kilo-code.new.e2eFixture.sessionDeletePrivate"
+const CMD_SESSION_DELETE_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionDeletePrivateReplay"
 
 /**
  * Bounded live fd3/fd4 ServePrivatePeer observation/changed producer proof.
@@ -4581,6 +4596,459 @@ async function serviceObservationProducerUpdateBoundary(
   writeFileSync(join(scratch, "obs-prod-update-runtime-evidence"), JSON.stringify(evidence, null, 2))
   writeFileSync(join(scratch, "obs-prod-update-ready"), fixtureId)
   const deadline = Date.now() + OBS_PROD_UPDATE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    await sleep(200)
+  }
+}
+
+// eslint-disable-next-line complexity -- E2E orchestration boundary: single scenario proof aggregates gate/peer/recorder/parent+child+delete/telemetry/replay evidence; helpers would split atomic evidence flow
+async function serviceObservationProducerDeleteBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  const status0 = (await vscodeApi.commands.executeCommand(CMD_PROD_STATUS)) as Record<string, unknown>
+  writeFileSync(join(scratch, "obs-prod-delete-status.json"), JSON.stringify(status0, null, 2))
+  try {
+    const cstate = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+    writeFileSync(join(scratch, "obs-prod-delete-cstate.json"), JSON.stringify(cstate, null, 2))
+  } catch (e) {
+    writeFileSync(join(scratch, "obs-prod-delete-cstate.json"), JSON.stringify({ error: String(e) }, null, 2))
+  }
+  let gate: Record<string, unknown> | null = null
+  let gateOk = false
+  let gateErr: string | undefined
+  try {
+    const gateRaw = readFileSync(join(scratch, "canonical-gate.json"), "utf8")
+    gate = JSON.parse(gateRaw) as Record<string, unknown>
+    gateErr = validateGateEvidence(gate)
+    gateOk = gateErr === undefined
+    writeFileSync(join(scratch, "obs-prod-delete-gate.json"), JSON.stringify({ gate, gateOk, gateErr }, null, 2))
+  } catch (e) {
+    gateErr = String(e)
+    writeFileSync(join(scratch, "obs-prod-delete-gate.json"), JSON.stringify({ error: gateErr }, null, 2))
+  }
+  const canonicalForEvidence = (() => {
+    try {
+      const raw = gate as Record<string, unknown> | null
+      const dr = raw?.dataRoot as string | undefined
+      const dp = (status0 as Record<string, unknown>).dbPath as string | undefined
+      return { dbPath: String(dp ?? ""), dataRoot: dr, gateOk, gateErr }
+    } catch {
+      return { dbPath: String((status0 as Record<string, unknown>).dbPath ?? ""), gateOk, gateErr }
+    }
+  })()
+  const peerReadyDeadline = Date.now() + 15_000
+  while (Date.now() < peerReadyDeadline) {
+    try {
+      const peerStat = (await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)) as {
+        private: { available: boolean; state: string }
+      }
+      if (peerStat?.private?.available) break
+    } catch {}
+    await sleep(200)
+  }
+  const dirForCreate = (() => {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (ws) return ws
+    return join(scratch, "workspace")
+  })()
+  const parentTitle = `E2E Obs Delete Parent ${fixtureId.slice(0, 8)}`
+  const parentRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_CREATE, {
+    directory: dirForCreate,
+    title: parentTitle,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string } }; transportUnknown?: boolean }
+    sessionId?: string
+  }
+  const parentOk = parentRes.result?.status === "succeeded" && parentRes.result?.accepted === true && !!parentRes.sessionId
+  console.log(`[obs-prod-delete] parent create ok=${parentOk} sessionId=${parentRes.sessionId}`)
+  if (!parentOk) throw new Error(`parent create failed: ${JSON.stringify(parentRes.result).slice(0, 800)}`)
+  const parentId = parentRes.sessionId as string
+  // create child with parentSessionId = parentId
+  const childTitle = `E2E Obs Delete Child ${fixtureId.slice(0, 8)}`
+  const childRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_CREATE, {
+    directory: dirForCreate,
+    title: childTitle,
+    parentSessionId: parentId,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; data?: { session?: { id?: string; parentID?: string | null } }; transportUnknown?: boolean }
+    sessionId?: string
+  }
+  const childOk = childRes.result?.status === "succeeded" && childRes.result?.accepted === true && !!childRes.sessionId
+  console.log(`[obs-prod-delete] child create ok=${childOk} sessionId=${childRes.sessionId} parentID=${(childRes.result.data?.session as Record<string, unknown> | undefined)?.parentID}`)
+  if (!childOk) throw new Error(`child create failed: ${JSON.stringify(childRes.result).slice(0, 800)}`)
+  const childId = childRes.sessionId as string
+  const expectedIds = [parentId, childId]
+  await sleep(800)
+  // wait briefly for create notifs then wait for ack to catch up before isolating delete baseline
+  let waitCreateNotif = 0
+  const waitDeadline = Date.now() + 5000
+  while (Date.now() < waitDeadline) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as { entries: unknown[] }
+    if (Array.isArray(raw.entries) && raw.entries.length > 0) {
+      waitCreateNotif = raw.entries.length
+      break
+    }
+    await sleep(200)
+  }
+  console.log(`[obs-prod-delete] create notif count before clear=${waitCreateNotif}`)
+  // Wait for persisted cursor to advance to snapshot cursor (creates ack) before clearing telemetry baseline
+  const persistWaitDeadline = Date.now() + 8000
+  while (Date.now() < persistWaitDeadline) {
+    const snap = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+    const tel = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number } | null
+    if (tel && tel.persistedCursor === snap.cursor && snap.cursor >= 2) break
+    await sleep(200)
+  }
+  const persistedCheck = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as { persistedCursor?: number; count?: number } | null
+  const snapCheck = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  console.log(`[obs-prod-delete] persisted before clear=${persistedCheck?.persistedCursor} snapshot=${snapCheck.cursor} telCount=${persistedCheck?.count}`)
+  await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_CLEAR)
+  await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY_CLEAR)
+  const beforeSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+    startOrdinal: number
+    nextOrdinal: number
+    entries: unknown[]
+  }
+  const beforeNext = typeof beforeSnapRaw.nextOrdinal === "number" ? beforeSnapRaw.nextOrdinal : 0
+  const beforeStart = typeof beforeSnapRaw.startOrdinal === "number" ? beforeSnapRaw.startOrdinal : beforeNext
+  const beforeTelemetryRaw = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+    count: number
+    lastAckCursor?: number
+    lastBaseline?: number
+    lastRefreshAt?: number
+    persistedCursor?: number
+  } | null
+  const beforeTelemetryCount = beforeTelemetryRaw?.count ?? 0
+  const beforePersisted = (beforeTelemetryRaw?.persistedCursor ?? (status0 as Record<string, unknown>).persistedCursor) as number | undefined
+  const beforeSnapRes = (await vscodeApi.commands.executeCommand(CMD_PROD_SNAPSHOT)) as { cursor: number }
+  const beforeCursor = beforeSnapRes.cursor
+  console.log(`[obs-prod-delete] beforeCursor=${beforeCursor} beforeNext=${beforeNext} beforePersisted=${beforePersisted} parent=${parentId} child=${childId}`)
+  const deleteRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_DELETE_PRIVATE, {
+    directory: dirForCreate,
+    sessionId: parentId,
+  })) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean; failure?: unknown }
+    sessionId: string
+  }
+  const deleteSucceeded = deleteRes.result?.status === "succeeded" && deleteRes.result?.accepted === true && deleteRes.sessionId === parentId && !deleteRes.result.transportUnknown
+  console.log(`[obs-prod-delete] delete privateSucceeded=${deleteSucceeded} sessionId=${deleteRes.sessionId} opId=${deleteRes.opId} status=${deleteRes.result.status}`)
+  if (!deleteSucceeded) throw new Error(`fixture sessionDeletePrivate not succeeded: ${JSON.stringify(deleteRes.result).slice(0, 800)}`)
+  const opIdOk = deleteRes.opId.startsWith(`delete:${parentId}:`) && deleteRes.opId.split(":").length === 3
+  const tupleOk = deleteRes.opId === deleteRes.idempotencyKey && !!deleteRes.requestId && typeof deleteRes.directory === "string" && deleteRes.directory.length > 0
+  if (!opIdOk || !tupleOk) throw new Error(`delete tuple mismatch opId=${deleteRes.opId} idempotencyKey=${deleteRes.idempotencyKey} dir=${deleteRes.directory}`)
+  let afterSnap: { startOrdinal: number; nextOrdinal: number; entries: unknown[] } | null = null
+  let afterEntries: unknown[] = []
+  let envelope: unknown = null
+  const pollDeadline = Date.now() + 8000
+  while (Date.now() < pollDeadline) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+      startOrdinal: number
+      nextOrdinal: number
+      entries: unknown[]
+    }
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    const filtered = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") {
+        return (e as Record<string, unknown>).ordinal as number >= beforeNext
+      }
+      return false
+    })
+    if (filtered.length >= 1) {
+      afterSnap = raw
+      afterEntries = filtered
+      envelope = filtered.length === 1 ? filtered[0] : filtered[filtered.length - 1] ?? null
+      break
+    }
+    await sleep(200)
+  }
+  if (!afterSnap) {
+    const raw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+      startOrdinal: number
+      nextOrdinal: number
+      entries: unknown[]
+    }
+    afterSnap = raw
+    const all = Array.isArray(raw.entries) ? raw.entries : []
+    afterEntries = all.filter((e) => {
+      if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") {
+        return (e as Record<string, unknown>).ordinal as number >= beforeNext
+      }
+      return false
+    })
+    envelope = afterEntries.length === 1 ? afterEntries[0] : afterEntries[afterEntries.length - 1] ?? null
+  }
+  console.log(`[obs-prod-delete] after poll afterEntries=${afterEntries.length} envelopePreview=${JSON.stringify(envelope)?.slice(0, 1500)}`)
+  let notificationStrictValid = false
+  let notificationCursor: number | undefined
+  let notificationSeqs: number[] = []
+  let notificationKinds: string[] = []
+  let notificationIds: string[] = []
+  try {
+    const envRec = envelope as Record<string, unknown> | null
+    const params = (envRec?.params as unknown) ?? envelope
+    if (isValidObservationChangedNotification(params as unknown)) {
+      notificationStrictValid = true
+      const p = params as { v: string; cursor: number; entries: Array<Record<string, unknown>> }
+      notificationCursor = p.cursor
+      notificationSeqs = p.entries.map((e) => e.seq as number)
+      notificationKinds = p.entries.map((e) => String(e.kind))
+      notificationIds = p.entries.map((e) => String(e.session_id))
+    }
+  } catch (e) {
+    console.log(`[obs-prod-delete] notification validation error ${String(e).slice(0, 400)}`)
+  }
+  console.log(`[obs-prod-delete] notificationStrictValid=${notificationStrictValid} cursor=${notificationCursor} seqs=${JSON.stringify(notificationSeqs)} kinds=${JSON.stringify(notificationKinds)} ids=${JSON.stringify(notificationIds)}`)
+  let contiguous = false
+  if (typeof notificationCursor === "number" && notificationSeqs.length >= 2) {
+    const sorted = [...notificationSeqs].sort((a, b) => a - b)
+    const contiguousSeq = sorted.every((v, i) => i === 0 || v === sorted[i - 1]! + 1)
+    const startOk = sorted[0] === beforeCursor + 1
+    const cursorOk = notificationCursor === sorted[sorted.length - 1]
+    const countOk = notificationCursor === beforeCursor + sorted.length
+    if (contiguousSeq && startOk && cursorOk && countOk) contiguous = true
+  }
+  console.log(`[obs-prod-delete] contiguous=${contiguous} beforeCursor=${beforeCursor} notificationCursor=${notificationCursor} seqs=${JSON.stringify(notificationSeqs)}`)
+  // verify deleted entries
+  if (notificationKinds.length > 0 && notificationKinds.some((k) => k !== "deleted")) throw new Error(`delete entries kind must all be deleted got ${JSON.stringify(notificationKinds)}`)
+  const missing = expectedIds.filter((id) => !notificationIds.includes(id))
+  if (missing.length > 0) throw new Error(`delete envelope missing expected ids ${missing.join(",")} got ${notificationIds.join(",")}`)
+  let afterTelemetry: {
+    count: number
+    lastAckCursor?: number
+    lastBaseline?: number
+    lastRefreshAt?: number
+    persistedCursor?: number
+  } | null = null
+  const telemetryDeadline = Date.now() + 8000
+  while (Date.now() < telemetryDeadline) {
+    const t = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+      count: number
+      lastAckCursor?: number
+      lastBaseline?: number
+      lastRefreshAt?: number
+      persistedCursor?: number
+    } | null
+    if (t && t.count === beforeTelemetryCount + 1 && typeof t.lastAckCursor === "number" && typeof t.lastBaseline === "number") {
+      afterTelemetry = t
+      break
+    }
+    if (t && t.count > beforeTelemetryCount && typeof t.lastAckCursor === "number") {
+      afterTelemetry = t
+      break
+    }
+    await sleep(200)
+  }
+  if (!afterTelemetry) {
+    afterTelemetry = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+      count: number
+      lastAckCursor?: number
+      lastBaseline?: number
+      lastRefreshAt?: number
+      persistedCursor?: number
+    } | null
+  }
+  if (afterTelemetry && afterTelemetry.count === beforeTelemetryCount + 1 && afterTelemetry.lastAckCursor === undefined) {
+    const extraDeadline = Date.now() + 3000
+    while (Date.now() < extraDeadline) {
+      const t2 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+        count: number
+        lastAckCursor?: number
+        lastBaseline?: number
+        lastRefreshAt?: number
+        persistedCursor?: number
+      } | null
+      if (t2 && typeof t2.lastAckCursor === "number") {
+        afterTelemetry = t2
+        break
+      }
+      await sleep(200)
+    }
+  }
+  if (afterTelemetry && typeof notificationCursor === "number") {
+    const persistDeadline = Date.now() + 3000
+    while (Date.now() < persistDeadline) {
+      if (afterTelemetry.persistedCursor === notificationCursor) break
+      const t3 = (await vscodeApi.commands.executeCommand(CMD_AM_TELEMETRY)) as {
+        count: number
+        lastAckCursor?: number
+        lastBaseline?: number
+        lastRefreshAt?: number
+        persistedCursor?: number
+      } | null
+      if (t3) afterTelemetry = t3
+      if (afterTelemetry.persistedCursor === notificationCursor) break
+      await sleep(200)
+    }
+  }
+  console.log(`[obs-prod-delete] afterTelemetry=${JSON.stringify(afterTelemetry)} beforeCount=${beforeTelemetryCount} notificationCursor=${notificationCursor} beforeCursor=${beforeCursor}`)
+  const refreshAdvancedOnce = afterTelemetry ? afterTelemetry.count === beforeTelemetryCount + 1 : false
+  const ackCursorMatches = afterTelemetry?.lastAckCursor === notificationCursor
+  const baselineMatches = afterTelemetry?.lastBaseline === beforeCursor
+  console.log(`[obs-prod-delete] refreshAdvancedOnce=${refreshAdvancedOnce} ackCursorMatches=${ackCursorMatches} baselineMatches=${baselineMatches}`)
+  const replayRes = (await vscodeApi.commands.executeCommand(CMD_SESSION_DELETE_PRIVATE_REPLAY, parentId)) as {
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: { status: string; accepted: boolean; transportUnknown?: boolean }
+    sessionId: string
+  }
+  const replaySameSession = replayRes.sessionId === parentId
+  const replaySucceeded = replayRes.result?.status === "succeeded" && replayRes.result?.accepted === true
+  const replayTupleSame = replayRes.opId === deleteRes.opId && replayRes.idempotencyKey === deleteRes.idempotencyKey && replayRes.requestId === deleteRes.requestId && replayRes.directory === deleteRes.directory
+  console.log(`[obs-prod-delete] replay sameSession=${replaySameSession} succeeded=${replaySucceeded} tupleSame=${replayTupleSame}`)
+  if (!replayTupleSame) throw new Error(`replay tuple mismatch ${JSON.stringify(replayRes).slice(0, 500)} vs ${JSON.stringify(deleteRes).slice(0, 500)}`)
+  await sleep(600)
+  const secondSnapRaw = (await vscodeApi.commands.executeCommand(CMD_PEER_CHANGED_SNAP)) as {
+    startOrdinal: number
+    nextOrdinal: number
+    entries: unknown[]
+  }
+  const secondAll = Array.isArray(secondSnapRaw.entries) ? secondSnapRaw.entries : []
+  const secondDelta = secondAll.filter((e) => {
+    if (e && typeof e === "object" && typeof (e as Record<string, unknown>).ordinal === "number") {
+      return (e as Record<string, unknown>).ordinal as number >= (afterSnap?.nextOrdinal ?? beforeNext + 1)
+    }
+    return false
+  })
+  const idempotentSecondNotifCount = secondDelta.length
+  const canonicalDbPath = String((status0 as Record<string, unknown>).dbPath ?? "")
+  try {
+    writeFileSync(
+      join(scratch, "obs-prod-delete-debug.json"),
+      JSON.stringify(
+        {
+          beforeNext,
+          beforeCursor,
+          beforePersisted,
+          parentId,
+          childId,
+          deleteRes: { opId: deleteRes.opId, requestId: deleteRes.requestId, sessionId: parentId, resultStatus: deleteRes.result.status },
+          afterEntriesCount: afterEntries.length,
+          envelopePreview: typeof envelope === "object" ? JSON.stringify(envelope).slice(0, 1500) : String(envelope).slice(0, 1500),
+          notificationStrictValid,
+          contiguous,
+          seqs: notificationSeqs,
+          ids: notificationIds,
+          kinds: notificationKinds,
+          refreshBefore: beforeTelemetryCount,
+          refreshAfter: afterTelemetry?.count,
+          ackCursorMatches,
+          baselineMatches,
+          replaySameSession,
+          idempotentSecondNotifCount,
+        },
+        null,
+        2,
+      ),
+    )
+  } catch {}
+  const evidence = {
+    scenario: "observation-producer-delete",
+    collectedAt: new Date().toISOString(),
+    pid: (status0 as Record<string, unknown>).pid ?? 0,
+    canonical: {
+      dbPath: canonicalDbPath,
+      dataRoot: canonicalForEvidence.dataRoot,
+      gateOk,
+      gateErr,
+      isolateOk: (() => {
+        try {
+          const dr = gate?.dataRoot as string | undefined
+          if (!dr) return undefined
+          return isIsolatedDataRoot(scratch, dr)
+        } catch {
+          return undefined
+        }
+      })(),
+    },
+    testBridge: (status0 as Record<string, unknown>).testBridge === true,
+    before: {
+      cursor: beforeCursor,
+      persisted: beforePersisted,
+      startOrdinal: beforeStart,
+      nextOrdinal: beforeNext,
+      notifCount: 0,
+      refreshCount: beforeTelemetryCount,
+    },
+    after: {
+      cursor: notificationCursor ?? beforeCursor,
+      persisted: afterTelemetry?.persistedCursor ?? beforePersisted,
+      startOrdinal: afterSnap?.startOrdinal ?? beforeStart,
+      nextOrdinal: afterSnap?.nextOrdinal ?? beforeNext,
+      notifCount: afterEntries.length,
+      refreshCount: afterTelemetry?.count ?? beforeTelemetryCount,
+    },
+    envelope,
+    notificationStrictValid,
+    contiguous,
+    envelopeValid: notificationStrictValid && notificationIds.length >= 2 && expectedIds.every((id) => notificationIds.includes(id)) && notificationKinds.every((k) => k === "deleted"),
+    ack: {
+      requested: notificationCursor ?? beforeCursor + 1,
+      persistedAfter: afterTelemetry?.persistedCursor,
+      success: ackCursorMatches && baselineMatches,
+    },
+    refresh: {
+      beforeCount: beforeTelemetryCount,
+      afterCount: afterTelemetry?.count,
+      advancedOnce: refreshAdvancedOnce,
+      lastAckCursor: afterTelemetry?.lastAckCursor,
+      lastBaseline: afterTelemetry?.lastBaseline,
+    },
+    idempotentSecondNotifCount,
+    expectedSessionIds: expectedIds,
+    create: {
+      parentSessionId: parentId,
+      childSessionId: childId,
+    },
+    delete: {
+      opId: deleteRes.opId,
+      requestId: deleteRes.requestId,
+      directory: deleteRes.directory,
+      privateSucceeded: deleteSucceeded,
+      sessionId: parentId,
+    },
+    replay: {
+      sameSession: replaySameSession,
+      succeeded: replaySucceeded,
+      opId: replayRes.opId,
+      requestId: replayRes.requestId,
+    },
+    notification: {
+      cursor: notificationCursor,
+      entries: (() => {
+        try {
+          const envRec = envelope as Record<string, unknown> | null
+          const params = (envRec?.params as unknown) ?? envelope
+          const p = params as { entries: unknown[] }
+          return p.entries
+        } catch {
+          return []
+        }
+      })(),
+    },
+    beforeStatus: status0,
+    afterTelemetry,
+    gate,
+  }
+  writeFileSync(join(scratch, "obs-prod-delete-runtime-evidence"), JSON.stringify(evidence, null, 2))
+  writeFileSync(join(scratch, "obs-prod-delete-ready"), fixtureId)
+  const deadline = Date.now() + OBS_PROD_DELETE_BUDGET
   while (Date.now() < deadline) {
     if (existsSync(join(scratch, "done"))) break
     await sleep(200)

@@ -289,7 +289,9 @@ import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-r
 import { assertR9ObservationLifecycle } from "./e2e-probe-r9"
 import { assertObservationProducerLifecycle } from "./e2e-probe-observation-producer"
 import { assertObservationProducerUpdateLifecycle } from "./e2e-probe-observation-producer-update"
+import { assertObservationProducerDeleteLifecycle } from "./e2e-probe-observation-producer-delete"
 import {
+  OBSERVATION_PRODUCER_DELETE_SCENARIO,
   OBSERVATION_PRODUCER_SCENARIO,
   OBSERVATION_PRODUCER_UPDATE_SCENARIO,
   e2eTimeoutForScenario,
@@ -363,6 +365,7 @@ const SCENARIO_VALUES = [
   "r9-observation",
   OBSERVATION_PRODUCER_SCENARIO,
   OBSERVATION_PRODUCER_UPDATE_SCENARIO,
+  OBSERVATION_PRODUCER_DELETE_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -382,7 +385,8 @@ export function parseScenarios(value: string): Set<string> {
     value === "p3-4-removal" ||
     value === "r9-observation" ||
     value === OBSERVATION_PRODUCER_SCENARIO ||
-    value === OBSERVATION_PRODUCER_UPDATE_SCENARIO
+    value === OBSERVATION_PRODUCER_UPDATE_SCENARIO ||
+    value === OBSERVATION_PRODUCER_DELETE_SCENARIO
   ) {
     return new Set([value])
   }
@@ -407,7 +411,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has("real-lifecycle") ||
     parseScenarios(value).has("r9-observation") ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_SCENARIO) ||
-    parseScenarios(value).has(OBSERVATION_PRODUCER_UPDATE_SCENARIO)
+    parseScenarios(value).has(OBSERVATION_PRODUCER_UPDATE_SCENARIO) ||
+    parseScenarios(value).has(OBSERVATION_PRODUCER_DELETE_SCENARIO)
   )
 }
 
@@ -2588,6 +2593,10 @@ async function runScenario(
     await assertObservationProducerUpdateLifecycle(browser, plan, scratch)
     console.log("[probe] observation-producer-update lifecycle assertion passed")
   }
+  if (scenarios.has(OBSERVATION_PRODUCER_DELETE_SCENARIO)) {
+    await assertObservationProducerDeleteLifecycle(browser, plan, scratch)
+    console.log("[probe] observation-producer-delete lifecycle assertion passed")
+  }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
     await runGcLifecycleBoundaries(browser, plan, scratch, workspace, lifecycleModel)
@@ -2685,6 +2694,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("r9-observation")) return "r9-ready"
   if (scenarios.has(OBSERVATION_PRODUCER_SCENARIO)) return "obs-prod-ready"
   if (scenarios.has(OBSERVATION_PRODUCER_UPDATE_SCENARIO)) return "obs-prod-update-ready"
+  if (scenarios.has(OBSERVATION_PRODUCER_DELETE_SCENARIO)) return "obs-prod-delete-ready"
   return "ready"
 }
 

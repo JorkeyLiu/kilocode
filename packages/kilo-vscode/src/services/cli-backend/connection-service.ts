@@ -279,6 +279,7 @@ export class KiloConnectionService {
     isAvailable: () => this.isPrivateAvailable(),
     createWithHandle: (req) => this.privateCreateWithHandle(req as ServePrivateCreateRequest),
     updateWithHandle: (req) => this.privateSessionUpdateWithHandle(req as ServePrivateSessionUpdateRequest),
+    deleteWithHandle: (req) => this.privateDeleteWithHandle(req as ServePrivateDeleteRequest),
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -3908,5 +3909,27 @@ export class KiloConnectionService {
     sessionId: string
   }> {
     return this.observationFixture.replayUpdate(sessionId)
+  }
+
+  public async fixtureSessionDeletePrivate(input: { directory?: string; sessionId: string; token?: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateDeleteResult
+    sessionId: string
+  }> {
+    return this.observationFixture.delete(input)
+  }
+
+  public async fixtureSessionDeletePrivateReplay(sessionId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: ServePrivateDeleteResult
+    sessionId: string
+  }> {
+    return this.observationFixture.replayDelete(sessionId)
   }
 }

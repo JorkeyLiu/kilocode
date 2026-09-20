@@ -997,6 +997,19 @@ export function activate(context: vscode.ExtensionContext) {
         if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
         return connectionService.fixtureSessionUpdatePrivateReplay(sessionId as string)
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionDeletePrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        return connectionService.fixtureSessionDeletePrivate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+          token: typeof o.token === "string" ? (o.token as string) : undefined,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionDeletePrivateReplay", async (sessionId?: unknown) => {
+        if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+        return connectionService.fixtureSessionDeletePrivateReplay(sessionId as string)
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedSnapshot", async () => {
         return connectionService.fixturePrivateObservationChangedSnapshot()
       }),
