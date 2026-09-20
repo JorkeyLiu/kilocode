@@ -2405,9 +2405,16 @@ export function validateCreateRequest(raw: unknown): ServePrivateCreateRequest {
   const allowedCtx = new Set(["directory", "parentSessionId", "configVersion"])
   for (const k of Object.keys(ctx as Record<string, unknown>))
     if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
-  const allowedPayload = new Set(["title", "parentID", "platform", "metadata"])
+  const allowedPayload = new Set(["title", "parentID", "platform", "metadata", "sandboxInheritanceToken"])
   for (const k of Object.keys(payload as Record<string, unknown>))
     if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  if ("sandboxInheritanceToken" in payload && payload.sandboxInheritanceToken !== null && payload.sandboxInheritanceToken !== undefined) {
+    if (typeof payload.sandboxInheritanceToken !== "string") throw new Error("payload.sandboxInheritanceToken must be string")
+    const tok = payload.sandboxInheritanceToken as string
+    if (tok.length === 0) throw new Error("payload.sandboxInheritanceToken must be non-empty string")
+    if (tok.length > 500) throw new Error("payload.sandboxInheritanceToken too long")
+    if (!/^si-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tok)) throw new Error("payload.sandboxInheritanceToken invalid shape")
+  }
   const opId = raw.opId as string
   parseCreateOpId(opId)
   if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for create")

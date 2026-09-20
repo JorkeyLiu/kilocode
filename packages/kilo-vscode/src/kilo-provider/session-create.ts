@@ -34,23 +34,6 @@ export async function createSessionPrivateFirst(opts: {
   sandboxInheritanceToken?: string
 }): Promise<Session> {
   const { client, connection, directory } = opts
-  if (opts.sandboxInheritanceToken) {
-    const res = (await client.session.create(
-      {
-        directory,
-        platform: opts.platform,
-        metadata: opts.metadata,
-        sandboxInheritanceToken: opts.sandboxInheritanceToken,
-        ...(opts.title ? { title: opts.title } : {}),
-        ...(opts.parentID ? { parentID: opts.parentID } : {}),
-      } as unknown as Record<string, unknown>,
-      { throwOnError: false } as unknown as { throwOnError: false },
-    )) as unknown as { data?: Session; error?: unknown }
-    if (res.error) throw res.error
-    if (!res.data) throw new Error("SDK create returned no data")
-    return res.data
-  }
-
   const { opId, idempotencyKey, requestId } = buildCreateIdentity()
   const ctx = { directory, parentSessionId: null as string | null }
   const payload: Record<string, unknown> = {}
@@ -58,6 +41,7 @@ export async function createSessionPrivateFirst(opts: {
   if (opts.parentID) payload.parentID = opts.parentID
   if (opts.platform) payload.platform = opts.platform
   if (opts.metadata) payload.metadata = opts.metadata
+  if (opts.sandboxInheritanceToken) payload.sandboxInheritanceToken = opts.sandboxInheritanceToken
   const privateReq = {
     v: 1 as const,
     requestId,
@@ -153,6 +137,7 @@ export async function createSessionPrivateFirst(opts: {
     context: ctx,
     ...(opts.title ? { title: opts.title } : {}),
     ...(opts.parentID ? { parentID: opts.parentID } : {}),
+    ...(opts.sandboxInheritanceToken ? { sandboxInheritanceToken: opts.sandboxInheritanceToken } : {}),
   }
   const res = (await client.session.create(sdkInput as unknown as never, { throwOnError: false } as unknown as never)) as unknown as { data?: Session; error?: unknown }
   if (res.error) throw res.error

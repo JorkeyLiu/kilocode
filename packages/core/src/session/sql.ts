@@ -228,6 +228,9 @@ export const SessionOperationTable = sqliteTable(
     cancelled: integer({ mode: "boolean" }),
     title: text(),
     result_snapshot: text(),
+    sandbox_token_hash: text(),
+    sandbox_source_session_id: text(),
+    sandbox_source_directory: text(),
   },
   (table) => [
     index("session_operation_session_idx").on(table.session_id),

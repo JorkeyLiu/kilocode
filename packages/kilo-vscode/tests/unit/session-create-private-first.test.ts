@@ -154,22 +154,44 @@ describe("createSessionPrivateFirst private-first with single SDK fallback", () 
     expect(sdkInput.opId).toBe(privateReq?.opId)
   })
 
-  it("sandboxInheritanceToken bypasses private and uses exactly one SDK with token", async () => {
+  it("sandboxInheritanceToken private-first carries token, private success 0 SDK", async () => {
     const sdk = mock(async (input: Record<string, unknown>) => ({ data: makeSession("ses_sandbox"), error: undefined }))
     const client = { session: { create: sdk } } as unknown as KiloClient
-    const privateMock = mock(() => { throw new Error("should not be called") })
+    let capturedReq: Record<string, unknown> | null = null
     const conn = {
       isPrivateAvailable: () => true,
-      privateCreateWithHandle: privateMock,
-      privateCreate: privateMock,
+      privateCreateWithHandle: (req: unknown) => {
+        capturedReq = req as Record<string, unknown>
+        return { id: 7, promise: Promise.resolve(makeSucceeded(req as never)), cancel: () => true }
+      },
+      peekPrivatePeerNextId: () => 7,
+      tryCancelPrivatePending: () => true,
+      invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    const sess = await createSessionPrivateFirst({ client, connection: conn as never, directory: "/repo", sandboxInheritanceToken: "si_123", platform: "linux", metadata: {} })
-    expect((sess as unknown as { id: string }).id).toBe("ses_sandbox")
-    expect(privateMock).toHaveBeenCalledTimes(0)
+    const token = "si-11111111-1111-4111-8111-111111111111"
+    const sess = await createSessionPrivateFirst({ client, connection: conn as never, directory: "/repo", sandboxInheritanceToken: token, platform: "linux", metadata: {} })
+    expect((sess as unknown as { id: string }).id).toBe("ses_private_ok")
+    expect(sdk).toHaveBeenCalledTimes(0)
+    expect((capturedReq?.payload as Record<string, unknown>)?.sandboxInheritanceToken).toBe(token)
+  })
+
+  it("sandboxInheritanceToken unavailable/timeout fallback exactly-one SDK same tuple+token", async () => {
+    const sdk = mock(async (input: Record<string, unknown>) => ({ data: makeSession("ses_sandbox_fallback"), error: undefined }))
+    const client = { session: { create: sdk } } as unknown as KiloClient
+    let privateReq: Record<string, unknown> | null = null
+    const conn = {
+      isPrivateAvailable: () => false,
+      privateCreateWithHandle: mock(() => { throw new Error("unavailable") }),
+    } as unknown as never
+    const token = "si-22222222-2222-4222-8222-222222222222"
+    const sess = await createSessionPrivateFirst({ client, connection: conn as never, directory: "/repo", sandboxInheritanceToken: token })
+    expect((sess as unknown as { id: string }).id).toBe("ses_sandbox_fallback")
     expect(sdk).toHaveBeenCalledTimes(1)
     const sdkInput = sdk.mock.calls[0]![0] as Record<string, unknown>
-    expect(sdkInput.sandboxInheritanceToken).toBe("si_123")
-    expect(sdkInput.opId).toBeUndefined()
+    expect(sdkInput.sandboxInheritanceToken).toBe(token)
+    expect(typeof sdkInput.opId).toBe("string")
+    expect(typeof sdkInput.requestId).toBe("string")
+    expect(sdkInput.opId).toBe(sdkInput.idempotencyKey)
   })
 
   it("private unavailable fallback calls SDK once", async () => {

@@ -1245,6 +1245,9 @@ export interface SessionCreateMeta {
   title?: string | null
   parentID?: string | null
   createdSessionId?: string | null
+  sandboxTokenHash?: string | null
+  sandboxSourceSessionId?: string | null
+  sandboxSourceDirectory?: string | null
 }
 
 export interface SessionCreateRecord extends FailureRecord {
@@ -1280,6 +1283,9 @@ function rowToSessionCreateRecord(row: typeof SessionOperationTable.$inferSelect
       title: row.title ?? null,
       parentID: (row as unknown as { message_id?: string | null }).message_id ?? null,
       createdSessionId: row.session_id as unknown as string,
+      sandboxTokenHash: (row as unknown as { sandbox_token_hash?: string | null }).sandbox_token_hash ?? null,
+      sandboxSourceSessionId: (row as unknown as { sandbox_source_session_id?: string | null }).sandbox_source_session_id ?? null,
+      sandboxSourceDirectory: (row as unknown as { sandbox_source_directory?: string | null }).sandbox_source_directory ?? null,
     },
     ...(snapshot !== undefined ? { resultSnapshot: snapshot } : {}),
   }
@@ -1321,6 +1327,9 @@ export function isSessionCreateConflict(
     configVersion?: number | null
     title?: string | null
     parentID?: string | null
+    sandboxTokenHash?: string | null
+    sandboxSourceSessionId?: string | null
+    sandboxSourceDirectory?: string | null
   },
 ): boolean {
   if (prev.opId !== next.opId) return true
@@ -1329,6 +1338,9 @@ export function isSessionCreateConflict(
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.title ?? null) !== (next.title ?? null)) return true
   if ((prev.meta.parentID ?? null) !== (next.parentID ?? null)) return true
+  if ((prev.meta.sandboxTokenHash ?? null) !== (next.sandboxTokenHash ?? null)) return true
+  if ((prev.meta.sandboxSourceSessionId ?? null) !== (next.sandboxSourceSessionId ?? null)) return true
+  if ((prev.meta.sandboxSourceDirectory ?? null) !== (next.sandboxSourceDirectory ?? null)) return true
   return false
 }
 
@@ -1370,6 +1382,9 @@ export function insertSessionCreateSucceededTx(
         title: meta.title ?? null,
         message_id: meta.parentID ?? null,
         result_snapshot: snapshotJson,
+        sandbox_token_hash: meta.sandboxTokenHash ?? null,
+        sandbox_source_session_id: meta.sandboxSourceSessionId ?? null,
+        sandbox_source_directory: meta.sandboxSourceDirectory ?? null,
       } as unknown as typeof SessionOperationTable.$inferInsert)
       .run()
       .pipe(Effect.orDie)
