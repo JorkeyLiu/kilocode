@@ -10,6 +10,10 @@ export const DispatchAtomicSeam = {
   failDeleteBeforeTx: false,
   // Inside delete's canonical deleteFamilyWithDeleteTombstoneTx
   failDeleteInsideTx: false,
+  // Inside revert transaction (session update + changefeed + event + operation)
+  failRevertInsideTx: false,
+  // Inside unrevert transaction (session clear + changefeed + event + operation)
+  failUnrevertInsideTx: false,
 }
 
 // expose to core retention via global for cross-package injection without import cycle

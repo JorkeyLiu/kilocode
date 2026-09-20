@@ -4,11 +4,14 @@ import { Effect, Layer, Option } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionOperationTable } from "@opencode-ai/core/session/sql"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
+import { SessionChangefeedTable, SessionChangefeedStateTable } from "@opencode-ai/core/retention/sql"
 import { ConfigConvergence } from "@/kilocode/server/config-convergence"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceStore } from "@/project/instance-store"
 import { SessionRevert } from "@/session/revert"
 import { InstanceRef } from "@/effect/instance-ref"
+import { EventV2 } from "@opencode-ai/core/event"
 import {
   SessionRevertDispatchService,
   layer as DispatchLayer,
@@ -47,59 +50,160 @@ function unrevertReq(token: string) {
 
 function makeStore() {
   const stored: { row: any | undefined } = { row: undefined }
+  let sessionRev = 0
+  const sessionRowBase = {
+    id: SID,
+    directory: DIR,
+    project_id: "proj-1",
+    workspace_id: null,
+    revision: 0,
+    title: "t",
+    version: "1",
+    slug: "slug-1",
+    time_created: Date.now(),
+    time_updated: Date.now(),
+    summary_additions: null,
+    summary_deletions: null,
+    summary_files: null,
+    summary_diffs: null,
+    revert: null,
+    metadata: null,
+    cost: 0,
+    tokens_input: 0,
+    tokens_output: 0,
+    tokens_reasoning: 0,
+    tokens_cache_read: 0,
+    tokens_cache_write: 0,
+    permission: null,
+    agent: null,
+    model: null,
+    share_url: null,
+    path: null,
+    parent_id: null,
+  }
   const fakeDb: any = {
     select: (..._s: unknown[]) => ({
       from: (table: unknown) => ({
         where: (..._w: unknown[]) => ({
           get: () => {
-            if (table === SessionTable) return Effect.succeed({ directory: DIR, revision: 0 })
+            if (table === SessionChangefeedStateTable) return Effect.succeed({ id: 1, latest_seq: 1, retained_rows: 1, retained_bytes: 10 })
+            if (table === SessionTable) return Effect.succeed({ ...sessionRowBase, directory: DIR, project_id: "proj-1", workspace_id: null, revision: sessionRev, time_updated: Date.now() })
+            if (table === ProjectTable) return Effect.succeed({ worktree: DIR })
+            if (table === SessionChangefeedTable) return Effect.succeed({ seq: 1, session_id: SID, revision: sessionRev, kind: "changed", time: Date.now() })
+            // SessionOperation lookup by opId or hash: return stored row if matches
             return Effect.succeed(stored.row ?? undefined)
           },
-          all: () => Effect.succeed([]),
+          all: () => {
+            if (table === SessionChangefeedTable) return Effect.succeed([{ seq: 1, session_id: SID, revision: sessionRev, kind: "changed", time: Date.now() }])
+            if (table === SessionChangefeedStateTable) return Effect.succeed([{ id: 1, latest_seq: 1, retained_rows: 1, retained_bytes: 10 }])
+            return Effect.succeed([])
+          },
         }),
-      }),
-    }),
-    insert: (_table: unknown) => ({
-      values: (v: Record<string, unknown>) => ({
-        run: () => {
-          stored.row = {
-            op_id: v.op_id,
-            op_kind: v.op_kind,
-            outcome: v.outcome,
-            code: v.code,
-            message: v.message,
-            time: v.time,
-            revision: (v.revision as number) ?? 0,
-            idempotency_hash: v.idempotency_hash,
-            request_id: v.request_id,
-            directory: v.directory,
-            parent_session_id: (v.parent_session_id as string | null) ?? null,
-            config_version: (v.config_version as number | null) ?? null,
-            session_revision: (v.session_revision as number | null) ?? null,
-            message_id: (v.message_id as string | null) ?? null,
-            title: (v.title as string | null) ?? null,
-            result_snapshot: v.result_snapshot,
-          }
+        // for select without where? handle returning
+        get: () => {
+          if (table === SessionTable) return Effect.succeed({ ...sessionRowBase, revision: sessionRev })
+          if (table === SessionChangefeedStateTable) return Effect.succeed({ id: 1, latest_seq: 1, retained_rows: 1, retained_bytes: 10 })
           return Effect.succeed(undefined)
+        },
+        all: () => {
+          if (table === SessionChangefeedTable) return Effect.succeed([{ seq: 1, session_id: SID, revision: sessionRev, kind: "changed", time: Date.now() }])
+          return Effect.succeed([])
         },
       }),
     }),
+    insert: (table: unknown) => ({
+      values: (v: Record<string, unknown>) => ({
+        run: () => {
+          if (table === SessionOperationTable) {
+            stored.row = {
+              op_id: v.op_id,
+              op_kind: v.op_kind,
+              outcome: v.outcome,
+              code: v.code,
+              message: v.message,
+              time: v.time,
+              revision: (v.revision as number) ?? sessionRev,
+              idempotency_hash: v.idempotency_hash,
+              request_id: v.request_id,
+              directory: v.directory,
+              parent_session_id: (v.parent_session_id as string | null) ?? null,
+              config_version: (v.config_version as number | null) ?? null,
+              session_revision: (v.session_revision as number | null) ?? null,
+              message_id: (v.message_id as string | null) ?? null,
+              title: (v.title as string | null) ?? null,
+              result_snapshot: v.result_snapshot,
+            }
+          }
+          // SessionChangefeedTable insert is handled via Changefeed.appendTx which uses insert; we simulate by no-op
+          return Effect.succeed(undefined)
+        },
+        returning: () => ({
+          get: () => Effect.succeed(v),
+          all: () => Effect.succeed([v]),
+        }),
+        get: () => Effect.succeed(undefined),
+      }),
+    }),
+    update: (table: unknown) => ({
+      set: (vals: Record<string, unknown>) => ({
+        where: (..._w: unknown[]) => ({
+          returning: () => ({
+            all: () => {
+              if (table === SessionTable) {
+                sessionRev += 1
+                return Effect.succeed([{ rev: sessionRev }])
+              }
+              return Effect.succeed([])
+            },
+            get: () => {
+              if (table === SessionTable) {
+                sessionRev += 1
+                return Effect.succeed({ rev: sessionRev })
+              }
+              return Effect.succeed(undefined)
+            },
+          }),
+          run: () => Effect.succeed(undefined),
+        }),
+      }),
+    }),
+    delete: () => ({ where: () => ({ run: () => Effect.succeed(undefined) }) }),
     transaction: (fn: (tx: unknown) => Effect.Effect<unknown>) => fn(fakeDb),
+    run: () => Effect.succeed(undefined),
   }
-  return { fakeDb, stored }
+  return { fakeDb, stored, getRev: () => sessionRev }
+}
+
+function makeEventMock() {
+  return {
+    recordProjectedTx: () => Effect.succeed({ id: "evt_1", type: "session.updated", seq: 0, data: { sessionID: SID, info: { id: SID, slug: "slug-1", projectID: "proj-1", directory: DIR, title: "t", version: "1", time: { created: Date.now(), updated: Date.now() } } } } as unknown),
+    notifyCommitted: () => Effect.void,
+  } as unknown as EventV2.Interface
 }
 
 function layers(fakeDb: unknown, revertImpl: { revert: () => Effect.Effect<unknown>; unrevert: () => Effect.Effect<unknown> }) {
   const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as never)
   const cfgLayer = Layer.succeed(ConfigConvergence.Service, ConfigConvergence.noop)
   const gateLayer = Layer.succeed(GenerationGate.Service, GenerationGate.noop)
+  const eventLayer = Layer.succeed(EventV2.Service, makeEventMock() as never)
   const revertLayer = Layer.succeed(SessionRevert.Service, {
     revert: revertImpl.revert,
     unrevert: revertImpl.unrevert,
+    prepareRevert: () =>
+      Effect.gen(function* () {
+        const info = yield* revertImpl.revert() as unknown as Effect.Effect<{ id: string }>
+        // derive prepare result from info if possible; fallback to synthetic revert
+        return { revert: { messageID: MID, snapshot: "snap-1", diff: "" }, summary: { additions: 0, deletions: 0, files: 0, diffs: [] } } as unknown
+      }),
+    prepareUnrevert: () =>
+      Effect.gen(function* () {
+        yield* revertImpl.unrevert()
+        return true as unknown
+      }),
     cleanup: () => Effect.void,
   } as never)
   const refLayer = Layer.succeed(InstanceRef, { directory: DIR } as never)
-  const deps = Layer.mergeAll(dbLayer, cfgLayer, gateLayer, revertLayer, refLayer)
+  const deps = Layer.mergeAll(dbLayer, cfgLayer, gateLayer, revertLayer, refLayer, eventLayer)
   return Layer.mergeAll(Layer.provide(DispatchLayer, deps), refLayer)
 }
 
@@ -136,11 +240,11 @@ describe("session-revert-dispatch authoritative commit and replay", () => {
       expect(first.accepted).toBe(true)
       const second = (yield* svc.dispatchRevert(revertReq("tokA"))) as { status: string; data: unknown }
       expect(second.status).toBe("succeeded")
-      expect(JSON.stringify(second.data)).toBe(JSON.stringify(first.data))
+      expect(second.data).toEqual((first as any).data)
       expect(calls).toBe(1)
       const priv = (yield* svc.dispatchPrivateRevert(revertReq("tokA"))) as { status: string; data: { session: unknown } }
       expect(priv.status).toBe("succeeded")
-      expect(JSON.stringify(priv.data.session)).toBe(JSON.stringify(first.data))
+      expect(priv.data.session).toEqual((first as any).data)
     })
     await Effect.runPromise(Effect.provide(prog, full) as Effect.Effect<void>)
   })

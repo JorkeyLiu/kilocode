@@ -41,10 +41,20 @@ export type Failure =
   | SnapshotJournal.ApplyError
 // kilocode_change end
 
+export interface PrepareRevertResult {
+  readonly revert: NonNullable<Session.Info["revert"]>
+  readonly summary: NonNullable<Session.Info["summary"]>
+}
+
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Failure>
   readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Failure>
   readonly cleanup: (session: Session.Info) => Effect.Effect<void>
+  // Atomic private dispatch preparation: filesystem/snapshot work without durable DB mutation.
+  // Returns the intended persisted revert/summary fields for dispatch-owned transaction.
+  // Undefined means no revert boundary (no mutation needed). Legacy revert/unrevert remain for HTTP.
+  readonly prepareRevert: (input: RevertInput) => Effect.Effect<PrepareRevertResult | undefined, Failure>
+  readonly prepareUnrevert: (input: { sessionID: SessionID }) => Effect.Effect<boolean, Failure>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRevert") {}
@@ -92,6 +102,10 @@ export const layer = Layer.effect(
       if (!rows) return undefined
       return { rows, deps, worktree } as const
     })
+
+    // Typed boundary for Effect/Drizzle interop: planner input shares SessionV1 shape
+    type PlannerInput = readonly SnapshotCoveragePlan.InputMessage[]
+    const toPlannerInput = (all: readonly SessionV1.WithParts[]): PlannerInput => all as unknown as PlannerInput
     // kilocode_change end
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
@@ -157,7 +171,7 @@ export const layer = Layer.effect(
           // track backup as the future incomplete fallback, not as redo transport.
           // Hot path: single gated list shared by next/prev pure plans; prev
           // skipped when next is incomplete; list failure stays old Snapshot.
-          const current = all as unknown as readonly SnapshotCoveragePlan.InputMessage[]
+          const current = toPlannerInput(all)
           const shared = yield* rowsOnce(input.sessionID as string)
           const next = shared
             ? SnapshotCoveragePlan.plan({ sessionID: input.sessionID, messageID: input.messageID, partID: input.partID, messages: current, rows: shared.rows })
@@ -243,17 +257,17 @@ export const layer = Layer.effect(
           if (!session.revert) return session
           // kilocode_change start - message-only (no hash) clears marker without FS work.
           if (!session.revert.snapshot) {
-            const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
-            const shared = yield* rowsOnce(input.sessionID as string)
-            const marker = shared
-              ? SnapshotCoveragePlan.plan({
-                  sessionID: input.sessionID,
-                  messageID: session.revert.messageID,
-                  partID: session.revert.partID,
-                  messages: all as unknown as readonly SnapshotCoveragePlan.InputMessage[],
-                  rows: shared.rows,
-                })
-              : undefined
+          const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+          const shared = session.revert.messageID ? yield* rowsOnce(input.sessionID as string) : undefined
+          const marker = shared
+            ? SnapshotCoveragePlan.plan({
+                sessionID: input.sessionID,
+                messageID: session.revert.messageID,
+                partID: session.revert.partID,
+                messages: toPlannerInput(all),
+                rows: shared.rows,
+              })
+            : undefined
             const worktree = shared?.worktree
             const deps = shared?.deps
             // Complete empty journal batch keeps clear semantics without FS work.
@@ -284,7 +298,7 @@ export const layer = Layer.effect(
                 sessionID: input.sessionID,
                 messageID: session.revert.messageID,
                 partID: session.revert.partID,
-                messages: all as unknown as readonly SnapshotCoveragePlan.InputMessage[],
+                messages: toPlannerInput(all),
                 rows: shared.rows,
               })
             : undefined
@@ -327,6 +341,202 @@ export const layer = Layer.effect(
           )
           yield* sessions.clearRevert(input.sessionID)
           return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        }),
+      )
+    })
+
+    const prepareRevert = Effect.fn("SessionRevert.prepareRevert")(function* (input: RevertInput) {
+      return yield* mutex.withLock(input.sessionID)(
+        Effect.gen(function* () {
+          yield* state.assertNotBusy(input.sessionID)
+          const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+          const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          const boundary = SessionRevertBoundary.resolve(all, input)
+          let rev: Session.Info["revert"]
+          const patches: Snapshot.Patch[] = []
+          if (boundary) {
+            rev = {
+              messageID: boundary.messageID,
+              partID: boundary.partID,
+            }
+            for (const part of SessionRevertBoundary.patchesAfter(all, boundary)) patches.push(part as Snapshot.Patch)
+          }
+          if (!rev) return undefined as PrepareRevertResult | undefined
+          const needsRestore = !!session.revert?.snapshot
+          const needsFiles = patches.length > 0
+          const prepareFinish = Effect.fn("SessionRevert.prepareFinish")(function* (hash: string | undefined) {
+            rev.snapshot = hash
+            const range = all.filter((msg) => msg.info.id >= rev.messageID)
+            const diffs = yield* summary.computeDiff({ messages: range }).pipe(Effect.orElseSucceed(() => []))
+            if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot).pipe(Effect.orElseSucceed(() => ""))
+            yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
+            yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs }).pipe(Effect.ignore)
+            const summaryDiffs: Snapshot.SummaryFileDiff[] = diffs.map((d) => ({
+              file: d.file,
+              additions: d.additions,
+              deletions: d.deletions,
+              status: d.status,
+            }))
+            const summaryVal: NonNullable<Session.Info["summary"]> = {
+              additions: diffs.reduce((sum, x) => sum + x.additions, 0),
+              deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
+              files: diffs.length,
+              diffs: summaryDiffs,
+            }
+            return { revert: rev as NonNullable<Session.Info["revert"]>, summary: summaryVal } as PrepareRevertResult
+          })
+          const current = toPlannerInput(all)
+          const shared = yield* rowsOnce(input.sessionID as string)
+          const next = shared
+            ? SnapshotCoveragePlan.plan({ sessionID: input.sessionID, messageID: input.messageID, partID: input.partID, messages: current, rows: shared.rows })
+            : undefined
+          const prev =
+            shared && session.revert && next?.verdict === "complete"
+              ? SnapshotCoveragePlan.plan({ sessionID: input.sessionID, messageID: session.revert.messageID, partID: session.revert.partID, messages: current, rows: shared.rows })
+              : undefined
+          const hasMarker = !!session.revert
+          const worktree = shared?.worktree
+          const deps = shared?.deps
+          const journalFirst = !hasMarker && next?.verdict === "complete" && !!worktree && !!deps
+          const journalChain = hasMarker && next?.verdict === "complete" && prev?.verdict === "complete" && !!worktree && !!deps
+          if (journalFirst || journalChain) {
+            const prevOrder = journalChain ? prev!.applyOrder : []
+            const nextOrder = next!.applyOrder
+            if (prevOrder.length === 0 && nextOrder.length === 0) return yield* prepareFinish(undefined)
+            const segments: SnapshotJournalCas.Segment[] = journalChain
+              ? [
+                  { applyOrder: prev!.applyOrder, direction: "redo" },
+                  { applyOrder: next!.applyOrder, direction: "undo" },
+                ]
+              : [{ applyOrder: next!.applyOrder, direction: "undo" }]
+            const sid = input.sessionID as string
+            const root = worktree as string
+            const cas = SnapshotJournalCas.run({ sessionID: sid, worktree: root, segments }).pipe(
+              Effect.provideService(SnapshotJournal.Service, deps!.journal),
+              Effect.provideService(FSUtil.Service, deps!.fsys),
+            )
+            const hash = yield* snap.exclusive((raw) =>
+              Effect.gen(function* () {
+                const backup = yield* raw.track()
+                yield* cas
+                return backup
+              }),
+            )
+            return yield* prepareFinish(hash)
+          }
+          if (!needsRestore && !needsFiles) return yield* prepareFinish(undefined)
+          const hash = yield* snap.exclusive((raw) =>
+            Effect.gen(function* () {
+              const rollback = yield* raw.track()
+              const current2 = session.revert?.snapshot ?? rollback ?? (yield* raw.track())
+              const back = Effect.fn("SessionRevert.back")(function* (id: string | undefined) {
+                if (!id) return
+                const out = yield* Effect.exit(raw.restore(id))
+                if (Exit.isFailure(out)) log.warn("revert rollback restore failed", { hash: id })
+              })
+              if (needsRestore) {
+                const out = yield* Effect.exit(raw.restore(session.revert!.snapshot!))
+                if (Exit.isFailure(out)) {
+                  yield* back(rollback)
+                  return yield* Effect.failCause(out.cause)
+                }
+              }
+              if (needsFiles) {
+                const out = yield* Effect.exit(raw.revert(patches))
+                if (Exit.isFailure(out)) {
+                  yield* back(rollback)
+                  return yield* Effect.failCause(out.cause)
+                }
+              }
+              return current2
+            }),
+          )
+          return yield* prepareFinish(hash)
+        }),
+      )
+    })
+
+    const prepareUnrevert = Effect.fn("SessionRevert.prepareUnrevert")(function* (input: { sessionID: SessionID }) {
+      return yield* mutex.withLock(input.sessionID)(
+        Effect.gen(function* () {
+          log.info("unreverting", input)
+          yield* state.assertNotBusy(input.sessionID)
+          const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          if (!session.revert) return false
+          if (!session.revert.snapshot) {
+            const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+            const shared = yield* rowsOnce(input.sessionID as string)
+            const marker = shared
+              ? SnapshotCoveragePlan.plan({
+                  sessionID: input.sessionID,
+                  messageID: session.revert.messageID,
+                  partID: session.revert.partID,
+                  messages: toPlannerInput(all),
+                  rows: shared.rows,
+                })
+              : undefined
+            const worktree = shared?.worktree
+            const deps = shared?.deps
+            if (marker?.verdict === "complete" && !!worktree && !!deps && marker.applyOrder.length > 0) {
+              const sid = input.sessionID as string
+              const root = worktree as string
+              const cas = SnapshotJournalCas.run({
+                sessionID: sid,
+                worktree: root,
+                segments: [{ applyOrder: marker.applyOrder, direction: "redo" }],
+              }).pipe(
+                Effect.provideService(SnapshotJournal.Service, deps.journal),
+                Effect.provideService(FSUtil.Service, deps.fsys),
+              )
+              yield* snap.exclusive(() => cas)
+            }
+            return true
+          }
+          const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+          const shared = session.revert.messageID ? yield* rowsOnce(input.sessionID as string) : undefined
+          const marker = shared
+            ? SnapshotCoveragePlan.plan({
+                sessionID: input.sessionID,
+                messageID: session.revert.messageID,
+                partID: session.revert.partID,
+                messages: toPlannerInput(all),
+                rows: shared.rows,
+              })
+            : undefined
+          const worktree = shared?.worktree
+          const deps = shared?.deps
+          if (marker?.verdict === "complete" && !!worktree && !!deps) {
+            if (marker.applyOrder.length === 0) {
+              return true
+            }
+            const sid = input.sessionID as string
+            const root = worktree as string
+            const cas = SnapshotJournalCas.run({
+              sessionID: sid,
+              worktree: root,
+              segments: [{ applyOrder: marker.applyOrder, direction: "redo" }],
+            }).pipe(
+              Effect.provideService(SnapshotJournal.Service, deps.journal),
+              Effect.provideService(FSUtil.Service, deps.fsys),
+            )
+            yield* snap.exclusive(() => cas)
+            return true
+          }
+          const target = session.revert.snapshot
+          yield* snap.exclusive((raw) =>
+            Effect.gen(function* () {
+              const rollback = yield* raw.track()
+              const out = yield* Effect.exit(raw.restore(target))
+              if (Exit.isFailure(out)) {
+                if (rollback) {
+                  const back = yield* Effect.exit(raw.restore(rollback))
+                  if (Exit.isFailure(back)) log.warn("revert rollback restore failed", { hash: rollback })
+                }
+                return yield* Effect.failCause(out.cause)
+              }
+            }),
+          )
+          return true
         }),
       )
     })
@@ -377,7 +587,7 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ revert, unrevert, cleanup })
+    return Service.of({ revert, unrevert, cleanup, prepareRevert, prepareUnrevert })
   }),
 )
 

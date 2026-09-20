@@ -3,17 +3,28 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { SessionRevision } from "@opencode-ai/core/session/revision"
 import { ConfigConvergence } from "@/kilocode/server/config-convergence"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { SessionID, MessageID, PartID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionRevert } from "@/session/revert"
 import { Log } from "@opencode-ai/core/util/log"
 import { InstanceRef } from "@/effect/instance-ref"
 import { acquireDrainControl } from "@/kilocode/server/drain-control-acquire"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Location } from "@opencode-ai/core/location"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { ProjectV2 } from "@opencode-ai/core/project"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
+import { SessionOperationTable } from "@opencode-ai/core/session/sql"
+import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 
 export const VERSION = 1 as const
 export const REVERT_OP = "session/revert" as const
@@ -284,6 +295,18 @@ function infoFromSnapshot(snapshot: unknown): Session.Info | undefined {
   }
 }
 
+function snapshotToInfo(snapshot: unknown): Session.Info | undefined {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return undefined
+  try {
+    const info = Session.fromRow(snapshot as unknown as Parameters<typeof Session.fromRow>[0]) as unknown as Session.Info
+    const cleaned = JSON.parse(JSON.stringify(info))
+    Schema.decodeUnknownSync(Session.Info)(cleaned)
+    return info
+  } catch {
+    return undefined
+  }
+}
+
 function mapRevertFailure(tag: string, detail?: string): { code: string; retryable: boolean } {
   const hay = `${tag} ${detail ?? ""}`
   if (hay.includes("SessionBusyError")) return { code: "busy", retryable: false }
@@ -323,9 +346,20 @@ export const layer = Layer.effect(
   SessionRevertDispatchService,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const events = Option.getOrElse(yield* Effect.serviceOption(EventV2.Service), () => ({
+      recordProjectedTx: () =>
+        Effect.succeed({ id: "evt_mock", type: "session.updated", seq: 0, data: { sessionID: "mock", info: {} } } as unknown as EventV2.Payload),
+      notifyCommitted: () => Effect.void,
+    } as unknown as EventV2.Interface))
     const cfg = Option.getOrElse(yield* Effect.serviceOption(ConfigConvergence.Service), () => ConfigConvergence.noop)
     const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop)
     const revertSvc = yield* SessionRevert.Service
+
+    // Explicit typed helpers for narrowly necessary Effect/Drizzle boundaries
+    const toSessionRow = (row: unknown) => row as unknown as Parameters<typeof Session.fromRow>[0]
+    const toSessionInfo = (row: unknown) => Session.fromRow(toSessionRow(row)) as unknown as Session.Info
+    const asTx = (tx: unknown) => tx as never
+    const asOpInsert = (v: unknown) => v as unknown as typeof SessionOperationTable.$inferInsert
 
     const getSessionRev = (sid: SessionID) => SessionRevision.get(db, sid) as Effect.Effect<number | undefined>
     const getConfigVer = (dir: string) => cfg.getBootedVersion(dir) as Effect.Effect<number | undefined>
@@ -407,49 +441,6 @@ export const layer = Layer.effect(
         return { ok: true as const, rev: actualRev, cfg: currentCfg }
       })
 
-    const persistSucceeded = (
-      kind: "revert" | "unrevert",
-      sessionId: SessionID,
-      req: SessionRevertRequest | SessionUnrevertRequest,
-      hash: string,
-      info: Session.Info,
-      rev: number | undefined,
-      cfg: number | undefined,
-    ) =>
-      Effect.gen(function* () {
-        const snapshotJson = JSON.stringify(info)
-        const record = { opId: req.opId, opKind: kind, outcome: "succeeded", code: `${kind}.succeeded`, message: `${kind} succeeded`, time: Date.now() } as const
-        const meta = {
-          idempotencyHash: hash,
-          requestId: req.requestId,
-          directory: canonicalDirectory(req.context.directory),
-          parentSessionId: req.context.parentSessionId ?? null,
-          configVersion: req.context.configVersion ?? null,
-          sessionRevision: req.context.sessionRevision ?? null,
-          messageId: (req as SessionRevertRequest).payload?.messageId ?? null,
-          partId: (req as SessionRevertRequest).payload?.partId ?? null,
-        }
-        const inserted = yield* db.transaction((tx) =>
-          Effect.gen(function* () {
-            if (kind === "revert") {
-              const already = yield* SessionOperation.getSessionRevertByIdempotencyHashTx(tx as never, sessionId, hash)
-              if (already) return already
-              const opExists = yield* SessionOperation.getTx(tx as never, req.opId)
-              if (opExists) yield* Effect.fail(new Error("opId already exists with different idempotencyKey"))
-              return yield* SessionOperation.insertSessionRevertSucceededTx(tx as never, sessionId, record as never, meta, snapshotJson)
-            }
-            const already = yield* SessionOperation.getSessionUnrevertByIdempotencyHashTx(tx as never, sessionId, hash)
-            if (already) return already
-            const opExists = yield* SessionOperation.getTx(tx as never, req.opId)
-            if (opExists) yield* Effect.fail(new Error("opId already exists with different idempotencyKey"))
-            return yield* SessionOperation.insertSessionUnrevertSucceededTx(tx as never, sessionId, record as never, meta, snapshotJson)
-          }),
-        )
-        void rev
-        void cfg
-        return inserted
-      })
-
     const dispatchRevert = Effect.fn("SessionRevertDispatch.dispatchRevert")(function* (raw: unknown) {
       let req: SessionRevertRequest
       try {
@@ -504,27 +495,321 @@ export const layer = Layer.effect(
             return buildFailed(req, "revert", "InstanceUnavailableDuringConfigRebuild", "instance unavailable during config rebuild", true, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
           const leaseRelease: Effect.Effect<void> = req.context.configVersion !== undefined ? yield* gate.acquire(canonDir) : Effect.void
           const out: CheckpointResult = yield* Effect.gen(function* () {
+            const sessionRowPre = yield* db
+              .select({ directory: SessionTable.directory, project_id: SessionTable.project_id, workspace_id: SessionTable.workspace_id })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, sessionId))
+              .get()
+              .pipe(Effect.orDie)
+            if (!sessionRowPre) return buildFailed(req, "revert", "session.not_found", `session not found ${sessionId}`, false, false, makeRevision(undefined, yield* readCfgOmit(canonDir)))
+            const projectRow = yield* db
+              .select({ worktree: ProjectTable.worktree })
+              .from(ProjectTable)
+              .where(eq(ProjectTable.id, sessionRowPre.project_id))
+              .get()
+              .pipe(Effect.orDie)
+            const projectWorktree = projectRow ? canonicalDirectory(projectRow.worktree) : canonDir
             const fresh = yield* checkFresh(req, sessionId, canonDir)
             if (!fresh.ok) return buildFailed(req, "revert", fresh.code, fresh.message, false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-            const exit = yield* revertSvc.revert({ sessionID: sessionId, messageID: req.payload.messageId as never, partID: req.payload.partId as never }).pipe(Effect.exit)
-            if (exit._tag === "Failure") {
-              const found = tagOfCause(exit.cause)
+            // Filesystem operation before DB commit (DB cannot roll back FS)
+            const prepareEffect = revertSvc.prepareRevert({
+              sessionID: sessionId,
+              messageID: req.payload.messageId as unknown as MessageID,
+              partID: req.payload.partId as unknown as PartID | undefined,
+            })
+            const prepExit = yield* Effect.exit(prepareEffect)
+            if (prepExit._tag === "Failure") {
+              const found = tagOfCause(prepExit.cause)
               const mapped = mapRevertFailure(found.tag, found.message)
               return buildFailed(req, "revert", mapped.code, found.message.slice(0, 500), mapped.retryable, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
             }
-            const info = (exit as { value: Session.Info }).value
-            const persistExit = yield* Effect.exit(persistSucceeded("revert", sessionId, req, hash, info, fresh.rev, fresh.cfg))
-            if (persistExit._tag === "Failure") {
-              const found = tagOfCause(persistExit.cause)
-              const cause = found.message.slice(0, 500)
-              yield* Effect.logWarning("durable checkpoint persist failed", { opId: req.opId, kind: "revert", cause }).pipe(
-                Effect.catch(() => Effect.void),
-                Effect.catchDefect(() => Effect.void),
+            const prep = prepExit.value as { revert: NonNullable<Session.Info["revert"]>; summary: NonNullable<Session.Info["summary"]> } | undefined
+            if (!prep) {
+              // No revert boundary: treat as succeeded with current session snapshot, no revision bump
+              const currentInfo = yield* db
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, sessionId))
+                .get()
+                .pipe(Effect.orDie)
+                .pipe(Effect.map((row) => (row ? toSessionInfo(row) : undefined)))
+              const data = currentInfo as Session.Info | undefined
+              if (!data) return buildFailed(req, "revert", "internal", "session missing for no-op revert", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+              const now = Date.now()
+              const record: SessionOperation.FailureRecord = {
+                opId: req.opId,
+                opKind: "revert",
+                outcome: "succeeded",
+                code: "revert.succeeded",
+                message: "revert succeeded",
+                time: now,
+              }
+              const meta = {
+                idempotencyHash: hash,
+                requestId: req.requestId,
+                directory: canonDir,
+                parentSessionId: req.context.parentSessionId ?? null,
+                configVersion: req.context.configVersion ?? null,
+                sessionRevision: req.context.sessionRevision ?? null,
+                messageId: req.payload.messageId ?? null,
+                partId: req.payload.partId ?? null,
+              }
+              type ReserveNoop =
+                | { status: "conflict" }
+                | { status: "replay"; existing: unknown }
+                | { status: "reserved"; info: Session.Info; revision: number }
+              const reserveNoop: ReserveNoop = yield* db.transaction(
+                (tx) =>
+                  Effect.gen(function* () {
+                    const already = yield* SessionOperation.getSessionRevertByIdempotencyHashTx(asTx(tx), sessionId, hash)
+                    if (already) {
+                      const c = SessionOperation.isSessionCheckpointConflict(already, {
+                        opId: req.opId,
+                        directory: canonDir,
+                        parentSessionId: req.context.parentSessionId ?? null,
+                        configVersion: req.context.configVersion ?? null,
+                        sessionRevision: req.context.sessionRevision ?? null,
+                        messageId: req.payload.messageId ?? null,
+                        partId: req.payload.partId ?? null,
+                      })
+                      if (c) return { status: "conflict" as const }
+                      return { status: "replay" as const, existing: already }
+                    }
+                    const opExistsInside = yield* SessionOperation.getTx(asTx(tx), req.opId)
+                    if (opExistsInside) return { status: "conflict" as const }
+                    const cur = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionId)).get().pipe(Effect.orDie)
+                    const curRev = cur ? (cur as unknown as { rev: number }).rev : 0
+                    const snapshotJson = JSON.stringify(currentInfo)
+                    yield* tx
+                      .insert(SessionOperationTable)
+                      .values(
+                        asOpInsert({
+                          op_id: record.opId,
+                          session_id: sessionId,
+                          op_kind: record.opKind,
+                          outcome: record.outcome,
+                          code: record.code,
+                          message: record.message,
+                          time: record.time,
+                          cancel: null,
+                          detail: null,
+                          stack: null,
+                          revision: curRev,
+                          idempotency_hash: meta.idempotencyHash,
+                          request_id: meta.requestId,
+                          directory: meta.directory,
+                          parent_session_id: meta.parentSessionId,
+                          config_version: meta.configVersion,
+                          session_revision: meta.sessionRevision,
+                          message_id: meta.messageId,
+                          title: meta.partId,
+                          result_snapshot: snapshotJson,
+                        }),
+                      )
+                      .run()
+                      .pipe(Effect.orDie)
+                    return { status: "reserved" as const, info: data, revision: curRev }
+                  }),
+                { behavior: "immediate" },
               )
-              return buildFailed(req, "revert", "internal", `persist failed: ${cause}`.slice(0, 500), false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)), cause.slice(0, 1000))
+              if (reserveNoop.status === "conflict") return buildFailed(req, "revert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+              if (reserveNoop.status === "replay") {
+                const existingReplay = reserveNoop.existing as { resultSnapshot: unknown; revision: number }
+                const persisted = infoFromSnapshot(existingReplay.resultSnapshot)
+                if (!persisted) return buildFailed(req, "revert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+                return buildSucceeded(req, persisted, makeRevision(existingReplay.revision, yield* readCfgOmit(canonDir)))
+              }
+              return buildSucceeded(req, reserveNoop.info, makeRevision(reserveNoop.revision, yield* readCfgOmit(canonDir)))
             }
-            return buildSucceeded(req, info, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-          }).pipe(Effect.ensuring(leaseRelease))
+            const now = Date.now()
+            const record: SessionOperation.FailureRecord = {
+              opId: req.opId,
+              opKind: "revert",
+              outcome: "succeeded",
+              code: "revert.succeeded",
+              message: "revert succeeded",
+              time: now,
+            }
+            const meta = {
+              idempotencyHash: hash,
+              requestId: req.requestId,
+              directory: canonDir,
+              parentSessionId: req.context.parentSessionId ?? null,
+              configVersion: req.context.configVersion ?? null,
+              sessionRevision: req.context.sessionRevision ?? null,
+              messageId: req.payload.messageId ?? null,
+              partId: req.payload.partId ?? null,
+            }
+            type ReserveResult =
+              | { status: "stale"; authRev: number }
+              | { status: "conflict" }
+              | { status: "replay"; existing: unknown }
+              | { status: "internal"; message: string }
+              | { status: "reserved"; info: Session.Info; revision: number; event: EventV2.Payload }
+            const reserveResult: ReserveResult = yield* db.transaction(
+              (tx) =>
+                Effect.gen(function* () {
+                  const already = yield* SessionOperation.getSessionRevertByIdempotencyHashTx(tx as never, sessionId, hash)
+                  if (already) {
+                    const c = SessionOperation.isSessionCheckpointConflict(already, {
+                      opId: req.opId,
+                      directory: canonDir,
+                      parentSessionId: req.context.parentSessionId ?? null,
+                      configVersion: req.context.configVersion ?? null,
+                      sessionRevision: req.context.sessionRevision ?? null,
+                      messageId: req.payload.messageId ?? null,
+                      partId: req.payload.partId ?? null,
+                    })
+                    if (c) return { status: "conflict" as const }
+                    return { status: "replay" as const, existing: already }
+                  }
+                  const opExistsInside = yield* SessionOperation.getTx(tx as never, req.opId)
+                  if (opExistsInside) return { status: "conflict" as const }
+                  const authRevEffect = SessionRevision.getTx(tx as never, sessionId)
+                  const authRevEither = yield* (authRevEffect as unknown as Effect.Effect<unknown, unknown, unknown>).pipe(
+                    Effect.map((v) => ({ _tag: "Right" as const, right: v as number | undefined })),
+                    Effect.catch((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                    Effect.catchDefect((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                  ) as unknown as Effect.Effect<{ _tag: "Right"; right: number | undefined } | { _tag: "Left"; left: unknown }>
+                  if ((authRevEither as unknown as { _tag: string })._tag === "Left") return { status: "internal" as const, message: "revision read failed inside tx" }
+                  const authRev: number | undefined = (authRevEither as unknown as { right: number | undefined }).right
+                  if (authRev !== undefined && req.context.sessionRevision !== undefined && req.context.sessionRevision < authRev) return { status: "stale" as const, authRev }
+                  const cfgInsideEither = yield* (getConfigVer(canonDir) as unknown as Effect.Effect<unknown, unknown, unknown>).pipe(
+                    Effect.map((v) => ({ _tag: "Right" as const, right: v as number | undefined })),
+                    Effect.catch((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                    Effect.catchDefect((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                  ) as unknown as Effect.Effect<{ _tag: "Right"; right: number | undefined } | { _tag: "Left"; left: unknown }>
+                  if ((cfgInsideEither as unknown as { _tag: string })._tag === "Left") return { status: "internal" as const, message: "config version read failed inside tx" }
+                  const cfgInside: number | undefined = (cfgInsideEither as unknown as { right: number | undefined }).right
+                  const effectiveInside = cfgInside ?? fresh.cfg
+                  if (req.context.configVersion !== undefined && effectiveInside === undefined) return { status: "internal" as const, message: "config version unavailable inside tx" }
+                  if (req.context.configVersion !== undefined && effectiveInside !== undefined && req.context.configVersion < effectiveInside) {
+                    const revForStale = authRev ?? fresh.rev ?? 0
+                    return { status: "stale" as const, authRev: revForStale }
+                  }
+                  // Atomic session update + revision + changefeed + operation + event
+                  const updated = yield* tx
+                    .update(SessionTable)
+                    .set({
+                      revert: prep.revert as unknown as typeof SessionTable.$inferInsert.revert,
+                      summary_additions: prep.summary.additions,
+                      summary_deletions: prep.summary.deletions,
+                      summary_files: prep.summary.files,
+                      summary_diffs: prep.summary.diffs as unknown as typeof SessionTable.$inferInsert.summary_diffs,
+                      time_updated: now,
+                      revision: sql`${SessionTable.revision} + 1`,
+                    })
+                    .where(eq(SessionTable.id, sessionId))
+                    .returning({ rev: SessionTable.revision })
+                    .all()
+                    .pipe(Effect.orDie)
+                  if (updated.length !== 1) yield* Effect.die(new Error(`session revert update failed for ${sessionId}`))
+                  const nextRev = (updated[0] as { rev: number }).rev
+                  yield* Changefeed.appendTx(asTx(tx), { session_id: sessionId as unknown as string, revision: nextRev, kind: "changed", time: now })
+                  const updatedRow = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionId)).get().pipe(Effect.orDie)
+                  if (!updatedRow) yield* Effect.die(new Error("session missing after revert update"))
+                  const infoForEvent = toSessionInfo(updatedRow)
+                  const snapshotJson = JSON.stringify(infoForEvent)
+                  const loc = new Location.Info({
+                    directory: AbsolutePath.make(canonDir),
+                    ...(sessionRowPre.workspace_id ? { workspaceID: sessionRowPre.workspace_id as unknown as WorkspaceV2.ID } : {}),
+                    project: { id: ProjectV2.ID.make(sessionRowPre.project_id), directory: AbsolutePath.make(projectWorktree) },
+                  })
+                  const event = yield* (events as unknown as { recordProjectedTx: (tx: unknown, def: unknown, data: unknown, opts: unknown) => Effect.Effect<unknown> }).recordProjectedTx(
+                    asTx(tx),
+                    SessionV1.Event.Updated,
+                    { sessionID: sessionId, info: infoForEvent },
+                    { location: loc as unknown as Location.Info },
+                  ) as Effect.Effect<EventV2.Payload>
+                  yield* tx
+                    .insert(SessionOperationTable)
+                    .values(
+                      asOpInsert({
+                        op_id: record.opId,
+                        session_id: sessionId,
+                        op_kind: record.opKind,
+                        outcome: record.outcome,
+                        code: record.code,
+                        message: record.message,
+                        time: record.time,
+                        cancel: null,
+                        detail: null,
+                        stack: null,
+                        revision: nextRev,
+                        idempotency_hash: meta.idempotencyHash,
+                        request_id: meta.requestId,
+                      directory: meta.directory,
+                      parent_session_id: meta.parentSessionId,
+                      config_version: meta.configVersion,
+                      session_revision: meta.sessionRevision,
+                      message_id: meta.messageId,
+                      title: meta.partId,
+                      result_snapshot: snapshotJson,
+                    }),
+                    )
+                    .run()
+                    .pipe(Effect.orDie)
+                  if (DispatchAtomicSeam.failRevertInsideTx) yield* Effect.die(new Error("injected revert tx failure"))
+                  const cfEntry = yield* tx
+                    .select()
+                    .from(SessionChangefeedTable)
+                    .where(and(eq(SessionChangefeedTable.session_id, sessionId as unknown as string), eq(SessionChangefeedTable.revision, nextRev)))
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!cfEntry) yield* Effect.die(new Error("changefeed entry missing after revert"))
+                  return { status: "reserved" as const, info: infoForEvent as unknown as Session.Info, revision: nextRev, event }
+                }),
+              { behavior: "immediate" },
+            )
+            if (reserveResult.status === "stale") {
+              const latestCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(reserveResult.authRev, latestCfg ?? fresh.cfg)
+              return buildFailed(req, "revert", "stale", "stale sessionRevision", false, false, revision)
+            }
+            if (reserveResult.status === "conflict") {
+              const latestRev = yield* readRevOmit(sessionId)
+              const latestCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(latestRev ?? fresh.rev, latestCfg ?? fresh.cfg)
+              return buildFailed(req, "revert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
+            }
+            if (reserveResult.status === "replay") {
+              const existingReplay = reserveResult.existing as { resultSnapshot: unknown; revision: number }
+              const persisted = snapshotToInfo(existingReplay.resultSnapshot) ?? infoFromSnapshot(existingReplay.resultSnapshot)
+              if (!persisted) return buildFailed(req, "revert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+              return buildSucceeded(req, persisted, makeRevision(existingReplay.revision, yield* readCfgOmit(canonDir)))
+            }
+            if (reserveResult.status === "internal") {
+              const latestRev = yield* readRevOmit(sessionId)
+              const latestCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(latestRev ?? fresh.rev, latestCfg ?? fresh.cfg)
+              return buildFailed(req, "revert", "internal", reserveResult.message, false, false, revision)
+            }
+            if (reserveResult.status !== "reserved") return buildFailed(req, "revert", "internal", "unexpected reserve status", false, false, undefined)
+            const updatedInfo = reserveResult.info
+            const revision = makeRevision(reserveResult.revision, yield* readCfgOmit(canonDir))
+            const succeeded = buildSucceeded(req, updatedInfo, revision)
+            yield* (events as unknown as { notifyCommitted: (e: unknown) => Effect.Effect<void> }).notifyCommitted(reserveResult.event).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            return succeeded
+          }).pipe(Effect.ensuring(leaseRelease)).pipe(
+            Effect.catchDefect((defect: unknown) =>
+              Effect.gen(function* () {
+                const msg = defect instanceof Error ? defect.message : String(defect)
+                const latestRev = yield* readRevOmit(sessionId)
+                const latestCfg = yield* readCfgOmit(canonDir)
+                const revision = makeRevision(latestRev, latestCfg)
+                return buildFailed(req, "revert", "internal", msg, false, false, revision)
+              }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "revert", "internal", String(defect), false, false, undefined)))),
+            ),
+            Effect.catch((cause: unknown) =>
+              Effect.gen(function* () {
+                const msg = cause instanceof Error ? cause.message : String(cause)
+                const latestRev = yield* readRevOmit(sessionId)
+                const latestCfg = yield* readCfgOmit(canonDir)
+                const revision = makeRevision(latestRev, latestCfg)
+                return buildFailed(req, "revert", "internal", msg, false, false, revision)
+              }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "revert", "internal", String(cause), false, false, undefined)))),
+            ),
+          )
           return out
         }).pipe(Effect.ensuring(drainRelease))
       try {
@@ -569,7 +854,7 @@ export const layer = Layer.effect(
         partId: req.payload.partId ?? null,
       })
       if (conflict) return buildFailed(req, "revert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-      const persisted = infoFromSnapshot((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+      const persisted = infoFromSnapshot((existing as unknown as { resultSnapshot: unknown }).resultSnapshot) ?? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
       if (!persisted) return buildFailed(req, "revert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
       return buildPrivateSucceeded(req, persisted, makeRevision((existing as unknown as { revision: number }).revision, yield* readCfgOmit(canonDir)))
     })
@@ -608,7 +893,7 @@ export const layer = Layer.effect(
               sessionRevision: req.context.sessionRevision ?? null,
             })
             if (conflict) return buildFailed(req, "unrevert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-            const persisted = infoFromSnapshot((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+            const persisted = infoFromSnapshot((existing as unknown as { resultSnapshot: unknown }).resultSnapshot) ?? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
             if (!persisted) return buildFailed(req, "unrevert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
             return buildSucceeded(req, persisted, makeRevision((existing as unknown as { revision: number }).revision, yield* readCfgOmit(canonDir)))
           }
@@ -623,27 +908,250 @@ export const layer = Layer.effect(
             return buildFailed(req, "unrevert", "InstanceUnavailableDuringConfigRebuild", "instance unavailable during config rebuild", true, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
           const leaseRelease: Effect.Effect<void> = req.context.configVersion !== undefined ? yield* gate.acquire(canonDir) : Effect.void
           const out: CheckpointResult = yield* Effect.gen(function* () {
+            const sessionRowPre = yield* db
+              .select({ directory: SessionTable.directory, project_id: SessionTable.project_id, workspace_id: SessionTable.workspace_id })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, sessionId))
+              .get()
+              .pipe(Effect.orDie)
+            if (!sessionRowPre) return buildFailed(req, "unrevert", "session.not_found", `session not found ${sessionId}`, false, false, makeRevision(undefined, yield* readCfgOmit(canonDir)))
+            const projectRow = yield* db
+              .select({ worktree: ProjectTable.worktree })
+              .from(ProjectTable)
+              .where(eq(ProjectTable.id, sessionRowPre.project_id))
+              .get()
+              .pipe(Effect.orDie)
+            const projectWorktree = projectRow ? canonicalDirectory(projectRow.worktree) : canonDir
             const fresh = yield* checkFresh(req, sessionId, canonDir)
             if (!fresh.ok) return buildFailed(req, "unrevert", fresh.code, fresh.message, false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-            const exit = yield* revertSvc.unrevert({ sessionID: sessionId }).pipe(Effect.exit)
-            if (exit._tag === "Failure") {
-              const found = tagOfCause(exit.cause)
+            const prepareEffect = revertSvc.prepareUnrevert({ sessionID: sessionId })
+            const prepExit = yield* Effect.exit(prepareEffect)
+            if (prepExit._tag === "Failure") {
+              const found = tagOfCause(prepExit.cause)
               const mapped = mapRevertFailure(found.tag, found.message)
               return buildFailed(req, "unrevert", mapped.code, found.message.slice(0, 500), mapped.retryable, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
             }
-            const info = (exit as { value: Session.Info }).value
-            const persistExit = yield* Effect.exit(persistSucceeded("unrevert", sessionId, req, hash, info, fresh.rev, fresh.cfg))
-            if (persistExit._tag === "Failure") {
-              const found = tagOfCause(persistExit.cause)
-              const cause = found.message.slice(0, 500)
-              yield* Effect.logWarning("durable checkpoint persist failed", { opId: req.opId, kind: "unrevert", cause }).pipe(
-                Effect.catch(() => Effect.void),
-                Effect.catchDefect(() => Effect.void),
+            const hadRevert = prepExit.value as boolean
+            if (!hadRevert) {
+              const currentInfo = yield* db
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, sessionId))
+                .get()
+                .pipe(Effect.orDie)
+                .pipe(Effect.map((row) => (row ? toSessionInfo(row) : undefined)))
+              const data = currentInfo as Session.Info | undefined
+              if (!data) return buildFailed(req, "unrevert", "internal", "session missing for no-op unrevert", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+              const now = Date.now()
+              const record: SessionOperation.FailureRecord = { opId: req.opId, opKind: "unrevert", outcome: "succeeded", code: "unrevert.succeeded", message: "unrevert succeeded", time: now }
+              const meta = { idempotencyHash: hash, requestId: req.requestId, directory: canonDir, parentSessionId: req.context.parentSessionId ?? null, configVersion: req.context.configVersion ?? null, sessionRevision: req.context.sessionRevision ?? null, messageId: null as string | null, partId: null as string | null }
+              type ReserveNoop = { status: "conflict" } | { status: "replay"; existing: unknown } | { status: "reserved"; info: Session.Info; revision: number }
+              const reserveNoop: ReserveNoop = yield* db.transaction(
+                (tx) =>
+                  Effect.gen(function* () {
+                    const already = yield* SessionOperation.getSessionUnrevertByIdempotencyHashTx(tx as never, sessionId, hash)
+                    if (already) {
+                      const c = SessionOperation.isSessionCheckpointConflict(already, { opId: req.opId, directory: canonDir, parentSessionId: req.context.parentSessionId ?? null, configVersion: req.context.configVersion ?? null, sessionRevision: req.context.sessionRevision ?? null })
+                      if (c) return { status: "conflict" as const }
+                      return { status: "replay" as const, existing: already }
+                    }
+                    const opExistsInside = yield* SessionOperation.getTx(tx as never, req.opId)
+                    if (opExistsInside) return { status: "conflict" as const }
+                    const cur = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionId)).get().pipe(Effect.orDie)
+                    const curRev = cur ? (cur as unknown as { rev: number }).rev : 0
+                    const snapshotJson = JSON.stringify(currentInfo)
+                    yield* tx
+                      .insert(SessionOperationTable)
+                      .values({
+                        op_id: record.opId,
+                        session_id: sessionId,
+                        op_kind: record.opKind,
+                        outcome: record.outcome,
+                        code: record.code,
+                        message: record.message,
+                        time: record.time,
+                        cancel: null,
+                        detail: null,
+                        stack: null,
+                        revision: curRev,
+                        idempotency_hash: meta.idempotencyHash,
+                        request_id: meta.requestId,
+                        directory: meta.directory,
+                        parent_session_id: meta.parentSessionId,
+                        config_version: meta.configVersion,
+                        session_revision: meta.sessionRevision,
+                        message_id: meta.messageId,
+                        title: meta.partId,
+                        result_snapshot: snapshotJson,
+                      } as unknown as typeof SessionOperationTable.$inferInsert)
+                      .run()
+                      .pipe(Effect.orDie)
+                    return { status: "reserved" as const, info: data, revision: curRev }
+                  }),
+                { behavior: "immediate" },
               )
-              return buildFailed(req, "unrevert", "internal", `persist failed: ${cause}`.slice(0, 500), false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)), cause.slice(0, 1000))
+              if (reserveNoop.status === "conflict") return buildFailed(req, "unrevert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+              if (reserveNoop.status === "replay") {
+                const existingReplay = reserveNoop.existing as { resultSnapshot: unknown; revision: number }
+                const persisted = infoFromSnapshot(existingReplay.resultSnapshot) ?? snapshotToInfo(existingReplay.resultSnapshot)
+                if (!persisted) return buildFailed(req, "unrevert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+                return buildSucceeded(req, persisted, makeRevision(existingReplay.revision, yield* readCfgOmit(canonDir)))
+              }
+              return buildSucceeded(req, reserveNoop.info, makeRevision(reserveNoop.revision, yield* readCfgOmit(canonDir)))
             }
-            return buildSucceeded(req, info, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-          }).pipe(Effect.ensuring(leaseRelease))
+            const now = Date.now()
+            const record: SessionOperation.FailureRecord = { opId: req.opId, opKind: "unrevert", outcome: "succeeded", code: "unrevert.succeeded", message: "unrevert succeeded", time: now }
+            const meta = { idempotencyHash: hash, requestId: req.requestId, directory: canonDir, parentSessionId: req.context.parentSessionId ?? null, configVersion: req.context.configVersion ?? null, sessionRevision: req.context.sessionRevision ?? null, messageId: null as string | null, partId: null as string | null }
+            type ReserveResult =
+              | { status: "stale"; authRev: number }
+              | { status: "conflict" }
+              | { status: "replay"; existing: unknown }
+              | { status: "internal"; message: string }
+              | { status: "reserved"; info: Session.Info; revision: number; event: EventV2.Payload }
+            const reserveResult: ReserveResult = yield* db.transaction(
+              (tx) =>
+                Effect.gen(function* () {
+                  const already = yield* SessionOperation.getSessionUnrevertByIdempotencyHashTx(tx as never, sessionId, hash)
+                  if (already) {
+                    const c = SessionOperation.isSessionCheckpointConflict(already, { opId: req.opId, directory: canonDir, parentSessionId: req.context.parentSessionId ?? null, configVersion: req.context.configVersion ?? null, sessionRevision: req.context.sessionRevision ?? null })
+                    if (c) return { status: "conflict" as const }
+                    return { status: "replay" as const, existing: already }
+                  }
+                  const opExistsInside = yield* SessionOperation.getTx(tx as never, req.opId)
+                  if (opExistsInside) return { status: "conflict" as const }
+                  const authRevEffect = SessionRevision.getTx(tx as never, sessionId)
+                  const authRevEither = yield* (authRevEffect as unknown as Effect.Effect<unknown, unknown, unknown>).pipe(
+                    Effect.map((v) => ({ _tag: "Right" as const, right: v as number | undefined })),
+                    Effect.catch((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                    Effect.catchDefect((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                  ) as unknown as Effect.Effect<{ _tag: "Right"; right: number | undefined } | { _tag: "Left"; left: unknown }>
+                  if ((authRevEither as unknown as { _tag: string })._tag === "Left") return { status: "internal" as const, message: "revision read failed inside tx" }
+                  const authRev: number | undefined = (authRevEither as unknown as { right: number | undefined }).right
+                  if (authRev !== undefined && req.context.sessionRevision !== undefined && req.context.sessionRevision < authRev) return { status: "stale" as const, authRev }
+                  const cfgInsideEither = yield* (getConfigVer(canonDir) as unknown as Effect.Effect<unknown, unknown, unknown>).pipe(
+                    Effect.map((v) => ({ _tag: "Right" as const, right: v as number | undefined })),
+                    Effect.catch((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                    Effect.catchDefect((e: unknown) => Effect.succeed({ _tag: "Left" as const, left: e })),
+                  ) as unknown as Effect.Effect<{ _tag: "Right"; right: number | undefined } | { _tag: "Left"; left: unknown }>
+                  if ((cfgInsideEither as unknown as { _tag: string })._tag === "Left") return { status: "internal" as const, message: "config version read failed inside tx" }
+                  const cfgInside: number | undefined = (cfgInsideEither as unknown as { right: number | undefined }).right
+                  const effectiveInside = cfgInside ?? fresh.cfg
+                  if (req.context.configVersion !== undefined && effectiveInside === undefined) return { status: "internal" as const, message: "config version unavailable inside tx" }
+                  if (req.context.configVersion !== undefined && effectiveInside !== undefined && req.context.configVersion < effectiveInside) {
+                    const revForStale = authRev ?? fresh.rev ?? 0
+                    return { status: "stale" as const, authRev: revForStale }
+                  }
+                  const updated = yield* tx
+                    .update(SessionTable)
+                    .set({ revert: null, time_updated: now, revision: sql`${SessionTable.revision} + 1` })
+                    .where(eq(SessionTable.id, sessionId))
+                    .returning({ rev: SessionTable.revision })
+                    .all()
+                    .pipe(Effect.orDie)
+                  if (updated.length !== 1) yield* Effect.die(new Error(`session unrevert update failed for ${sessionId}`))
+                  const nextRev = (updated[0] as { rev: number }).rev
+                  yield* Changefeed.appendTx(asTx(tx), { session_id: sessionId as unknown as string, revision: nextRev, kind: "changed", time: now })
+                  const updatedRow = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionId)).get().pipe(Effect.orDie)
+                  if (!updatedRow) yield* Effect.die(new Error("session missing after unrevert update"))
+                  const infoForEvent = toSessionInfo(updatedRow)
+                  const snapshotJson = JSON.stringify(infoForEvent)
+                  const loc = new Location.Info({
+                    directory: AbsolutePath.make(canonDir),
+                    ...(sessionRowPre.workspace_id ? { workspaceID: sessionRowPre.workspace_id as unknown as WorkspaceV2.ID } : {}),
+                    project: { id: ProjectV2.ID.make(sessionRowPre.project_id), directory: AbsolutePath.make(projectWorktree) },
+                  })
+                  const event = yield* (events as unknown as { recordProjectedTx: (tx: unknown, def: unknown, data: unknown, opts: unknown) => Effect.Effect<unknown> }).recordProjectedTx(
+                    asTx(tx),
+                    SessionV1.Event.Updated,
+                    { sessionID: sessionId, info: infoForEvent },
+                    { location: loc as unknown as Location.Info },
+                  ) as Effect.Effect<EventV2.Payload>
+                  yield* tx
+                    .insert(SessionOperationTable)
+                    .values({
+                      op_id: record.opId,
+                      session_id: sessionId,
+                      op_kind: record.opKind,
+                      outcome: record.outcome,
+                      code: record.code,
+                      message: record.message,
+                      time: record.time,
+                      cancel: null,
+                      detail: null,
+                      stack: null,
+                      revision: nextRev,
+                      idempotency_hash: meta.idempotencyHash,
+                      request_id: meta.requestId,
+                      directory: meta.directory,
+                      parent_session_id: meta.parentSessionId,
+                      config_version: meta.configVersion,
+                      session_revision: meta.sessionRevision,
+                      message_id: meta.messageId,
+                      title: meta.partId,
+                      result_snapshot: snapshotJson,
+                    } as unknown as typeof SessionOperationTable.$inferInsert)
+                    .run()
+                    .pipe(Effect.orDie)
+                  if (DispatchAtomicSeam.failUnrevertInsideTx) yield* Effect.die(new Error("injected unrevert tx failure"))
+                  const cfEntry = yield* tx
+                    .select()
+                    .from(SessionChangefeedTable)
+                    .where(and(eq(SessionChangefeedTable.session_id, sessionId as unknown as string), eq(SessionChangefeedTable.revision, nextRev)))
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!cfEntry) yield* Effect.die(new Error("changefeed entry missing after unrevert"))
+                  return { status: "reserved" as const, info: infoForEvent as unknown as Session.Info, revision: nextRev, event }
+                }),
+              { behavior: "immediate" },
+            )
+            if (reserveResult.status === "stale") {
+              const latestCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(reserveResult.authRev, latestCfg ?? fresh.cfg)
+              return buildFailed(req, "unrevert", "stale", "stale sessionRevision", false, false, revision)
+            }
+            if (reserveResult.status === "conflict") {
+              const latestRev = yield* readRevOmit(sessionId)
+              const latestCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(latestRev ?? fresh.rev, latestCfg ?? fresh.cfg)
+              return buildFailed(req, "unrevert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
+            }
+            if (reserveResult.status === "replay") {
+              const existingReplay = reserveResult.existing as { resultSnapshot: unknown; revision: number }
+              const persisted = infoFromSnapshot(existingReplay.resultSnapshot) ?? snapshotToInfo(existingReplay.resultSnapshot)
+              if (!persisted) return buildFailed(req, "unrevert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
+              return buildSucceeded(req, persisted, makeRevision(existingReplay.revision, yield* readCfgOmit(canonDir)))
+            }
+            if (reserveResult.status === "internal") {
+              const latestRev = yield* readRevOmit(sessionId)
+              const latestCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(latestRev ?? fresh.rev, latestCfg ?? fresh.cfg)
+              return buildFailed(req, "unrevert", "internal", reserveResult.message, false, false, revision)
+            }
+            if (reserveResult.status !== "reserved") return buildFailed(req, "unrevert", "internal", "unexpected reserve status", false, false, undefined)
+            const revision = makeRevision(reserveResult.revision, yield* readCfgOmit(canonDir))
+            const succeeded = buildSucceeded(req, reserveResult.info, revision)
+            yield* (events as unknown as { notifyCommitted: (e: unknown) => Effect.Effect<void> }).notifyCommitted(reserveResult.event).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            return succeeded
+          }).pipe(Effect.ensuring(leaseRelease)).pipe(
+            Effect.catchDefect((defect: unknown) =>
+              Effect.gen(function* () {
+                const msg = defect instanceof Error ? defect.message : String(defect)
+                const latestRev = yield* readRevOmit(sessionId)
+                const latestCfg = yield* readCfgOmit(canonDir)
+                const revision = makeRevision(latestRev, latestCfg)
+                return buildFailed(req, "unrevert", "internal", msg, false, false, revision)
+              }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "unrevert", "internal", String(defect), false, false, undefined)))),
+            ),
+            Effect.catch((cause: unknown) =>
+              Effect.gen(function* () {
+                const msg = cause instanceof Error ? cause.message : String(cause)
+                const latestRev = yield* readRevOmit(sessionId)
+                const latestCfg = yield* readCfgOmit(canonDir)
+                const revision = makeRevision(latestRev, latestCfg)
+                return buildFailed(req, "unrevert", "internal", msg, false, false, revision)
+              }).pipe(Effect.catchDefect(() => Effect.succeed(buildFailed(req, "unrevert", "internal", String(cause), false, false, undefined)))),
+            ),
+          )
           return out
         }).pipe(Effect.ensuring(drainRelease))
       try {
@@ -686,7 +1194,7 @@ export const layer = Layer.effect(
         sessionRevision: req.context.sessionRevision ?? null,
       })
       if (conflict) return buildFailed(req, "unrevert", "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
-      const persisted = infoFromSnapshot((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+      const persisted = infoFromSnapshot((existing as unknown as { resultSnapshot: unknown }).resultSnapshot) ?? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
       if (!persisted) return buildFailed(req, "unrevert", "internal", "invalid persisted snapshot", false, false, makeRevision(yield* readRevOmit(sessionId), yield* readCfgOmit(canonDir)))
       return buildPrivateSucceeded(req, persisted, makeRevision((existing as unknown as { revision: number }).revision, yield* readCfgOmit(canonDir)))
     })
