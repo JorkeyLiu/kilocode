@@ -25,6 +25,8 @@ import { SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
 import { SessionOperationTable } from "@opencode-ai/core/session/sql"
 import { DispatchAtomicSeam } from "@/kilocode/session/dispatch-atomic-seam"
 import * as Changefeed from "@opencode-ai/core/retention/changefeed"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 
 export const VERSION = 1 as const
 export const REVERT_OP = "session/revert" as const
@@ -645,7 +647,13 @@ export const layer = Layer.effect(
               | { status: "conflict" }
               | { status: "replay"; existing: unknown }
               | { status: "internal"; message: string }
-              | { status: "reserved"; info: Session.Info; revision: number; event: EventV2.Payload }
+              | {
+                  status: "reserved"
+                  info: Session.Info
+                  revision: number
+                  event: EventV2.Payload
+                  changefeedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number }
+                }
             const reserveResult: ReserveResult = yield* db.transaction(
               (tx) =>
                 Effect.gen(function* () {
@@ -757,7 +765,20 @@ export const layer = Layer.effect(
                     .get()
                     .pipe(Effect.orDie)
                   if (!cfEntry) yield* Effect.die(new Error("changefeed entry missing after revert"))
-                  return { status: "reserved" as const, info: infoForEvent as unknown as Session.Info, revision: nextRev, event }
+                  const changefeedEntry = {
+                    seq: (cfEntry as unknown as { seq: number }).seq,
+                    session_id: (cfEntry as unknown as { session_id: string }).session_id,
+                    revision: (cfEntry as unknown as { revision: number }).revision,
+                    kind: (cfEntry as unknown as { kind: string }).kind,
+                    time: (cfEntry as unknown as { time: number }).time,
+                  }
+                  return {
+                    status: "reserved" as const,
+                    info: infoForEvent as unknown as Session.Info,
+                    revision: nextRev,
+                    event,
+                    changefeedEntry,
+                  }
                 }),
               { behavior: "immediate" },
             )
@@ -789,6 +810,28 @@ export const layer = Layer.effect(
             const revision = makeRevision(reserveResult.revision, yield* readCfgOmit(canonDir))
             const succeeded = buildSucceeded(req, updatedInfo, revision)
             yield* (events as unknown as { notifyCommitted: (e: unknown) => Effect.Effect<void> }).notifyCommitted(reserveResult.event).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            const entry = (reserveResult as unknown as { changefeedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number } }).changefeedEntry
+            if (entry && succeeded.status === "succeeded") {
+              yield* Effect.gen(function* () {
+                const opt = yield* Effect.serviceOption(PrivatePeerService)
+                if (opt._tag === "None") return
+                const peer = opt.value
+                const payload = {
+                  v: OBSERVATION_VERSION,
+                  cursor: entry.seq,
+                  entries: [
+                    {
+                      seq: entry.seq,
+                      session_id: entry.session_id,
+                      revision: entry.revision,
+                      kind: entry.kind,
+                      time: entry.time,
+                    },
+                  ],
+                }
+                yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            }
             return succeeded
           }).pipe(Effect.ensuring(leaseRelease)).pipe(
             Effect.catchDefect((defect: unknown) =>
@@ -1007,7 +1050,13 @@ export const layer = Layer.effect(
               | { status: "conflict" }
               | { status: "replay"; existing: unknown }
               | { status: "internal"; message: string }
-              | { status: "reserved"; info: Session.Info; revision: number; event: EventV2.Payload }
+              | {
+                  status: "reserved"
+                  info: Session.Info
+                  revision: number
+                  event: EventV2.Payload
+                  changefeedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number }
+                }
             const reserveResult: ReserveResult = yield* db.transaction(
               (tx) =>
                 Effect.gen(function* () {
@@ -1100,7 +1149,20 @@ export const layer = Layer.effect(
                     .get()
                     .pipe(Effect.orDie)
                   if (!cfEntry) yield* Effect.die(new Error("changefeed entry missing after unrevert"))
-                  return { status: "reserved" as const, info: infoForEvent as unknown as Session.Info, revision: nextRev, event }
+                  const changefeedEntry = {
+                    seq: (cfEntry as unknown as { seq: number }).seq,
+                    session_id: (cfEntry as unknown as { session_id: string }).session_id,
+                    revision: (cfEntry as unknown as { revision: number }).revision,
+                    kind: (cfEntry as unknown as { kind: string }).kind,
+                    time: (cfEntry as unknown as { time: number }).time,
+                  }
+                  return {
+                    status: "reserved" as const,
+                    info: infoForEvent as unknown as Session.Info,
+                    revision: nextRev,
+                    event,
+                    changefeedEntry,
+                  }
                 }),
               { behavior: "immediate" },
             )
@@ -1131,6 +1193,28 @@ export const layer = Layer.effect(
             const revision = makeRevision(reserveResult.revision, yield* readCfgOmit(canonDir))
             const succeeded = buildSucceeded(req, reserveResult.info, revision)
             yield* (events as unknown as { notifyCommitted: (e: unknown) => Effect.Effect<void> }).notifyCommitted(reserveResult.event).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            const entry = (reserveResult as unknown as { changefeedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number } }).changefeedEntry
+            if (entry && succeeded.status === "succeeded") {
+              yield* Effect.gen(function* () {
+                const opt = yield* Effect.serviceOption(PrivatePeerService)
+                if (opt._tag === "None") return
+                const peer = opt.value
+                const payload = {
+                  v: OBSERVATION_VERSION,
+                  cursor: entry.seq,
+                  entries: [
+                    {
+                      seq: entry.seq,
+                      session_id: entry.session_id,
+                      revision: entry.revision,
+                      kind: entry.kind,
+                      time: entry.time,
+                    },
+                  ],
+                }
+                yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            }
             return succeeded
           }).pipe(Effect.ensuring(leaseRelease)).pipe(
             Effect.catchDefect((defect: unknown) =>
