@@ -1509,7 +1509,10 @@ const AgentManagerContent: Component = () => {
                 {/* Keep terminal tabs mounted so output streams across context switches. */}
                 {renderTerminalLayer({ state: terms })}
                 <div class="am-chat-wrapper">
-                  <OperationStatus op={(() => { const id = session.currentSessionID(); return id ? recentOps()[id] : undefined })()} />
+                  {(() => {
+                    const id = session.currentSessionID()
+                    return <OperationStatus op={id ? recentOps()[id] : undefined} sessionId={id} />
+                  })()}
                   <ChatView
                     onSelectSession={(id) => {
                       handleOpenSession(id)
