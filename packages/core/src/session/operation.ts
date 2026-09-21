@@ -647,7 +647,7 @@ export function isCancelQueuedConflict(
 // ---------------------------------------------------------------------------
 type DbOrTx = Database.Interface["db"] | Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0]
 
-function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<FailureRecord> {
+function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<{ record: FailureRecord; entry: Changefeed.Entry }, unknown, never> {
   return Effect.gen(function* () {
     // validate shape then enforce redacted/capped boundary before any persistence
     validateRecord(record)
@@ -668,7 +668,7 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         existingRecord = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
-        return undefined as unknown as FailureRecord
+        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry }
       }
       // cross-session identity check (also enforced by validated row, but keep explicit for fail-closed)
       if (existingRow.session_id !== sessionID)
@@ -682,8 +682,9 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
           ),
         )
       if (recordsEqual(existingRecord, normalized)) {
-        // idempotent — no revision, no feed
-        return existingRecord
+        // idempotent — no revision, no feed; fail-closed on idempotent replay no entry
+        yield* Effect.die(new Error(`putTx idempotent replay should not be called for entry path`))
+        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry }
       }
       // not equal: enforce terminal regression and narrowest transition
       if (isTerminal(existingRecord.outcome) && normalized.outcome === "in-flight") {
@@ -706,15 +707,9 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
           new Error(`conflicting update for ${normalized.opId}: ${existingRecord.outcome} -> ${normalized.outcome}`),
         )
       }
-      // allowed update: advance revision then update row
-      yield* SessionRevision.advanceTx(sessionID, tx)
-      const after = yield* tx
-        .select({ rev: SessionTable.revision })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      const nextRev = after!.rev
+      // allowed update: advance revision then update row — capture real feed entry in same tx, no extra select
+      const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+      const nextRev = entry.revision
       yield* tx
         .update(SessionOperationTable)
         .set({
@@ -744,19 +739,13 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         updatedRecord = rowToValidatedRecord(updated as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
-        return undefined as unknown as FailureRecord
+        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry }
       }
-      return updatedRecord
+      return { record: updatedRecord, entry }
     } else {
-      // new operation: advance revision then insert
-      yield* SessionRevision.advanceTx(sessionID, tx)
-      const after = yield* tx
-        .select({ rev: SessionTable.revision })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      const nextRev = after!.rev
+      // new operation: advance revision then insert — capture real entry, no extra select
+      const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+      const nextRev = entry.revision
       yield* tx
         .insert(SessionOperationTable)
         .values({
@@ -786,6 +775,107 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry }
+      }
+      return { record: insertedRecord, entry }
+    }
+  })
+}
+
+// internal put helper that retains old idempotent semantics for public `put` compatibility
+function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<FailureRecord, unknown, never> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    const normalized = normalizeRecord(record)
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
+    const existingRow = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, normalized.opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (existingRow) {
+      let existingRecord: FailureRecord
+      try {
+        existingRecord = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as FailureRecord
+      }
+      if (existingRow.session_id !== sessionID)
+        yield* Effect.die(new Error(`cross-identity opId ${normalized.opId} already owned by session ${existingRow.session_id}`))
+      if (existingRow.op_kind !== normalized.opKind)
+        yield* Effect.die(new Error(`cross-kind conflict for ${normalized.opId}: existing ${existingRow.op_kind} vs new ${normalized.opKind}`))
+      if (recordsEqual(existingRecord, normalized)) {
+        return existingRecord
+      }
+      if (isTerminal(existingRecord.outcome) && normalized.outcome === "in-flight") {
+        yield* Effect.die(new Error(`terminal outcome ${existingRecord.outcome} cannot regress to in-flight for ${normalized.opId}`))
+      }
+      if (isTerminal(existingRecord.outcome) && isTerminal(normalized.outcome)) {
+        yield* Effect.die(new Error(`terminal outcome already recorded for ${normalized.opId}: ${existingRecord.outcome} vs ${normalized.outcome}`))
+      }
+      if (existingRecord.outcome === "in-flight" && isTerminal(normalized.outcome)) {
+      } else {
+        yield* Effect.die(new Error(`conflicting update for ${normalized.opId}: ${existingRecord.outcome} -> ${normalized.outcome}`))
+      }
+      const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+      const nextRev = entry.revision
+      yield* tx
+        .update(SessionOperationTable)
+        .set({
+          op_kind: normalized.opKind,
+          outcome: normalized.outcome,
+          code: normalized.code,
+          message: normalized.message,
+          time: normalized.time,
+          cancel: normalized.cancel?.source ?? null,
+          detail: normalized.detail ?? null,
+          stack: normalized.stack ?? null,
+          revision: nextRev,
+          session_id: sessionID,
+        })
+        .where(eq(SessionOperationTable.op_id, normalized.opId))
+        .run()
+        .pipe(Effect.orDie)
+      const updated = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
+      if (!updated) yield* Effect.die(new Error(`operation row missing after update ${normalized.opId}`))
+      let updatedRecord: FailureRecord
+      try {
+        updatedRecord = rowToValidatedRecord(updated as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as FailureRecord
+      }
+      return updatedRecord
+    } else {
+      const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+      const nextRev = entry.revision
+      yield* tx
+        .insert(SessionOperationTable)
+        .values({
+          op_id: normalized.opId,
+          session_id: sessionID,
+          op_kind: normalized.opKind,
+          outcome: normalized.outcome,
+          code: normalized.code,
+          message: normalized.message,
+          time: normalized.time,
+          cancel: normalized.cancel?.source ?? null,
+          detail: normalized.detail ?? null,
+          stack: normalized.stack ?? null,
+          revision: nextRev,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const inserted = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
+      if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
+      let insertedRecord: FailureRecord
+      try {
+        insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
         return undefined as unknown as FailureRecord
       }
       return insertedRecord
@@ -800,7 +890,7 @@ export function put(
 ): Effect.Effect<FailureRecord> {
   return Effect.gen(function* () {
     validateRecord(record)
-    return yield* db.transaction((tx) => putTx(tx as DbOrTx, sessionID, record), { behavior: "immediate" })
+    return yield* db.transaction((tx) => putTxIdempotent(tx as DbOrTx, sessionID, record), { behavior: "immediate" })
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord>
 }
 
@@ -885,8 +975,8 @@ export function listTx(tx: DbOrTx, sessionID: SessionSchema.ID): Effect.Effect<F
 // Prompt durable helpers — cross-process atomic inception + terminal CAS
 // ---------------------------------------------------------------------------
 export type EnsurePromptInFlightResult =
-  | { fresh: true; record: FailureRecord }
-  | { fresh: false; record: FailureRecord; rowSessionId: string }
+  | { fresh: true; record: FailureRecord; entry: Changefeed.Entry }
+  | { fresh: false; record: FailureRecord; rowSessionId: string; entry?: undefined }
 
 function ensurePromptInFlightTxInner(
   tx: DbOrTx,
@@ -901,9 +991,9 @@ function ensurePromptInFlightTxInner(
         existing = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
-        return { fresh: false as const, record: undefined as unknown as FailureRecord, rowSessionId: existingRow.session_id as unknown as string }
+        return { fresh: false as const, record: undefined as unknown as FailureRecord, rowSessionId: existingRow.session_id as unknown as string, entry: undefined }
       }
-      return { fresh: false as const, record: existing, rowSessionId: existingRow.session_id as unknown as string }
+      return { fresh: false as const, record: existing, rowSessionId: existingRow.session_id as unknown as string, entry: undefined }
     }
     const normalized = normalizeRecord({
       opId,
@@ -915,9 +1005,8 @@ function ensurePromptInFlightTxInner(
     })
     const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
     if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
-    yield* SessionRevision.advanceTx(sessionID, tx)
-    const after = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
-    const nextRev = after!.rev
+    const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+    const nextRev = entry.revision
     const insertOutcome = yield* tx
       .insert(SessionOperationTable)
       .values({
@@ -954,9 +1043,9 @@ function ensurePromptInFlightTxInner(
         rereadRecord = rowToValidatedRecord(reread as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
-        return { fresh: false as const, record: undefined as unknown as FailureRecord, rowSessionId: (reread as unknown as { session_id: string }).session_id }
+        return { fresh: false as const, record: undefined as unknown as FailureRecord, rowSessionId: (reread as unknown as { session_id: string }).session_id, entry: undefined }
       }
-      return { fresh: false as const, record: rereadRecord, rowSessionId: (reread as unknown as { session_id: string }).session_id }
+      return { fresh: false as const, record: rereadRecord, rowSessionId: (reread as unknown as { session_id: string }).session_id, entry: undefined }
     }
     const inserted = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, opId)).get().pipe(Effect.orDie)
     if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${opId}`))
@@ -965,9 +1054,9 @@ function ensurePromptInFlightTxInner(
       insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
     } catch (e) {
       yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
-      return { fresh: true as const, record: undefined as unknown as FailureRecord }
+      return { fresh: true as const, record: undefined as unknown as FailureRecord, entry: undefined as unknown as Changefeed.Entry }
     }
-    return { fresh: true as const, record: insertedRecord }
+    return { fresh: true as const, record: insertedRecord, entry }
   })
 }
 
@@ -999,7 +1088,7 @@ export function ensurePromptInFlight(
             } catch (e) {
               return yield* Effect.fail(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
             }
-            return { fresh: false as const, record: rec, rowSessionId: (row as unknown as { session_id: string }).session_id }
+            return { fresh: false as const, record: rec, rowSessionId: (row as unknown as { session_id: string }).session_id, entry: undefined }
           })
         }
         return Effect.fail(err)
@@ -1020,7 +1109,7 @@ export function ensurePromptInFlight(
             } catch (e) {
               return yield* Effect.fail(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
             }
-            return { fresh: false as const, record: rec, rowSessionId: (row as unknown as { session_id: string }).session_id }
+            return { fresh: false as const, record: rec, rowSessionId: (row as unknown as { session_id: string }).session_id, entry: undefined }
           })
         }
         return Effect.fail(defect)
@@ -1037,35 +1126,64 @@ export function ensurePromptInFlightTx(
   return ensurePromptInFlightTxInner(tx, sessionID, opId)
 }
 
+export type TryTransitionPromptTerminalResult =
+  | { applied: true; record: FailureRecord; entry: Changefeed.Entry }
+  | { applied: false; record: FailureRecord | undefined; entry?: undefined }
+
 export function tryTransitionPromptTerminal(
   db: Database.Interface["db"],
   sessionID: SessionSchema.ID,
   record: FailureRecord,
-): Effect.Effect<{ applied: boolean; record: FailureRecord | undefined }> {
+): Effect.Effect<TryTransitionPromptTerminalResult, unknown, never> {
   return db
     .transaction(
       (tx) =>
         Effect.gen(function* () {
           const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
           if (!existingRow) {
-            const applied = yield* putTx(tx as DbOrTx, sessionID, record)
-            return { applied: true, record: applied }
+            const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
+            return { applied: true as const, record: applied, entry }
           }
           let existing: FailureRecord
           try {
             existing = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
           } catch (e) {
             yield* Effect.die(new TypeError(`invalid persisted operation row ${record.opId}: ${e instanceof Error ? e.message : String(e)}`))
-            return { applied: false, record: undefined }
+            return { applied: false as const, record: undefined, entry: undefined }
           }
-          if (isTerminal(existing.outcome)) return { applied: false, record: existing }
-          if (existing.outcome !== "in-flight") return { applied: false, record: existing }
-          const applied = yield* putTx(tx as DbOrTx, sessionID, record)
-          return { applied: true, record: applied }
+          if (isTerminal(existing.outcome)) return { applied: false as const, record: existing, entry: undefined }
+          if (existing.outcome !== "in-flight") return { applied: false as const, record: existing, entry: undefined }
+          const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
+          return { applied: true as const, record: applied, entry }
         }),
       { behavior: "immediate" },
     )
-    .pipe(Effect.orDie) as Effect.Effect<{ applied: boolean; record: FailureRecord | undefined }>
+    .pipe(Effect.orDie) as Effect.Effect<TryTransitionPromptTerminalResult, unknown, never>
+}
+
+export function tryTransitionPromptTerminalTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<TryTransitionPromptTerminalResult, unknown, never> {
+  return Effect.gen(function* () {
+    const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
+    if (!existingRow) {
+      const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
+      return { applied: true as const, record: applied, entry }
+    }
+    let existing: FailureRecord
+    try {
+      existing = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
+    } catch (e) {
+      yield* Effect.die(new TypeError(`invalid persisted operation row ${record.opId}: ${e instanceof Error ? e.message : String(e)}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    if (isTerminal(existing.outcome)) return { applied: false as const, record: existing, entry: undefined }
+    if (existing.outcome !== "in-flight") return { applied: false as const, record: existing, entry: undefined }
+    const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
+    return { applied: true as const, record: applied, entry }
+  })
 }
 
 // ---------------------------------------------------------------------------

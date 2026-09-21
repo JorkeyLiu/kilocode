@@ -8,6 +8,15 @@ export interface ManagedSessionState {
   createdAt: string
 }
 
+export interface PanelOperation {
+  opId: string
+  outcome: "succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned"
+  code: string
+  message: string
+  time: number
+  cancel?: { source: "user_stop" | "steering" | "timeout" | "network_disconnect" | "unknown" }
+}
+
 /**
  * Per-session cumulative active-generation runtime, pushed by the extension
  * host. Must stay in sync with src/agent-manager/session-timing.ts.

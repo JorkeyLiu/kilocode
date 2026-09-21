@@ -44,6 +44,15 @@ interface LocalStatsMessage {
   stats: { branch: string; files: number; additions: number; deletions: number; ahead: number; behind: number }
 }
 
+export interface PanelOperation {
+  opId: string
+  outcome: "succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned"
+  code: string
+  message: string
+  time: number
+  cancel?: { source: "user_stop" | "steering" | "timeout" | "network_disconnect" | "unknown" }
+}
+
 interface StateMessage {
   type: "agentManager.state"
   sessions: ManagedSession[]
@@ -53,6 +62,7 @@ interface StateMessage {
   sidebarCollapsed?: boolean
   isGitRepo?: boolean
   activeSessionId?: string
+  recentOperations?: Record<string, PanelOperation>
 }
 
 interface TerminalCreatedMessage {

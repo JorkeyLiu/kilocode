@@ -682,6 +682,7 @@ export interface AgentManagerStateMessage {
   sidebarCollapsed?: boolean
   isGitRepo?: boolean
   activeSessionId?: string
+  recentOperations?: Record<string, import("./agent-manager").PanelOperation>
 }
 
 // ---------------------------------------------------------------------------

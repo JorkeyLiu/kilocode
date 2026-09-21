@@ -36,6 +36,7 @@ export const OBSERVATION_METHODS = {
   LIST: "observation/list",
   GET: "observation/get",
   MESSAGES: "observation/messages",
+  OPERATIONS: "observation/operations",
 } as const
 
 export const OBSERVATION_NOTIFICATION = "observation/changed" as const
@@ -48,6 +49,7 @@ export const OBSERVATION_REQUIRED_CAPABILITIES = [
   "observation/list",
   "observation/get",
   "observation/messages",
+  "observation/operations",
 ] as const
 
 export type ObservationRequiredCapability = (typeof OBSERVATION_REQUIRED_CAPABILITIES)[number]
@@ -219,6 +221,20 @@ export type ObservationMessagesResult =
   | { v: typeof OBSERVATION_VERSION; status: "not_found" }
   | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
 
+export interface ObservationOperationsPanelEntry {
+  opId: string
+  outcome: string
+  code: string
+  message: string
+  time: number
+  cancel?: { source: string }
+}
+
+export type ObservationOperationsResult =
+  | { v: typeof OBSERVATION_VERSION; status: "found"; operations: ObservationOperationsPanelEntry[] }
+  | { v: typeof OBSERVATION_VERSION; status: "not_found" }
+  | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
+
 export interface ObservationDeps {
   getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
   readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
@@ -236,6 +252,7 @@ export interface ObservationDeps {
     limit: number
     cursor?: string
   }) => Promise<ObservationMessagesResult>
+  operations?: (input: { directory: string; sessionId: string; limit?: number }) => Promise<ObservationOperationsResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -489,6 +506,44 @@ function validateMessagesResult(res: unknown, limit: number): asserts res is Obs
   }
 }
 
+// eslint-disable-next-line complexity
+function validateOperationsResult(res: unknown): asserts res is ObservationOperationsResult {
+  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("operations returned invalid shape")
+  const r = res as Record<string, unknown>
+  if (r.v !== OBSERVATION_VERSION) throw internalError("operations returned invalid version")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string)) throw internalError("operations returned invalid status")
+  const status = r.status as string
+  if (status === "not_found" || status === "scope_mismatch") {
+    const allowed = new Set(["v", "status"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("operations returned invalid shape")
+    if ("operations" in r) throw internalError("operations returned invalid shape")
+    return
+  }
+  const allowedFound = new Set(["v", "status", "operations"])
+  for (const k of Object.keys(r)) if (!allowedFound.has(k)) throw internalError("operations returned invalid shape")
+  if (!Array.isArray(r.operations)) throw internalError("operations returned invalid operations")
+  const ops = r.operations as unknown[]
+  for (const op of ops) {
+    if (op === null || typeof op !== "object" || Array.isArray(op)) throw internalError("operations returned invalid operation shape")
+    const rec = op as Record<string, unknown>
+    const allowedOp = new Set(["opId", "outcome", "code", "message", "time", "cancel"])
+    for (const k of Object.keys(rec)) if (!allowedOp.has(k)) throw internalError("operations returned invalid operation shape")
+    if (typeof rec.opId !== "string" || rec.opId.length === 0) throw internalError("operations returned invalid operation shape")
+    if (typeof rec.outcome !== "string" || !["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"].includes(rec.outcome as string)) throw internalError("operations returned invalid operation shape")
+    if (typeof rec.code !== "string" || rec.code.length === 0) throw internalError("operations returned invalid operation shape")
+    if (typeof rec.message !== "string") throw internalError("operations returned invalid operation shape")
+    if (typeof rec.time !== "number" || !Number.isFinite(rec.time)) throw internalError("operations returned invalid operation shape")
+    if ("cancel" in rec && rec.cancel !== undefined) {
+      if (rec.cancel === null || typeof rec.cancel !== "object" || Array.isArray(rec.cancel)) throw internalError("operations returned invalid operation shape")
+      const c = rec.cancel as Record<string, unknown>
+      if (typeof c.source !== "string" || !["user_stop", "steering", "timeout", "network_disconnect", "unknown"].includes(c.source as string)) throw internalError("operations returned invalid operation shape")
+      const extra = Object.keys(c).filter((k) => k !== "source")
+      if (extra.length > 0) throw internalError("operations returned invalid operation shape")
+    }
+    if ("detail" in rec || "stack" in rec || "idempotencyHash" in rec || "requestId" in rec || "revision" in rec) throw internalError("operations returned invalid operation shape")
+  }
+}
+
 export class ObservationController {
   constructor(private readonly deps: ObservationDeps) {}
 
@@ -508,6 +563,8 @@ export class ObservationController {
         return this.handleGet(params)
       case OBSERVATION_METHODS.MESSAGES:
         return this.handleMessages(params)
+      case OBSERVATION_METHODS.OPERATIONS:
+        return this.handleOperations(params)
       default:
         throw notFound(`Method not found: ${method}`)
     }
@@ -724,6 +781,35 @@ export class ObservationController {
       }
     })()
     validateMessagesResult(res, limit)
+    return res
+  }
+
+  private async handleOperations(params: unknown): Promise<ObservationOperationsResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "directory", "sessionId", "limit"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    if (!("directory" in o)) throw invalidParams("directory is required")
+    if (!("sessionId" in o)) throw invalidParams("sessionId is required")
+    const directory = parseDirectory(o.directory)
+    const sessionId = parseSessionId(o.sessionId)
+    const limit = (() => {
+      if (!("limit" in o) || o.limit === undefined) return 1
+      const raw = o.limit
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 20) throw invalidParams("limit must be integer 1..20")
+      return raw as number
+    })()
+    if (!this.deps.operations) throw notFound(`Method not found: ${OBSERVATION_METHODS.OPERATIONS}`)
+    const res = await (async () => {
+      try {
+        return await this.deps.operations!({ directory, sessionId, limit })
+      } catch (e) {
+        if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+        throw internalError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    validateOperationsResult(res)
     return res
   }
 

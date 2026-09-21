@@ -14,8 +14,10 @@ type DbOrTx = Database.Interface["db"] | Tx
  * Transaction-owned advance: must be called inside an active transaction.
  * No nested transaction is opened; caller provides the transaction handle
  * (or the database handle when already inside a transaction context).
+ * Returns the real `ChangefeedEntry` appended in the same transaction.
+ * Any append failure remains fail-closed (transaction aborts).
  */
-export function advanceTx(sessionID: SessionSchema.ID, tx: DbOrTx): Effect.Effect<void> {
+export function advanceTx(sessionID: SessionSchema.ID, tx: DbOrTx): Effect.Effect<Changefeed.Entry> {
   return Effect.gen(function* () {
     const rows = yield* tx
       .update(SessionTable)
@@ -29,15 +31,17 @@ export function advanceTx(sessionID: SessionSchema.ID, tx: DbOrTx): Effect.Effec
         `Session revision advance failed: expected exactly 1 row, got ${rows.length} for session ${sessionID}`,
       )
     const next = rows[0]!.revision
-    yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: next, kind: "changed", time: Date.now() })
+    const entry = yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: next, kind: "changed", time: Date.now() })
+    return entry
   })
 }
 
 /**
  * Root convenience wrapper: opens one immediate transaction around the advance + feed.
+ * Returns the appended `ChangefeedEntry` from the same transaction.
  */
-export function advance(sessionID: SessionSchema.ID, db: Database.Interface["db"]): Effect.Effect<void> {
-  return db.transaction((tx) => advanceTx(sessionID, tx), { behavior: "immediate" }).pipe(Effect.orDie)
+export function advance(sessionID: SessionSchema.ID, db: Database.Interface["db"]): Effect.Effect<Changefeed.Entry> {
+  return db.transaction((tx) => advanceTx(sessionID, tx), { behavior: "immediate" }).pipe(Effect.orDie) as Effect.Effect<Changefeed.Entry>
 }
 
 export class RevisionNotFoundError extends Error {

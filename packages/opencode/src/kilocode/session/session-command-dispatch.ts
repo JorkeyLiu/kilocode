@@ -17,6 +17,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
 import { SessionOperationTable } from "@opencode-ai/core/session/sql"
 import { NamedError } from "@opencode-ai/core/util/error"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
 import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirements"
 import {
   acquireDrainControl,
@@ -272,10 +274,25 @@ export const layer = Layer.effect(
             time: Date.now(),
             ...(detail ? { detail } : {}),
           }
-          yield* SessionOperation.tryTransitionPromptTerminal(db, sid, rec).pipe(
-            Effect.catch(() => Effect.void),
-            Effect.catchDefect(() => Effect.void),
+          const res = yield* SessionOperation.tryTransitionPromptTerminal(db, sid, rec).pipe(
+            Effect.map((v) => v as { applied: boolean; entry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }),
+            Effect.catch(() => Effect.succeed({ applied: false } as { applied: boolean })),
+            Effect.catchDefect(() => Effect.succeed({ applied: false } as { applied: boolean })),
           )
+          if (res.applied && (res as { entry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }).entry) {
+            const entry = (res as { entry: { seq: number; session_id: string; revision: number; kind: string; time: number } }).entry
+            yield* Effect.gen(function* () {
+              const opt = yield* Effect.serviceOption(PrivatePeerService)
+              if (opt._tag === "None") return
+              const peer = opt.value
+              const payload = {
+                v: OBSERVATION_VERSION,
+                cursor: entry.seq,
+                entries: [{ seq: entry.seq, session_id: entry.session_id, revision: entry.revision, kind: entry.kind, time: entry.time }],
+              }
+              yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+          }
           commandInflight.delete(opId)
         }),
       ).pipe(Effect.uninterruptible, Effect.ignore)
@@ -533,6 +550,20 @@ export const layer = Layer.effect(
           return buildFailed(req, inception.record.code, inception.record.message, retryable, false, revision) as SessionCommandResult
         }
         commandInflight.set(req.opId, sid)
+        if ((inception as { entry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }).entry) {
+          const entry = (inception as { entry: { seq: number; session_id: string; revision: number; kind: string; time: number } }).entry
+          yield* Effect.gen(function* () {
+            const opt = yield* Effect.serviceOption(PrivatePeerService)
+            if (opt._tag === "None") return
+            const peer = opt.value
+            const payload = {
+              v: OBSERVATION_VERSION,
+              cursor: entry.seq,
+              entries: [{ seq: entry.seq, session_id: entry.session_id, revision: entry.revision, kind: entry.kind, time: entry.time }],
+            }
+            yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+          }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+        }
         const run = Effect.gen(function* () {
           const exit = yield* promptSvc.command(input as unknown as Parameters<typeof promptSvc.command>[0]).pipe(Effect.exit)
           if (exit._tag === "Success") {

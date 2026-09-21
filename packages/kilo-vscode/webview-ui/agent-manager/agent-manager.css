@@ -1893,8 +1893,26 @@ body.vscode-high-contrast-light {
   padding: 8px;
   background: var(--vscode-terminal-background, #1e1e1e);
 }
+[data-component="am-operation-status"] {
+  padding: 6px 12px;
+  font-size: var(--kilo-font-size-12);
+  border-bottom: 1px solid var(--border-weak-base);
+}
+[data-component="am-operation-status"][data-tone="error"] {
+  color: var(--text-critical, var(--vscode-errorForeground));
+}
+[data-component="am-operation-status"][data-tone="running"] {
+  color: var(--text-weak);
+}
+[data-component="am-operation-status"][data-tone="cancelled"] {
+  color: var(--text-weak);
+}
+[data-component="am-operation-status"][data-tone="neutral"] {
+  color: var(--text-weak);
+}
+
 /* Third-party xterm classes — addressed by attribute selector so the
-   agent-manager "am-* prefix" architecture test does not flag them. */
+    agent-manager "am-* prefix" architecture test does not flag them. */
 .am-terminal-host [class="xterm"] {
   height: 100%;
 }

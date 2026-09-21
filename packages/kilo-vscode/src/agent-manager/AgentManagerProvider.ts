@@ -102,6 +102,7 @@ export class AgentManagerProvider implements Disposable {
   )
   private hydrated = false
   private generation = 0
+  private recentOps = new Map<string, import("./types").PanelOperation>()
   // Fixture-only Agent Manager content-readiness handshake (KILO_E2E_FIXTURE).
   // Scoped to a content generation distinct from `generation` because the
   // fixture reload path preserves the same PanelContext/provider while the
@@ -289,6 +290,7 @@ export class AgentManagerProvider implements Disposable {
     const sid = (event as { properties?: { sessionID?: string } }).properties?.sessionID
     if (!sid) return
     this.timing.forget(sid)
+    this.recentOps?.delete(sid)
     if (!this.catalogTombstone) this.catalogTombstone = new Set<string>()
     this.catalogTombstone.add(sid)
     if (!this.recentSessions) this.recentSessions = new Set<string>()
@@ -311,6 +313,8 @@ export class AgentManagerProvider implements Disposable {
     }
     if (changed) {
       this.schedulePersist()
+      this.pushState()
+    } else if (this.recentOps?.has(sid)) {
       this.pushState()
     }
   }
@@ -640,6 +644,8 @@ export class AgentManagerProvider implements Disposable {
       this.activeSessionId = ord[0]
       changed = true
     }
+    const pruned = this.pruneRecentOps(remaining)
+    if (pruned) changed = true
     if (changed) {
       this.schedulePersist()
       this.pushState()
@@ -721,6 +727,7 @@ export class AgentManagerProvider implements Disposable {
         if (!this.recentSessions) this.recentSessions = new Set<string>()
         this.recentSessions.delete(m.sessionId)
         this.managedSessions.delete(m.sessionId)
+        this.recentOps?.delete(m.sessionId)
         this.timing.forget(m.sessionId)
         if (this.tabOrder && this.LOCAL) {
           const ord = this.tabOrder[this.LOCAL]
@@ -771,7 +778,12 @@ export class AgentManagerProvider implements Disposable {
       this.terminalManager.syncOnSessionSwitch(m.sessionID)
       this.emitActiveSessionChanged(m.sessionID)
       this.schedulePersist()
-      if (prev !== m.sessionID) this.triggerObservationRefresh()
+      if (prev !== m.sessionID) {
+        this.triggerObservationRefresh()
+        void this.fetchRecentOps([m.sessionID]).then(() => this.pushState()).catch(() => {})
+      } else {
+        void this.fetchRecentOps([m.sessionID]).then(() => this.pushState()).catch(() => {})
+      }
       return msg
     }
 
@@ -918,6 +930,7 @@ export class AgentManagerProvider implements Disposable {
       }
       if (this.generation !== gen || this.panel?.sessions !== sessions) return
       this.hydrated = true
+      void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
       return
     }
     if (this.coordinator) {
@@ -937,6 +950,7 @@ export class AgentManagerProvider implements Disposable {
         }
         if (this.generation !== gen || this.panel?.sessions !== sessions) return
         if (decision.ackCursor !== undefined) await this.coordinator.ack(decision.ackCursor)
+        void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
         return
       }
     }
@@ -944,6 +958,7 @@ export class AgentManagerProvider implements Disposable {
     try {
       await sessions.refreshSessions()
     } catch {}
+    void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
   }
 
   /**
@@ -1085,10 +1100,11 @@ export class AgentManagerProvider implements Disposable {
       }
       await this.coordinator.ack(decision.ackCursor)
     }
+    void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
   }
 
   /**
-   * Strictly bounded observation/changed consumer — payload-free, versioned, fail-closed.
+    * Strictly bounded observation/changed consumer — payload-free, versioned, fail-closed.
    * - Validates via coordinator.decideFromChangedNotificationWithValidity (v1.0, cursor, entries, seq/revision/time/kind)
    * - Invalid/out-of-order/gap discarded: no refresh, no ack, no cursor mutation
    * - Legal changed/deleted converted to single re-observe signal (refresh + ack after success)
@@ -1189,6 +1205,7 @@ export class AgentManagerProvider implements Disposable {
       this.pendingChangedBaseline = undefined
       return
     }
+    void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
     const latestAck = this.pendingChangedAckCursor
     const latestBaseline = this.pendingChangedBaseline
     this.pendingChangedAckCursor = undefined
@@ -1365,6 +1382,7 @@ export class AgentManagerProvider implements Disposable {
     this.panelSessions.delete(sessionId)
     if (!this.recentSessions) this.recentSessions = new Set<string>()
     this.recentSessions.delete(sessionId)
+    this.recentOps?.delete(sessionId)
     this.managedSessions.delete(sessionId)
     if (this.tabOrder && this.LOCAL) {
       const ord = this.tabOrder[this.LOCAL]
@@ -1471,6 +1489,7 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private pushState(): void {
+    const ops = this.recentOps && this.recentOps.size > 0 ? Object.fromEntries(this.recentOps) : undefined
     this.postToWebview({
       type: "agentManager.state",
       sessions: [...this.managedSessions.values()],
@@ -1480,9 +1499,43 @@ export class AgentManagerProvider implements Disposable {
       sidebarCollapsed: this.sidebarCollapsed,
       isGitRepo: true,
       ...(this.activeSessionId ? { activeSessionId: this.activeSessionId } : {}),
+      ...(ops ? { recentOperations: ops } : {}),
     })
 
     this.statsPoller.setEnabled(this.panel !== undefined)
+  }
+
+  private pruneRecentOps(validIds: Set<string>): boolean {
+    if (!this.recentOps) return false
+    let changed = false
+    for (const k of [...this.recentOps.keys()]) if (!validIds.has(k)) { this.recentOps.delete(k); changed = true }
+    return changed
+  }
+
+  private async fetchRecentOps(ids: string[]): Promise<void> {
+    if (ids.length === 0) return
+    if (!this.recentOps) this.recentOps = new Map<string, import("./types").PanelOperation>()
+    const root = this.getRoot()
+    if (!root) return
+    const reader = this.coordinator?.observationReader() as unknown as { isEnabled(): boolean; isStarted(): boolean; operations?(input: unknown): Promise<unknown> } | null
+    if (!reader || !reader.operations || !reader.isEnabled() || !reader.isStarted()) return
+    for (const sid of ids) {
+      try {
+        const raw = (await reader.operations({ directory: root, sessionId: sid, limit: 1 })) as { v?: string; status?: string; operations?: unknown[] }
+        if (!raw || raw.v !== "1.0") continue
+        if (raw.status === "found" && Array.isArray(raw.operations) && raw.operations.length > 0) {
+          const op = raw.operations[0] as unknown as import("./types").PanelOperation
+          // validate panel shape strictly
+          if (typeof op.opId !== "string" || typeof op.outcome !== "string" || typeof op.code !== "string" || typeof op.message !== "string" || typeof op.time !== "number") continue
+          if ((op as unknown as Record<string, unknown>).detail !== undefined || (op as unknown as Record<string, unknown>).stack !== undefined) continue
+          this.recentOps.set(sid, op)
+        } else if (raw.status === "found" && Array.isArray(raw.operations) && raw.operations.length === 0) {
+          this.recentOps.delete(sid)
+        } else if (raw.status === "not_found" || raw.status === "scope_mismatch") {
+          this.recentOps.delete(sid)
+        }
+      } catch {}
+    }
   }
 
   // File helpers

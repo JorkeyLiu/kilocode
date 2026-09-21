@@ -6,6 +6,7 @@ import { createChangefeedDeps } from "./changefeed-adapter"
 import { createSessionListDeps } from "./session-list-adapter"
 import { createSessionGetDeps } from "./session-get-adapter"
 import { createSessionMessagesDeps } from "./session-messages-adapter"
+import { createSessionOperationsDeps } from "./session-operations-adapter"
 import { startWorker } from "./worker"
 import type { ObservationDeps } from "./observation"
 import { JsonRpcPeer } from "./peer"
@@ -52,7 +53,8 @@ export async function createStandaloneDeps(): Promise<{
   const list = createSessionListDeps(svc.db)
   const get = createSessionGetDeps(svc.db)
   const messages = createSessionMessagesDeps(svc.db)
-  const deps: ObservationDeps = { ...base, list: list.list, get: get.get, messages: messages.messages }
+  const ops = createSessionOperationsDeps(svc.db)
+  const deps: ObservationDeps = { ...base, list: list.list, get: get.get, messages: messages.messages, operations: ops.operations }
   const dispose = async () => {
     try {
       await runtime.dispose()

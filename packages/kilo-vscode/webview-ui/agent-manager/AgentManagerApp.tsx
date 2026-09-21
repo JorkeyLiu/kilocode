@@ -109,6 +109,8 @@ import { openSession, openChildSession, type OpenChildSessionDeps, type OpenSess
 import { accumulateCatalog, reconcile } from "./hydration"
 import { mergePreview } from "./SidebarSessionList"
 import { resolveCoverBottomPage, shouldClearBottomPage } from "./cover-bottom-page"
+import { OperationStatus } from "./OperationStatus"
+import type { PanelOperation } from "../src/types/messages/agent-manager"
 import "./agent-manager.css"
 
 // Explicit tool registration at the Agent Manager boundary. The task renderer
@@ -163,6 +165,7 @@ const AgentManagerContent: Component = () => {
   const [sessionsLoaded, setSessionsLoaded] = createSignal(false)
   const [isGitRepo, setIsGitRepo] = createSignal(true)
   const [managedSessions, setManagedSessions] = createSignal<{ id: string }[]>([])
+  const [recentOps, setRecentOps] = createSignal<Record<string, PanelOperation>>({})
   // Non-authoritative preview: flat read-only rows from page deltas. Never
   // enters the session store, Topics, pruning, tombstones, or readiness.
   const [preview, setPreview] = createSignal<SessionInfo[]>([])
@@ -927,6 +930,8 @@ const AgentManagerContent: Component = () => {
       if (msg.type === "agentManager.state") {
         const state = msg as AgentManagerStateMessage
         setManagedSessions(state.sessions)
+        if (state.recentOperations) setRecentOps(state.recentOperations)
+        else setRecentOps({})
         if (state.timing) session.setTimingSnapshots(state.timing)
         if (state.isGitRepo !== undefined) setIsGitRepo(state.isGitRepo)
         // Only update non-LOCAL tab order keys from extension state.
@@ -1504,6 +1509,7 @@ const AgentManagerContent: Component = () => {
                 {/* Keep terminal tabs mounted so output streams across context switches. */}
                 {renderTerminalLayer({ state: terms })}
                 <div class="am-chat-wrapper">
+                  <OperationStatus op={(() => { const id = session.currentSessionID(); return id ? recentOps()[id] : undefined })()} />
                   <ChatView
                     onSelectSession={(id) => {
                       handleOpenSession(id)
