@@ -234,6 +234,10 @@ SQLite is default structured store.
 | Retention tables | `session_changefeed` (bounded payload-free deltas: global monotonic `seq`, `session_id`, `revision`, `kind`, `time`, no FK to `session`, `UNIQUE(session_id, revision, kind)`, 50,000 rows / 64 MiB logical caps), `session_changefeed_state` (singleton `latest_seq` / retained counts), and `retention_obligation` (durable artifact-cleanup obligations) |
 | Legacy migration | On first database creation, CLI runs one-time JSON-to-SQLite migration for projects, sessions, messages, parts, todos, permissions, and shares |
 
+### Database activation marker gate
+
+Shared `Database.assertNoActivationMarker` in `@opencode-ai/core/database/database.ts` is sourced from the same `.cutover-*.marker.json`/`.rollback-*.marker.json` via `markerPathsForFile` and is fail-closed (`:memory:` bypasses). Writer `Database.layer` and `Database.layerFromPath` acquire the data-root lease first, then run the marker check before opening the DB; failure releases the lease via the finalizer and the DB is not opened. Standalone private observation (`packages/opencode/src/private-worker/standalone-worker.ts` `createStandaloneDeps`) checks before any `layerNoLease`/`ManagedRuntime` creation and remains a no-lease pure observer. Legacy `AppLayer`/session-store authority and runtime/store cutover are unchanged.
+
 ### Snapshot v2 journal
 
 - Store: content-addressed `snapshot_blob` (sha256 PK, complete raw bytes, size).

@@ -22,7 +22,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/storage/Database") {}
 
-function markerPathsForFile(file: string): { cutover: string; rollback: string } | undefined {
+export function markerPathsForFile(file: string): { cutover: string; rollback: string } | undefined {
   if (file === ":memory:" || file.includes(":memory:")) return undefined
   const abs = resolve(file)
   const dataRoot = dirname(abs)
@@ -30,6 +30,18 @@ function markerPathsForFile(file: string): { cutover: string; rollback: string }
   return {
     cutover: join(parent, `.cutover-${base}.marker.json`),
     rollback: join(parent, `.rollback-${base}.marker.json`),
+  }
+}
+
+export async function assertNoActivationMarker(file: string): Promise<void> {
+  const markers = markerPathsForFile(file)
+  if (!markers) return
+  for (const p of [markers.cutover, markers.rollback] as const) {
+    const exists = await fs
+      .access(p)
+      .then(() => true)
+      .catch(() => false)
+    if (exists) throw new Error(`DB activation blocked: marker exists at ${p} - recovery required`)
   }
 }
 
@@ -45,7 +57,11 @@ const createDbEffect = Effect.gen(function* () {
   yield* DatabaseMigration.apply(db)
 
   const ident = yield* db
-    .get<{ uuid: string; schema_version: string; cutover_archive_id: string }>(sql`SELECT uuid, schema_version, cutover_archive_id FROM storage_identity WHERE id = 1`)
+    .get<{
+      uuid: string
+      schema_version: string
+      cutover_archive_id: string
+    }>(sql`SELECT uuid, schema_version, cutover_archive_id FROM storage_identity WHERE id = 1`)
     .pipe(
       Effect.catch((e: any) => {
         const msg = String((e as any)?.message ?? e)
@@ -56,12 +72,15 @@ const createDbEffect = Effect.gen(function* () {
     )
   if (ident) {
     const isUUID = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
-    const isValidArchiveID = (id: string) => /^\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    const isValidArchiveID = (id: string) =>
+      /^\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
     if (!isUUID(ident.uuid)) yield* Effect.die(new Error(`invalid storage uuid ${ident.uuid}`))
     if (ident.schema_version !== "1") yield* Effect.die(new Error(`schema version mismatch`))
-    if (!ident.cutover_archive_id || !isValidArchiveID(ident.cutover_archive_id)) yield* Effect.die(new Error(`invalid cutover archive id ${ident.cutover_archive_id}`))
+    if (!ident.cutover_archive_id || !isValidArchiveID(ident.cutover_archive_id))
+      yield* Effect.die(new Error(`invalid cutover archive id ${ident.cutover_archive_id}`))
     const av = yield* db.get<{ auto_vacuum: number }>(sql`PRAGMA auto_vacuum`).pipe(Effect.orDie)
-    if ((av as any)?.auto_vacuum !== 2) yield* Effect.die(new Error(`auto_vacuum must be 2, got ${(av as any)?.auto_vacuum}`))
+    if ((av as any)?.auto_vacuum !== 2)
+      yield* Effect.die(new Error(`auto_vacuum must be 2, got ${(av as any)?.auto_vacuum}`))
   }
 
   return { db }
@@ -80,36 +99,34 @@ export const layer = Layer.unwrap(
     )
     // attach release to the unwrap scope so it lives for layer lifetime
     yield* Effect.addFinalizer(() => Effect.promise(() => handle.release()).pipe(Effect.orDie))
-    const markers = markerPathsForFile(file)
-    if (markers) {
-      for (const p of [markers.cutover, markers.rollback] as const) {
-        const exists = yield* Effect.promise(() => fs.access(p).then(() => true).catch(() => false)).pipe(Effect.orDie)
-        if (exists) yield* Effect.die(new Error(`DB activation blocked: marker exists at ${p} - recovery required`))
-      }
-    }
+    yield* Effect.tryPromise({
+      try: () => assertNoActivationMarker(file),
+      catch: (e) => e as Error,
+    }).pipe(Effect.orDie)
     return Layer.effect(Service, createDbEffect).pipe(Layer.provide(sqliteLayer({ filename: file })))
   }),
 ) as unknown as Layer.Layer<Service, never, never>
 
 export function layerFromPath(filename: string): Layer.Layer<Service, never, never> {
   if (filename === ":memory:" || filename.includes(":memory:")) {
-    return Layer.effect(Service, createDbEffect).pipe(Layer.provide(sqliteLayer({ filename }))) as unknown as Layer.Layer<Service, never, never>
+    return Layer.effect(Service, createDbEffect).pipe(
+      Layer.provide(sqliteLayer({ filename })),
+    ) as unknown as Layer.Layer<Service, never, never>
   }
   return Layer.unwrap(
     Effect.gen(function* () {
       const dataRoot = dirname(resolve(filename))
       const handle = yield* Effect.promise(() => acquireLease(dataRoot)).pipe(
-        Effect.mapError((e: any) => new Error(`DB lease acquisition failed for ${filename}: ${String(e?.message ?? e)}`)),
+        Effect.mapError(
+          (e: any) => new Error(`DB lease acquisition failed for ${filename}: ${String(e?.message ?? e)}`),
+        ),
         Effect.orDie,
       )
       yield* Effect.addFinalizer(() => Effect.promise(() => handle.release()).pipe(Effect.orDie))
-      const markers = markerPathsForFile(filename)
-      if (markers) {
-        for (const p of [markers.cutover, markers.rollback] as const) {
-          const exists = yield* Effect.promise(() => fs.access(p).then(() => true).catch(() => false)).pipe(Effect.orDie)
-          if (exists) yield* Effect.die(new Error(`DB activation blocked: marker exists at ${p} - recovery required`))
-        }
-      }
+      yield* Effect.tryPromise({
+        try: () => assertNoActivationMarker(filename),
+        catch: (e) => e as Error,
+      }).pipe(Effect.orDie)
       return Layer.effect(Service, createDbEffect).pipe(Layer.provide(sqliteLayer({ filename })))
     }),
   ) as unknown as Layer.Layer<Service, never, never>
@@ -136,7 +153,12 @@ export function path() {
   const next = join(Global.Path.data, `kilo-${safe}.db`)
   const prev = join(Global.Path.data, `opencode-${safe}.db`)
   if (!existsSync(next) && existsSync(prev)) {
-    log.warn("using legacy opencode channel database fallback", { channel: InstallationChannel, safe, canonical: next, legacy: prev })
+    log.warn("using legacy opencode channel database fallback", {
+      channel: InstallationChannel,
+      safe,
+      canonical: next,
+      legacy: prev,
+    })
     return prev
   }
   return next

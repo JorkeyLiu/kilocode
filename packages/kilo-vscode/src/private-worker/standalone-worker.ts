@@ -42,6 +42,7 @@ export async function createStandaloneDeps(): Promise<{
 }> {
   const file = process.env.KILO_DB!
   if (!isAbsolute(file)) throw new Error(`KILO_DB must be absolute for standalone worker: ${file}`)
+  await Database.assertNoActivationMarker(file)
   const layer = Database.layerNoLease(file)
   const runtime = ManagedRuntime.make(layer)
   const svc = await runtime.runPromise(
@@ -54,7 +55,13 @@ export async function createStandaloneDeps(): Promise<{
   const get = createSessionGetDeps(svc.db)
   const messages = createSessionMessagesDeps(svc.db)
   const ops = createSessionOperationsDeps(svc.db)
-  const deps: ObservationDeps = { ...base, list: list.list, get: get.get, messages: messages.messages, operations: ops.operations }
+  const deps: ObservationDeps = {
+    ...base,
+    list: list.list,
+    get: get.get,
+    messages: messages.messages,
+    operations: ops.operations,
+  }
   const dispose = async () => {
     try {
       await runtime.dispose()
