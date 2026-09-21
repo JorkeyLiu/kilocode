@@ -217,6 +217,8 @@ export class KiloConnectionService {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private viewedSending = false
   private viewedDirty = false
+  private viewedPending: Promise<void> | null = null
+  private disposePromise: Promise<void> | null = null
   private unsubRemote: (() => void) | null = null
   private privatePeer: ServePrivatePeer | null = null
   private privateAvailable = false
@@ -777,6 +779,7 @@ export class KiloConnectionService {
 
   /** Debounced: send the aggregated attached + visible snapshot to the server. Works even when remote control is disabled. */
   flushViewed(): void {
+    if (this.isDisposed) return
     if (this.debounceTimer) clearTimeout(this.debounceTimer)
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null
@@ -785,6 +788,7 @@ export class KiloConnectionService {
   }
 
   private sendViewed(): void {
+    if (this.isDisposed) return
     if (this.viewedSending) {
       this.viewedDirty = true
       return
@@ -796,84 +800,105 @@ export class KiloConnectionService {
     const snap = collectViewedSnapshot(this.viewerId, this.active, this.viewedSequence, this.attached, this.visible)
     const dir = this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0]
     const client = this.client
-    void (async () => {
+    let pending!: Promise<void>
+    pending = (async () => {
       try {
         await emitViewedOnce({ connection: this, client, directory: dir, snap })
       } catch (err) {
         console.warn("[Kilo New] ConnectionService: viewed flush failed:", err)
       } finally {
         this.viewedSending = false
-        if (this.viewedDirty) this.sendViewed()
+        const dirty = this.viewedDirty
+        this.viewedDirty = false
+        if (this.viewedPending === pending) this.viewedPending = null
+        if (dirty && !this.isDisposed) this.sendViewed()
       }
     })()
+    this.viewedPending = pending
   }
 
   // Async so the bounded fail-soft final detach (3 s exact-cancel private
   // attempt plus at most one same-snapshot SDK fallback) settles before
   // peer teardown. No retry, no new owner, no delivery-after-death claim.
   async dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise
     if (this.isDisposed) return
     this.isDisposed = true
-    this.connectGeneration += 1
-    this.connectPromise = null
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer)
-      this.debounceTimer = null
-    }
-    this.viewedDirty = false
-    this.viewedSequence += 1
-    try {
-      await emitDisposeDetach({
-        viewerId: this.viewerId,
-        seq: this.viewedSequence,
-        directory: this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0],
-        peer: this.privatePeer,
-        live: this.privateAvailable,
-        client: this.client,
-      })
-    } catch {}
-    // Invalidate any pending connect continuations before resource installation
-    this.sseClient?.dispose()
-    this.disposePrivatePeer()
-    this.serverManager.dispose()
-    this.eventListeners.clear()
-    this.stateListeners.clear()
-    this.profileChangeListeners.clear()
-    this.favoritesChangeListeners.clear()
-    this.directoryProviders.clear()
-    this.rootDirectory = undefined
-    this.currentDirectory = undefined
-    this.messageSessionIdsByMessageId.clear()
-    this.permissionDirectories.clear()
-    this.questionDirectories.clear()
-    this.firstModelEventMessages.clear()
-    this.questionRevision += 1
-    this.seenConfigTransactions.clear()
-    this.configRevisionListeners.clear()
-    this.privateAvailableListeners.clear()
-    this.clearAllDeferredGetObservers()
-    this.clearAllDeferredMessagesObservers()
-    this.deferredChildren.clearAll()
-    this.deferredRemoteStatus.clearAll()
-    this.deferredSessionList.clearAll()
-    this.lastSessionUpdateIdentities?.clear()
-    this.attached.clear()
-    this.visible.clear()
-    if (this.checkinTimer) {
-      clearInterval(this.checkinTimer)
-      this.checkinTimer = null
-    }
-    this.windowStateDisposable?.dispose()
-    this.windowStateDisposable = null
-    this.viewedDirty = false
-    this.unsubRemote?.()
-    this.unsubRemote = null
-    this.client = null
-    this.sseClient = null
-    this.config = null
-    this.info = null
-    this.state = "disconnected"
-    this.error = null
+    const task = (async () => {
+      this.connectGeneration += 1
+      this.connectPromise = null
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer)
+        this.debounceTimer = null
+      }
+      if (this.checkinTimer) {
+        clearInterval(this.checkinTimer)
+        this.checkinTimer = null
+      }
+      this.viewedDirty = false
+      if (this.viewedSending && this.viewedPending) {
+        try {
+          await this.viewedPending
+        } catch {}
+        this.viewedDirty = false
+      }
+      this.viewedSequence += 1
+      try {
+        await emitDisposeDetach({
+          viewerId: this.viewerId,
+          seq: this.viewedSequence,
+          directory: this.rootDirectory ?? this.currentDirectory ?? this.getKnownDirectories()[0],
+          peer: this.privatePeer,
+          live: this.privateAvailable,
+          client: this.client,
+        })
+      } catch {}
+      // Invalidate any pending connect continuations before resource installation
+      this.sseClient?.dispose()
+      this.disposePrivatePeer()
+      this.serverManager.dispose()
+      this.eventListeners.clear()
+      this.stateListeners.clear()
+      this.profileChangeListeners.clear()
+      this.favoritesChangeListeners.clear()
+      this.directoryProviders.clear()
+      this.rootDirectory = undefined
+      this.currentDirectory = undefined
+      this.messageSessionIdsByMessageId.clear()
+      this.permissionDirectories.clear()
+      this.questionDirectories.clear()
+      this.firstModelEventMessages.clear()
+      this.questionRevision += 1
+      this.seenConfigTransactions.clear()
+      this.configRevisionListeners.clear()
+      this.privateAvailableListeners.clear()
+      this.clearAllDeferredGetObservers()
+      this.clearAllDeferredMessagesObservers()
+      this.deferredChildren.clearAll()
+      this.deferredRemoteStatus.clearAll()
+      this.deferredSessionList.clearAll()
+      this.lastSessionUpdateIdentities?.clear()
+      this.attached.clear()
+      this.visible.clear()
+      if (this.checkinTimer) {
+        clearInterval(this.checkinTimer)
+        this.checkinTimer = null
+      }
+      this.windowStateDisposable?.dispose()
+      this.windowStateDisposable = null
+      this.viewedDirty = false
+      this.viewedPending = null
+      this.unsubRemote?.()
+      this.unsubRemote = null
+      this.client = null
+      this.sseClient = null
+      this.config = null
+      this.info = null
+      this.state = "disconnected"
+      this.error = null
+    })()
+    this.disposePromise = task
+    return task
   }
 
   private setState(state: ConnectionState, error?: Error): void {

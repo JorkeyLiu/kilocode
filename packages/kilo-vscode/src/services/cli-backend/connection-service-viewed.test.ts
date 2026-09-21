@@ -277,4 +277,208 @@ describe("KiloConnectionService session/viewed private-first", () => {
     expect(client.calls[0]!.attached).toEqual([])
     expect(client.calls[0]!.visible).toEqual([])
   })
+
+  test("viewed in-flight dispose waits bounded detach, no trailing, no second peer/client touch, single sequence bump", async () => {
+    const client = { calls: [] as unknown[] }
+    const svc = serviceWith(client)
+    let releaseViewed!: (v: unknown) => void
+    const gateViewed = new Promise<unknown>((res) => { releaseViewed = res })
+    let releaseDetach!: (v: unknown) => void
+    const gateDetach = new Promise<unknown>((res) => { releaseDetach = res })
+    const order: string[] = []
+    let viewedCalls = 0
+    let detachCalls = 0
+    let detachPayload: { viewer: { active: boolean; sequence: number }; attached: string[]; visible: string[] } | null = null
+    const peer = {
+      isAvailable: () => true,
+      dispose: () => { order.push("peer-disposed") },
+      hasCapability: () => true,
+      privateSessionViewedOutcomeWithHandle: (r: { requestId: string; payload: { viewer: { active: boolean; sequence: number }; attached: string[]; visible: string[] } }) => {
+        if (viewedCalls === 0) {
+          viewedCalls += 1
+          return {
+            id: 11,
+            promise: gateViewed.then(() => {
+              order.push("viewed-settled")
+              return {
+                kind: "valid",
+                result: {
+                  v: 1,
+                  requestId: r.requestId,
+                  op: "session/viewed",
+                  status: "succeeded",
+                  outcome: { type: "succeeded", time: 1 },
+                  accepted: true,
+                  data: { applied: true },
+                },
+              }
+            }),
+            cancel: () => true,
+          }
+        }
+        detachCalls += 1
+        detachPayload = r.payload
+        return {
+          id: 12,
+          promise: gateDetach.then(() => {
+            order.push("detach-settled")
+            return {
+              kind: "valid",
+              result: {
+                v: 1,
+                requestId: r.requestId,
+                op: "session/viewed",
+                status: "succeeded",
+                outcome: { type: "succeeded", time: 1 },
+                accepted: true,
+                data: { applied: true },
+              },
+            }
+          }),
+          cancel: () => true,
+        }
+      },
+      invalidateOnObserverTimeout: () => {},
+      tryCancelPending: () => true,
+      getState: () => "open",
+    }
+    ;(svc as unknown as { privatePeer: unknown }).privatePeer = peer
+    ;(svc as unknown as { privateAvailable: boolean }).privateAvailable = true
+    ;(svc as unknown as { privateEpoch: number }).privateEpoch = 1
+    ;(svc as unknown as { viewedSequence: number }).viewedSequence = 0
+    ;(svc as unknown as { sendViewed: () => void }).sendViewed()
+    expect((svc as unknown as { viewedSending: boolean }).viewedSending).toBe(true)
+    expect((svc as unknown as { viewedSequence: number }).viewedSequence).toBe(1)
+    expect(viewedCalls).toBe(1)
+    // mark dirty via second send while in-flight
+    ;(svc as unknown as { sendViewed: () => void }).sendViewed()
+    expect((svc as unknown as { viewedDirty: boolean }).viewedDirty).toBe(true)
+    const disposeP = svc.dispose()
+    await new Promise((r) => setTimeout(r, 20))
+    // strictly bounded: detach must not have started while viewed in-flight
+    expect(detachCalls).toBe(0)
+    expect(order).toEqual([])
+    // debounce/checkin cleared synchronously at dispose start
+    expect((svc as unknown as { debounceTimer: unknown }).debounceTimer).toBe(null)
+    // release viewed first
+    releaseViewed({})
+    // allow viewed settle then detach start
+    await new Promise((r) => setTimeout(r, 30))
+    expect(order).toEqual(["viewed-settled"])
+    expect(viewedCalls).toBe(1)
+    expect(detachCalls).toBe(1)
+    expect(order.includes("detach-settled")).toBe(false)
+    expect((svc as unknown as { viewedSequence: number }).viewedSequence).toBe(2)
+    // no trailing viewed started; detach is via emitDisposeDetach, not viewedSending
+    expect((svc as unknown as { viewedSending: boolean }).viewedSending).toBe(false)
+    expect((svc as unknown as { viewedDirty: boolean }).viewedDirty).toBe(false)
+    releaseDetach({})
+    await disposeP
+    expect(order).toEqual(["viewed-settled", "detach-settled", "peer-disposed"])
+    expect(viewedCalls).toBe(1)
+    expect(detachCalls).toBe(1)
+    expect(client.calls.length).toBe(0)
+    expect(detachPayload!.viewer.active).toBe(false)
+    expect(detachPayload!.viewer.sequence).toBe(2)
+    expect(detachPayload!.attached).toEqual([])
+    expect(detachPayload!.visible).toEqual([])
+    // sequence not extra bumped, no trailing
+    expect((svc as unknown as { viewedSequence: number }).viewedSequence).toBe(2)
+    expect((svc as unknown as { viewedSending: boolean }).viewedSending).toBe(false)
+    expect((svc as unknown as { viewedDirty: boolean }).viewedDirty).toBe(false)
+    // no timer left behind
+    expect((svc as unknown as { debounceTimer: unknown }).debounceTimer).toBe(null)
+    expect((svc as unknown as { checkinTimer: unknown }).checkinTimer).toBe(null)
+    // extra settling must not create trailing viewed
+    await new Promise((r) => setTimeout(r, 30))
+    expect(viewedCalls).toBe(1)
+    expect(detachCalls).toBe(1)
+    expect(client.calls.length).toBe(0)
+  })
+
+  test("dispose idempotent concurrent and sequential: single detach and single peer/server disposal, no trailing timer", async () => {
+    const client = { calls: [] as unknown[] }
+    const svc = serviceWith(client)
+    let release!: (v: unknown) => void
+    const gate = new Promise<unknown>((res) => { release = res })
+    const order: string[] = []
+    let privateCalls = 0
+    let peerDisposes = 0
+    let serverDisposes = 0
+    const peer = {
+      isAvailable: () => true,
+      dispose: () => { peerDisposes += 1; order.push("peer-disposed") },
+      hasCapability: () => true,
+      privateSessionViewedOutcomeWithHandle: (r: { requestId: string }) => {
+        privateCalls += 1
+        return {
+          id: 13,
+          promise: gate.then(() => {
+            order.push("detach-settled")
+            return {
+              kind: "valid",
+              result: {
+                v: 1,
+                requestId: r.requestId,
+                op: "session/viewed",
+                status: "succeeded",
+                outcome: { type: "succeeded", time: 1 },
+                accepted: true,
+                data: { applied: true },
+              },
+            }
+          }),
+          cancel: () => true,
+        }
+      },
+      invalidateOnObserverTimeout: () => {},
+      tryCancelPending: () => true,
+      getState: () => "open",
+    }
+    ;(svc as unknown as { privatePeer: unknown }).privatePeer = peer
+    ;(svc as unknown as { privateAvailable: boolean }).privateAvailable = true
+    ;(svc as unknown as { privateEpoch: number }).privateEpoch = 1
+    ;(svc as unknown as { viewedSequence: number }).viewedSequence = 10
+    const sm = (svc as unknown as { serverManager: { dispose: () => void } }).serverManager
+    const origDispose = sm.dispose.bind(sm)
+    ;(svc as unknown as { serverManager: { dispose: () => void } }).serverManager.dispose = () => { serverDisposes += 1; order.push("server-disposed") }
+    // install observable timers
+    ;(svc as unknown as { debounceTimer: unknown }).debounceTimer = setTimeout(() => {}, 10000)
+    ;(svc as unknown as { checkinTimer: unknown }).checkinTimer = setInterval(() => {}, 10000)
+    const p1 = svc.dispose()
+    const p2 = svc.dispose()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(privateCalls).toBe(1)
+    expect(order).toEqual([])
+    expect((svc as unknown as { debounceTimer: unknown }).debounceTimer).toBe(null)
+    expect((svc as unknown as { checkinTimer: unknown }).checkinTimer).toBe(null)
+    release({})
+    await Promise.all([p1, p2])
+    expect(privateCalls).toBe(1)
+    expect(peerDisposes).toBe(1)
+    expect(serverDisposes).toBe(1)
+    expect(order).toEqual(["detach-settled", "peer-disposed", "server-disposed"])
+    expect(client.calls.length).toBe(0)
+    expect((svc as unknown as { viewedSequence: number }).viewedSequence).toBe(11)
+    // sequential second dispose after settled must stay idempotent
+    const p3 = svc.dispose()
+    await p3
+    expect(privateCalls).toBe(1)
+    expect(peerDisposes).toBe(1)
+    expect(serverDisposes).toBe(1)
+    expect((svc as unknown as { viewedSequence: number }).viewedSequence).toBe(11)
+    // no trailing after short delay
+    await new Promise((r) => setTimeout(r, 30))
+    expect(privateCalls).toBe(1)
+    expect(client.calls.length).toBe(0)
+    expect((svc as unknown as { debounceTimer: unknown }).debounceTimer).toBe(null)
+    expect((svc as unknown as { checkinTimer: unknown }).checkinTimer).toBe(null)
+    expect((svc as unknown as { viewedDirty: boolean }).viewedDirty).toBe(false)
+    // restore to avoid leaking mocked serverManager for other tests (no further tests in file but keep clean)
+    ;(svc as unknown as { serverManager: { dispose: () => void } }).serverManager.dispose = origDispose
+    const dt = (svc as unknown as { debounceTimer: ReturnType<typeof setTimeout> | null }).debounceTimer
+    if (dt) clearTimeout(dt)
+    const ct = (svc as unknown as { checkinTimer: ReturnType<typeof setInterval> | null }).checkinTimer
+    if (ct) clearInterval(ct)
+  })
 })
