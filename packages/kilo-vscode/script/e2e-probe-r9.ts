@@ -108,7 +108,7 @@ function validateNotificationEnvelope(item: unknown): string | undefined {
     if (!isValidIntegerCursor(entry.seq)) return `notification entry seq must be integer >=0, got ${String(entry.seq)}`
     if (typeof entry.session_id !== "string" || entry.session_id.length === 0) return `notification entry session_id must be non-empty string, got ${String(entry.session_id)}`
     if (typeof entry.revision !== "number" || !Number.isInteger(entry.revision) || entry.revision < 0) return `notification entry revision must be integer >=0, got ${String(entry.revision)}`
-    if (entry.kind !== "changed" && entry.kind !== "deleted") return `notification entry kind must be changed or deleted, got ${String(entry.kind)}`
+    if (entry.kind !== "changed" && entry.kind !== "deleted" && entry.kind !== "generation") return `notification entry kind must be changed or deleted or generation, got ${String(entry.kind)}`
     if (typeof entry.time !== "number" || !Number.isFinite(entry.time)) return `notification entry time must be finite number, got ${String(entry.time)}`
   }
   // params.cursor should equal max seq for continuity

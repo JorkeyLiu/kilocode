@@ -196,7 +196,7 @@ if (isMain) {
                 const revision =
                   typeof p.revision === "number" && Number.isInteger(p.revision) && p.revision >= 0 ? p.revision : 1
                 const kindRaw = typeof p.kind === "string" ? p.kind : "changed"
-                const kind = kindRaw === "deleted" || kindRaw === "changed" ? kindRaw : "changed"
+                const kind = kindRaw === "deleted" || kindRaw === "changed" || kindRaw === "generation" ? kindRaw : "changed"
                 const time = typeof p.time === "number" && Number.isInteger(p.time) ? p.time : Date.now()
                 const capsRaw = p.caps as unknown
                 let entry: Changefeed.Entry

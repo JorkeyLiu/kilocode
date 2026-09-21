@@ -594,7 +594,7 @@ Derived, bounded, payload-free, never reconstruction authority. Canonical aggreg
 
 | Aspect | Behavior |
 |---|---|
-| Feed rows | Payload-free `session_changefeed` rows: global monotonic `seq` (AUTOINCREMENT), `session_id`, `revision`, `kind` (`changed`/`deleted`), runtime-owned `time`. No FK to `session`; `UNIQUE(session_id, revision, kind)` |
+| Feed rows | Payload-free `session_changefeed` rows: global monotonic `seq` (AUTOINCREMENT), `session_id`, `revision`, `kind` (`changed`/`deleted`/`generation` — `generation` is terminal prompt provenance alongside `changed` at same `revision`), runtime-owned `time`. No FK to `session`; `UNIQUE(session_id, revision, kind)` |
 | Revision coupling | An actually inserted new `Session` row atomically emits one payload-free `changed` at `revision 0` in the same `BEGIN IMMEDIATE` (fork emits for child only); same-key/replayed creation adds no feed row or `seq`; force `SessionImportService` replacement emits `prior revision + 1`; every other successful `SessionRevision.advance` emits one `changed` at the new revision in the same transaction; deletion emits `deleted` at `current + 1` per family member before hard delete; feed remains derived/bounded/truncatable, never reconstruction authority |
 | Idempotency | Feed identity is `(session_id, revision, kind)`. Duplicate append returns/reuses the existing entry and must not create a sequence gap |
 | Ordering | Global `seq` is monotonic across all sessions. `readAfter(cursor)` returns ordered `seq`-asc deltas only if contiguous |

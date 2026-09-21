@@ -3504,7 +3504,7 @@ async function serviceR9ObservationBoundary(
           return `session_id must be non-empty string got ${String(en.session_id)}`
         if (typeof en.revision !== "number" || !Number.isInteger(en.revision))
           return `revision must be integer got ${String(en.revision)}`
-        if (en.kind !== "changed" && en.kind !== "deleted") return `kind must be changed/deleted got ${String(en.kind)}`
+        if (en.kind !== "changed" && en.kind !== "deleted" && en.kind !== "generation") return `kind must be changed/deleted/generation got ${String(en.kind)}`
         if (typeof en.time !== "number") return `time must be number got ${String(en.time)}`
       }
       const maxSeq = Math.max(...(entries as Array<Record<string, unknown>>).map((e) => e.seq as number))

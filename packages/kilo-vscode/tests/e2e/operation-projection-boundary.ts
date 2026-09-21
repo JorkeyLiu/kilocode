@@ -372,7 +372,7 @@ function validateNotificationSnapshot(
         return { valid: false, reason: "session_id invalid" }
       if (typeof e.revision !== "number" || !Number.isInteger(e.revision) || e.revision < 0)
         return { valid: false, reason: "revision invalid" }
-      if (e.kind !== "changed" && e.kind !== "deleted")
+      if (e.kind !== "changed" && e.kind !== "deleted" && e.kind !== "generation")
         return { valid: false, reason: `kind invalid ${String(e.kind)}` }
       if (typeof e.time !== "number" || !Number.isFinite(e.time)) return { valid: false, reason: "time invalid" }
     }
