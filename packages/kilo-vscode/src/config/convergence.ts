@@ -22,7 +22,11 @@
  * scan/materialization. The hint always requests fail-safe cold convergence
  * (no hot/noop, no baseline, also cold for every asset descriptor); hint
  * failure leaves local state intact with a pending diagnostic and never
- * rewrites disk. Own-write hash hits send no observe (they already
+ * rewrites disk. The hint has at most one retry after a transport/timeout failure; no delivery guarantee — a parsed response (cold or any pending:
+ * failed/malformed/noop/hot/unknown/scope/id mismatch) never retries, and
+ * transport/timeout status is bounded to one retried attempt with a fresh
+ * internally four-key-bound observe token over the identical descriptor
+ * batch. Own-write hash hits send no observe (they already
  * acquire/resolve); non-`.md`, invalid/unmaterializable, and nested-subdir
  * events keep fail-soft semantics with diagnostics and no error descriptor.
  */
@@ -316,23 +320,52 @@ export class PrivateConvergenceAdapter implements ConfigConvergenceAdapter {
    * batching live in the bounded per-scope descriptor accumulator
    * (`external-observe.ts`), so distinct asset ids are never dropped here.
    * Failure/unavailable returns pending with local materialization intact
-   * and no rewrite.
+   * and no rewrite. The hint has at most one retry after a transport/timeout failure; no delivery guarantee — only the first
+   * private FD request lacking a valid response due to throw/timeout is
+   * retried once with a fresh internally four-key-bound observe token
+   * (observeId/opId/requestId/idempotencyKey) over the identical
+   * descriptor batch; the second throw/timeout returns the existing
+   * pending diagnostic. Any successfully parsed response (cold or any
+   * pending: failed/malformed/noop/hot/unknown/scope/id mismatch) never
+   * retries. No persistent queue, SDK fallback, hot/noop/baseline,
+   * infinite retry, epoch/lease binding, or fence-ownership change.
    */
   async observe(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
-    if (descriptors.length === 0) return { status: "pending", message: "observe requires descriptors; local state intact" }
-    return this.observeOnce(descriptors)
+    if (descriptors.length === 0)
+      return { status: "pending", message: "observe requires descriptors; local state intact" }
+    return this.observeWithRetry(descriptors)
   }
 
-  private async observeOnce(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
+  private async observeWithRetry(descriptors: readonly ConvergenceDescriptor[]): Promise<ConvergenceState> {
+    const first = await this.observeAttempt(descriptors)
+    if (!first.thrown) return first.state
+    const second = await this.observeAttempt(descriptors)
+    if (!second.thrown) return second.state
+    return { status: "pending", message: "observe unreachable; runtime convergence pending" }
+  }
+
+  private async observeAttempt(
+    descriptors: readonly ConvergenceDescriptor[],
+  ): Promise<{ readonly thrown: false; readonly state: ConvergenceState } | { readonly thrown: true }> {
     const peer = this.current()
-    if (!peer) return { status: "pending", message: "private transport unavailable; runtime convergence pending" }
+    if (!peer)
+      return {
+        thrown: false,
+        state: { status: "pending", message: "private transport unavailable; runtime convergence pending" },
+      }
     try {
       if (typeof peer.hasCapability === "function") {
         if (!peer.hasCapability("config/convergence/observe"))
-          return { status: "pending", message: "runtime observe capability missing; runtime convergence pending" }
+          return {
+            thrown: false,
+            state: { status: "pending", message: "runtime observe capability missing; runtime convergence pending" },
+          }
       }
     } catch {
-      return { status: "pending", message: "capability negotiation failed; runtime convergence pending" }
+      return {
+        thrown: false,
+        state: { status: "pending", message: "capability negotiation failed; runtime convergence pending" },
+      }
     }
     const id = token().replace("gui-", "obs-")
     const params = {
@@ -344,10 +377,14 @@ export class PrivateConvergenceAdapter implements ConfigConvergenceAdapter {
       descriptors: [...descriptors],
     }
     try {
-      const raw = await withTimeout(peer.request("config/convergence/observe", params), this.timeoutMs, "observe timed out")
-      return parseObserveResponse(raw, id)
+      const raw = await withTimeout(
+        peer.request("config/convergence/observe", params),
+        this.timeoutMs,
+        "observe timed out",
+      )
+      return { thrown: false, state: parseObserveResponse(raw, id) }
     } catch {
-      return { status: "pending", message: "observe unreachable; runtime convergence pending" }
+      return { thrown: true }
     }
   }
 }
