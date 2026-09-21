@@ -3,10 +3,10 @@ import type { CanonicalConfigService } from "../config/service"
 export interface PrivateSessionReader {
   isEnabled(): boolean
   isStarted(): boolean
-  list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number }): Promise<unknown>
-  get(input: { directory: string; sessionId: string }): Promise<unknown>
-  messages?(input: { directory: string; sessionId: string; limit: number; cursor?: string }): Promise<unknown>
-  operations?(input: { directory: string; sessionId: string; limit?: number }): Promise<unknown>
+  list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number; signal?: AbortSignal }): Promise<unknown>
+  get(input: { directory: string; sessionId: string; signal?: AbortSignal }): Promise<unknown>
+  messages?(input: { directory: string; sessionId: string; limit: number; cursor?: string; signal?: AbortSignal }): Promise<unknown>
+  operations?(input: { directory: string; sessionId: string; limit?: number; signal?: AbortSignal }): Promise<unknown>
 }
 
 /** Legacy alias — prefer PrivateSessionReader. */

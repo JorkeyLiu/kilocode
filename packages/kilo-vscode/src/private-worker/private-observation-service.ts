@@ -586,29 +586,33 @@ export class PrivateObservationService implements Disposable {
     return this.host.request(OBSERVATION_METHODS.SUBSCRIBE, params ?? {})
   }
 
-  /** Delegate observation/list — versioned directory-scoped session-list projection, no InstanceRef/drain-control. */
-  async list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number }): Promise<unknown> {
+  /** Delegate observation/list — versioned directory-scoped session-list projection, no InstanceRef/drain-control. Signal is transport-only cancellation and never enters the observation wire payload. */
+  async list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number; signal?: AbortSignal }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
     const payload: Record<string, unknown> = { v: OBSERVATION_VERSION, directory: input.directory }
     if (input.archived !== undefined) payload.archived = input.archived
     if (input.cursor !== undefined) payload.cursor = input.cursor
     if (input.limit !== undefined) payload.limit = input.limit
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.LIST, payload, { signal })
     return this.host.request(OBSERVATION_METHODS.LIST, payload)
   }
 
-  /** Delegate observation/get — versioned directory-scoped single session projection, no InstanceRef/drain-control. */
-  async get(input: { directory: string; sessionId: string }): Promise<unknown> {
+  /** Delegate observation/get — versioned directory-scoped single session projection, no InstanceRef/drain-control. Signal is transport-only. */
+  async get(input: { directory: string; sessionId: string; signal?: AbortSignal }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
     const payload: Record<string, unknown> = {
       v: OBSERVATION_VERSION,
       directory: input.directory,
       sessionId: input.sessionId,
     }
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.GET, payload, { signal })
     return this.host.request(OBSERVATION_METHODS.GET, payload)
   }
 
-  /** Delegate observation/messages — bounded raw storage-stripped page, no InstanceRef/drain-control. */
-  async messages(input: { directory: string; sessionId: string; limit: number; cursor?: string }): Promise<unknown> {
+  /** Delegate observation/messages — bounded raw storage-stripped page, no InstanceRef/drain-control. Signal is transport-only. */
+  async messages(input: { directory: string; sessionId: string; limit: number; cursor?: string; signal?: AbortSignal }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
     const payload: Record<string, unknown> = {
       v: OBSERVATION_VERSION,
@@ -617,11 +621,13 @@ export class PrivateObservationService implements Disposable {
       limit: input.limit,
     }
     if (input.cursor !== undefined) payload.cursor = input.cursor
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.MESSAGES, payload, { signal })
     return this.host.request(OBSERVATION_METHODS.MESSAGES, payload)
   }
 
-  /** Delegate observation/operations — bounded panel-safe projection, no InstanceRef/drain-control. */
-  async operations(input: { directory: string; sessionId: string; limit?: number }): Promise<unknown> {
+  /** Delegate observation/operations — bounded panel-safe projection, no InstanceRef/drain-control. Signal is transport-only. */
+  async operations(input: { directory: string; sessionId: string; limit?: number; signal?: AbortSignal }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
     const payload: Record<string, unknown> = {
       v: OBSERVATION_VERSION,
@@ -629,6 +635,8 @@ export class PrivateObservationService implements Disposable {
       sessionId: input.sessionId,
     }
     if (input.limit !== undefined) payload.limit = input.limit
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.OPERATIONS, payload, { signal })
     return this.host.request(OBSERVATION_METHODS.OPERATIONS, payload)
   }
 

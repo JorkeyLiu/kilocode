@@ -77,6 +77,17 @@ function makeHarness(opts: {
       if (opts.privateGet) return opts.privateGet(input)
       return makePrivateFound(input.sessionId, input.directory)
     },
+    messages: async (input: { directory: string; sessionId: string; limit: number; cursor?: string }) => ({
+      v: "1.0" as const,
+      status: "found" as const,
+      messages: [
+        {
+          info: { id: "msg_1", sessionID: input.sessionId, role: "user" as const, time: { created: 100 }, agent: "a", model: { providerID: "p", modelID: "m" } },
+          parts: [{ id: "prt_msg_1", sessionID: input.sessionId, messageID: "msg_1", type: "text" as const, text: "hi" }],
+        },
+      ],
+      nextCursor: undefined,
+    }),
   }
 
   const connectionService = {
@@ -168,7 +179,7 @@ describe("KiloProvider detail private-first matrix", () => {
     expect(h.sdkGets).toHaveLength(0)
   })
 
-  it("private malformed -> bounded warning then SDK exactly once with no second private request", async () => {
+  it("private malformed -> fails closed without SDK, no second private request", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -177,10 +188,9 @@ describe("KiloProvider detail private-first matrix", () => {
     })
     try {
       const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<unknown> }).getSessionInfo("ses_abc")
-      expect((out as Record<string, unknown>).id).toBe("ses_abc")
-      expect(h.sdkGets).toHaveLength(1)
+      expect(out).toBeUndefined()
+      expect(h.sdkGets).toHaveLength(0)
       expect(h.privateGets).toHaveLength(1)
-      // fallback issues no second private request (no parity observer)
       await new Promise((r) => setTimeout(r, 60))
       expect(h.parityGets).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
@@ -189,7 +199,7 @@ describe("KiloProvider detail private-first matrix", () => {
     }
   })
 
-  it("private InternalError -> fallback SDK once with no second private request", async () => {
+  it("private InternalError -> fails closed without SDK, no second private request", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -199,8 +209,8 @@ describe("KiloProvider detail private-first matrix", () => {
     })
     try {
       const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<unknown> }).getSessionInfo("ses_abc")
-      expect((out as Record<string, unknown>).id).toBe("ses_abc")
-      expect(h.sdkGets).toHaveLength(1)
+      expect(out).toBeUndefined()
+      expect(h.sdkGets).toHaveLength(0)
       await new Promise((r) => setTimeout(r, 60))
       expect(h.parityGets).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
@@ -209,29 +219,29 @@ describe("KiloProvider detail private-first matrix", () => {
     }
   })
 
-  it("private MethodNotFound -> fallback SDK once", async () => {
+  it("private MethodNotFound -> fails closed without SDK", async () => {
     const err = Object.assign(new Error("not found"), { code: ErrorCode.MethodNotFound })
     const h = makeHarness({ privateGet: async () => { throw err } })
     const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<unknown> }).getSessionInfo("ses_abc")
-    expect((out as Record<string, unknown>).id).toBe("ses_abc")
-    expect(h.sdkGets).toHaveLength(1)
+    expect(out).toBeUndefined()
+    expect(h.sdkGets).toHaveLength(0)
   })
 
-  it("gate off (disabled) -> SDK once with no second private request", async () => {
+  it("gate off (disabled) -> fails closed without SDK", async () => {
     const h = makeHarness({ privateEnabled: false })
     const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<unknown> }).getSessionInfo("ses_abc")
-    expect((out as Record<string, unknown>).id).toBe("ses_abc")
-    expect(h.sdkGets).toHaveLength(1)
+    expect(out).toBeUndefined()
+    expect(h.sdkGets).toHaveLength(0)
     await new Promise((r) => setTimeout(r, 60))
     expect(h.parityGets).toHaveLength(0)
     expect(h.privateGets).toHaveLength(0)
   })
 
-  it("gate not started -> SDK once", async () => {
+  it("gate not started -> fails closed without SDK", async () => {
     const h = makeHarness({ privateStarted: false })
     const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<unknown> }).getSessionInfo("ses_abc")
-    expect((out as Record<string, unknown>).id).toBe("ses_abc")
-    expect(h.sdkGets).toHaveLength(1)
+    expect(out).toBeUndefined()
+    expect(h.sdkGets).toHaveLength(0)
   })
 
   it("SDK unavailable with private error -> preserves semantics without SDK retry", async () => {
@@ -270,20 +280,20 @@ describe("KiloProvider detail private-first matrix", () => {
     expect((web2.revert as Record<string, unknown>).messageID).toBe("msg_1")
   })
 
-  it("strict signal reaches SDK fallback", async () => {
-    const sdkGets: Array<{ signal?: AbortSignal }> = []
+  it("strict signal does not reach SDK on private-authority unavailable (zero SDK)", async () => {
     const h = makeHarness({
       privateGet: async () => { const e = Object.assign(new Error("boom"), { code: ErrorCode.InternalError }); throw e },
-      sdkGet: async (_p: unknown, opts: unknown) => {
-        sdkGets.push(opts as { signal?: AbortSignal })
-        return { data: makeSdkSession("ses_abc", "/tmp/ws"), error: undefined, response: { status: 200, headers: { get: () => null } } }
-      },
     })
     const ctrl = new AbortController()
     const p = h.provider as unknown as { getSessionDetail: (id: string, dir: string, signal?: AbortSignal) => Promise<unknown> }
-    const detail = await p.getSessionDetail("ses_abc", "/tmp/ws", ctrl.signal)
-    expect((detail as Record<string, unknown>).id).toBe("ses_abc")
-    expect(sdkGets[0]?.signal).toBe(ctrl.signal)
+    let threw: unknown = null
+    try {
+      await p.getSessionDetail("ses_abc", "/tmp/ws", ctrl.signal)
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
+    expect(h.sdkGets).toHaveLength(0)
   })
 
   it("never calls private lifecycle (no initialize/reconnect)", async () => {
@@ -393,6 +403,22 @@ describe("KiloProvider detail private-first matrix", () => {
       space.fs["writeFile"] = async (uri: unknown, bytes: Uint8Array) => {
         writes.push({ uri, bytes })
       }
+      const privateReaderForExport = {
+        isEnabled: () => true,
+        isStarted: () => true,
+        list: async () => ({ v: "1.0", entries: [] }),
+        get: async () => ({ v: "1.0", status: "found", session: { id: "ses_abc", title: "hello", parentID: null, directory: "/tmp/ws", projectID: "p", createdAt: 1, updatedAt: 2 } }),
+        messages: async (input: { directory: string; sessionId: string; limit: number; cursor?: string }) => ({
+          v: "1.0",
+          status: "found",
+          messages: [
+            {
+              info: { id: "msg_1", sessionID: input.sessionId, role: "user", time: { created: 1000 }, agent: "a", model: { providerID: "p", modelID: "m" } },
+              parts: [{ id: "prt_msg_1", sessionID: input.sessionId, messageID: "msg_1", type: "text", text: "hello world" }],
+            },
+          ],
+        }),
+      } as unknown as import("./kilo-provider/options").PrivateSessionReader
       const got: Array<{ id: string; dir: string }> = []
       const ok = await exp.exportTranscript(
         client,
@@ -405,6 +431,7 @@ describe("KiloProvider detail private-first matrix", () => {
           },
         },
         null,
+        privateReaderForExport,
       )
       expect(ok).toBeTrue()
       expect(got).toHaveLength(1)
@@ -418,7 +445,7 @@ describe("KiloProvider detail private-first matrix", () => {
       // Cancel: returns false without write.
       writes.length = 0
       win["showSaveDialog"] = async () => undefined
-      const cancelled = await exp.exportTranscript(client, { sessionID: "ses_abc", dir: "/tmp/ws", getSessionDetail: async () => detail }, null)
+      const cancelled = await exp.exportTranscript(client, { sessionID: "ses_abc", dir: "/tmp/ws", getSessionDetail: async () => detail }, null, privateReaderForExport)
       expect(cancelled).toBeFalse()
       expect(writes).toHaveLength(0)
       // Detail domain failure preserves thrown behavior, no dialog and no write.
@@ -438,10 +465,11 @@ describe("KiloProvider detail private-first matrix", () => {
       expect(threw).toBeTrue()
       expect(dialogs).toBe(0)
       expect(writes).toHaveLength(0)
-      // SDK fallback path (no injected getter) still maps via static import.
+      // SDK fallback path (no injected getter) still maps via static import for detail,
+      // messages via private-authority with the same private reader.
       writes.length = 0
       win["showSaveDialog"] = async () => ({ fsPath: "/tmp/out.md" })
-      const sdkOk = await exp.exportTranscript(client, { sessionID: "ses_abc", dir: "/tmp/ws" }, null)
+      const sdkOk = await exp.exportTranscript(client, { sessionID: "ses_abc", dir: "/tmp/ws" }, null, privateReaderForExport)
       expect(sdkOk).toBeTrue()
       expect(seen).toHaveLength(1)
       expect(writes).toHaveLength(1)
@@ -452,7 +480,7 @@ describe("KiloProvider detail private-first matrix", () => {
     }
   })
 
-  it("summary diff status number/boolean malformed -> exactly one SDK fallback", async () => {
+  it("summary diff status number/boolean malformed -> fails closed without SDK", async () => {
     for (const bad of [1, true]) {
       const warns: unknown[][] = []
       const orig = console.warn
@@ -469,9 +497,9 @@ describe("KiloProvider detail private-first matrix", () => {
           }),
         })
         const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<Record<string, unknown> | undefined> }).getSessionInfo("ses_abc")
-        expect(out?.id).toBe("ses_abc")
+        expect(out).toBeUndefined()
         expect(h.privateGets).toHaveLength(1)
-        expect(h.sdkGets).toHaveLength(1)
+        expect(h.sdkGets).toHaveLength(0)
         expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
       } finally {
         console.warn = orig
@@ -504,7 +532,7 @@ describe("KiloProvider detail private-first matrix", () => {
     }
   })
 
-  it("thrown host-closed generic error -> exactly one SDK with no second private request, no lifecycle", async () => {
+  it("thrown host-closed generic error -> fails closed without SDK, no lifecycle", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -514,9 +542,9 @@ describe("KiloProvider detail private-first matrix", () => {
       const init = mock(() => Promise.resolve())
       reader["initialize"] = init
       const out = await (h.provider as unknown as { getSessionInfo: (id: string) => Promise<Record<string, unknown> | undefined> }).getSessionInfo("ses_abc")
-      expect(out?.id).toBe("ses_abc")
+      expect(out).toBeUndefined()
       expect(h.privateGets).toHaveLength(1)
-      expect(h.sdkGets).toHaveLength(1)
+      expect(h.sdkGets).toHaveLength(0)
       await new Promise((r) => setTimeout(r, 60))
       expect(h.parityGets).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Detail]"))).toBeTrue()
@@ -537,8 +565,7 @@ describe("KiloProvider detail private-first matrix", () => {
     }
   })
 
-  it("strict replace production path forwards AbortSignal to SDK fallback", async () => {
-    const seen: Array<{ signal?: AbortSignal }> = []
+  it("strict replace with private-authority unavailable aborts with no SDK and no stale session", async () => {
     const h = makeHarness({
       privateGet: async () => { throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError }) },
     })
@@ -547,24 +574,18 @@ describe("KiloProvider detail private-first matrix", () => {
     ;(anyP["lastReconciledAt"] as unknown) = new Map<string, number>()
     const posts: unknown[] = []
     ;(anyP["postMessage"] as unknown) = (m: unknown) => posts.push(m)
-    const sdk = h.client as unknown as { session: Record<string, unknown> }
-    const base = sdk.session["get"] as (p: unknown, o: unknown) => Promise<unknown>
-    void base
-    sdk.session["get"] = async (p: unknown, o: unknown) => {
-      h.sdkGets.push(p)
-      seen.push(o as { signal?: AbortSignal })
-      return { data: makeSdkSession("ses_abc", "/tmp/ws"), error: undefined, response: { status: 200, headers: { get: () => null } } }
+    let threw: unknown = null
+    try {
+      await (h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }).doLoadMessages("ses_abc", { mode: "replace" }, true)
+    } catch (e) {
+      threw = e
     }
-    const ok = await (h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }).doLoadMessages("ses_abc", { mode: "replace" }, true)
-    expect(ok).toBeTrue()
-    expect(h.sdkGets).toHaveLength(1)
-    expect(seen).toHaveLength(1)
-    expect(seen[0]?.signal instanceof AbortSignal).toBeTrue()
-    expect(posts.some((p) => (p as Record<string, unknown>).type === "sessionUpdated")).toBeTrue()
-    expect(posts.some((p) => (p as Record<string, unknown>).type === "messagesLoaded")).toBeTrue()
+    expect(threw).toBeInstanceOf(Error)
+    expect(h.sdkGets).toHaveLength(0)
+    expect(posts.some((p) => (p as Record<string, unknown>).type === "sessionUpdated")).toBeFalse()
   })
 
-  it("strict replace aborted during SDK fallback writes no stale session", async () => {
+  it("strict replace private-authority unavailable writes no stale session", async () => {
     const h = makeHarness({
       privateGet: async () => { throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError }) },
     })
@@ -574,20 +595,19 @@ describe("KiloProvider detail private-first matrix", () => {
     ;(anyP["currentSession"] as unknown) = null
     const posts: unknown[] = []
     ;(anyP["postMessage"] as unknown) = (m: unknown) => posts.push(m)
-    const sdk = h.client as unknown as { session: Record<string, unknown> }
-    sdk.session["get"] = async (p: unknown) => {
-      h.sdkGets.push(p)
-      ;(anyP["loadMessagesAbort"] as unknown as AbortController | undefined)?.abort()
-      return { data: makeSdkSession("ses_abc", "/tmp/ws"), error: undefined, response: { status: 200, headers: { get: () => null } } }
+    let threw: unknown = null
+    try {
+      await (h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }).doLoadMessages("ses_abc", { mode: "replace" }, true)
+    } catch (e) {
+      threw = e
     }
-    const ok = await (h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }).doLoadMessages("ses_abc", { mode: "replace" }, true)
-    expect(ok).toBeFalse()
-    expect(h.sdkGets).toHaveLength(1)
+    expect(threw).toBeInstanceOf(Error)
+    expect(h.sdkGets).toHaveLength(0)
     expect(anyP["currentSession"]).toBeNull()
     expect(posts.some((p) => (p as Record<string, unknown>).type === "sessionUpdated")).toBeFalse()
   })
 
-  it("handleSyncSession private found -> no SDK get, messages once, both events, dedupe retry", async () => {
+  it("handleSyncSession private found -> no SDK get, messages via private-authority, both events, dedupe retry", async () => {
     const h = makeHarness({
       privateGet: async (input) => makePrivateFound(input.sessionId, input.directory),
     })
@@ -606,13 +626,12 @@ describe("KiloProvider detail private-first matrix", () => {
     await (h.provider as unknown as { handleSyncSession: (id: string) => Promise<void> }).handleSyncSession("ses_child")
     expect(h.privateGets).toHaveLength(1)
     expect(h.sdkGets).toHaveLength(0)
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(0)
     expect(posts.some((p) => (p as Record<string, unknown>).type === "sessionUpdated")).toBeTrue()
     expect(posts.some((p) => (p as Record<string, unknown>).type === "messagesLoaded" && (p as Record<string, unknown>).sessionID === "ses_child")).toBeTrue()
     expect((anyP["syncedChildSessions"] as Set<string>).has("ses_child")).toBeTrue()
-    // Dedupe: second sync without failure does not refetch.
     await (h.provider as unknown as { handleSyncSession: (id: string) => Promise<void> }).handleSyncSession("ses_child")
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(0)
     expect(h.privateGets).toHaveLength(1)
   })
 
@@ -623,7 +642,6 @@ describe("KiloProvider detail private-first matrix", () => {
         if (fail) throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError })
         return makePrivateFound(input.sessionId, input.directory)
       },
-      sdkGet: async () => { throw new Error("metadata missing") },
     })
     const anyP = h.provider as unknown as Record<string, unknown>
     ;(anyP["syncedChildSessions"] as unknown) = new Set<string>()
@@ -632,10 +650,12 @@ describe("KiloProvider detail private-first matrix", () => {
     ;(anyP["postMessage"] as unknown) = (m: unknown) => posts.push(m)
     await (h.provider as unknown as { handleSyncSession: (id: string) => Promise<void> }).handleSyncSession("ses_retry")
     expect((anyP["syncedChildSessions"] as Set<string>).has("ses_retry")).toBeFalse()
+    expect(h.sdkGets).toHaveLength(0)
     expect(posts).toHaveLength(0)
     fail = false
     await (h.provider as unknown as { handleSyncSession: (id: string) => Promise<void> }).handleSyncSession("ses_retry")
     expect((anyP["syncedChildSessions"] as Set<string>).has("ses_retry")).toBeTrue()
+    expect(h.sdkGets).toHaveLength(0)
     expect(posts.some((p) => (p as Record<string, unknown>).type === "sessionUpdated")).toBeTrue()
     expect(posts.some((p) => (p as Record<string, unknown>).type === "messagesLoaded")).toBeTrue()
   })
@@ -750,7 +770,7 @@ describe("KiloProvider detail generation invalidation", () => {
     expect(posts.some((p) => (p as Record<string, unknown>).type === "messagesLoaded")).toBeTrue()
   })
 
-  it("SDK fallback abort-throw maps stale load to false without writes", async () => {
+  it("private-authority unavailable maps stale load to throw without writes and zero SDK", async () => {
     const h = makeHarness({
       privateGet: async () => { throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError }) },
     })
@@ -760,29 +780,26 @@ describe("KiloProvider detail generation invalidation", () => {
     ;(anyP["currentSession"] as unknown) = null
     const posts: unknown[] = []
     ;(anyP["postMessage"] as unknown) = (m: unknown) => posts.push(m)
-    const sdk = h.client as unknown as { session: Record<string, unknown> }
-    sdk.session["get"] = async (p: unknown) => {
-      h.sdkGets.push(p)
-      ;(anyP["loadMessagesAbort"] as unknown as AbortController | undefined)?.abort()
-      throw Object.assign(new Error("aborted"), { name: "AbortError" })
+    let threw: unknown = null
+    try {
+      await (h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }).doLoadMessages("ses_abc", { mode: "replace" }, true)
+    } catch (e) {
+      threw = e
     }
-    const ok = await (h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }).doLoadMessages("ses_abc", { mode: "replace" }, true)
-    expect(ok).toBeFalse()
+    expect(threw).toBeInstanceOf(Error)
+    expect(h.sdkGets).toHaveLength(0)
     expect(anyP["currentSession"]).toBeNull()
     expect(posts.some((p) => (p as Record<string, unknown>).type === "sessionUpdated")).toBeFalse()
     expect(posts.some((p) => (p as Record<string, unknown>).type === "messagesLoaded")).toBeFalse()
   })
 
-  it("SDK-error path preserves original error with no second private request", async () => {
+  it("private-authority error path preserves original error with no SDK and no second private request", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
     try {
-      const secret = "sdk-boom-secret-marker"
-      const sdkErr = new Error(`${secret} at /tmp/ws for ses_abc`)
       const h = makeHarness({
         privateGet: async () => { throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError }) },
-        sdkGet: async () => { throw sdkErr },
       })
       let threw: unknown = null
       try {
@@ -790,11 +807,15 @@ describe("KiloProvider detail generation invalidation", () => {
       } catch (e) {
         threw = e
       }
-      expect(threw).toBe(sdkErr)
+      expect(threw).toBeInstanceOf(Error)
+      expect((threw as Error).message).toBe("boom")
+      expect(h.sdkGets).toHaveLength(0)
       await new Promise((r) => setTimeout(r, 60))
       expect(h.parityGets).toHaveLength(0)
       for (const w of warns) {
-        expect(String(w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "))).not.toContain(secret)
+        const text = String(w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "))
+        expect(text).toContain("[Kilo Detail]")
+        expect(text).not.toContain("/tmp")
       }
     } finally {
       console.warn = orig

@@ -317,7 +317,7 @@ export interface SessionRefreshContext {
   pendingSessionRefresh: boolean
   connectionState: "connecting" | "connected" | "disconnected" | "error"
   listSessions:
-    | ((input: { limit: number; cursor?: string }) => Promise<{ sessions: Session[]; cursor: string | null }>)
+    | ((input: { limit: number; cursor?: string; signal?: AbortSignal }) => Promise<{ sessions: Session[]; cursor: string | null }>)
     | null
   /** Total sessions in the last complete inventory. Sizes the first drain page. Updated by loadSessions. */
   loadedCount: number

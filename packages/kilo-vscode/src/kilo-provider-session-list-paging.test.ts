@@ -211,7 +211,7 @@ describe("session-list complete inventory drain", () => {
     })
   })
 
-  test("private-first list SDK fallback issues exactly one SDK read with no second private request", async () => {
+  test("private-authority list unavailable branches make zero SDK calls and surface unavailable", async () => {
     const parity: unknown[] = []
     const sdkCalls: unknown[] = []
     const privateCalls: unknown[] = []
@@ -242,7 +242,10 @@ describe("session-list complete inventory drain", () => {
         return { id: 1, promise: new Promise(() => {}) }
       },
       getClient: () => client,
-      getClientAsync: async () => client,
+      getClientAsync: async () => {
+        sdkCalls.push("getClientAsync")
+        return client
+      },
       getConnectionError: () => null,
       sandboxPreference: { onChange: () => ({ dispose: () => {} }) },
       onEvent: () => () => {},
@@ -262,21 +265,132 @@ describe("session-list complete inventory drain", () => {
       { fsPath: "/tmp" } as unknown as import("vscode").Uri,
       connectionService,
       undefined,
-      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<
-        typeof KiloProvider
-      >[3],
+      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<typeof KiloProvider>[3],
     )
     Object.defineProperty(provider, "client", { get: () => client })
     Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => "/tmp", configurable: true })
     Object.defineProperty(provider, "initializeConnection", { value: async () => {}, configurable: true })
     const ctx = (provider as unknown as { sessionRefreshContext: SessionRefreshContext }).sessionRefreshContext
+    let threw: unknown = null
+    try {
+      await ctx.listSessions!({ limit: 10 })
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
+    expect((threw as Error).message).toMatch(/private observation unavailable/)
+    expect(privateCalls).toHaveLength(1)
+    expect(sdkCalls).toHaveLength(0)
+    await new Promise((r) => setTimeout(r, 60))
+    expect(parity).toHaveLength(0)
+  })
+
+  test("private-authority list valid found and valid empty are authoritative with zero SDK", async () => {
+    const sdkCalls: unknown[] = []
+    const client = {
+      experimental: {
+        session: {
+          list: async (p: unknown) => {
+            sdkCalls.push(p)
+            return { data: [], response: { headers: { get: () => null } } }
+          },
+        },
+      },
+    } as unknown as import("@kilocode/sdk/v2/client").KiloClient
+    const privateReader = {
+      isEnabled: () => true,
+      isStarted: () => true,
+      list: async () => ({ v: "1.0", entries: [], nextCursor: undefined }),
+      get: async () => ({ v: "1.0", status: "not_found" }),
+    }
+    const provider = new KiloProvider(
+      { fsPath: "/tmp" } as unknown as import("vscode").Uri,
+      { getClient: () => client, getClientAsync: async () => { sdkCalls.push("getClientAsync"); return client } } as unknown as KiloConnectionService,
+      undefined,
+      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<typeof KiloProvider>[3],
+    )
+    Object.defineProperty(provider, "client", { get: () => client })
+    Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => "/tmp", configurable: true })
+    const ctx = (provider as unknown as { sessionRefreshContext: SessionRefreshContext }).sessionRefreshContext
     const out = await ctx.listSessions!({ limit: 10 })
     expect(out.sessions).toEqual([])
     expect(out.cursor).toBeNull()
-    expect(privateCalls).toHaveLength(1)
-    expect(sdkCalls).toHaveLength(1)
-    expect((sdkCalls[0] as Record<string, unknown>).limit).toBe(10)
-    await new Promise((r) => setTimeout(r, 60))
-    expect(parity).toHaveLength(0)
+    expect(sdkCalls).toHaveLength(0)
+  })
+
+  test("private-authority list malformed fails closed without SDK", async () => {
+    const sdkCalls: unknown[] = []
+    const client = {
+      experimental: {
+        session: {
+          list: async (p: unknown) => {
+            sdkCalls.push(p)
+            return { data: [], response: { headers: { get: () => null } } }
+          },
+        },
+      },
+    } as unknown as import("@kilocode/sdk/v2/client").KiloClient
+    const privateReader = {
+      isEnabled: () => true,
+      isStarted: () => true,
+      list: async () => ({ v: "1.0", entries: [{ id: "bad", title: 123 }] }),
+      get: async () => ({ v: "1.0", status: "not_found" }),
+    }
+    const provider = new KiloProvider(
+      { fsPath: "/tmp" } as unknown as import("vscode").Uri,
+      { getClient: () => client, getClientAsync: async () => { sdkCalls.push("getClientAsync"); return client } } as unknown as KiloConnectionService,
+      undefined,
+      { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<typeof KiloProvider>[3],
+    )
+    Object.defineProperty(provider, "client", { get: () => client })
+    Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => "/tmp", configurable: true })
+    const ctx = (provider as unknown as { sessionRefreshContext: SessionRefreshContext }).sessionRefreshContext
+    let threw: unknown = null
+    try {
+      await ctx.listSessions!({ limit: 10 })
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
+    expect(sdkCalls).toHaveLength(0)
+  })
+
+  test("private-authority list gate-off/not-started makes zero SDK calls", async () => {
+    for (const started of [false]) {
+      const sdkCalls: unknown[] = []
+      const client = {
+        experimental: {
+          session: {
+            list: async (p: unknown) => {
+              sdkCalls.push(p)
+              return { data: [], response: { headers: { get: () => null } } }
+            },
+          },
+        },
+      } as unknown as import("@kilocode/sdk/v2/client").KiloClient
+      const privateReader = {
+        isEnabled: () => true,
+        isStarted: () => started as boolean,
+        list: async () => ({ v: "1.0", entries: [] }),
+        get: async () => ({ v: "1.0", status: "not_found" }),
+      }
+      const provider = new KiloProvider(
+        { fsPath: "/tmp" } as unknown as import("vscode").Uri,
+        { getClient: () => client, getClientAsync: async () => { sdkCalls.push("getClientAsync"); return client } } as unknown as KiloConnectionService,
+        undefined,
+        { projectDirectory: "/tmp", privateSessionReader: privateReader } as unknown as Parameters<typeof KiloProvider>[3],
+      )
+      Object.defineProperty(provider, "client", { get: () => client })
+      Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => "/tmp", configurable: true })
+      const ctx = (provider as unknown as { sessionRefreshContext: SessionRefreshContext }).sessionRefreshContext
+      let threw: unknown = null
+      try {
+        await ctx.listSessions!({ limit: 10 })
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(Error)
+      expect(sdkCalls).toHaveLength(0)
+    }
   })
 })

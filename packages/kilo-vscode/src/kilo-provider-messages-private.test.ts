@@ -197,7 +197,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("private malformed falls back exactly once with bounded warn, no second private request, and no raw data", async () => {
+  it("private malformed fails closed without SDK, no second private request, and no raw data", async () => {
     const warns: unknown[][] = []
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
@@ -205,15 +205,21 @@ describe("paged messages private-first", () => {
       const h = makeHarness({
         privateMessages: async () => ({ v: "1.0", status: "found", messages: [{ info: { id: "bad" }, parts: [] }] }),
       })
-      const page = await fetchMessagePage(
-        h.client as never,
-        { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
-        h.connection as never,
-        h.reader as never,
-      )
-      expect(page.items).toHaveLength(1)
+      let threw: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(Error)
+      expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
       expect(h.privateCalls).toHaveLength(1)
-      expect(h.sdkCalls).toHaveLength(1)
+      expect(h.sdkCalls).toHaveLength(0)
       await tick()
       expect(h.parityCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
@@ -227,7 +233,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("private InternalError/MethodNotFound/transport/closed each fallback exactly once with no second private request", async () => {
+  it("private InternalError/MethodNotFound/transport/closed each fails closed without SDK", async () => {
     const cases: unknown[] = [
       Object.assign(new Error("boom"), { code: ErrorCode.InternalError }),
       Object.assign(new Error("missing"), { code: ErrorCode.MethodNotFound }),
@@ -244,15 +250,21 @@ describe("paged messages private-first", () => {
             throw err
           },
         })
-        const page = await fetchMessagePage(
-          h.client as never,
-          { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
-          h.connection as never,
-          h.reader as never,
-        )
-        expect(page.items).toHaveLength(1)
+        let threw: unknown = null
+        try {
+          await fetchMessagePage(
+            h.client as never,
+            { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+            h.connection as never,
+            h.reader as never,
+          )
+        } catch (e) {
+          threw = e
+        }
+        expect(threw).toBeInstanceOf(Error)
+        expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
         expect(h.privateCalls).toHaveLength(1)
-        expect(h.sdkCalls).toHaveLength(1)
+        expect(h.sdkCalls).toHaveLength(0)
         await tick()
         expect(h.parityCalls).toHaveLength(0)
         expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
@@ -267,29 +279,41 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("disabled/not-started/legacy reader fallback silently to SDK once with no second private request", async () => {
+  it("disabled/not-started/legacy reader fails closed without SDK", async () => {
     for (const opts of [{ privateEnabled: false }, { privateStarted: false }, { hasPrivateMessagesFn: false }]) {
       const h = makeHarness(opts)
-      const page = await fetchMessagePage(
-        h.client as never,
-        { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
-        h.connection as never,
-        h.reader as never,
-      )
-      expect(page.items).toHaveLength(1)
-      expect(h.sdkCalls).toHaveLength(1)
+      let threw: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(Error)
+      expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
+      expect(h.sdkCalls).toHaveLength(0)
       await tick()
       expect(h.parityCalls).toHaveLength(0)
     }
-    // Disabled path makes no private call.
     const h2 = makeHarness({ privateEnabled: false })
-    await fetchMessagePage(
-      h2.client as never,
-      { sessionID: h2.sid, workspaceDir: h2.dir, limit: 2 },
-      h2.connection as never,
-      h2.reader as never,
-    )
+    let threw2: unknown = null
+    try {
+      await fetchMessagePage(
+        h2.client as never,
+        { sessionID: h2.sid, workspaceDir: h2.dir, limit: 2 },
+        h2.connection as never,
+        h2.reader as never,
+      )
+    } catch (e) {
+      threw2 = e
+    }
+    expect(threw2).toBeInstanceOf(Error)
     expect(h2.privateCalls).toHaveLength(0)
+    expect(h2.sdkCalls).toHaveLength(0)
   })
 
   it("limit=0 full read iterates private pages oldest-first with wire limit 100", async () => {
@@ -346,7 +370,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("limit=0 second-page failure falls back to exactly one SDK full-read with no second private request", async () => {
+  it("limit=0 second-page failure fails closed without SDK", async () => {
     const newest = Array.from({ length: 100 }, (_, i) => userMsg(`msg_${String(i + 2).padStart(3, "0")}`, i + 2))
     const cursor0 = encodeMessageCursor({ id: newest[0]!.info.id, time: 2 })
     const warns: unknown[][] = []
@@ -358,64 +382,54 @@ describe("paged messages private-first", () => {
           if (input.cursor === undefined) return privateFound(input.sessionId, newest, cursor0)
           throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError })
         },
-        sdkMessages: async (p: unknown) => {
-          expect((p as Record<string, unknown>).limit).toBe(0)
-          return {
-            data: [userMsg("msg_sdk", 999)],
-            error: undefined,
-            response: { status: 200, headers: { get: () => null } },
-          }
-        },
       })
-      const page = await fetchMessagePage(
-        h.client as never,
-        { sessionID: h.sid, workspaceDir: h.dir, limit: 0 },
-        h.connection as never,
-        h.reader as never,
-      )
-      expect((page.items[0] as { info: { id: string } }).info.id).toBe("msg_sdk")
+      let threw: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 0 },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(Error)
+      expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
       expect(h.privateCalls).toHaveLength(2)
-      expect(h.sdkCalls).toHaveLength(1)
-      expect((h.sdkCalls[0] as Record<string, unknown>).limit).toBe(0)
+      expect(h.sdkCalls).toHaveLength(0)
       await tick()
       expect(h.parityCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
-      for (const w of warns) {
-        const text = w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
-        expect(text).not.toContain(SECRET_DIR)
-        expect(text).not.toContain(SECRET_SES)
-      }
     } finally {
       console.warn = orig
     }
   })
 
-  it("limit=0 private unavailable falls back to exactly one SDK full-read with no second private request", async () => {
+  it("limit=0 private unavailable fails closed without SDK", async () => {
     const h = makeHarness({ privateEnabled: false })
-    const page = await fetchMessagePage(
-      h.client as never,
-      { sessionID: h.sid, workspaceDir: h.dir, limit: 0 },
-      h.connection as never,
-      h.reader as never,
-    )
+    let threw: unknown = null
+    try {
+      await fetchMessagePage(
+        h.client as never,
+        { sessionID: h.sid, workspaceDir: h.dir, limit: 0 },
+        h.connection as never,
+        h.reader as never,
+      )
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
+    expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
     expect(h.privateCalls).toHaveLength(0)
-    expect(h.sdkCalls).toHaveLength(1)
-    expect((h.sdkCalls[0] as Record<string, unknown>).limit).toBe(0)
-    expect(page.cursor).toBeUndefined()
+    expect(h.sdkCalls).toHaveLength(0)
     await tick()
     expect(h.parityCalls).toHaveLength(0)
   })
 
-  it("limit=0 transient SDK rejection is not retried with no second private request", async () => {
-    const seenOpts: unknown[] = []
+  it("limit=0 private-authority does not call SDK on second-page failure (zero SDK)", async () => {
     const h = makeHarness({
       privateEnabled: false,
-      sdkMessages: async (_p: unknown, o: unknown) => {
-        seenOpts.push(o)
-        // Transient per retry helper ("load failed") with cause status 404:
-        // old retry fallback would read three times.
-        throw Object.assign(new Error("load failed"), { cause: { status: 404 } })
-      },
     })
     let threw: unknown = null
     try {
@@ -429,22 +443,15 @@ describe("paged messages private-first", () => {
       threw = e
     }
     expect(threw).toBeInstanceOf(Error)
-    expect(String((threw as Error).message)).toBe("load failed")
-    expect(h.sdkCalls).toHaveLength(1)
-    expect((h.sdkCalls[0] as Record<string, unknown>).limit).toBe(0)
-    expect(seenOpts).toHaveLength(1)
+    expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
+    expect(h.sdkCalls).toHaveLength(0)
     await tick()
     expect(h.parityCalls).toHaveLength(0)
   })
 
-  it("limit=0 transient SDK rejection preserves AbortSignal with one SDK read and no second private request", async () => {
-    const seenOpts: Array<{ signal?: AbortSignal }> = []
+  it("limit=0 private-authority preserves AbortSignal semantics with zero SDK", async () => {
     const h = makeHarness({
       privateEnabled: false,
-      sdkMessages: async (_p: unknown, o: unknown) => {
-        seenOpts.push(o as { signal?: AbortSignal })
-        throw Object.assign(new Error("fetch failed"), { cause: { status: 404 } })
-      },
     })
     const ctrl = new AbortController()
     let threw: unknown = null
@@ -459,9 +466,8 @@ describe("paged messages private-first", () => {
       threw = e
     }
     expect(threw).toBeInstanceOf(Error)
-    expect(h.sdkCalls).toHaveLength(1)
-    expect(seenOpts).toHaveLength(1)
-    expect(seenOpts[0]!.signal).toBe(ctrl.signal)
+    expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
+    expect(h.sdkCalls).toHaveLength(0)
     await tick()
     expect(h.parityCalls).toHaveLength(0)
   })
@@ -485,7 +491,7 @@ describe("paged messages private-first", () => {
     expect(h.sdkCalls).toHaveLength(0)
   })
 
-  it("out-of-order private page falls back exactly once", async () => {
+  it("out-of-order private page fails closed without SDK", async () => {
     const h = makeHarness({
       privateMessages: async (input) =>
         privateFound(input.sessionId, [userMsg("msg_2", 200, input.sessionId), userMsg("msg_1", 100, input.sessionId)]),
@@ -494,15 +500,21 @@ describe("paged messages private-first", () => {
     const orig = console.warn
     console.warn = (...a: unknown[]) => warns.push(a)
     try {
-      const page = await fetchMessagePage(
-        h.client as never,
-        { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
-        h.connection as never,
-        h.reader as never,
-      )
-      expect(page.items).toHaveLength(1)
+      let threw: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(Error)
+      expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
       expect(h.privateCalls).toHaveLength(1)
-      expect(h.sdkCalls).toHaveLength(1)
+      expect(h.sdkCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
     } finally {
       console.warn = orig
@@ -544,31 +556,27 @@ describe("paged messages private-first", () => {
     expect(h.parityCalls).toHaveLength(0)
   })
 
-  it("SDK fallback preserves original AbortSignal", async () => {
-    const seen: Array<{ signal?: AbortSignal }> = []
+  it("private-authority preserves AbortSignal on unavailable with zero SDK", async () => {
     const h = makeHarness({
       privateMessages: async () => {
         throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError })
       },
-      sdkMessages: async (_p: unknown, o: unknown) => {
-        seen.push(o as { signal?: AbortSignal })
-        return {
-          data: [userMsg("msg_2", 200)],
-          error: undefined,
-          response: { status: 200, headers: { get: () => null } },
-        }
-      },
     })
     const ctrl = new AbortController()
-    const page = await fetchMessagePage(
-      h.client as never,
-      { sessionID: h.sid, workspaceDir: h.dir, limit: 2, signal: ctrl.signal },
-      h.connection as never,
-      h.reader as never,
-    )
-    expect(page.items).toHaveLength(1)
-    expect(seen).toHaveLength(1)
-    expect(seen[0]!.signal).toBe(ctrl.signal)
+    let threw: unknown = null
+    try {
+      await fetchMessagePage(
+        h.client as never,
+        { sessionID: h.sid, workspaceDir: h.dir, limit: 2, signal: ctrl.signal },
+        h.connection as never,
+        h.reader as never,
+      )
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
+    expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
+    expect(h.sdkCalls).toHaveLength(0)
   })
 
   it("stale generation: second replace wins, first private late result writes nothing", async () => {
@@ -646,7 +654,7 @@ describe("paged messages private-first", () => {
     expect(threw).toBeTrue()
   })
 
-  it("part sessionID mismatch triggers bounded fallback, never authoritative", async () => {
+  it("part sessionID mismatch triggers bounded unavailable, never authoritative", async () => {
     const bad = [
       {
         info: userMsg("msg_1", 100).info,
@@ -665,15 +673,21 @@ describe("paged messages private-first", () => {
     console.warn = (...a: unknown[]) => warns.push(a)
     try {
       const h = makeHarness({ privateMessages: async (input) => privateFound(input.sessionId, bad) })
-      const page = await fetchMessagePage(
-        h.client as never,
-        { sessionID: h.sid, workspaceDir: h.dir, limit: 1 },
-        h.connection as never,
-        h.reader as never,
-      )
-      expect(page.items).toHaveLength(1)
+      let threw2: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 1 },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw2 = e
+      }
+      expect(threw2).toBeInstanceOf(Error)
+      expect(String((threw2 as Error).message)).toMatch(/private observation unavailable/)
       expect(h.privateCalls).toHaveLength(1)
-      expect(h.sdkCalls).toHaveLength(1)
+      expect(h.sdkCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
       for (const w of warns) {
         const text = w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
@@ -686,7 +700,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("part messageID mismatch triggers bounded fallback, never authoritative", async () => {
+  it("part messageID mismatch triggers bounded unavailable, never authoritative", async () => {
     const bad = [
       {
         info: userMsg("msg_1", 100).info,
@@ -705,15 +719,21 @@ describe("paged messages private-first", () => {
     console.warn = (...a: unknown[]) => warns.push(a)
     try {
       const h = makeHarness({ privateMessages: async (input) => privateFound(input.sessionId, bad) })
-      const page = await fetchMessagePage(
-        h.client as never,
-        { sessionID: h.sid, workspaceDir: h.dir, limit: 1 },
-        h.connection as never,
-        h.reader as never,
-      )
-      expect(page.items).toHaveLength(1)
+      let threw2: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 1 },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw2 = e
+      }
+      expect(threw2).toBeInstanceOf(Error)
+      expect(String((threw2 as Error).message)).toMatch(/private observation unavailable/)
       expect(h.privateCalls).toHaveLength(1)
-      expect(h.sdkCalls).toHaveLength(1)
+      expect(h.sdkCalls).toHaveLength(0)
       expect(warns.some((w) => String(w[0]).includes("[Kilo Messages]"))).toBeTrue()
       for (const w of warns) {
         const text = w.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")
@@ -725,72 +745,51 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("per-page fallback: double private failure yields two private attempts, one logical SDK fallback per page, no second private request, merged fill", async () => {
-    const assistant = {
-      info: { id: "msg_old", sessionID: SECRET_SES, role: "assistant", time: { created: 100 } },
-      parts: [],
-    }
-    const newer = { info: { id: "msg_new", sessionID: SECRET_SES, role: "user", time: { created: 200 } }, parts: [] }
-    const sdkParams: unknown[] = []
-    let sdkN = 0
+  it("per-page private-authority unavailable yields zero SDK with no second private request", async () => {
     const h = makeHarness({
       privateMessages: async () => {
         throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError })
       },
-      sdkMessages: async (p: unknown) => {
-        sdkN += 1
-        sdkParams.push(p)
-        if (sdkN === 1)
-          return { data: [assistant], error: undefined, response: { status: 200, headers: { get: () => "cur-1" } } }
-        expect((p as Record<string, unknown>).before).toBe("cur-1")
-        return { data: [newer], error: undefined, response: { status: 200, headers: { get: () => null } } }
-      },
     })
-    const page = await fetchMessagePage(
-      h.client as never,
-      { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
-      h.connection as never,
-      h.reader as never,
-    )
-    expect(h.privateCalls).toHaveLength(2)
-    expect((h.privateCalls[0] as Record<string, unknown>).cursor).toBeUndefined()
-    expect((h.privateCalls[1] as Record<string, unknown>).cursor).toBe("cur-1")
-    expect(h.sdkCalls).toHaveLength(2)
-    expect((sdkParams[0] as Record<string, unknown>).before).toBeUndefined()
-    expect((sdkParams[1] as Record<string, unknown>).before).toBe("cur-1")
-    expect(page.items).toHaveLength(2)
-    expect((page.items[0] as { info: { id: string } }).info.id).toBe("msg_new")
-    expect((page.items[1] as { info: { id: string } }).info.id).toBe("msg_old")
-    expect(page.cursor).toBeUndefined()
+    let threw: unknown = null
+    try {
+      await fetchMessagePage(
+        h.client as never,
+        { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+        h.connection as never,
+        h.reader as never,
+      )
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
+    expect(String((threw as Error).message)).toMatch(/private observation unavailable/)
+    expect(h.privateCalls).toHaveLength(1)
+    expect(h.sdkCalls).toHaveLength(0)
     await tick()
     expect(h.parityCalls).toHaveLength(0)
   })
 
-  it("paged fallback preserves transient retry: one logical SDK fallback per page", async () => {
-    let sdkN = 0
+  it("paged private-authority unavailable preserves zero SDK", async () => {
     const h = makeHarness({
       privateMessages: async () => {
         throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError })
       },
-      sdkMessages: async () => {
-        sdkN += 1
-        if (sdkN === 1) throw new Error("load failed")
-        return {
-          data: [userMsg("msg_2", 200)],
-          error: undefined,
-          response: { status: 200, headers: { get: () => null } },
-        }
-      },
     })
-    const page = await fetchMessagePage(
-      h.client as never,
-      { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
-      h.connection as never,
-      h.reader as never,
-    )
-    expect(page.items).toHaveLength(1)
+    let threw: unknown = null
+    try {
+      await fetchMessagePage(
+        h.client as never,
+        { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+        h.connection as never,
+        h.reader as never,
+      )
+    } catch (e) {
+      threw = e
+    }
+    expect(threw).toBeInstanceOf(Error)
     expect(h.privateCalls).toHaveLength(1)
-    expect(h.sdkCalls).toHaveLength(2)
+    expect(h.sdkCalls).toHaveLength(0)
   })
 
   it("limit=0 private iteration stops promptly on abort with no further pages or SDK fallback", async () => {

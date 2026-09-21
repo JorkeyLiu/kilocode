@@ -2811,25 +2811,30 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Centralized private-first single-session detail authority.
+   * Centralized private-authority single-session detail.
    * - Private valid `found` => authoritative detail, no SDK and no parity observer.
    * - Private `not_found`/`scope_mismatch` => authoritative terminal (bounded domain error), no SDK.
-   * - Gate off/not started, malformed revalidation, JSON-RPC InternalError/MethodNotFound/transport/host-closed => bounded warning then SDK exactly once if client available, with no second private request.
+   * - Gate off/not started, malformed revalidation, JSON-RPC InternalError/MethodNotFound/transport/host-closed => fails closed with zero SDK and no second private request.
    * - Never retry private, never init/reconnect, never cache private errors, never post private-specific error.
    * - Strict callers receive domain error for missing metadata so message load aborts; optional callers catch and return undefined / fail-closed.
-   * - Signal is forwarded to SDK fallback only; private lacks signal but generation checks prevent stale writes.
+   * - AbortSignal is transport-only: before-read guard prevents the RPC, an in-flight private RPC is cancelled via existing peer $/cancelRequest with abort listener cleanup; signal never becomes an observation wire payload; no DB-query cancellation.
+   * - No protocol/schema/API SDK changes; no-signal behavior preserved; SDK fallback remains zero.
    */
   private async getSessionDetail(sessionID: string, directory: string, signal?: AbortSignal): Promise<SessionDetail> {
+    if (signal?.aborted) {
+      if (typeof signal.throwIfAborted === "function") signal.throwIfAborted()
+      throw signal.reason ?? new DOMException("This operation was aborted", "AbortError")
+    }
     const reader = this.privateSessionReader
     const canUsePrivate = !!(reader && reader.isEnabled() && reader.isStarted())
     if (canUsePrivate) {
       try {
-        const raw = await reader!.get({ directory, sessionId: sessionID })
+        const raw = await reader!.get({ directory, sessionId: sessionID, ...(signal ? { signal } : {}) })
         let result: import("./private-worker/observation").ObservationGetResult
         try {
           result = validatePrivateGetResult(raw, directory, sessionID)
         } catch (e) {
-          console.warn("[Kilo Detail] private get malformed, falling back to SDK", { fallback: true })
+          console.warn("[Kilo Detail] private get malformed, failing closed without SDK", { unavailable: true })
           throw e
         }
         if (result.status === "found") {
@@ -2840,24 +2845,22 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         throw new Error("get returned invalid status")
       } catch (e) {
         if (e instanceof SessionNotFoundError || e instanceof SessionScopeMismatchError) throw e
-        console.warn("[Kilo Detail] private get failed, falling back to SDK", { fallback: true })
-        // fall through to SDK exactly once if client available
+        if (signal?.aborted) throw e
+        if (e instanceof DOMException && e.name === "AbortError") throw e
+        if (e instanceof Error && e.name === "AbortError") throw e
+        // Private-authority: any other private error (worker error, transport, protocol invalid, malformed)
+        // fails closed with zero SDK (no getClientAsync, no client.session.get fallback).
+        console.warn("[Kilo Detail] private get unavailable, failing closed without SDK", { unavailable: true })
+        throw e
       }
     }
-    // SDK exactly once (gate off/not started/malformed/transport path), no parity observer.
-    if (!this.client) throw new Error("Not connected to CLI backend")
-    let res: { data?: unknown; error?: unknown; response?: unknown }
-    try {
-      const raw = await this.client.session.get({ sessionID, directory }, {
-        throwOnError: true,
-        ...(signal ? { signal } : {}),
-      } as unknown as { throwOnError: true })
-      res = raw as unknown as { data?: unknown; error?: unknown; response?: unknown }
-      if (!res.data) throw new Error("Session metadata not found")
-      return sdkSessionToDetail(res.data as Session)
-    } catch (sdkErr) {
-      throw sdkErr
+    if (signal?.aborted) {
+      if (typeof signal.throwIfAborted === "function") signal.throwIfAborted()
+      throw signal.reason ?? new DOMException("This operation was aborted", "AbortError")
     }
+    // Private-authority: gate off / not started / missing reader => explicit unavailable with zero SDK
+    console.warn("[Kilo Detail] private get gate off/not-started, failing closed without SDK", { unavailable: true })
+    throw new Error("private observation unavailable: gate off or not started")
   }
 
   private async handleCreateSession(): Promise<void> {
@@ -3371,134 +3374,144 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const hasClient = !!client
     const listSessions: SessionRefreshContext["listSessions"] =
       hasPrivate || hasClient
-        ? async (input: { limit: number; cursor?: string }) => {
-            if (hasPrivate) {
-              try {
-                const canonicalRequested = (() => {
-                  try {
-                    return canonicalDirectory(directory)
-                  } catch {
-                    throw new Error("invalid requested directory")
-                  }
-                })()
-                const raw = (await privateList!.list({
-                  directory,
-                  archived: false,
-                  limit: input.limit,
-                  ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
-                })) as unknown as {
-                  v?: unknown
-                  entries?: unknown
-                  nextCursor?: unknown
-                }
-                if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid private shape")
-                const rec = raw as Record<string, unknown>
-                if (rec.v !== "1.0") throw new Error("invalid private version")
-                if (!Array.isArray(rec.entries)) throw new Error("invalid private entries")
-                const entries = rec.entries as unknown[]
-                for (const e of entries) {
-                  if (!e || typeof e !== "object" || Array.isArray(e)) throw new Error("invalid entry shape")
-                  const r = e as Record<string, unknown>
-                  const idOk =
-                    typeof r.id === "string" &&
-                    (r.id as string).length > 0 &&
-                    (r.id as string).startsWith("ses") &&
-                    !(r.id as string).includes("\0")
-                  const titleOk = typeof r.title === "string"
-                  const parentOk =
-                    r.parentID === null ||
-                    (typeof r.parentID === "string" &&
-                      (r.parentID as string).length > 0 &&
-                      (r.parentID as string).startsWith("ses") &&
-                      !(r.parentID as string).includes("\0"))
-                  const dirOk =
-                    typeof r.directory === "string" &&
-                    (r.directory as string).length > 0 &&
-                    !(r.directory as string).includes("\0") &&
-                    (() => {
-                      try {
-                        return (
-                          canonicalDirectory(r.directory as string) === (r.directory as string) &&
-                          (r.directory as string) === canonicalRequested
-                        )
-                      } catch {
-                        return false
-                      }
-                    })()
-                  const projOk =
-                    typeof r.projectID === "string" &&
-                    (r.projectID as string).length > 0 &&
-                    !(r.projectID as string).includes("\0")
-                  const createdOk =
-                    typeof r.createdAt === "number" &&
-                    Number.isFinite(r.createdAt as number) &&
-                    Number.isSafeInteger(r.createdAt as number) &&
-                    (r.createdAt as number) >= 0 &&
-                    (r.createdAt as number) <= 8640000000000000
-                  const updatedOk =
-                    typeof r.updatedAt === "number" &&
-                    Number.isFinite(r.updatedAt as number) &&
-                    Number.isSafeInteger(r.updatedAt as number) &&
-                    (r.updatedAt as number) >= 0 &&
-                    (r.updatedAt as number) <= 8640000000000000
-                  if (!idOk || !titleOk || !parentOk || !dirOk || !projOk || !createdOk || !updatedOk)
-                    throw new Error("invalid entry shape")
-                }
-                const mapped = (
-                  entries as Array<{
-                    id: string
-                    parentID: string | null
-                    title: string
-                    directory: string
-                    projectID: string
-                    createdAt: number
-                    updatedAt: number
-                  }>
-                ).map((e) => ({
-                  id: e.id,
-                  parentID: e.parentID ?? null,
-                  title: e.title,
-                  directory: e.directory,
-                  projectID: e.projectID,
-                  time: { created: e.createdAt, updated: e.updatedAt },
-                })) as unknown as Session[]
-                const rawNext = rec.nextCursor as unknown
-                let next: string | null = null
-                if (rawNext !== undefined) {
-                  if (typeof rawNext !== "string") throw new Error("invalid nextCursor shape")
-                  const decoded = decodeGlobalListCursor(rawNext)
-                  if (
-                    !Number.isFinite(decoded.updated) ||
-                    !Number.isSafeInteger(decoded.updated) ||
-                    decoded.updated < 0 ||
-                    decoded.updated > 8640000000000000 ||
-                    decoded.id.length === 0 ||
-                    !decoded.id.startsWith("ses") ||
-                    decoded.id.includes("\0")
-                  )
-                    throw new Error("invalid nextCursor content")
-                  const normalized = normalizeSessionListNextCursor(rawNext)
-                  if (normalized === null) throw new Error("invalid nextCursor")
-                  next = normalized
-                }
-                return { sessions: mapped, cursor: next }
-              } catch {
-                console.warn("[Kilo SessionList] private projection invalid, falling back to SDK", {
-                  fallback: true,
-                })
-              }
+        ? async (input: { limit: number; cursor?: string; signal?: AbortSignal }) => {
+            const signal = input.signal
+            if (signal?.aborted) {
+              if (typeof signal.throwIfAborted === "function") signal.throwIfAborted()
+              throw signal.reason ?? new DOMException("This operation was aborted", "AbortError")
             }
-            if (!client) throw new Error("Not connected to CLI backend")
+            const hasPrivate = !!privateList && privateList.isEnabled() && privateList.isStarted()
+            if (!hasPrivate) {
+              if (signal?.aborted) {
+                if (typeof signal.throwIfAborted === "function") signal.throwIfAborted()
+                throw signal.reason ?? new DOMException("This operation was aborted", "AbortError")
+              }
+              console.warn("[Kilo SessionList] private unavailable (gate off/not-started), failing closed without SDK", {
+                unavailable: true,
+              })
+              throw new Error("private observation unavailable: gate off or not started")
+            }
             try {
-              const result = await client.experimental.session.list(
-                { directory, limit: input.limit, cursor: input.cursor },
-                { throwOnError: true },
-              )
-              const raw = result.response.headers.get("x-next-cursor")
-              const next = normalizeSessionListNextCursor(raw)
-              return { sessions: result.data, cursor: next }
-            } catch (error) {
-              throw error
+              const canonicalRequested = (() => {
+                try {
+                  return canonicalDirectory(directory)
+                } catch {
+                  throw new Error("invalid requested directory")
+                }
+              })()
+              const raw = (await privateList!.list({
+                directory,
+                archived: false,
+                limit: input.limit,
+                ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+                ...(signal ? { signal } : {}),
+              })) as unknown as {
+                v?: unknown
+                entries?: unknown
+                nextCursor?: unknown
+              }
+              if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid private shape")
+              const rec = raw as Record<string, unknown>
+              if (rec.v !== "1.0") throw new Error("invalid private version")
+              if (!Array.isArray(rec.entries)) throw new Error("invalid private entries")
+              const entries = rec.entries as unknown[]
+              for (const e of entries) {
+                if (!e || typeof e !== "object" || Array.isArray(e)) throw new Error("invalid entry shape")
+                const r = e as Record<string, unknown>
+                const idOk =
+                  typeof r.id === "string" &&
+                  (r.id as string).length > 0 &&
+                  (r.id as string).startsWith("ses") &&
+                  !(r.id as string).includes("\0")
+                const titleOk = typeof r.title === "string"
+                const parentOk =
+                  r.parentID === null ||
+                  (typeof r.parentID === "string" &&
+                    (r.parentID as string).length > 0 &&
+                    (r.parentID as string).startsWith("ses") &&
+                    !(r.parentID as string).includes("\0"))
+                const dirOk =
+                  typeof r.directory === "string" &&
+                  (r.directory as string).length > 0 &&
+                  !(r.directory as string).includes("\0") &&
+                  (() => {
+                    try {
+                      return (
+                        canonicalDirectory(r.directory as string) === (r.directory as string) &&
+                        (r.directory as string) === canonicalRequested
+                      )
+                    } catch {
+                      return false
+                    }
+                  })()
+                const projOk =
+                  typeof r.projectID === "string" &&
+                  (r.projectID as string).length > 0 &&
+                  !(r.projectID as string).includes("\0")
+                const createdOk =
+                  typeof r.createdAt === "number" &&
+                  Number.isFinite(r.createdAt as number) &&
+                  Number.isSafeInteger(r.createdAt as number) &&
+                  (r.createdAt as number) >= 0 &&
+                  (r.createdAt as number) <= 8640000000000000
+                const updatedOk =
+                  typeof r.updatedAt === "number" &&
+                  Number.isFinite(r.updatedAt as number) &&
+                  Number.isSafeInteger(r.updatedAt as number) &&
+                  (r.updatedAt as number) >= 0 &&
+                  (r.updatedAt as number) <= 8640000000000000
+                if (!idOk || !titleOk || !parentOk || !dirOk || !projOk || !createdOk || !updatedOk)
+                  throw new Error("invalid entry shape")
+              }
+              const mapped = (
+                entries as Array<{
+                  id: string
+                  parentID: string | null
+                  title: string
+                  directory: string
+                  projectID: string
+                  createdAt: number
+                  updatedAt: number
+                }>
+              ).map((e) => ({
+                id: e.id,
+                parentID: e.parentID ?? null,
+                title: e.title,
+                directory: e.directory,
+                projectID: e.projectID,
+                time: { created: e.createdAt, updated: e.updatedAt },
+              })) as unknown as Session[]
+              const rawNext = rec.nextCursor as unknown
+              let next: string | null = null
+              if (rawNext !== undefined) {
+                if (typeof rawNext !== "string") throw new Error("invalid nextCursor shape")
+                const decoded = decodeGlobalListCursor(rawNext)
+                if (
+                  !Number.isFinite(decoded.updated) ||
+                  !Number.isSafeInteger(decoded.updated) ||
+                  decoded.updated < 0 ||
+                  decoded.updated > 8640000000000000 ||
+                  decoded.id.length === 0 ||
+                  !decoded.id.startsWith("ses") ||
+                  decoded.id.includes("\0")
+                )
+                  throw new Error("invalid nextCursor content")
+                const normalized = normalizeSessionListNextCursor(rawNext)
+                if (normalized === null) throw new Error("invalid nextCursor")
+                next = normalized
+              }
+              return { sessions: mapped, cursor: next }
+            } catch (e) {
+              if (signal?.aborted) throw e
+              if (e instanceof DOMException && e.name === "AbortError") throw e
+              if (e instanceof Error && e.name === "AbortError") throw e
+              // Private-authority: valid private empty and found stay authoritative with no SDK;
+              // any gate-off/not-started/worker-error/protocol-invalid/malformed fails closed with zero SDK.
+              // Abort is transport-only cancellation via peer $/cancelRequest with abort listener cleanup.
+              console.warn("[Kilo SessionList] private projection unavailable, failing closed without SDK", {
+                unavailable: true,
+              })
+              throw new Error("private observation unavailable")
             }
           }
         : null

@@ -155,9 +155,39 @@ export class PrivateWorkerHost {
     }
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, opts?: { signal?: AbortSignal }): Promise<unknown> {
     if (!this.peer) throw new Error("Not started")
-    return this.peer.request(method, params)
+    const signal = opts?.signal
+    if (!signal) return this.peer.request(method, params)
+    if (signal.aborted) {
+      const reason = (signal as unknown as { reason?: unknown }).reason
+      const err = reason !== undefined ? reason : new DOMException("This operation was aborted", "AbortError")
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)))
+    }
+    const { id, promise } = this.peer.requestWithId(method, params)
+    const onAbort = () => {
+      try {
+        this.peer?.cancel(id)
+      } catch {}
+    }
+    try {
+      signal.addEventListener("abort", onAbort, { once: true })
+    } catch {}
+    const cleanup = () => {
+      try {
+        signal.removeEventListener("abort", onAbort)
+      } catch {}
+    }
+    return promise.then(
+      (v) => {
+        cleanup()
+        return v
+      },
+      (e) => {
+        cleanup()
+        throw e
+      },
+    )
   }
 
   notify(method: string, params?: unknown): void {

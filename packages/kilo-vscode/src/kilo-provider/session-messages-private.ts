@@ -22,27 +22,44 @@ function isUsable(reader: PrivateSessionReader | null | undefined): reader is Pr
 
 /**
  * Non-owning single private paged-read attempt. Never init/reconnect/dispose.
- * skip: gate off/legacy (silent SDK fallback). found/terminal: authoritative
- * with no SDK. fallback: bounded warn once (no raw directory/session data),
- * caller does exactly one SDK read with the original signal.
+ * skip: gate off/legacy (private-authority unavailable, zero SDK). found/terminal:
+ * authoritative with no SDK. fallback: bounded warn once (no raw
+ * directory/session data), caller fails closed with zero SDK. Signal is
+ * transport-only cancellation via existing peer $/cancelRequest and never
+ * becomes an observation wire payload; no DB-query cancellation.
  */
 export async function tryPrivateMessagesPage(
   reader: PrivateSessionReader | null | undefined,
-  input: { directory: string; sessionId: string; limit: number; cursor?: string },
+  input: { directory: string; sessionId: string; limit: number; cursor?: string; signal?: AbortSignal },
 ): Promise<PrivateMessagesAttempt> {
   if (!isUsable(reader)) return { kind: "skip" }
+  // Before-read cancellation guard: abort prevents the outgoing private RPC
+  // and subsequent reads/SDK fallback remain zero. Preserve no-signal behavior.
+  if (input.signal?.aborted) {
+    const s = input.signal
+    if (typeof s.throwIfAborted === "function") s.throwIfAborted()
+    throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
+  }
   let raw: unknown
   try {
-    raw = await reader.messages({ directory: input.directory, sessionId: input.sessionId, limit: input.limit, ...(input.cursor !== undefined ? { cursor: input.cursor } : {}) })
-  } catch {
-    console.warn("[Kilo Messages] private messages failed, falling back to SDK", { fallback: true })
+    raw = await reader.messages({
+      directory: input.directory,
+      sessionId: input.sessionId,
+      limit: input.limit,
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+    })
+  } catch (e) {
+    // Abort already handled via signal; let abort propagate instead of mapping to fallback.
+    if (input.signal?.aborted) throw e
+    console.warn("[Kilo Messages] private messages failed, failing closed without SDK", { unavailable: true })
     return { kind: "fallback" }
   }
   let validated: ObservationMessagesResult
   try {
     validated = validatePrivateMessagesResult(raw, input.limit, input.sessionId)
   } catch {
-    console.warn("[Kilo Messages] private messages malformed, falling back to SDK", { fallback: true })
+    console.warn("[Kilo Messages] private messages malformed, failing closed without SDK", { unavailable: true })
     return { kind: "fallback" }
   }
   if (validated.status === "found") return { kind: "found", items: validated.messages, cursor: validated.nextCursor }
@@ -60,7 +77,7 @@ function internal(msg: string): Error & { code?: number } {
  * Defensive revalidation of the private observation/messages result at the
  * provider boundary. Mirrors the controller wire invariants without
  * duplicating storage logic. Throws an InternalError-coded error on any
- * malformed shape so callers fall back to exactly one SDK read.
+ * malformed shape so callers fail closed with zero SDK.
  */
 // eslint-disable-next-line complexity
 export function validatePrivateMessagesResult(raw: unknown, limit: number, sessionId: string): ObservationMessagesResult {
