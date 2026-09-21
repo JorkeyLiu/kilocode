@@ -288,7 +288,8 @@ export default [
     // Raised 3290 → 3310 for observation-producer-revert: import + registry ref +
     // parse/readyMarker/canonical check + runScenario branch plus revert/unrevert pair comments.
     // Raised 3310 → 3330 for prompt-private-first: import + registry ref + parse/readyMarker/canonical check + runScenario branch.
-    rules: { complexity: ["error", 27], "max-lines": ["error", 3330] },
+    // Raised 3330 → 3350 for command-private-first: import + registry ref + parse/readyMarker/canonical check + runScenario branch.
+    rules: { complexity: ["error", 27], "max-lines": ["error", 3350] },
   },
   {
     files: ["script/e2e-evidence.ts"],
@@ -350,6 +351,11 @@ export default [
     rules: { complexity: ["error", 40] },
   },
   {
+    files: ["script/e2e-probe-command-private.ts"],
+    // Command-private-first validates private command succeeded tuple, runtime observation, no duplicate.
+    rules: { complexity: ["error", 40] },
+  },
+  {
     files: ["src/services/cli-backend/connection-service.ts"],
     // Raised 4100 → 4140 for prompt-private-first E2E fixture thin delegation:
     // four prompt pass-throughs (prompt/replayPrompt + thin handle fields) are
@@ -357,7 +363,11 @@ export default [
     // serve-private-prompt-contract/connection-service-observation-fixture etc.
     // per the shared-carrier convention. connection-service.ts measures ~4138
     // lines, so 4140 is the smallest passing cap.
-    rules: { "max-lines": ["error", 4140] },
+    // Raised 4140 → 4180 for command-private-first E2E fixture thin delegation:
+    // two command pass-throughs (command/replayCommand) plus one handle field
+    // per the same convention. connection-service.ts measures 4173 lines, so
+    // 4180 is the smallest passing cap with headroom.
+    rules: { "max-lines": ["error", 4180] },
   },
   {
     files: ["tests/e2e/runner.ts"],
@@ -371,6 +381,16 @@ export default [
     // Prompt-private-first boundary: peer ready + create confirm + single same-tuple retry + read-only observation/replay.
     // Helpers isolate wait/attempt/observe phases; single orchestration retains atomic evidence.
     rules: { complexity: ["error", 42], "max-lines": ["error", 600] },
+  },
+  {
+    files: ["tests/e2e/command-private-first-boundary.ts"],
+    // Command-private-first boundary: peer ready + create confirm + single same-tuple retry + read-only observation/replay.
+    // Mirrors prompt boundary; helpers isolate wait/attempt/observe phases.
+    // Raised 42→60 for wrapper-aware command-list extraction (valid/invalid unwrap) and strict fail-fast diagnostics.
+    // Raised 60→80 for provider-seeded isolated workspace (realpath + e2e-local/e2e-model) and 8-command fallback loop.
+    // Raised 600→620 for wrapper-aware extraction + scoped diagnostics (measures 601).
+    // Raised 620→650 for provider seed + fallback loop (measures 633).
+    rules: { complexity: ["error", 80], "max-lines": ["error", 650] },
   },
 
   eslintConfigPrettier,

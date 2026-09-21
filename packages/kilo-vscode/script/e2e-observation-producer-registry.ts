@@ -12,6 +12,7 @@ export const OBSERVATION_PRODUCER_FORK_SCENARIO = "observation-producer-fork" as
 export const OBSERVATION_PRODUCER_REVERT_SCENARIO = "observation-producer-revert" as const
 export const OBSERVATION_PRODUCER_SANDBOX_SCENARIO = "observation-producer-sandbox" as const
 export const PROMPT_PRIVATE_FIRST_SCENARIO = "prompt-private-first" as const
+export const COMMAND_PRIVATE_FIRST_SCENARIO = "command-private-first" as const
 
 const OBSERVATION_PRODUCER_TIMEOUT_MS = 1_200_000 as const
 const OBSERVATION_PRODUCER_UPDATE_TIMEOUT_MS = 1_200_000 as const
@@ -20,6 +21,7 @@ const OBSERVATION_PRODUCER_FORK_TIMEOUT_MS = 1_200_000 as const
 const OBSERVATION_PRODUCER_REVERT_TIMEOUT_MS = 1_200_000 as const
 const OBSERVATION_PRODUCER_SANDBOX_TIMEOUT_MS = 1_200_000 as const
 const PROMPT_PRIVATE_FIRST_TIMEOUT_MS = 1_200_000 as const
+const COMMAND_PRIVATE_FIRST_TIMEOUT_MS = 1_200_000 as const
 
 const SCENARIO_TIMEOUTS: Record<string, number> = {
   "real-completed": 6_000_000,
@@ -35,6 +37,7 @@ const SCENARIO_TIMEOUTS: Record<string, number> = {
   [OBSERVATION_PRODUCER_REVERT_SCENARIO]: OBSERVATION_PRODUCER_REVERT_TIMEOUT_MS,
   [OBSERVATION_PRODUCER_SANDBOX_SCENARIO]: OBSERVATION_PRODUCER_SANDBOX_TIMEOUT_MS,
   [PROMPT_PRIVATE_FIRST_SCENARIO]: PROMPT_PRIVATE_FIRST_TIMEOUT_MS,
+  [COMMAND_PRIVATE_FIRST_SCENARIO]: COMMAND_PRIVATE_FIRST_TIMEOUT_MS,
 }
 
 export function e2eTimeoutForScenario(scenario: string | undefined): number {

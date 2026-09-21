@@ -143,6 +143,7 @@ import type {
 import { isValidObservationChangedNotification } from "../../src/services/cli-backend/serve-private-peer"
 import { isIsolatedDataRoot, validateGateEvidence } from "../../script/e2e-canonical"
 import { servicePromptPrivateFirstBoundary } from "./prompt-private-first-boundary"
+import { serviceCommandPrivateFirstBoundary } from "./command-private-first-boundary"
 
 const EXTENSION_ID = "kilocode.kilo-code"
 const CMD_OPEN = "kilo-code.new.agentManagerOpen"
@@ -808,6 +809,7 @@ interface ScenarioFlags {
   runObservationProducerRevert: boolean
   runObservationProducerSandbox: boolean
   runPromptPrivateFirst: boolean
+  runCommandPrivateFirst: boolean
 }
 
 /**
@@ -916,6 +918,13 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // Validates explicit messageID tuple, accepted succeeded, runtime observation
     // sees user message, idempotent replay yields same message with no duplicate.
     runPromptPrivateFirst: scenario === "prompt-private-first",
+    // command-private-first is focused-only: bounded live E2E proof for the
+    // real kilo serve SessionCommandDispatch.dispatch via fd3/fd4 PrivatePeer
+    // -> ServePrivatePeer strict command validation -> extension privateCommand.
+    // Validates explicit messageID tuple, accepted succeeded, runtime observation
+    // sees user message (via init command args), idempotent replay yields same
+    // message with no duplicate. Reuses prompt tuple prompt:<messageId>.
+    runCommandPrivateFirst: scenario === "command-private-first",
   }
 }
 
@@ -952,11 +961,12 @@ export async function run(): Promise<void> {
     "observation-producer-revert",
     "observation-producer-sandbox",
     "prompt-private-first",
+    "command-private-first",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first (default: all)",
     )
   }
   const {
@@ -981,6 +991,7 @@ export async function run(): Promise<void> {
     runObservationProducerRevert,
     runObservationProducerSandbox,
     runPromptPrivateFirst,
+    runCommandPrivateFirst,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1283,6 +1294,11 @@ export async function run(): Promise<void> {
   // --- prompt-private-first bounded live E2E proof (focused only) ---
   if (runPromptPrivateFirst) {
     await servicePromptPrivateFirstBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- command-private-first bounded live E2E proof (focused only) ---
+  if (runCommandPrivateFirst) {
+    await serviceCommandPrivateFirstBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {

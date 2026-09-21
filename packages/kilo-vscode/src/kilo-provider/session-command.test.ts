@@ -545,4 +545,35 @@ describe("command private-first", () => {
     expect(sdk).toBe(1)
     expect(legacy).toBe(0)
   })
+
+  test("revision valid passes and invalid fail-closed", () => {
+    const { opId, idempotencyKey, requestId } = buildCommandIdentity(MID)
+    const req = {
+      v: 1,
+      requestId,
+      opId,
+      op: "session/command",
+      idempotencyKey,
+      context: { directory: DIR, sessionId: SID, parentSessionId: null },
+      payload: { messageId: MID, command: "probe", arguments: "hello", model: "p/m" },
+    } as unknown as Parameters<typeof validateCommandResult>[1]
+    const ok = succeededFor(req as unknown as Record<string, unknown>)
+    // valid revision passes
+    expect(() => validateCommandResult({ ...ok, revision: { session: 0, config: 1 } }, req)).not.toThrow()
+    expect(() => validateCommandResult({ ...ok, revision: { session: 2, config: 3 } }, req)).not.toThrow()
+    // malformed revision fails closed
+    expect(() => validateCommandResult({ ...ok, revision: { session: 1, config: 1, extra: 1 } } as unknown as Record<string, unknown>, req)).toThrow()
+    expect(() => validateCommandResult({ ...ok, revision: { session: "x", config: 1 } } as unknown as Record<string, unknown>, req)).toThrow()
+    expect(() => validateCommandResult({ ...ok, revision: { session: 1 } } as unknown as Record<string, unknown>, req)).toThrow()
+    expect(() => validateCommandResult({ ...ok, revision: { session: -1, config: 0 } } as unknown as Record<string, unknown>, req)).toThrow()
+    expect(() => validateCommandResult({ ...ok, revision: { session: 1.5, config: 0 } } as unknown as Record<string, unknown>, req)).toThrow()
+    expect(() => validateCommandResult({ ...ok, revision: "bad" } as unknown as Record<string, unknown>, req)).toThrow()
+    // failed and ambiguous also validate revision
+    const failed = terminalFor(req as unknown as Record<string, unknown>, "session.not_found")
+    expect(() => validateCommandResult({ ...failed, revision: { session: 0, config: 0 } }, req)).not.toThrow()
+    expect(() => validateCommandResult({ ...failed, revision: { session: "y", config: 0 } } as unknown as Record<string, unknown>, req)).toThrow()
+    const amb = ambiguousFor(req as unknown as Record<string, unknown>)
+    expect(() => validateCommandResult({ ...amb, revision: { session: 5, config: 2 } }, req)).not.toThrow()
+    expect(() => validateCommandResult({ ...amb, revision: null } as unknown as Record<string, unknown>, req)).toThrow()
+  })
 })

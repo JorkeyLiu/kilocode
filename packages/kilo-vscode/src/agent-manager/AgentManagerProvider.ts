@@ -2073,6 +2073,12 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private getRoot(): string | undefined {
-    return this.host.workspacePath()
+    const p = this.host.workspacePath()
+    if (!p) return undefined
+    try {
+      return require("node:fs").realpathSync(p)
+    } catch {
+      return p
+    }
   }
 }

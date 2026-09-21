@@ -291,6 +291,8 @@ export class KiloConnectionService {
     e2eSandboxSetWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxSetWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxSetWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxSetRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxSetResult> },
     e2eSandboxGrantReadWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxGrantReadWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxGrantReadWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxGrantReadRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxGrantReadResult> },
     promptWithHandle: (req) => this.privatePromptWithHandle(req as unknown as import("./serve-private-prompt-contract").PromptContractRequest) as unknown as { id: number; promise: Promise<import("./serve-private-prompt-contract").PromptResult>; cancel: (msg?: string) => boolean },
+    commandWithHandle: (req) => this.privateCommandWithHandle(req as unknown as import("./serve-private-command-contract").CommandContractRequest) as unknown as { id: number; promise: Promise<import("./serve-private-command-contract").CommandResult>; cancel: (msg?: string) => boolean },
+    commandListWithHandle: (req) => this.privateCommandListOutcomeWithHandle(req as unknown as import("./serve-private-command-list-contract").CommandListContractRequest) as unknown as { id: number; promise: Promise<import("./serve-private-command-list-contract").CommandListWireOutcome>; cancel: (msg?: string) => boolean },
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -4134,5 +4136,38 @@ export class KiloConnectionService {
     messageId: string
   }> {
     return this.observationFixture.replayPrompt(sessionId, messageId)
+  }
+
+  public async fixtureSessionCommandPrivate(input: { directory?: string; sessionId: string; messageId: string; command: string; arguments: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-command-contract").CommandResult
+    sessionId: string
+    messageId: string
+  }> {
+    return this.observationFixture.command(input)
+  }
+
+  public async fixtureSessionCommandPrivateReplay(sessionId: string, messageId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-command-contract").CommandResult
+    sessionId: string
+    messageId: string
+  }> {
+    return this.observationFixture.replayCommand(sessionId, messageId)
+  }
+
+  public async fixtureCommandListPrivate(input?: { directory?: string }): Promise<{
+    opId: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-command-list-contract").CommandListResult
+  }> {
+    return this.observationFixture.commandList(input)
   }
 }

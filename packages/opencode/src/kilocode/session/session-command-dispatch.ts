@@ -362,32 +362,6 @@ export const layer = Layer.effect(
         return buildFailed(req, "scope_mismatch", "message belongs to another session", false, false, revision)
       }
 
-      // Sync command-exists precheck before accept: preserves the current
-      // synchronous command observable error semantics as terminal non-retryable.
-      const cmd = yield* commands.get(req.payload.command).pipe(
-        Effect.map((v) => ({ tag: "ok" as const, value: v })),
-        Effect.catch(() => Effect.succeed({ tag: "fail" as const })),
-        Effect.catchDefect(() => Effect.succeed({ tag: "fail" as const })),
-      )
-      if (cmd.tag === "fail" || !cmd.value) {
-        const available = yield* commands.list().pipe(
-          Effect.map((list) => list.map((c) => c.name).sort()),
-          Effect.catch(() => Effect.succeed([] as string[])),
-          Effect.catchDefect(() => Effect.succeed([] as string[])),
-        )
-        const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
-        const message = `Command not found: "${req.payload.command}".${hint}`
-        yield* events
-          .publish(Session.Event.Error, {
-            sessionID: sid,
-            error: new NamedError.Unknown({ message }).toObject(),
-          } as never)
-          .pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
-        const curCfg = yield* readCfgOmit(canonDir)
-        const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
-        return buildFailed(req, "command.not_found", message, false, false, revision)
-      }
-
       const acquired = yield* acquireDrainControl(canonDir).pipe(
         Effect.map((v) => ({ tag: "ok" as const, value: v })),
         Effect.catch((err: unknown) => {
@@ -404,6 +378,33 @@ export const layer = Layer.effect(
         const curCfg = yield* readCfgOmit(canonDir)
         const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
         return buildFailed(req, acquired.code, acquired.message, acquired.retryable, false, revision)
+      }
+      // Sync command-exists precheck with correct InstanceRef (was previously before acquire, causing empty list for isolated workspaces)
+      const cmd = yield* commands.get(req.payload.command).pipe(
+        Effect.provideService(InstanceRef, acquired.value.ctx),
+        Effect.map((v) => ({ tag: "ok" as const, value: v })),
+        Effect.catch(() => Effect.succeed({ tag: "fail" as const })),
+        Effect.catchDefect(() => Effect.succeed({ tag: "fail" as const })),
+      )
+      if (cmd.tag === "fail" || !cmd.value) {
+        const available = yield* commands.list().pipe(
+          Effect.provideService(InstanceRef, acquired.value.ctx),
+          Effect.map((list) => list.map((c) => c.name).sort()),
+          Effect.catch(() => Effect.succeed([] as string[])),
+          Effect.catchDefect(() => Effect.succeed([] as string[])),
+        )
+        const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
+        const message = `Command not found: "${req.payload.command}".${hint}`
+        yield* events
+          .publish(Session.Event.Error, {
+            sessionID: sid,
+            error: new NamedError.Unknown({ message }).toObject(),
+          } as never)
+          .pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+        const curCfg = yield* readCfgOmit(canonDir)
+        const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+        yield* acquired.value.release.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+        return buildFailed(req, "command.not_found", message, false, false, revision)
       }
 
       const input = {

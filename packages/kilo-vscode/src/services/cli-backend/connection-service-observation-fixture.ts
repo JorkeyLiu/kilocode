@@ -34,6 +34,8 @@ import type {
   E2ESandboxTokenIssueResult,
 } from "./serve-private-e2e-sandbox"
 import type { PromptContractRequest, PromptResult } from "./serve-private-prompt-contract"
+import type { CommandContractRequest, CommandResult } from "./serve-private-command-contract"
+import type { CommandListContractRequest, CommandListResult, CommandListWireOutcome } from "./serve-private-command-list-contract"
 
 interface Deps {
   getPeer: () => ServePrivatePeer | null
@@ -50,11 +52,17 @@ interface Deps {
   e2eSandboxSetWithHandle: (req: E2ESandboxSetRequest) => { promise: Promise<E2ESandboxSetResult> }
   e2eSandboxGrantReadWithHandle: (req: E2ESandboxGrantReadRequest) => { promise: Promise<E2ESandboxGrantReadResult> }
   promptWithHandle: (req: PromptContractRequest) => { id: number; promise: Promise<PromptResult>; cancel?: (msg?: string) => boolean }
+  commandWithHandle: (req: CommandContractRequest) => { id: number; promise: Promise<CommandResult>; cancel?: (msg?: string) => boolean }
+  commandListWithHandle: (req: CommandListContractRequest) => { id: number; promise: Promise<CommandListWireOutcome>; cancel?: (msg?: string) => boolean }
   getCurrentDirectory: () => string | undefined
   getRootDirectory: () => string | undefined
 }
 
 function boundedPromptTimeoutMs(): number {
+  return 12_000
+}
+
+function boundedCommandTimeoutMs(): number {
   return 12_000
 }
 
@@ -330,6 +338,71 @@ function buildPromptRequest(
   }
 }
 
+async function withCommandBounded<T>(handle: { id: number; promise: Promise<T>; cancel?: (msg?: string) => boolean }, timeoutMs: number): Promise<{ result: T | null; timedOut: boolean; cancelled: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error(`command timeout ${timeoutMs}`)), timeoutMs)
+    ;(timer as unknown as { unref?: () => void })?.unref?.()
+  })
+  try {
+    const result = (await Promise.race([handle.promise, timeout])) as T
+    return { result, timedOut: false, cancelled: false }
+  } catch (err) {
+    const msg = String(err)
+    const isTimeout = msg.includes("command timeout")
+    if (isTimeout && handle.cancel) {
+      let ok = false
+      try {
+        ok = handle.cancel("command fixture timeout")
+      } catch {}
+      return { result: null, timedOut: true, cancelled: ok }
+    }
+    if (isTimeout) return { result: null, timedOut: true, cancelled: false }
+    throw err
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function buildCommandRequest(
+  dir: string,
+  sessionId: string,
+  messageId: string,
+  command: string,
+  args: string,
+): CommandContractRequest {
+  if (!messageId.startsWith("msg")) throw new Error("messageId must be msg*")
+  if (typeof command !== "string" || command.length === 0) throw new Error("command required")
+  if (typeof args !== "string") throw new Error("arguments must be string")
+  const opId = `prompt:${messageId}`
+  const idempotencyKey = `prompt:${messageId}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "session/command",
+    idempotencyKey,
+    context: { directory: dir, sessionId, parentSessionId: null },
+    payload: { messageId, command, arguments: args, model: "e2e-local/e2e-model" },
+  }
+}
+
+function buildCommandListRequest(dir: string): CommandListContractRequest {
+  const token = crypto.randomUUID()
+  const opId = `command-list:${token}`
+  const requestId = crypto.randomUUID()
+  return {
+    v: 1,
+    requestId,
+    opId,
+    op: "command/list",
+    idempotencyKey: opId,
+    context: { directory: dir },
+    payload: {},
+  }
+}
+
 export class ConnectionObservationFixture {
   private fixCreateReq: ServePrivateCreateRequest | null = null
   private fixUpdateReqs = new Map<string, ServePrivateSessionUpdateRequest>()
@@ -342,6 +415,7 @@ export class ConnectionObservationFixture {
   private fixSandboxReq: ServePrivateCreateRequest | null = null
   private fixSandboxSecondReq: ServePrivateCreateRequest | null = null
   private fixPromptReqs = new Map<string, PromptContractRequest>()
+  private fixCommandReqs = new Map<string, CommandContractRequest>()
 
   constructor(private readonly deps: Deps) {}
 
@@ -927,5 +1001,216 @@ export class ConnectionObservationFixture {
     }
     writeFixtureDiag(process.env.KILO_E2E_SCRATCH, `prompt-fixture-replay-${stored.requestId.slice(0, 8)}.json`, diag)
     return { opId: stored.opId, idempotencyKey: stored.idempotencyKey, requestId: stored.requestId, directory: stored.context.directory, result, sessionId, messageId }
+  }
+
+  async command(input: { directory?: string; sessionId: string; messageId: string; command: string; arguments: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: CommandResult
+    sessionId: string
+    messageId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionCommand requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    if (!input.sessionId || typeof input.sessionId !== "string" || !input.sessionId.startsWith("ses")) throw new Error("sessionId must be ses*")
+    if (!input.messageId || typeof input.messageId !== "string" || !input.messageId.startsWith("msg")) throw new Error("messageId must be msg*")
+    if (typeof input.command !== "string" || input.command.length === 0) throw new Error("command required")
+    if (typeof input.arguments !== "string") throw new Error("arguments must be string")
+    const dir = resolveDirectory(input.directory, this.deps)
+    const req = buildCommandRequest(dir, input.sessionId, input.messageId, input.command, input.arguments)
+    this.fixCommandReqs.set(input.sessionId + ":" + input.messageId, req)
+    const peerBefore = this.deps.getPeer()
+    const epochBefore = epochSnapshot(peerBefore)
+    const startedAt = Date.now()
+    const handle = this.deps.commandWithHandle(req)
+    const bounded = await withCommandBounded(handle, boundedCommandTimeoutMs())
+    const peerAfter = this.deps.getPeer()
+    const epochAfter = epochSnapshot(peerAfter)
+    const durationMs = Date.now() - startedAt
+    const timedOut = bounded.timedOut
+    let result: CommandResult
+    if (bounded.result !== null) {
+      result = bounded.result as CommandResult
+    } else {
+      result = {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/command",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as CommandResult
+    }
+    const diag = {
+      kind: "command",
+      opId: req.opId,
+      requestId: req.requestId,
+      directory: dir,
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      command: input.command,
+      arguments: input.arguments,
+      epochBefore,
+      epochAfter,
+      startedAt,
+      durationMs,
+      timedOut,
+      cancelled: bounded.cancelled,
+      resultStatus: (result as unknown as { status?: string }).status,
+      transportUnknown: (result as unknown as { transportUnknown?: boolean }).transportUnknown,
+      peerAvailableBefore: (() => {
+        try {
+          return peerBefore?.isAvailable?.() ?? null
+        } catch {
+          return null
+        }
+      })(),
+      peerAvailableAfter: (() => {
+        try {
+          return peerAfter?.isAvailable?.() ?? null
+        } catch {
+          return null
+        }
+      })(),
+    }
+    writeFixtureDiag(process.env.KILO_E2E_SCRATCH, `command-fixture-attempt-${req.requestId.slice(0, 8)}.json`, diag)
+    return { opId: req.opId, idempotencyKey: req.idempotencyKey, requestId: req.requestId, directory: dir, result, sessionId: input.sessionId, messageId: input.messageId }
+  }
+
+  async replayCommand(sessionId: string, messageId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: CommandResult
+    sessionId: string
+    messageId: string
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionCommand replay requires KILO_E2E_FIXTURE")
+    if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+    if (!messageId || typeof messageId !== "string") throw new Error("messageId required")
+    const key = sessionId + ":" + messageId
+    const stored = this.fixCommandReqs.get(key)
+    if (!stored) throw new Error("no stored fixture command identity to replay")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const peerBefore = this.deps.getPeer()
+    const epochBefore = epochSnapshot(peerBefore)
+    const startedAt = Date.now()
+    const handle = this.deps.commandWithHandle(stored)
+    const bounded = await withCommandBounded(handle, boundedCommandTimeoutMs())
+    const peerAfter = this.deps.getPeer()
+    const epochAfter = epochSnapshot(peerAfter)
+    const durationMs = Date.now() - startedAt
+    let result: CommandResult
+    if (bounded.result !== null) {
+      result = bounded.result as CommandResult
+    } else {
+      result = {
+        v: 1,
+        requestId: stored.requestId,
+        opId: stored.opId,
+        op: "session/command",
+        idempotencyKey: stored.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as CommandResult
+    }
+    const diag = {
+      kind: "replayCommand",
+      opId: stored.opId,
+      requestId: stored.requestId,
+      sessionId,
+      messageId,
+      epochBefore,
+      epochAfter,
+      startedAt,
+      durationMs,
+      timedOut: bounded.timedOut,
+      cancelled: bounded.cancelled,
+      resultStatus: (result as unknown as { status?: string }).status,
+      transportUnknown: (result as unknown as { transportUnknown?: boolean }).transportUnknown,
+    }
+    writeFixtureDiag(process.env.KILO_E2E_SCRATCH, `command-fixture-replay-${stored.requestId.slice(0, 8)}.json`, diag)
+    return { opId: stored.opId, idempotencyKey: stored.idempotencyKey, requestId: stored.requestId, directory: stored.context.directory, result, sessionId, messageId }
+  }
+
+  async commandList(input?: { directory?: string }): Promise<{
+    opId: string
+    requestId: string
+    directory: string
+    result: CommandListResult
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture commandList requires KILO_E2E_FIXTURE")
+    if (!this.deps.isAvailable() || !this.deps.getPeer()) throw new Error("Private peer unavailable")
+    const dir = resolveDirectory(input?.directory, this.deps)
+    const req = buildCommandListRequest(dir)
+    const peerBefore = this.deps.getPeer()
+    const epochBefore = epochSnapshot(peerBefore)
+    const startedAt = Date.now()
+    const handle = this.deps.commandListWithHandle(req)
+    const bounded = await withCommandBounded(handle as unknown as { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }, boundedCommandTimeoutMs())
+    const peerAfter = this.deps.getPeer()
+    const epochAfter = epochSnapshot(peerAfter)
+    const durationMs = Date.now() - startedAt
+    let result: CommandListResult
+    if (bounded.result !== null) {
+      const raw = bounded.result as unknown as CommandListWireOutcome | CommandListResult
+      const isRec = !!raw && typeof raw === "object" && !Array.isArray(raw)
+      if (isRec && (raw as unknown as { kind?: unknown }).kind === "valid" && "result" in (raw as Record<string, unknown>)) {
+        const inner = (raw as unknown as { kind: "valid"; result: CommandListResult }).result
+        result = inner as CommandListResult
+      } else if (isRec && (raw as unknown as { kind?: unknown }).kind === "invalid") {
+        const detail = (raw as unknown as { detail?: string }).detail ?? "invalid"
+        result = {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "command/list",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as CommandListResult
+        writeFixtureDiag(process.env.KILO_E2E_SCRATCH, `command-list-fixture-invalid-${req.requestId.slice(0, 8)}.json`, { detail, raw })
+      } else {
+        result = raw as CommandListResult
+      }
+    } else {
+      result = {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "command/list",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as CommandListResult
+    }
+    const diag = {
+      kind: "commandList",
+      opId: req.opId,
+      requestId: req.requestId,
+      directory: dir,
+      epochBefore,
+      epochAfter,
+      startedAt,
+      durationMs,
+      timedOut: bounded.timedOut,
+      cancelled: bounded.cancelled,
+      resultStatus: (result as unknown as { status?: string }).status,
+      data: (result as unknown as { data?: unknown }).data,
+    }
+    writeFixtureDiag(process.env.KILO_E2E_SCRATCH, `command-list-fixture-${req.requestId.slice(0, 8)}.json`, diag)
+    return { opId: req.opId, requestId: req.requestId, directory: dir, result }
   }
 }

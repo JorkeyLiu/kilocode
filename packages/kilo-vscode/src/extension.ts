@@ -1125,6 +1125,32 @@ export function activate(context: vscode.ExtensionContext) {
         if (!o.messageId || typeof o.messageId !== "string") throw new Error("messageId required")
         return connectionService.fixtureSessionPromptPrivateReplay(o.sessionId as string, o.messageId as string)
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionCommandPrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        if (!o.messageId || typeof o.messageId !== "string") throw new Error("messageId required")
+        if (!o.command || typeof o.command !== "string") throw new Error("command required")
+        if (o.arguments === undefined || typeof o.arguments !== "string") throw new Error("arguments required")
+        return connectionService.fixtureSessionCommandPrivate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+          messageId: o.messageId as string,
+          command: o.command as string,
+          arguments: o.arguments as string,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionCommandPrivateReplay", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        if (!o.messageId || typeof o.messageId !== "string") throw new Error("messageId required")
+        return connectionService.fixtureSessionCommandPrivateReplay(o.sessionId as string, o.messageId as string)
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.commandListPrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        return connectionService.fixtureCommandListPrivate({
+          directory: typeof o?.directory === "string" ? (o.directory as string) : undefined,
+        })
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedSnapshot", async () => {
         return connectionService.fixturePrivateObservationChangedSnapshot()
       }),

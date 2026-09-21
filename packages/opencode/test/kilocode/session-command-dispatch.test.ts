@@ -9,6 +9,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceStore } from "@/project/instance-store"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { ControlLease } from "@/kilocode/server/control-lease"
+import { InstanceRef } from "@/effect/instance-ref"
 import { SessionCommandDispatchService, layer as DispatchLayer, validateRequest } from "@/kilocode/session/session-command-dispatch"
 
 const SID = "ses_abc12300000000000001"
@@ -139,6 +140,104 @@ function depsFor(over: {
   const deps = Layer.mergeAll(dbLayer, sessionLayer, promptLayer, commandLayer, eventsLayer, storeLayer, gateLayer, leaseLayer)
   const full = Layer.provide(DispatchLayer, deps)
   return Layer.mergeAll(full, deps)
+}
+
+function makeCountingLease() {
+  let acquires = 0
+  let releases = 0
+  const lease: ControlLease.ControlLease = {
+    acquire: (ctx) => {
+      acquires += 1
+      return Option.some(
+        Effect.sync(() => {
+          releases += 1
+        }),
+      )
+    },
+    acquireWrite: () => Option.some(Effect.void),
+    sealAndDrain: () => Effect.void,
+  }
+  return { lease, counts: () => ({ acquires, releases }) }
+}
+
+function makeDirectoryAwareDeps(opts: {
+  dirCommandMap: Map<string, string[]>
+  sidToDir: Map<string, string>
+  countingLease?: ReturnType<typeof makeCountingLease>
+  sessionGetOverride?: () => Effect.Effect<unknown>
+}) {
+  const fakeDb = {
+    select: (..._a: unknown[]) => ({
+      from: (..._b: unknown[]) => ({
+        where: (..._c: unknown[]) => ({
+          get: () => Effect.succeed(undefined),
+          all: () => Effect.succeed([]),
+          orderBy: (..._o: unknown[]) => ({
+            all: () => Effect.succeed([]),
+            get: () => Effect.succeed(undefined),
+          }),
+        }),
+      }),
+    }),
+  }
+  const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)
+  const sessionLayer = Layer.succeed(Session.Service, {
+    get: opts.sessionGetOverride
+      ? opts.sessionGetOverride
+      : (sid: unknown) => {
+          const dir = opts.sidToDir.get(String(sid))
+          if (!dir) return Effect.fail(Object.assign(new Error("session not found"), { _tag: "NotFoundError" }))
+          return Effect.succeed({ directory: dir, id: String(sid) })
+        },
+  } as any)
+  const promptLayer = Layer.succeed(SessionPrompt.Service, {
+    prompt: () => Effect.die(new Error("unused")),
+    command: () => Effect.succeed({ id: "dummy" } as any),
+    cancel: () => Effect.void,
+    loop: () => Effect.die(new Error("unused")),
+    shell: () => Effect.die(new Error("unused")),
+    resolvePromptParts: () => Effect.succeed([] as never),
+  } as any)
+  const commandLayer = Layer.succeed(Command.Service, {
+    get: (name: string) =>
+      Effect.gen(function* () {
+        const ctx = yield* InstanceRef
+        const list = opts.dirCommandMap.get(ctx.directory) ?? []
+        if (list.includes(name)) return { name, template: "hi", hints: [] } as any
+        return undefined
+      }),
+    list: () =>
+      Effect.gen(function* () {
+        const ctx = yield* InstanceRef
+        const list = opts.dirCommandMap.get(ctx.directory) ?? []
+        return list.map((name) => ({ name, template: "hi", hints: [] })) as any
+      }),
+  } as any)
+  const eventsLayer = Layer.succeed(EventV2Bridge.Service, {
+    publish: () => Effect.void,
+  } as any)
+  const storeLayer = Layer.succeed(InstanceStore.Service, {
+    load: (input: { directory: string }) =>
+      Effect.succeed({ directory: input.directory, worktree: input.directory, project: { id: "proj-test" } } as any),
+    snapshot: (dir: string) =>
+      Effect.succeed(
+        Option.some({ directory: dir, worktree: dir, project: { id: `proj-${dir}` } } as any),
+      ),
+    reload: (input: { directory: string }) =>
+      Effect.succeed({ directory: input.directory, worktree: input.directory, project: { id: "proj-test" } } as any),
+    dispose: () => Effect.void,
+    disposeSafe: () => Effect.void,
+    disposeDirectory: () => Effect.void,
+    disposeAll: () => Effect.void,
+    provide: (_input: unknown, effect: Effect.Effect<unknown>) => effect as Effect.Effect<unknown>,
+    directories: () => Effect.succeed([]),
+  } as any)
+  const gateLayer = Layer.succeed(GenerationGate.Service, GenerationGate.noop)
+  const lease = opts.countingLease?.lease ?? ControlLease.noop
+  const leaseLayer = Layer.succeed(ControlLease.Service, lease)
+  const deps = Layer.mergeAll(dbLayer, sessionLayer, promptLayer, commandLayer, eventsLayer, storeLayer, gateLayer, leaseLayer)
+  const full = Layer.provide(DispatchLayer, deps)
+  return { layer: Layer.mergeAll(full, deps), leaseCounts: opts.countingLease?.counts }
 }
 
 describe("session-command-dispatch accept-only scope ownership", () => {
@@ -318,5 +417,170 @@ describe("session-command-dispatch accept-only scope ownership", () => {
       expect(result.accepted).toBe(false)
     })
     await Effect.runPromise(prog.pipe(Effect.provide(depsFor({})), Effect.scoped))
+  })
+})
+
+describe("session-command-dispatch instance-state isolation and ControlLease ownership (real InstanceRef wiring)", () => {
+  const DIR_A = "/tmp/ws-a"
+  const DIR_B = "/tmp/ws-b"
+  const SID_A = "ses_aaa12300000000000001"
+  const SID_B = "ses_bbb12300000000000002"
+  const MID_A1 = "msg_aaa12300000000000001"
+  const MID_B1 = "msg_bbb12300000000000001"
+  const MID_B2 = "msg_bbb12300000000000002"
+  const MID_A2 = "msg_aaa12300000000000002"
+
+  function reqFor(dir: string, sid: string, mid: string, command: string) {
+    return {
+      v: 1,
+      requestId: `req-${mid}`,
+      opId: `prompt:${mid}`,
+      op: "session/command",
+      idempotencyKey: `prompt:${mid}`,
+      context: { directory: dir, sessionId: sid, parentSessionId: null },
+      payload: { messageId: mid, command, arguments: "hello" },
+    }
+  }
+
+  test("two isolated directories: owner dir accepted, other dir same command -> command.not_found", async () => {
+    const dirMap = new Map<string, string[]>([[DIR_A, ["probe"]], [DIR_B, []]])
+    const sidMap = new Map<string, string>([[SID_A, DIR_A], [SID_B, DIR_B]])
+    const { layer } = makeDirectoryAwareDeps({ dirCommandMap: dirMap, sidToDir: sidMap })
+    const prog = Effect.gen(function* () {
+      const svc = yield* SessionCommandDispatchService
+      const ok = (yield* svc.dispatch(reqFor(DIR_A, SID_A, MID_A1, "probe"))) as any
+      expect(ok.status).toBe("succeeded")
+      expect(ok.accepted).toBe(true)
+      const nf = (yield* svc.dispatch(reqFor(DIR_B, SID_B, MID_B1, "probe"))) as any
+      expect(nf.status).toBe("failed")
+      expect(nf.accepted).toBe(false)
+      expect(nf.failure.code).toBe("command.not_found")
+      expect(nf.failure.retryable).toBe(false)
+      expect(nf.failure.message).toContain('Command not found')
+    })
+    await Effect.runPromise(prog.pipe(Effect.provide(layer), Effect.scoped))
+  })
+
+  test("command.not_found releases ControlLease exactly once; subsequent dispatch not blocked (no fence)", async () => {
+    const dirMap = new Map<string, string[]>([[DIR_A, []], [DIR_B, []]])
+    const sidMap = new Map<string, string>([[SID_A, DIR_A], [SID_B, DIR_B]])
+    const counter = makeCountingLease()
+    const { layer } = makeDirectoryAwareDeps({ dirCommandMap: dirMap, sidToDir: sidMap, countingLease: counter })
+    const prog = Effect.gen(function* () {
+      const svc = yield* SessionCommandDispatchService
+      const first = (yield* svc.dispatch(reqFor(DIR_B, SID_B, MID_B1, "missing"))) as any
+      expect(first.status).toBe("failed")
+      expect(first.failure.code).toBe("command.not_found")
+      expect(first.failure.retryable).toBe(false)
+      expect(counter.counts().acquires).toBe(1)
+      expect(counter.counts().releases).toBe(1)
+      const second = (yield* svc.dispatch(reqFor(DIR_B, SID_B, MID_B2, "missing"))) as any
+      expect(second.status).toBe("failed")
+      expect(second.failure.code).toBe("command.not_found")
+      expect(second.failure.retryable).toBe(false)
+      expect(counter.counts().acquires).toBe(2)
+      expect(counter.counts().releases).toBe(2)
+    })
+    await Effect.runPromise(prog.pipe(Effect.provide(layer), Effect.scoped))
+  })
+
+  test("accepted path retains lease ownership until background completes (no double release)", async () => {
+    const dirMap = new Map<string, string[]>([[DIR_A, ["probe"]]])
+    const sidMap = new Map<string, string>([[SID_A, DIR_A]])
+    const counter = makeCountingLease()
+    const { layer } = makeDirectoryAwareDeps({ dirCommandMap: dirMap, sidToDir: sidMap, countingLease: counter })
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* SessionCommandDispatchService
+          const res = (yield* svc.dispatch(reqFor(DIR_A, SID_A, MID_A2, "probe"))) as any
+          expect(res.status).toBe("succeeded")
+          expect(res.accepted).toBe(true)
+          expect(counter.counts().acquires).toBe(1)
+          expect(counter.counts().releases).toBe(0)
+          // fork owns release; poll until background releases (or timeout)
+          let attempts = 0
+          while (counter.counts().releases === 0 && attempts < 50) {
+            yield* Effect.sleep("20 millis")
+            attempts += 1
+          }
+          expect(counter.counts().releases).toBe(1)
+          expect(counter.counts().acquires).toBe(1)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+  })
+
+  test("InstanceUnavailableDuringConfigRebuild remains retryable and does not read command (no InstanceRef leak)", async () => {
+    // existing test already covers fence is retryable; this test adds that command not read when fenced
+    let getCalled = 0
+    let listCalled = 0
+    const dirMap = new Map<string, string[]>([[DIR, ["probe"]]])
+    const sidMap = new Map<string, string>([[SID, DIR]])
+    // custom Command that would throw if read
+    const fakeDb = {
+      select: (..._a: unknown[]) => ({
+        from: (..._b: unknown[]) => ({
+          where: (..._c: unknown[]) => ({
+            get: () => Effect.succeed(undefined),
+            all: () => Effect.succeed([]),
+            orderBy: (..._o: unknown[]) => ({
+              all: () => Effect.succeed([]),
+              get: () => Effect.succeed(undefined),
+            }),
+          }),
+        }),
+      }),
+    }
+    const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)
+    const sessionLayer = Layer.succeed(Session.Service, {
+      get: () => Effect.succeed({ directory: DIR, id: SID }),
+    } as any)
+    const promptLayer = Layer.succeed(SessionPrompt.Service, {
+      prompt: () => Effect.die(new Error("unused")),
+      command: () => Effect.succeed({ id: "dummy" } as any),
+      cancel: () => Effect.void,
+      loop: () => Effect.die(new Error("unused")),
+      shell: () => Effect.die(new Error("unused")),
+      resolvePromptParts: () => Effect.succeed([] as never),
+    } as any)
+    const commandLayer = Layer.succeed(Command.Service, {
+      get: () => {
+        getCalled += 1
+        return Effect.succeed({ name: "probe", template: "hi", hints: [] } as any)
+      },
+      list: () => {
+        listCalled += 1
+        return Effect.succeed([{ name: "probe" }] as any)
+      },
+    } as any)
+    const eventsLayer = Layer.succeed(EventV2Bridge.Service, { publish: () => Effect.void } as any)
+    const storeLayer = Layer.succeed(InstanceStore.Service, {
+      load: () => Effect.succeed({ directory: DIR, worktree: DIR, project: { id: "proj-test" } } as any),
+      snapshot: () => Effect.succeed(Option.none() as any),
+      reload: () => Effect.succeed({ directory: DIR, worktree: DIR, project: { id: "proj-test" } } as any),
+      dispose: () => Effect.void,
+      disposeSafe: () => Effect.void,
+      disposeDirectory: () => Effect.void,
+      disposeAll: () => Effect.void,
+      provide: (_input: unknown, effect: Effect.Effect<unknown>) => effect as Effect.Effect<unknown>,
+      directories: () => Effect.succeed([]),
+    } as any)
+    const gateLayer = Layer.succeed(GenerationGate.Service, { ...GenerationGate.noop, isBarrierActive: () => true })
+    const leaseLayer = Layer.succeed(ControlLease.Service, ControlLease.noop)
+    const deps = Layer.mergeAll(dbLayer, sessionLayer, promptLayer, commandLayer, eventsLayer, storeLayer, gateLayer, leaseLayer)
+    const full = Layer.provide(DispatchLayer, deps)
+    const layer = Layer.mergeAll(full, deps)
+    const prog = Effect.gen(function* () {
+      const svc = yield* SessionCommandDispatchService
+      const res = (yield* svc.dispatch(base())) as any
+      expect(res.status).toBe("failed")
+      expect(res.failure.code).toBe("InstanceUnavailableDuringConfigRebuild")
+      expect(res.failure.retryable).toBe(true)
+      expect(res.accepted).toBe(false)
+    })
+    await Effect.runPromise(prog.pipe(Effect.provide(layer), Effect.scoped))
+    expect(getCalled).toBe(0)
+    expect(listCalled).toBe(0)
   })
 })
