@@ -212,13 +212,20 @@ describe("dispatch commit-after notify via entry", () => {
               yield* Effect.sleep("20 millis")
               tries += 1
             }
-            expect(calls.length).toBe(2)
+            expect(calls.length).toBe(3)
             const term = calls[1].params as any
             expect(term.v).toBe(OBSERVATION_VERSION)
             expect(term.cursor).toBe(term.entries[0].seq)
             expect(Object.keys(term.entries[0]).sort()).toEqual(["kind", "revision", "seq", "session_id", "time"].sort())
+            expect(term.entries[0].kind).toBe("changed")
+            const gen = calls[2].params as any
+            expect(gen.v).toBe(OBSERVATION_VERSION)
+            expect(gen.entries[0].kind).toBe("generation")
+            expect(gen.entries[0].revision).toBe(term.entries[0].revision)
+            expect(gen.cursor).toBe(gen.entries[0].seq)
             const crows = yield* db.select().from(SessionChangefeedTable).all().pipe(Effect.orDie)
-            expect(crows.length).toBe(2)
+            expect(crows.length).toBe(3)
+            expect(crows.filter((c:any)=>c.kind==="generation").length).toBe(1)
           }).pipe(Effect.provide(deps)),
         ),
       )
@@ -243,7 +250,7 @@ describe("dispatch commit-after notify via entry", () => {
               yield* Effect.sleep("20 millis")
               tries += 1
             }
-            expect(calls.length).toBe(2)
+            expect(calls.length).toBe(3)
             const term = calls[1].params as any
             expect(term.entries[0].kind).toBe("changed")
             const row = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, `prompt:${MID2}`)).get().pipe(Effect.orDie)
@@ -272,7 +279,7 @@ describe("dispatch commit-after notify via entry", () => {
               yield* Effect.sleep("20 millis")
               tries += 1
             }
-            expect(calls.length).toBe(2)
+            expect(calls.length).toBe(3)
             const row = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, `prompt:${MID3}`)).get().pipe(Effect.orDie)
             expect(row!.outcome).toBe("abandoned")
           }).pipe(Effect.provide(deps)),
@@ -301,7 +308,7 @@ describe("dispatch commit-after notify via entry", () => {
             tries += 1
           }
           const before = calls.length
-          expect(before).toBe(2)
+          expect(before).toBe(3)
           const r2 = (yield* svc.dispatch(basePrompt())) as any
           expect(r2.status).toBe("succeeded")
           // give a tick for any stray notify
@@ -331,7 +338,7 @@ describe("dispatch commit-after notify via entry", () => {
             yield* Effect.sleep("20 millis")
             tries += 1
           }
-          expect(calls.length).toBe(2)
+          expect(calls.length).toBe(3)
           const mod = yield* Effect.promise(() => import("@opencode-ai/core/session/operation"))
           const rec: any = { opId: `prompt:${MID}`, opKind: "prompt", outcome: "failed", code: "prompt.failed", message: "second", time: Date.now() }
           const res = yield* (mod as any).SessionOperation.tryTransitionPromptTerminal(db, SID as any, rec).pipe(
@@ -340,7 +347,7 @@ describe("dispatch commit-after notify via entry", () => {
           )
           expect((res as any).applied).toBe(false)
           yield* Effect.sleep("30 millis")
-          expect(calls.length).toBe(2)
+          expect(calls.length).toBe(3)
         }).pipe(Effect.provide(deps)),
       ),
     )
@@ -367,7 +374,7 @@ describe("dispatch commit-after notify via entry", () => {
             yield* Effect.sleep("20 millis")
             tries += 1
           }
-          expect(calls.length).toBe(2)
+          expect(calls.length).toBe(3)
           const row = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, `prompt:${MID}`)).get().pipe(Effect.orDie)
           expect(row!.outcome).toBe("succeeded")
         }).pipe(Effect.provide(deps)),
@@ -462,12 +469,12 @@ describe("dispatch commit-after notify via entry", () => {
             yield* Effect.sleep("20 millis")
             tries += 1
           }
-          expect(calls.length).toBe(2)
+          expect(calls.length).toBe(3)
           const term = calls[1].params as any
           expect(term.v).toBe(OBSERVATION_VERSION)
           expect(term.cursor).toBe(term.entries[0].seq)
           const crows = yield* db.select().from(SessionChangefeedTable).all().pipe(Effect.orDie)
-          expect(crows.length).toBe(2)
+          expect(crows.length).toBe(3)
         }).pipe(Effect.provide(deps)),
       ),
     )
@@ -493,7 +500,7 @@ describe("dispatch commit-after notify via entry", () => {
             tries += 1
           }
           const before = calls.length
-          expect(before).toBe(2)
+          expect(before).toBe(3)
           const r2 = (yield* svc.dispatch(baseCommand())) as any
           expect(r2.status).toBe("succeeded")
           yield* Effect.sleep("20 millis")
@@ -542,7 +549,7 @@ describe("dispatch commit-after notify via entry", () => {
             yield* Effect.sleep("20 millis")
             tries += 1
           }
-          expect(calls.length).toBe(2)
+          expect(calls.length).toBe(3)
         }).pipe(Effect.provide(deps)),
       ),
     )

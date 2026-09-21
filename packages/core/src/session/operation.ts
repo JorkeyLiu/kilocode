@@ -41,6 +41,26 @@ export function isTerminal(outcome: Outcome): boolean {
   return outcome !== "in-flight"
 }
 
+export interface RecoveryVisible {
+  budget: 0
+  nextAt: number | null
+  provenance: "terminal"
+}
+
+export function needsRecovery(opKind: OpKind, outcome: Outcome): boolean {
+  return opKind === "prompt" && (outcome === "failed" || outcome === "abandoned")
+}
+
+export function recoveryForTerminal(opKind: OpKind, outcome: Outcome): RecoveryVisible | undefined {
+  if (!needsRecovery(opKind, outcome)) return undefined
+  return { budget: 0, nextAt: null, provenance: "terminal" as const }
+}
+
+function recoveryColumns(rec: RecoveryVisible | undefined): { budget: number | null; nextAt: number | null; provenance: string | null } {
+  if (!rec) return { budget: null, nextAt: null, provenance: null }
+  return { budget: rec.budget, nextAt: rec.nextAt, provenance: rec.provenance }
+}
+
 // ---------------------------------------------------------------------------
 // R12 tiers + redaction/cap boundary (core-owned, persists only redacted)
 // ---------------------------------------------------------------------------
@@ -647,7 +667,7 @@ export function isCancelQueuedConflict(
 // ---------------------------------------------------------------------------
 type DbOrTx = Database.Interface["db"] | Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0]
 
-function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<{ record: FailureRecord; entry: Changefeed.Entry }, unknown, never> {
+function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<{ record: FailureRecord; entry: Changefeed.Entry; generationEntry?: Changefeed.Entry }, unknown, never> {
   return Effect.gen(function* () {
     // validate shape then enforce redacted/capped boundary before any persistence
     validateRecord(record)
@@ -710,6 +730,9 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
       // allowed update: advance revision then update row — capture real feed entry in same tx, no extra select
       const entry = yield* SessionRevision.advanceTx(sessionID, tx)
       const nextRev = entry.revision
+      const rec = recoveryForTerminal(normalized.opKind, normalized.outcome)
+      const cols = recoveryColumns(rec)
+      const shouldGen = isTerminal(normalized.outcome) && normalized.opKind === "prompt"
       yield* tx
         .update(SessionOperationTable)
         .set({
@@ -723,10 +746,17 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
           stack: normalized.stack ?? null,
           revision: nextRev,
           session_id: sessionID,
-        })
+          recovery_budget: cols.budget,
+          recovery_next_at: cols.nextAt,
+          recovery_provenance: cols.provenance as unknown as "terminal" | null,
+        } as unknown as typeof SessionOperationTable.$inferInsert)
         .where(eq(SessionOperationTable.op_id, normalized.opId))
         .run()
         .pipe(Effect.orDie)
+      let genEntry: Changefeed.Entry | undefined
+      if (shouldGen) {
+        genEntry = yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
+      }
       const updated = yield* tx
         .select()
         .from(SessionOperationTable)
@@ -739,13 +769,16 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         updatedRecord = rowToValidatedRecord(updated as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
-        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry }
+        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry; generationEntry?: Changefeed.Entry }
       }
-      return { record: updatedRecord, entry }
+      return { record: updatedRecord, entry, ...(genEntry ? { generationEntry: genEntry } : {}) }
     } else {
       // new operation: advance revision then insert — capture real entry, no extra select
       const entry = yield* SessionRevision.advanceTx(sessionID, tx)
       const nextRev = entry.revision
+      const rec = recoveryForTerminal(normalized.opKind, normalized.outcome)
+      const cols = recoveryColumns(rec)
+      const shouldGen = isTerminal(normalized.outcome) && normalized.opKind === "prompt"
       yield* tx
         .insert(SessionOperationTable)
         .values({
@@ -760,9 +793,16 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
           detail: normalized.detail ?? null,
           stack: normalized.stack ?? null,
           revision: nextRev,
-        })
+          recovery_budget: cols.budget,
+          recovery_next_at: cols.nextAt,
+          recovery_provenance: cols.provenance as unknown as "terminal" | null,
+        } as unknown as typeof SessionOperationTable.$inferInsert)
         .run()
         .pipe(Effect.orDie)
+      let genEntry: Changefeed.Entry | undefined
+      if (shouldGen) {
+        genEntry = yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
+      }
       const inserted = yield* tx
         .select()
         .from(SessionOperationTable)
@@ -775,9 +815,9 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
       } catch (e) {
         yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
-        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry }
+        return undefined as unknown as { record: FailureRecord; entry: Changefeed.Entry; generationEntry?: Changefeed.Entry }
       }
-      return { record: insertedRecord, entry }
+      return { record: insertedRecord, entry, ...(genEntry ? { generationEntry: genEntry } : {}) }
     }
   })
 }
@@ -822,6 +862,9 @@ function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: Failur
       }
       const entry = yield* SessionRevision.advanceTx(sessionID, tx)
       const nextRev = entry.revision
+      const recU = recoveryForTerminal(normalized.opKind, normalized.outcome)
+      const colsU = recoveryColumns(recU)
+      const shouldGenU = isTerminal(normalized.outcome) && normalized.opKind === "prompt"
       yield* tx
         .update(SessionOperationTable)
         .set({
@@ -835,10 +878,14 @@ function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: Failur
           stack: normalized.stack ?? null,
           revision: nextRev,
           session_id: sessionID,
-        })
+          recovery_budget: colsU.budget,
+          recovery_next_at: colsU.nextAt,
+          recovery_provenance: colsU.provenance as unknown as "terminal" | null,
+        } as unknown as typeof SessionOperationTable.$inferInsert)
         .where(eq(SessionOperationTable.op_id, normalized.opId))
         .run()
         .pipe(Effect.orDie)
+      if (shouldGenU) yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
       const updated = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
       if (!updated) yield* Effect.die(new Error(`operation row missing after update ${normalized.opId}`))
       let updatedRecord: FailureRecord
@@ -852,6 +899,9 @@ function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: Failur
     } else {
       const entry = yield* SessionRevision.advanceTx(sessionID, tx)
       const nextRev = entry.revision
+      const recI = recoveryForTerminal(normalized.opKind, normalized.outcome)
+      const colsI = recoveryColumns(recI)
+      const shouldGenI = isTerminal(normalized.outcome) && normalized.opKind === "prompt"
       yield* tx
         .insert(SessionOperationTable)
         .values({
@@ -866,9 +916,13 @@ function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: Failur
           detail: normalized.detail ?? null,
           stack: normalized.stack ?? null,
           revision: nextRev,
-        })
+          recovery_budget: colsI.budget,
+          recovery_next_at: colsI.nextAt,
+          recovery_provenance: colsI.provenance as unknown as "terminal" | null,
+        } as unknown as typeof SessionOperationTable.$inferInsert)
         .run()
         .pipe(Effect.orDie)
+      if (shouldGenI) yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
       const inserted = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
       if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
       let insertedRecord: FailureRecord
@@ -1127,7 +1181,7 @@ export function ensurePromptInFlightTx(
 }
 
 export type TryTransitionPromptTerminalResult =
-  | { applied: true; record: FailureRecord; entry: Changefeed.Entry }
+  | { applied: true; record: FailureRecord; entry: Changefeed.Entry; generationEntry?: Changefeed.Entry }
   | { applied: false; record: FailureRecord | undefined; entry?: undefined }
 
 export function tryTransitionPromptTerminal(
@@ -1141,8 +1195,8 @@ export function tryTransitionPromptTerminal(
         Effect.gen(function* () {
           const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
           if (!existingRow) {
-            const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
-            return { applied: true as const, record: applied, entry }
+            const { record: applied, entry, generationEntry } = yield* putTx(tx as DbOrTx, sessionID, record)
+            return { applied: true as const, record: applied, entry, ...(generationEntry ? { generationEntry } : {}) }
           }
           let existing: FailureRecord
           try {
@@ -1153,8 +1207,8 @@ export function tryTransitionPromptTerminal(
           }
           if (isTerminal(existing.outcome)) return { applied: false as const, record: existing, entry: undefined }
           if (existing.outcome !== "in-flight") return { applied: false as const, record: existing, entry: undefined }
-          const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
-          return { applied: true as const, record: applied, entry }
+          const { record: applied, entry, generationEntry } = yield* putTx(tx as DbOrTx, sessionID, record)
+          return { applied: true as const, record: applied, entry, ...(generationEntry ? { generationEntry } : {}) }
         }),
       { behavior: "immediate" },
     )
@@ -1169,8 +1223,8 @@ export function tryTransitionPromptTerminalTx(
   return Effect.gen(function* () {
     const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
     if (!existingRow) {
-      const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
-      return { applied: true as const, record: applied, entry }
+      const { record: applied, entry, generationEntry } = yield* putTx(tx as DbOrTx, sessionID, record)
+      return { applied: true as const, record: applied, entry, ...(generationEntry ? { generationEntry } : {}) }
     }
     let existing: FailureRecord
     try {
@@ -1181,8 +1235,8 @@ export function tryTransitionPromptTerminalTx(
     }
     if (isTerminal(existing.outcome)) return { applied: false as const, record: existing, entry: undefined }
     if (existing.outcome !== "in-flight") return { applied: false as const, record: existing, entry: undefined }
-    const { record: applied, entry } = yield* putTx(tx as DbOrTx, sessionID, record)
-    return { applied: true as const, record: applied, entry }
+    const { record: applied, entry, generationEntry } = yield* putTx(tx as DbOrTx, sessionID, record)
+    return { applied: true as const, record: applied, entry, ...(generationEntry ? { generationEntry } : {}) }
   })
 }
 

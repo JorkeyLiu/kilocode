@@ -8,8 +8,8 @@ import { SessionChangefeedStateTable, SessionChangefeedTable } from "./sql"
 export const MAX_ROWS = 50_000
 export const MAX_BYTES = 64 * 1024 * 1024
 
-export type Kind = "changed" | "deleted"
-const VALID_KINDS = new Set<string>(["changed", "deleted"])
+export type Kind = "changed" | "deleted" | "generation"
+const VALID_KINDS = new Set<string>(["changed", "deleted", "generation"])
 function assertKind(kind: string): asserts kind is Kind {
   if (!VALID_KINDS.has(kind)) {
     throw new Error(`invalid changefeed kind: ${kind}`)

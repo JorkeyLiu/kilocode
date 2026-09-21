@@ -272,7 +272,7 @@ export const layer = Layer.effect(
             ...(detail ? { detail } : {}),
           }
           const res = yield* SessionOperation.tryTransitionPromptTerminal(db, sid, rec).pipe(
-            Effect.map((v) => v as { applied: boolean; entry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }),
+            Effect.map((v) => v as { applied: boolean; entry?: { seq: number; session_id: string; revision: number; kind: string; time: number }; generationEntry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }),
             Effect.catch(() => Effect.succeed({ applied: false } as { applied: boolean })),
             Effect.catchDefect(() => Effect.succeed({ applied: false } as { applied: boolean })),
           )
@@ -289,6 +289,20 @@ export const layer = Layer.effect(
               }
               yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
             }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            const gen = (res as { generationEntry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }).generationEntry
+            if (gen) {
+              yield* Effect.gen(function* () {
+                const opt = yield* Effect.serviceOption(PrivatePeerService)
+                if (opt._tag === "None") return
+                const peer = opt.value
+                const payload = {
+                  v: OBSERVATION_VERSION,
+                  cursor: gen.seq,
+                  entries: [{ seq: gen.seq, session_id: gen.session_id, revision: gen.revision, kind: gen.kind, time: gen.time }],
+                }
+                yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            }
           }
           promptInflight.delete(opId)
         }),

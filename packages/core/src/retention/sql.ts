@@ -7,14 +7,14 @@ export const SessionChangefeedTable = sqliteTable(
     seq: integer().primaryKey({ autoIncrement: true }),
     session_id: text().notNull(),
     revision: integer().notNull(),
-    kind: text().$type<"changed" | "deleted">().notNull(),
+    kind: text().$type<"changed" | "deleted" | "generation">().notNull(),
     time: integer().notNull(),
   },
   (table) => [
     uniqueIndex("session_changefeed_session_revision_kind_idx").on(table.session_id, table.revision, table.kind),
     index("session_changefeed_seq_idx").on(table.seq),
     index("session_changefeed_session_idx").on(table.session_id),
-    check("session_changefeed_kind_check", sql`${table.kind} IN ('changed', 'deleted')`),
+    check("session_changefeed_kind_check", sql`${table.kind} IN ('changed', 'deleted', 'generation')`),
   ],
 )
 

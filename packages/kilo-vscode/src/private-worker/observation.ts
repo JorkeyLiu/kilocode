@@ -97,9 +97,9 @@ export function isObservationCapable(result: unknown): boolean {
   }
 }
 
-export type ObservationKind = "changed" | "deleted"
+export type ObservationKind = "changed" | "deleted" | "generation"
 
-const VALID_KINDS = new Set<string>(["changed", "deleted"])
+const VALID_KINDS = new Set<string>(["changed", "deleted", "generation"])
 
 function isValidKind(v: unknown): v is ObservationKind {
   return typeof v === "string" && VALID_KINDS.has(v)
@@ -228,6 +228,7 @@ export interface ObservationOperationsPanelEntry {
   message: string
   time: number
   cancel?: { source: string }
+  recovery?: { budget: 0; nextAt: number | null; provenance: "terminal" }
 }
 
 export type ObservationOperationsResult =
@@ -526,7 +527,7 @@ function validateOperationsResult(res: unknown): asserts res is ObservationOpera
   for (const op of ops) {
     if (op === null || typeof op !== "object" || Array.isArray(op)) throw internalError("operations returned invalid operation shape")
     const rec = op as Record<string, unknown>
-    const allowedOp = new Set(["opId", "outcome", "code", "message", "time", "cancel"])
+    const allowedOp = new Set(["opId", "outcome", "code", "message", "time", "cancel", "recovery"])
     for (const k of Object.keys(rec)) if (!allowedOp.has(k)) throw internalError("operations returned invalid operation shape")
     if (typeof rec.opId !== "string" || rec.opId.length === 0) throw internalError("operations returned invalid operation shape")
     if (typeof rec.outcome !== "string" || !["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"].includes(rec.outcome as string)) throw internalError("operations returned invalid operation shape")
@@ -540,6 +541,17 @@ function validateOperationsResult(res: unknown): asserts res is ObservationOpera
       const extra = Object.keys(c).filter((k) => k !== "source")
       if (extra.length > 0) throw internalError("operations returned invalid operation shape")
     }
+    if ("recovery" in rec && rec.recovery !== undefined) {
+      if (rec.recovery === null || typeof rec.recovery !== "object" || Array.isArray(rec.recovery)) throw internalError("operations returned invalid operation shape")
+      const rv = rec.recovery as Record<string, unknown>
+      const allowedRec = new Set(["budget", "nextAt", "provenance"])
+      for (const k of Object.keys(rv)) if (!allowedRec.has(k)) throw internalError("operations returned invalid operation shape")
+      if (rv.budget !== 0) throw internalError("operations returned invalid operation shape")
+      if (rv.nextAt !== null && rv.nextAt !== undefined && (typeof rv.nextAt !== "number" || !Number.isFinite(rv.nextAt))) throw internalError("operations returned invalid operation shape")
+      if (rv.provenance !== "terminal") throw internalError("operations returned invalid operation shape")
+      if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("operations returned invalid operation shape")
+    }
+    // Ensure no diagnostic fields leak
     if ("detail" in rec || "stack" in rec || "idempotencyHash" in rec || "requestId" in rec || "revision" in rec) throw internalError("operations returned invalid operation shape")
   }
 }

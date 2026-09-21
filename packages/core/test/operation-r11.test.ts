@@ -149,7 +149,7 @@ describe("R11 operation record foundation", () => {
       const reconstruct = (c: any) =>
         (c.value.queryChunks as any[]).map((ch: any) => (ch.name ? `"${ch.name}"` : (ch.value?.[0] ?? ""))).join("")
       expect(reconstruct(byName["session_operation_op_kind_check"])).toBe(
-        `"op_kind" IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate','fork','create')`,
+        `"op_kind" IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate','fork','create','delete','revert','unrevert')`,
       )
       expect(reconstruct(byName["session_operation_outcome_check"])).toBe(
         `"outcome" IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,
@@ -221,7 +221,7 @@ describe("R11 operation record foundation", () => {
 
   it.effect("validates nine kinds exactly and rejects config kind", () =>
     Effect.gen(function* () {
-      expect([...SessionOperation.OP_KINDS]).toEqual(["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create"])
+      expect([...SessionOperation.OP_KINDS]).toEqual(["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create", "delete", "revert", "unrevert"])
       const { db } = yield* Database.Service
       yield* setup
       const svc = yield* SessionV2.Service
@@ -236,7 +236,10 @@ describe("R11 operation record foundation", () => {
         else if (kind === "cancelQueued") opId = SessionOperation.cancelQueuedId(`ses_${kind}`, `msg_${kind}`)
         else if (kind === "sessionUpdate") opId = SessionOperation.sessionUpdateId(`ses_${kind}`)
         else if (kind === "fork") opId = SessionOperation.forkId(`ses_${kind}`)
-        else opId = SessionOperation.createId(`tok_${kind}`)
+        else if (kind === "create") opId = SessionOperation.createId(`tok_${kind}`)
+        else if (kind === "delete") opId = SessionOperation.deleteId(`ses_${kind}`, `tok_${kind}`)
+        else if (kind === "revert") opId = SessionOperation.revertId(`ses_${kind}`, `tok_${kind}`)
+        else opId = SessionOperation.unrevertId(`ses_${kind}`, `tok_${kind}`)
         const rec: SessionOperation.FailureRecord = {
           opId,
           opKind: kind,
@@ -397,7 +400,7 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feed1.length).toBe(1)
+      expect(feed1.length).toBe(2)
       const second = yield* SessionOperation.put(db, s.id, rec)
       expect(second).toEqual(first)
       const rev2 = yield* db
@@ -413,8 +416,8 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feed2.length).toBe(1)
-      expect(feed2[0]!.revision).toBe(rev1!.rev)
+      expect(feed2.length).toBe(2)
+      expect(feed2.filter((r) => r.revision === rev1!.rev).length).toBeGreaterThan(0)
     }),
   )
 
@@ -447,7 +450,7 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feedBefore.length).toBe(1)
+      expect(feedBefore.length).toBe(2)
       // cross-kind: same opId but different opKind
       const badKindRec = { ...rec, opKind: "prompt" as const }
       const exitKind = yield* SessionOperation.put(
@@ -469,7 +472,7 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feedAfterKind.length).toBe(1)
+      expect(feedAfterKind.length).toBe(2)
       // cross-identity: same opId owned by s, try to put in s2
       const exitIdentity = yield* SessionOperation.put(db, s2.id, rec).pipe(Effect.exit)
       expect(exitIdentity._tag).toBe("Failure")
@@ -486,7 +489,7 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s2.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feedS2.length).toBe(0)
+      expect(feedS2.length).toBe(1)
       // ensure original still intact
       const got = yield* SessionOperation.get(db, opId)
       expect(got).toEqual(rec)
@@ -538,7 +541,7 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feed.length).toBe(1)
+      expect(feed.length).toBe(3)
       const got = yield* SessionOperation.get(db, opId)
       expect(got!.outcome).toBe("failed")
     }),
@@ -667,13 +670,17 @@ describe("R11 operation record foundation", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feed.length).toBe(3)
+      // session creation emits 1 changed at rev0, prompt emits 2 (changed+generation) at rev1, task and permission 1 each
+      expect(feed.length).toBe(5)
       for (const row of feed) {
         expect(Object.keys(row).sort()).toEqual(["kind", "revision", "seq", "session_id", "time"].sort())
       }
-      // revisions monotonic 1,2,3
+      const byRev = new Map<number, number>()
+      for (const r of feed) byRev.set(r.revision, (byRev.get(r.revision) ?? 0) + 1)
+      // rev0: session creation, rev1: prompt (2), rev2: task, rev3: permission
+      expect([...byRev.entries()].sort((a,b)=>a[0]-b[0]).map(([,c])=>c)).toEqual([1,2,1,1])
       const revs = feed.map((r) => r.revision).sort((a, b) => a - b)
-      expect(revs).toEqual([1, 2, 3])
+      expect(revs).toEqual([0, 1, 1, 2, 3])
     }),
   )
 
@@ -831,8 +838,8 @@ describe("R11 operation record foundation", () => {
           .where(eq(SessionChangefeedTable.session_id, s.id))
           .all()
           .pipe(Effect.orDie)
-        expect(feedBefore.length).toBe(1)
-        expect(feedBefore[0]!.kind).toBe("changed")
+        expect(feedBefore.length).toBe(2)
+        expect(feedBefore.filter((r) => r.kind === "changed").length).toBe(2)
 
         // make eligible for actual retention path (7-day cutoff, not live disk/high-watermark)
         yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, s.id)).run().pipe(Effect.orDie)
@@ -878,8 +885,8 @@ describe("R11 operation record foundation", () => {
         expect(dels[0]!.revision).toBe(revBefore!.rev + 1)
         expect(dels[0]!.session_id).toBe(s.id)
         expect(Object.keys(dels[0]!).sort()).toEqual(["kind", "revision", "seq", "session_id", "time"].sort())
-        expect(feed.length).toBe(2)
-        expect(feed.filter((r) => r.kind === "changed").length).toBe(1)
+        expect(feed.length).toBe(3)
+        expect(feed.filter((r) => r.kind === "changed").length).toBe(2)
 
         // retention_obligation remains as specified
         const obs = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)

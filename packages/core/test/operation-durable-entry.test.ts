@@ -131,7 +131,11 @@ describe("durable operation entry in same transaction", () => {
       // seq monotonic increasing vs fresh
       if (fresh.fresh) expect(applied.entry.seq).toBeGreaterThan(fresh.entry.seq)
       const feedAfterApplied = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, s.id)).all().pipe(Effect.orDie)
-      expect(feedAfterApplied.length).toBe(countAfterFresh + 1)
+      expect(feedAfterApplied.length).toBe(countAfterFresh + 2)
+      expect(applied.generationEntry).toBeDefined()
+      expect(applied.generationEntry!.kind).toBe("generation")
+      expect(applied.generationEntry!.revision).toBe(applied.entry.revision)
+      expect(applied.generationEntry!.seq).toBeGreaterThan(applied.entry.seq)
       const revAfterApplied = sessRow!.rev
       expect(revAfterApplied).toBe((revAfterFresh!.rev as number) + 1)
       // second terminal attempt should be no-op with no entry and no revision advance
@@ -139,10 +143,11 @@ describe("durable operation entry in same transaction", () => {
       const noop = yield* SessionOperation.tryTransitionPromptTerminal(db, s.id, termRec2)
       expect(noop.applied).toBe(false)
       expect((noop as unknown as { entry?: unknown }).entry).toBeUndefined()
+      expect((noop as unknown as { generationEntry?: unknown }).generationEntry).toBeUndefined()
       const sessRow2 = yield* db.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, s.id)).get().pipe(Effect.orDie)
       expect(sessRow2!.rev).toBe(revAfterApplied)
       const feedAfterNoop = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, s.id)).all().pipe(Effect.orDie)
-      expect(feedAfterNoop.length).toBe(countAfterFresh + 1)
+      expect(feedAfterNoop.length).toBe(countAfterFresh + 2)
       // record returned for no-op should be the existing terminal
       expect(noop.record).toBeDefined()
       expect(noop.record!.outcome).toBe("succeeded")

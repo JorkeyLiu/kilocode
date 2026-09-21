@@ -231,6 +231,9 @@ export const SessionOperationTable = sqliteTable(
     sandbox_token_hash: text(),
     sandbox_source_session_id: text(),
     sandbox_source_directory: text(),
+    recovery_budget: integer(),
+    recovery_next_at: integer(),
+    recovery_provenance: text().$type<"terminal">(),
   },
   (table) => [
     index("session_operation_session_idx").on(table.session_id),
