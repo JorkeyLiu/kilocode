@@ -340,6 +340,52 @@ describe("AgentManagerObservationCoordinator", () => {
     expect(dec.shouldRefresh).toBe(false)
     expect(dec.ackCursor).toBeUndefined()
   })
+
+  it("contiguous mixed changed+generation read delta validates and acks (generic kind)", async () => {
+    // persisted 5, cursor 7, entries [6 changed, 7 generation] same revision (generation alongside changed)
+    const { svc } = fakePrivate({
+      enabled: true,
+      persisted: 5,
+      readInvalid: {
+        v: "1.0",
+        cursor: 7,
+        rehydrate: false,
+        entries: [
+          { seq: 6, session_id: "ses_mix", revision: 5, kind: "changed", time: 7006 },
+          { seq: 7, session_id: "ses_mix", revision: 5, kind: "generation", time: 7006 },
+        ],
+      } as any,
+    })
+    const coord = new AgentManagerObservationCoordinator(svc)
+    const dec = await coord.decide()
+    expect(dec.shouldRefresh).toBe(true)
+    expect(dec.ackCursor).toBe(7)
+    const ok = await coord.ack(dec.ackCursor!)
+    expect(ok).toBe(true)
+    expect(svc.getPersistedCursor()).toBe(7)
+    // also via direct decideFromReadResultWithValidity must be valid (no fallback)
+    const raw = { v: "1.0", cursor: 7, rehydrate: false as const, entries: [
+      { seq: 6, session_id: "ses_mix", revision: 5, kind: "changed", time: 7006 },
+      { seq: 7, session_id: "ses_mix", revision: 5, kind: "generation", time: 7006 },
+    ] }
+    const res = coord.decideFromReadResultWithValidity(raw as unknown, 5)
+    expect(res.valid).toBe(true)
+    expect(res.decision.shouldRefresh).toBe(true)
+    expect(res.decision.ackCursor).toBe(7)
+    // and changed-notification path with same mixed entries is valid
+    const nRes = coord.decideFromChangedNotificationWithValidity({ v: "1.0", cursor: 7, entries: raw.entries } as unknown, 5)
+    expect(nRes.valid).toBe(true)
+    expect(nRes.decision.ackCursor).toBe(7)
+    // bad shape still fail-closed even with generation kind (non-finite time)
+    const bad = { v: "1.0", cursor: 6, rehydrate: false as const, entries: [{ seq: 6, session_id: "ses_mix", revision: 5, kind: "generation", time: NaN }] }
+    const badRes = coord.decideFromReadResultWithValidity(bad as unknown, 5)
+    expect(badRes.valid).toBe(false)
+    expect(badRes.decision.ackCursor).toBeUndefined()
+    // bogus kind remains rejected even though generation is now valid
+    const badKind = { v: "1.0", cursor: 6, rehydrate: false as const, entries: [{ seq: 6, session_id: "ses_mix", revision: 5, kind: "bogus", time: 7006 }] }
+    const badKindRes = coord.decideFromReadResultWithValidity(badKind as unknown, 5)
+    expect(badKindRes.valid).toBe(false)
+  })
 })
 
 describe("AgentManagerProvider requestState hydration reset and singleflight", () => {

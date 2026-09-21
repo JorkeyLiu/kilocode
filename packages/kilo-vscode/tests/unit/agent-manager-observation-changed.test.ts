@@ -149,6 +149,64 @@ describe("AgentManager observation/changed bounded consumer", () => {
     expect(store.get()).toBe(4)
   })
 
+  it("valid generation notification triggers exactly one refresh and ack (bounded consumer, no polling)", async () => {
+    const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 7 })
+    const provider: any = makeProvider(svc)
+    provider.generation = 1
+    provider.hydrated = true
+    let refreshCount = 0
+    provider.panel = {
+      visible: true,
+      sessions: {
+        refreshSessions: async () => {
+          refreshCount++
+        },
+      },
+    } as any
+    const note = {
+      v: "1.0",
+      cursor: 8,
+      entries: [{ seq: 8, session_id: "ses_g", revision: 5, kind: "generation", time: 7005 }],
+    }
+    provider.handleObservationChanged(OBSERVATION_NOTIFICATION, note)
+    await new Promise((r) => setTimeout(r, 20))
+    await waitForRefresh(provider)
+    expect(refreshCount).toBe(1)
+    expect(readLog.length).toBe(0)
+    expect(ackLog).toEqual([8])
+    expect(store.get()).toBe(8)
+  })
+
+  it("mixed changed+generation contiguous notification triggers single refresh+ack (generic kind)", async () => {
+    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 5 })
+    const provider: any = makeProvider(svc)
+    provider.generation = 1
+    provider.hydrated = true
+    let refreshCount = 0
+    provider.panel = {
+      visible: true,
+      sessions: {
+        refreshSessions: async () => {
+          refreshCount++
+        },
+      },
+    } as any
+    const note = {
+      v: "1.0",
+      cursor: 7,
+      entries: [
+        { seq: 6, session_id: "ses_mix", revision: 5, kind: "changed", time: 7006 },
+        { seq: 7, session_id: "ses_mix", revision: 5, kind: "generation", time: 7006 },
+      ],
+    }
+    provider.handleObservationChanged(OBSERVATION_NOTIFICATION, note)
+    await new Promise((r) => setTimeout(r, 20))
+    await waitForRefresh(provider)
+    expect(refreshCount).toBe(1)
+    expect(ackLog).toEqual([7])
+    expect(store.get()).toBe(7)
+  })
+
   it("burst multiple valid notifications coalesce to one refresh with latest cursor", async () => {
     const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 10 })
     const provider: any = makeProvider(svc)

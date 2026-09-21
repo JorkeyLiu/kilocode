@@ -20,7 +20,7 @@ function isValidObservationEntry(e: unknown, cursor: number, prevSeq: number): {
   if (typeof o.revision !== "number" || !Number.isSafeInteger(o.revision) || o.revision < 0)
     return { ok: false, seq: -1 }
   const kind = o.kind
-  if (kind !== "changed" && kind !== "deleted") return { ok: false, seq: -1 }
+  if (kind !== "changed" && kind !== "deleted" && kind !== "generation") return { ok: false, seq: -1 }
   const time = o.time
   if (typeof time !== "number" || !Number.isFinite(time)) return { ok: false, seq: -1 }
   return { ok: true, seq }

@@ -253,4 +253,75 @@ describe("serve-private-peer observation/changed producer forwarding", () => {
     hostPeer.dispose()
     cli.dispose()
   })
+
+  it("generation kind notification is strictly validated and forwarded (bounded consumer closure)", async () => {
+    const cliToHost = new PassThrough()
+    const hostToCli = new PassThrough()
+    let forwarded: unknown[] = []
+    const cli = new JsonRpcPeer({
+      reader: cliToHost,
+      writer: hostToCli,
+      onRequest: async (method) => {
+        if (method === "initialize") {
+          return {
+            protocol: { name: "kilo-private", major: 1, minor: 0 },
+            protocolVersion: "1.0",
+            serverInfo: { name: "kilo", version: "7.4.11" },
+            capabilities: ["session/create", "session/status"],
+          }
+        }
+        throw new Error("unexpected")
+      },
+    })
+    const hostPeer = new ServePrivatePeer({
+      reader: hostToCli as unknown as NodeJS.ReadableStream,
+      writer: cliToHost as unknown as NodeJS.WritableStream,
+      epoch: 6,
+      pid: 128,
+      onObservationChanged: (m, p) => forwarded.push({ m, p }),
+    })
+    const ok = await hostPeer.initialize()
+    expect(ok).toBeTrue()
+    const validGen = {
+      v: OBSERVATION_VERSION,
+      cursor: 2,
+      entries: [{ seq: 2, session_id: "ses_gen123", revision: 5, kind: "generation", time: 7005 }],
+    }
+    expect(isValidObservationChangedNotification(validGen)).toBeTrue()
+    const keys = Object.keys(validGen.entries[0] as Record<string, unknown>).sort()
+    expect(keys).toEqual(["kind", "revision", "seq", "session_id", "time"].sort())
+    cli.notify(OBSERVATION_NOTIFICATION, validGen)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(forwarded.length).toBe(1)
+    const f = forwarded[0] as { m: string; p: unknown }
+    expect(f.m).toBe(OBSERVATION_NOTIFICATION)
+    expect((f.p as { cursor: number }).cursor).toBe(2)
+    expect(((f.p as { entries: Array<{ kind: string }> }).entries[0]!.kind)).toBe("generation")
+    // mixed changed + generation contiguous (seq 1 changed, seq 2 generation) must also be valid/forwarded
+    forwarded = []
+    const mixed = {
+      v: OBSERVATION_VERSION,
+      cursor: 3,
+      entries: [
+        { seq: 2, session_id: "ses_mix", revision: 5, kind: "changed", time: 7006 },
+        { seq: 3, session_id: "ses_mix", revision: 5, kind: "generation", time: 7006 },
+      ],
+    }
+    expect(isValidObservationChangedNotification(mixed)).toBeTrue()
+    cli.notify(OBSERVATION_NOTIFICATION, mixed)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(forwarded.length).toBe(1)
+    // invalid kind must remain fail-closed
+    expect(isValidObservationChangedNotification({ v: "1.0", cursor: 1, entries: [{ seq: 1, session_id: "ses_a", revision: 0, kind: "bogus", time: 1 }] })).toBeFalse()
+    // invalid shape still fail-closed (extra key)
+    expect(
+      isValidObservationChangedNotification({
+        v: "1.0",
+        cursor: 1,
+        entries: [{ seq: 1, session_id: "ses_a", revision: 0, kind: "generation", time: 1, extra: 1 }],
+      }),
+    ).toBeFalse()
+    hostPeer.dispose()
+    cli.dispose()
+  })
 })

@@ -2776,7 +2776,7 @@ export function isValidObservationChangedNotification(raw: unknown): boolean {
     if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq <= 0) return false
     if (typeof sid !== "string" || sid.length === 0 || !sid.startsWith("ses") || sid.includes("\0")) return false
     if (typeof rev !== "number" || !Number.isSafeInteger(rev) || rev < 0) return false
-    if (kind !== "changed" && kind !== "deleted") return false
+    if (kind !== "changed" && kind !== "deleted" && kind !== "generation") return false
     if (typeof time !== "number" || !Number.isSafeInteger(time) || time < 0) return false
     if (prevSeq !== -1 && seq !== prevSeq + 1) return false
     if (seq > cursor) return false
