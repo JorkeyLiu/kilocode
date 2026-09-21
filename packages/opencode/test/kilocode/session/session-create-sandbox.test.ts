@@ -663,4 +663,39 @@ describe("sessionCreate sandbox inheritance durable", () => {
       expect(JSON.stringify(feeds3)).not.toContain(token)
     }),
   )
+
+  it.live("pre-commit reservation same-hash reentry is idempotent via manual reserve before dispatch", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true })) as any
+      const dir = tmp.path
+      const srcOp = SessionOperation.createId("src-pre-" + Math.random().toString(36).slice(2, 6))
+      const srcReq = { v: 1, requestId: "req-src-pre", opId: srcOp, op: "session/create", idempotencyKey: srcOp, context: { directory: dir, parentSessionId: null }, payload: { title: "src" } }
+      const srcRes = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(srcReq) })))) as any
+      expect(srcRes.status).toBe("succeeded")
+      const token = SandboxInheritance.issue({ sessionID: srcRes.data.id, directory: dir, count: 3 })
+      const opId = SessionOperation.createId("pre-" + Math.random().toString(36).slice(2, 6))
+      // simulate pre-commit window: reserve before dispatch holds reservation
+      const pre = SandboxInheritance.reserve(opId, token)!
+      expect(pre.hash).toBe(sha256Hex(token))
+      expect(SandboxInheritance._getReservation(opId)).toBeDefined()
+      expect(SandboxInheritance._getGrant(token)?.remaining).toBe(3)
+      const req = { v: 1, requestId: "req-pre", opId, op: "session/create", idempotencyKey: opId, context: { directory: dir, parentSessionId: null }, payload: { title: "child", sandboxInheritanceToken: token } }
+      const res = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(req) })))) as any
+      expect(res.status).toBe("succeeded")
+      expect(JSON.stringify(res)).not.toContain(token)
+      // single deduction despite manual reserve + dispatch reserve idempotent
+      expect(SandboxInheritance._getGrant(token)?.remaining).toBe(2)
+      expect(SandboxInheritance._getReservation(opId)).toBeUndefined()
+      const dbRows = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const db = (yield* Database.Service).db; const rows = yield* db.select().from((yield* Effect.promise(() => import("@opencode-ai/core/session/sql")) as any).SessionOperationTable).all().pipe(Effect.orDie); return rows })))) as any
+      const row = (dbRows as any[]).find((r) => r.op_id === opId)
+      expect(row.sandbox_token_hash).toBe(sha256Hex(token))
+      expect(JSON.stringify(row)).not.toContain(token)
+      // replay does not re-deduct
+      const replay = yield* Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionCreateDispatchService; return yield* d.dispatch(req) })))) as any
+      expect(replay.status).toBe("succeeded")
+      expect(replay.data.id).toBe(res.data.id)
+      expect(SandboxInheritance._getGrant(token)?.remaining).toBe(2)
+      expect(JSON.stringify(replay)).not.toContain(token)
+    }),
+  )
 })

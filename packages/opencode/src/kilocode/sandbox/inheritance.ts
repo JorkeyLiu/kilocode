@@ -62,7 +62,12 @@ export function reserve(opId: string, token: string | undefined | null): Reserva
   if (!token) return undefined
   if (!shapeValid(token)) throw new Error("invalid sandbox inheritance token shape")
   cleanup()
-  if (reservations.has(opId)) throw new Error("sandbox inheritance token conflict for opId")
+  const existing = reservations.get(opId)
+  if (existing) {
+    const hash = hashToken(token)
+    if (existing.hash === hash) return existing
+    throw new Error("sandbox inheritance token conflict for opId")
+  }
   const grant = grants.get(token)
   if (!grant) throw new Error("Invalid sandbox inheritance token")
   if (grant.remaining <= 0) throw new Error("Invalid sandbox inheritance token")
