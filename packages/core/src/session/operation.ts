@@ -79,7 +79,10 @@ function scrubString(s: string): string {
 }
 
 export function normalizeRecord(record: FailureRecord): FailureRecord {
-  // preserve 9-field shape, scrub + cap string fields
+  // preserve 9-field shape, scrub + cap string fields — required fields stay strict, optional fields honor schema nullability
+  if (typeof record.message !== "string") throw new TypeError("message must be string")
+  if (typeof record.code !== "string" || record.code.length === 0) throw new TypeError("code must be non-empty string")
+  if (typeof record.time !== "number" || !Number.isFinite(record.time)) throw new TypeError("time must be finite number")
   const out: FailureRecord = {
     opId: record.opId,
     opKind: record.opKind,
@@ -88,9 +91,21 @@ export function normalizeRecord(record: FailureRecord): FailureRecord {
     message: cap(scrubString(record.message), 500),
     time: record.time,
   }
-  if (record.cancel !== undefined) out.cancel = { source: record.cancel.source }
-  if (record.detail !== undefined) out.detail = cap(scrubString(record.detail), 1000)
-  if (record.stack !== undefined) out.stack = cap(scrubString(record.stack), 2000)
+  if (record.cancel !== undefined) {
+    if (record.cancel === null || typeof record.cancel !== "object" || Array.isArray(record.cancel))
+      throw new TypeError("cancel must be object")
+    const src = (record.cancel as Record<string, unknown>).source
+    if (typeof src !== "string" || !cancelSet.has(src)) throw new TypeError("cancel.source invalid")
+    out.cancel = { source: src as CancelSource }
+  }
+  if (record.detail !== undefined) {
+    if (typeof record.detail !== "string") throw new TypeError("detail must be string")
+    out.detail = cap(scrubString(record.detail), 1000)
+  }
+  if (record.stack !== undefined) {
+    if (typeof record.stack !== "string") throw new TypeError("stack must be string")
+    out.stack = cap(scrubString(record.stack), 2000)
+  }
   return out
 }
 
@@ -461,6 +476,66 @@ function recordsEqual(a: FailureRecord, b: FailureRecord): boolean {
   return true
 }
 
+function isOpIdDuplicateError(err: unknown): boolean {
+  const rec = err as Record<string, unknown> | null | undefined
+  const code = typeof rec?.["code"] === "string" ? String(rec["code"]) : ""
+  const msg = String((rec?.["message"] as unknown) ?? err ?? "")
+  const errnoVal = rec?.["errno"]
+  const extVal = rec?.["extendedCode"]
+  const errnoNum = typeof errnoVal === "number" ? errnoVal : typeof extVal === "number" ? extVal : undefined
+  if (errnoNum === 1555 || errnoNum === 2067) return true
+  const errnoStr = typeof errnoVal === "string" ? errnoVal : typeof extVal === "string" ? extVal : ""
+  if (errnoStr === "1555" || errnoStr === "2067") return true
+  if (code === "SQLITE_CONSTRAINT_PRIMARYKEY" || code === "SQLITE_CONSTRAINT_UNIQUE") return true
+  if (msg.includes("SQLITE_CONSTRAINT_PRIMARYKEY") || msg.includes("SQLITE_CONSTRAINT_UNIQUE")) return true
+  // strict op_id scoped message: must mention session_operation.op_id with UNIQUE/PRIMARY
+  if (msg.includes("session_operation.op_id") && (msg.includes("UNIQUE constraint failed") || msg.includes("PRIMARY KEY"))) return true
+  return false
+}
+
+function isSqliteBusyError(err: unknown): boolean {
+  const rec = err as Record<string, unknown> | null | undefined
+  const code = typeof rec?.["code"] === "string" ? String(rec["code"]) : ""
+  const msg = String((rec?.["message"] as unknown) ?? err ?? "")
+  if (code === "SQLITE_BUSY" || code.startsWith("SQLITE_BUSY")) return true
+  if (msg.includes("SQLITE_BUSY")) return true
+  if (msg.includes("database is locked") || msg.includes("database table is locked")) return true
+  return false
+}
+
+// keep narrow alias for internal clarity; legacy name deprecated
+function isSqliteConstraintError(err: unknown): boolean {
+  return isOpIdDuplicateError(err)
+}
+
+function rowToValidatedRecord(row: typeof SessionOperationTable.$inferSelect): FailureRecord {
+  if (typeof row.op_id !== "string" || row.op_id.length === 0) throw new TypeError("op_id must be non-empty string")
+  if (typeof row.session_id !== "string" || row.session_id.length === 0) throw new TypeError("session_id must be non-empty string")
+  if (typeof row.op_kind !== "string" || !opKindSet.has(row.op_kind)) throw new TypeError(`op_kind must be one of ${OP_KINDS.join(", ")}`)
+  if (typeof row.outcome !== "string" || !outcomeSet.has(row.outcome)) throw new TypeError(`outcome must be one of ${OUTCOMES.join(", ")}`)
+  if (typeof row.code !== "string" || row.code.length === 0) throw new TypeError("code must be non-empty string")
+  if (typeof row.message !== "string") throw new TypeError("message must be string")
+  if (typeof row.time !== "number" || !Number.isFinite(row.time)) throw new TypeError("time must be finite number")
+  parseOpId(row.op_id)
+  const candidate: unknown = {
+    opId: row.op_id,
+    opKind: row.op_kind,
+    outcome: row.outcome,
+    code: row.code,
+    message: row.message,
+    time: row.time,
+    ...(row.cancel !== null && row.cancel !== undefined ? { cancel: { source: row.cancel } } : {}),
+    ...(row.detail !== null && row.detail !== undefined ? { detail: row.detail } : {}),
+    ...(row.stack !== null && row.stack !== undefined ? { stack: row.stack } : {}),
+  }
+  const validated = validateRecord(candidate)
+  return normalizeRecord(validated)
+}
+
+export function validatedRowToRecord(row: typeof SessionOperationTable.$inferSelect): FailureRecord {
+  return rowToValidatedRecord(row)
+}
+
 function rowToRecord(row: typeof SessionOperationTable.$inferSelect): FailureRecord {
   const rec: FailureRecord = {
     opId: row.op_id,
@@ -588,7 +663,14 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
       .get()
       .pipe(Effect.orDie)
     if (existingRow) {
-      // cross-session identity check
+      let existingRecord: FailureRecord
+      try {
+        existingRecord = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as FailureRecord
+      }
+      // cross-session identity check (also enforced by validated row, but keep explicit for fail-closed)
       if (existingRow.session_id !== sessionID)
         yield* Effect.die(
           new Error(`cross-identity opId ${normalized.opId} already owned by session ${existingRow.session_id}`),
@@ -599,7 +681,6 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
             `cross-kind conflict for ${normalized.opId}: existing ${existingRow.op_kind} vs new ${normalized.opKind}`,
           ),
         )
-      const existingRecord = rowToRecord(existingRow)
       if (recordsEqual(existingRecord, normalized)) {
         // idempotent — no revision, no feed
         return existingRecord
@@ -658,7 +739,14 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         .get()
         .pipe(Effect.orDie)
       if (!updated) yield* Effect.die(new Error(`operation row missing after update ${normalized.opId}`))
-      return rowToRecord(updated as typeof SessionOperationTable.$inferSelect)
+      let updatedRecord: FailureRecord
+      try {
+        updatedRecord = rowToValidatedRecord(updated as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as FailureRecord
+      }
+      return updatedRecord
     } else {
       // new operation: advance revision then insert
       yield* SessionRevision.advanceTx(sessionID, tx)
@@ -693,7 +781,14 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
         .get()
         .pipe(Effect.orDie)
       if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
-      return rowToRecord(inserted as typeof SessionOperationTable.$inferSelect)
+      let insertedRecord: FailureRecord
+      try {
+        insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as FailureRecord
+      }
+      return insertedRecord
     }
   })
 }
@@ -719,7 +814,11 @@ export function get(db: Database.Interface["db"], opId: string): Effect.Effect<F
       .get()
       .pipe(Effect.orDie)
     if (!row) return undefined
-    return rowToRecord(row)
+    try {
+      return rowToValidatedRecord(row as typeof SessionOperationTable.$inferSelect)
+    } catch (e) {
+      return yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+    }
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord | undefined>
 }
 
@@ -732,7 +831,15 @@ export function list(db: Database.Interface["db"], sessionID: SessionSchema.ID):
       .orderBy(asc(SessionOperationTable.op_id))
       .all()
       .pipe(Effect.orDie)
-    return rows.map(rowToRecord)
+    const out: FailureRecord[] = []
+    for (const r of rows) {
+      try {
+        out.push(rowToValidatedRecord(r as typeof SessionOperationTable.$inferSelect))
+      } catch (e) {
+        return yield* Effect.die(new TypeError(`invalid persisted operation row ${r.op_id}: ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
+    return out
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord[]>
 }
 
@@ -745,7 +852,11 @@ export function getTx(tx: DbOrTx, opId: string): Effect.Effect<FailureRecord | u
       .get()
       .pipe(Effect.orDie)
     if (!row) return undefined
-    return rowToRecord(row)
+    try {
+      return rowToValidatedRecord(row as typeof SessionOperationTable.$inferSelect)
+    } catch (e) {
+      return yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+    }
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord | undefined>
 }
 
@@ -758,8 +869,203 @@ export function listTx(tx: DbOrTx, sessionID: SessionSchema.ID): Effect.Effect<F
       .orderBy(asc(SessionOperationTable.op_id))
       .all()
       .pipe(Effect.orDie)
-    return rows.map(rowToRecord)
+    const out: FailureRecord[] = []
+    for (const r of rows) {
+      try {
+        out.push(rowToValidatedRecord(r as typeof SessionOperationTable.$inferSelect))
+      } catch (e) {
+        return yield* Effect.die(new TypeError(`invalid persisted operation row ${r.op_id}: ${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
+    return out
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord[]>
+}
+
+// ---------------------------------------------------------------------------
+// Prompt durable helpers — cross-process atomic inception + terminal CAS
+// ---------------------------------------------------------------------------
+export type EnsurePromptInFlightResult =
+  | { fresh: true; record: FailureRecord }
+  | { fresh: false; record: FailureRecord; rowSessionId: string }
+
+function ensurePromptInFlightTxInner(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  opId: string,
+): Effect.Effect<EnsurePromptInFlightResult> {
+  return Effect.gen(function* () {
+    const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, opId)).get().pipe(Effect.orDie)
+    if (existingRow) {
+      let existing: FailureRecord
+      try {
+        existing = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return { fresh: false as const, record: undefined as unknown as FailureRecord, rowSessionId: existingRow.session_id as unknown as string }
+      }
+      return { fresh: false as const, record: existing, rowSessionId: existingRow.session_id as unknown as string }
+    }
+    const normalized = normalizeRecord({
+      opId,
+      opKind: "prompt",
+      outcome: "in-flight",
+      code: "prompt.inflight",
+      message: "prompt accepted",
+      time: Date.now(),
+    })
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
+    yield* SessionRevision.advanceTx(sessionID, tx)
+    const after = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    const nextRev = after!.rev
+    const insertOutcome = yield* tx
+      .insert(SessionOperationTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: sessionID,
+        op_kind: normalized.opKind,
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        cancel: normalized.cancel?.source ?? null,
+        detail: normalized.detail ?? null,
+        stack: normalized.stack ?? null,
+        revision: nextRev,
+      })
+      .run()
+      .pipe(
+        Effect.map(() => ({ ok: true as const })),
+        Effect.catch((err: unknown) => {
+          if (isOpIdDuplicateError(err) || isSqliteBusyError(err)) return Effect.succeed({ ok: false as const, conflict: true as const })
+          return Effect.fail(err)
+        }),
+        Effect.catchDefect((defect: unknown) => {
+          if (isOpIdDuplicateError(defect) || isSqliteBusyError(defect)) return Effect.succeed({ ok: false as const, conflict: true as const })
+          return Effect.fail(defect)
+        }),
+        Effect.orDie,
+      )
+    if (!insertOutcome.ok) {
+      const reread = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, opId)).get().pipe(Effect.orDie)
+      if (!reread) yield* Effect.die(new Error(`operation row missing after constraint ${opId}`))
+      let rereadRecord: FailureRecord
+      try {
+        rereadRecord = rowToValidatedRecord(reread as typeof SessionOperationTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return { fresh: false as const, record: undefined as unknown as FailureRecord, rowSessionId: (reread as unknown as { session_id: string }).session_id }
+      }
+      return { fresh: false as const, record: rereadRecord, rowSessionId: (reread as unknown as { session_id: string }).session_id }
+    }
+    const inserted = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, opId)).get().pipe(Effect.orDie)
+    if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${opId}`))
+    let insertedRecord: FailureRecord
+    try {
+      insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
+    } catch (e) {
+      yield* Effect.die(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+      return { fresh: true as const, record: undefined as unknown as FailureRecord }
+    }
+    return { fresh: true as const, record: insertedRecord }
+  })
+}
+
+export function ensurePromptInFlight(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  opId: string,
+): Effect.Effect<EnsurePromptInFlightResult> {
+  const maybeTx = (db as unknown as { transaction?: (cb: unknown, opts?: unknown) => Effect.Effect<unknown> }).transaction
+  if (typeof maybeTx !== "function") {
+    return ensurePromptInFlightTxInner(db as unknown as DbOrTx, sessionID, opId)
+  }
+  return (db as unknown as { transaction: (cb: (tx: unknown) => Effect.Effect<unknown>, opts?: unknown) => Effect.Effect<unknown> })
+    .transaction((tx) => ensurePromptInFlightTxInner(tx as unknown as DbOrTx, sessionID, opId), { behavior: "immediate" } as unknown)
+    .pipe(
+      Effect.catch((err: unknown) => {
+        if (isOpIdDuplicateError(err) || isSqliteBusyError(err)) {
+          return Effect.gen(function* () {
+            const row = yield* db
+              .select()
+              .from(SessionOperationTable)
+              .where(eq(SessionOperationTable.op_id, opId))
+              .get()
+              .pipe(Effect.orDie)
+            if (!row) return yield* Effect.fail(err)
+            let rec: FailureRecord
+            try {
+              rec = rowToValidatedRecord(row as typeof SessionOperationTable.$inferSelect)
+            } catch (e) {
+              return yield* Effect.fail(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+            }
+            return { fresh: false as const, record: rec, rowSessionId: (row as unknown as { session_id: string }).session_id }
+          })
+        }
+        return Effect.fail(err)
+      }),
+      Effect.catchDefect((defect: unknown) => {
+        if (isOpIdDuplicateError(defect) || isSqliteBusyError(defect)) {
+          return Effect.gen(function* () {
+            const row = yield* db
+              .select()
+              .from(SessionOperationTable)
+              .where(eq(SessionOperationTable.op_id, opId))
+              .get()
+              .pipe(Effect.orDie)
+            if (!row) return yield* Effect.fail(defect)
+            let rec: FailureRecord
+            try {
+              rec = rowToValidatedRecord(row as typeof SessionOperationTable.$inferSelect)
+            } catch (e) {
+              return yield* Effect.fail(new TypeError(`invalid persisted operation row ${opId}: ${e instanceof Error ? e.message : String(e)}`))
+            }
+            return { fresh: false as const, record: rec, rowSessionId: (row as unknown as { session_id: string }).session_id }
+          })
+        }
+        return Effect.fail(defect)
+      }),
+      Effect.orDie,
+    ) as Effect.Effect<EnsurePromptInFlightResult>
+}
+
+export function ensurePromptInFlightTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  opId: string,
+): Effect.Effect<EnsurePromptInFlightResult> {
+  return ensurePromptInFlightTxInner(tx, sessionID, opId)
+}
+
+export function tryTransitionPromptTerminal(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<{ applied: boolean; record: FailureRecord | undefined }> {
+  return db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
+          if (!existingRow) {
+            const applied = yield* putTx(tx as DbOrTx, sessionID, record)
+            return { applied: true, record: applied }
+          }
+          let existing: FailureRecord
+          try {
+            existing = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
+          } catch (e) {
+            yield* Effect.die(new TypeError(`invalid persisted operation row ${record.opId}: ${e instanceof Error ? e.message : String(e)}`))
+            return { applied: false, record: undefined }
+          }
+          if (isTerminal(existing.outcome)) return { applied: false, record: existing }
+          if (existing.outcome !== "in-flight") return { applied: false, record: existing }
+          const applied = yield* putTx(tx as DbOrTx, sessionID, record)
+          return { applied: true, record: applied }
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie) as Effect.Effect<{ applied: boolean; record: FailureRecord | undefined }>
 }
 
 // ---------------------------------------------------------------------------

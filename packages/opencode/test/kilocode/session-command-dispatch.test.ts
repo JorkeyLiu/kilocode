@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Layer, Option } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionOperationTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { Command } from "@/command"
@@ -76,9 +77,11 @@ function depsFor(over: {
   let gets = 0
   const fakeDb = {
     select: (..._a: unknown[]) => ({
-      from: (..._b: unknown[]) => ({
+      from: (table: unknown) => ({
         where: (..._c: unknown[]) => ({
           get: () => {
+            const isOp = table === SessionOperationTable || String((table as any)?.name ?? "").includes("session_operation")
+            if (isOp) return Effect.succeed(undefined)
             gets += 1
             if (gets === 1 && over.existingRole) {
               return Effect.succeed({
@@ -100,6 +103,65 @@ function depsFor(over: {
         }),
       }),
     }),
+    transaction: (cb: (tx: unknown) => Effect.Effect<unknown>, _opts?: unknown) => {
+      let inserted: any = null
+      const tx: any = {
+        select: (..._a: unknown[]) => ({
+          from: (table: unknown) => ({
+            where: (..._c: unknown[]) => ({
+              get: () => {
+                if (table === SessionTable) return Effect.succeed({ id: SID, revision: 0, time_created: Date.now(), time_updated: Date.now() } as any)
+                if (table === SessionOperationTable || String(table).includes("SessionOperation") || (table as any)?.name === "session_operation") return Effect.succeed(inserted ?? undefined)
+                return Effect.succeed(undefined)
+              },
+              all: () => Effect.succeed([]),
+              orderBy: (..._o: unknown[]) => ({
+                get: () => {
+                  if (table === SessionTable) return Effect.succeed({ id: SID, revision: 0, time_created: Date.now(), time_updated: Date.now() } as any)
+                  if (table === SessionOperationTable || String(table).includes("SessionOperation") || (table as any)?.name === "session_operation") return Effect.succeed(inserted ?? undefined)
+                  return Effect.succeed(undefined)
+                },
+                all: () => Effect.succeed([]),
+              }),
+            }),
+          }),
+        }),
+        insert: (table: unknown) => ({
+          values: (vals: any) => ({
+            run: () => {
+              const isOp = table === SessionOperationTable || String((table as any)?.name ?? "").includes("session_operation")
+              if (isOp) {
+                inserted = {
+                  op_id: vals.op_id,
+                  session_id: vals.session_id,
+                  op_kind: vals.op_kind,
+                  outcome: vals.outcome,
+                  code: vals.code,
+                  message: vals.message,
+                  time: vals.time,
+                  cancel: vals.cancel,
+                  detail: vals.detail,
+                  stack: vals.stack,
+                  revision: vals.revision,
+                }
+              }
+              return Effect.succeed(undefined)
+            },
+            returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }),
+            onConflictDoNothing: () => ({ returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }) }),
+          }),
+        }),
+        update: () => ({
+          set: () => ({
+            where: () => ({
+              run: () => Effect.succeed(undefined),
+              returning: () => ({ all: () => Effect.succeed([{ id: SID, revision: 1 } as any]) }),
+            }),
+          }),
+        }),
+      }
+      return cb(tx as any)
+    },
   }
   const fakeCtx = { directory: DIR, worktree: DIR, project: { id: "proj-test" } }
   const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)
@@ -168,7 +230,7 @@ function makeDirectoryAwareDeps(opts: {
 }) {
   const fakeDb = {
     select: (..._a: unknown[]) => ({
-      from: (..._b: unknown[]) => ({
+      from: (table: unknown) => ({
         where: (..._c: unknown[]) => ({
           get: () => Effect.succeed(undefined),
           all: () => Effect.succeed([]),
@@ -179,6 +241,35 @@ function makeDirectoryAwareDeps(opts: {
         }),
       }),
     }),
+    transaction: (cb: (tx: unknown) => Effect.Effect<unknown>, _opts?: unknown) => {
+      let inserted: any = null
+      const tx: any = {
+        select: (..._a: unknown[]) => ({
+          from: (table: unknown) => ({
+            where: (..._c: unknown[]) => ({
+              get: () => {
+                if (table === SessionTable) return Effect.succeed({ id: "ses_dummy", revision: 0, time_created: Date.now(), time_updated: Date.now() } as any)
+                return Effect.succeed(inserted ?? undefined)
+              },
+              all: () => Effect.succeed([]),
+            }),
+          }),
+        }),
+        insert: (table: unknown) => ({
+          values: (vals: any) => ({
+            run: () => {
+              const isOp = table === SessionOperationTable || String((table as any)?.name ?? "").includes("session_operation")
+              if (isOp) inserted = { op_id: vals.op_id, session_id: vals.session_id, op_kind: vals.op_kind, outcome: vals.outcome, code: vals.code, message: vals.message, time: vals.time, cancel: vals.cancel, detail: vals.detail, stack: vals.stack, revision: vals.revision }
+              return Effect.succeed(undefined)
+            },
+            returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }),
+            onConflictDoNothing: () => ({ returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }) }),
+          }),
+        }),
+        update: () => ({ set: () => ({ where: () => ({ run: () => Effect.succeed(undefined), returning: () => ({ all: () => Effect.succeed([{ id: SID, revision: 1 } as any]) }) }) }) }),
+      }
+      return cb(tx as any)
+    },
   }
   const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)
   const sessionLayer = Layer.succeed(Session.Service, {

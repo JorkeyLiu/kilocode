@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Layer, Option } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionOperationTable } from "@opencode-ai/core/session/sql"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -58,13 +59,48 @@ describe("session-prompt-dispatch accept-only scope ownership", () => {
 
       const fakeDb = {
         select: (..._a: unknown[]) => ({
-          from: (..._b: unknown[]) => ({
+          from: (table: unknown) => ({
             where: (..._c: unknown[]) => ({
-              get: () => Effect.succeed(undefined),
+              get: () => {
+                // fastRow for SessionOperation should be empty for this test
+                if ((table as any)?.name === "session_operation" || String(table).includes("SessionOperation")) return Effect.succeed(undefined)
+                return Effect.succeed(undefined)
+              },
               all: () => Effect.succeed([]),
             }),
           }),
         }),
+        transaction: (cb: (tx: unknown) => Effect.Effect<unknown>, _opts?: unknown) => {
+          let inserted: any = null
+          const tx: any = {
+            select: (..._a: unknown[]) => ({
+              from: (table: unknown) => ({
+                where: (..._c: unknown[]) => ({
+                  get: () => {
+                    const n = String((table as any)?.name ?? "")
+                    if (n.includes("session_operation") || (table as any) === SessionOperationTable) return Effect.succeed(inserted ?? undefined)
+                    if (n.includes("session") || String(table).includes("SessionTable")) return Effect.succeed({ id: SID, revision: 0, time_created: Date.now(), time_updated: Date.now() } as any)
+                    return Effect.succeed({ id: SID, revision: 0 } as any)
+                  },
+                  all: () => Effect.succeed([]),
+                }),
+              }),
+            }),
+            insert: (table: unknown) => ({
+              values: (vals: any) => ({
+                run: () => {
+                  const isOp = table === SessionOperationTable || String((table as any)?.name ?? "").includes("session_operation")
+                  if (isOp) inserted = { op_id: vals.op_id, session_id: vals.session_id, op_kind: vals.op_kind, outcome: vals.outcome, code: vals.code, message: vals.message, time: vals.time, cancel: vals.cancel, detail: vals.detail, stack: vals.stack, revision: vals.revision }
+                  return Effect.succeed(undefined)
+                },
+                returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }),
+                onConflictDoNothing: () => ({ returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }) }),
+              }),
+            }),
+            update: () => ({ set: () => ({ where: () => ({ run: () => Effect.succeed(undefined), returning: () => ({ all: () => Effect.succeed([{ id: SID, revision: 1 } as any]) }) }) }) }),
+          }
+          return cb(tx as any)
+        },
       }
       const fakeCtx = { directory: DIR, worktree: DIR, project: { id: "proj-test" } }
       const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)
@@ -150,13 +186,54 @@ describe("session-prompt-dispatch accept-only scope ownership", () => {
       }
       const fakeDb = {
         select: (..._a: unknown[]) => ({
-          from: (..._b: unknown[]) => ({
+          from: (table: unknown) => ({
             where: (..._c: unknown[]) => ({
-              get: () => Effect.succeed(row),
+              get: () => {
+                const name = String((table as any)?.name ?? (table as any)?.[Symbol.toStringTag] ?? "")
+                if (name.includes("session_operation") || table === SessionOperationTable) return Effect.succeed(undefined)
+                return Effect.succeed(row as any)
+              },
               all: () => Effect.succeed([]),
+              orderBy: (..._o: unknown[]) => ({
+                get: () => {
+                  const name = String((table as any)?.name ?? (table as any)?.[Symbol.toStringTag] ?? "")
+                  if (name.includes("session_operation") || table === SessionOperationTable) return Effect.succeed(undefined)
+                  return Effect.succeed(row as any)
+                },
+                all: () => Effect.succeed([]),
+              }),
             }),
           }),
         }),
+        transaction: (cb: (tx: unknown) => Effect.Effect<unknown>, _opts?: unknown) => {
+          const tx: any = {
+            select: (..._a: unknown[]) => ({
+              from: (table: unknown) => ({
+                where: (..._c: unknown[]) => ({
+                  get: () => {
+                    const n = String((table as any)?.name ?? "")
+                    if (n.includes("session_operation") || table === SessionOperationTable) return Effect.succeed(undefined)
+                    if (n.includes("session") || String(table).includes("SessionTable")) return Effect.succeed({ id: SID, revision: 0 } as any)
+                    return Effect.succeed(row as any)
+                  },
+                  all: () => Effect.succeed([]),
+                  orderBy: (..._o: unknown[]) => ({
+                    get: () => {
+                      const n = String((table as any)?.name ?? "")
+                      if (n.includes("session_operation") || table === SessionOperationTable) return Effect.succeed(undefined)
+                      if (n.includes("session") || String(table).includes("SessionTable")) return Effect.succeed({ id: SID, revision: 0 } as any)
+                      return Effect.succeed(row as any)
+                    },
+                    all: () => Effect.succeed([]),
+                  }),
+                }),
+              }),
+            }),
+            insert: () => ({ values: (vals: any) => ({ run: () => Effect.succeed(undefined), returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }), onConflictDoNothing: () => ({ returning: () => ({ get: () => Effect.succeed({} as any), all: () => Effect.succeed([]) }) }) }) }),
+            update: () => ({ set: () => ({ where: () => ({ run: () => Effect.succeed(undefined), returning: () => ({ all: () => Effect.succeed([{ id: SID, revision: 1 } as any]) }) }) }) }),
+          }
+          return cb(tx as any)
+        },
       }
       const fakeCtx = { directory: DIR, worktree: DIR, project: { id: "proj-test" } }
       const dbLayer = Layer.succeed(Database.Service, { db: fakeDb } as any)

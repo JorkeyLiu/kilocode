@@ -5,7 +5,6 @@ import { Database } from "@opencode-ai/core/database/database"
 import { MessageTable } from "@opencode-ai/core/session/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { ConfigConvergence } from "@/kilocode/server/config-convergence"
-import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { eq } from "drizzle-orm"
 import { SessionID, MessageID } from "@/session/schema"
 import { Session } from "@/session/session"
@@ -14,12 +13,15 @@ import { SessionPrompt } from "@/session/prompt"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirements"
 import {
   acquireDrainControl,
   InstanceUnavailableDuringConfigRebuildError,
 } from "@/kilocode/server/drain-control-acquire"
+import { SessionOperationTable } from "@opencode-ai/core/session/sql"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 export const VERSION = 1 as const
 export const OP = "session/prompt" as const
@@ -226,6 +228,17 @@ function buildSucceeded(req: SessionPromptRequest, revision: Revision | undefine
   } as SessionPromptSucceeded
 }
 
+function isAbortedSuccess(value: unknown): boolean {
+  const info = (value as { info?: { error?: unknown } })?.info
+  if (!info || !info.error) return false
+  const err = info.error as { name?: unknown }
+  if (typeof err.name === "string" && (err.name === "MessageAbortedError" || err.name === "AbortedError")) return true
+  try {
+    if (SessionV1.AbortedError.isInstance(err as never)) return true
+  } catch {}
+  return false
+}
+
 export interface SessionPromptDispatch {
   readonly dispatch: (request: unknown) => Effect.Effect<SessionPromptResult, unknown, unknown>
 }
@@ -241,10 +254,35 @@ export const layer = Layer.effect(
     const session = yield* Session.Service
     const promptSvc = yield* SessionPrompt.Service
     const events = yield* EventV2Bridge.Service
-    // Layer-owned scope for the accept-only background run. forkIn keeps
-    // dispatch immediate-return while the fiber is interrupted when the layer
-    // scope closes; inner generation still converges via SessionPrompt owners.
     const layerScope = yield* Scope.Scope
+    const terminalMutex = KeyedMutex.makeUnsafe<string>()
+    const promptInflight = new Map<string, SessionID>()
+    const terminalizePrompt = (opId: string, sid: SessionID, outcome: SessionOperation.Outcome, code: string, message: string, detail?: string) =>
+      terminalMutex.withLock(opId)(
+        Effect.gen(function* () {
+          const rec: SessionOperation.FailureRecord = {
+            opId,
+            opKind: "prompt",
+            outcome,
+            code,
+            message,
+            time: Date.now(),
+            ...(detail ? { detail } : {}),
+          }
+          yield* SessionOperation.tryTransitionPromptTerminal(db, sid, rec).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.catchDefect(() => Effect.void),
+          )
+          promptInflight.delete(opId)
+        }),
+      ).pipe(Effect.uninterruptible, Effect.ignore)
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        for (const [opId, sid] of Array.from(promptInflight.entries())) {
+          yield* terminalizePrompt(opId, sid, "abandoned", "prompt.abandoned", "prompt abandoned due to scope shutdown")
+        }
+      }).pipe(Effect.uninterruptible, Effect.ignore),
+    )
     const cfg = Option.getOrElse(yield* Effect.serviceOption(ConfigConvergence.Service), () => ConfigConvergence.noop)
     const getConfigVer = (dir: string) => cfg.getBootedVersion(dir) as Effect.Effect<number | undefined>
     const readCfgOmit = (dir: string) =>
@@ -304,8 +342,6 @@ export const layer = Layer.effect(
       const found = yield* session.get(sid).pipe(
         Effect.map((v) => ({ tag: "ok" as const, value: v })),
         Effect.catch((err: unknown) => {
-          const missing = (err as { _tag?: string })?._tag === "NotFoundError" || err instanceof Error && String(err).includes("not found")
-          void missing
           return Effect.succeed({ tag: "fail" as const, err })
         }),
         Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
@@ -329,6 +365,52 @@ export const layer = Layer.effect(
         const curCfg = yield* readCfgOmit(canonDir)
         const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
         return buildFailed(req, "internal", "internal error", false, false, revision)
+      }
+
+      // Fast-path durable replay without lease (no extra mutex, DB is source of truth)
+      const fastRow = yield* db
+        .select()
+        .from(SessionOperationTable)
+        .where(eq(SessionOperationTable.op_id, req.opId))
+        .get()
+        .pipe(
+          Effect.map((v) => v as typeof SessionOperationTable.$inferSelect | undefined),
+          Effect.catch(() => Effect.succeed(undefined as typeof SessionOperationTable.$inferSelect | undefined)),
+          Effect.catchDefect(() => Effect.succeed(undefined as typeof SessionOperationTable.$inferSelect | undefined)),
+        )
+      if (fastRow) {
+        if ((fastRow.session_id as unknown as string) !== (sid as unknown as string)) {
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+          return buildFailed(req, "scope_mismatch", "message belongs to another session", false, false, revision)
+        }
+        let fastRec: SessionOperation.FailureRecord
+        try {
+          fastRec = (SessionOperation as unknown as { validatedRowToRecord: (row: unknown) => SessionOperation.FailureRecord }).validatedRowToRecord(fastRow as unknown)
+        } catch (e) {
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+          const detail = e instanceof Error ? e.message : String(e)
+          return buildFailed(req, "internal", "internal error", false, false, revision, detail)
+        }
+        try {
+          if (fastRec.opId !== req.opId) throw new TypeError(`opId mismatch ${fastRec.opId} vs ${req.opId}`)
+          if (fastRec.opKind !== "prompt") throw new TypeError(`opKind must be prompt for prompt replay, got ${fastRec.opKind}`)
+        } catch (e) {
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+          const detail = e instanceof Error ? e.message : String(e)
+          return buildFailed(req, "internal", "internal error", false, false, revision, detail)
+        }
+        if (fastRec.outcome === "in-flight" || fastRec.outcome === "succeeded") {
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+          return buildSucceeded(req, revision)
+        }
+        const curCfg = yield* readCfgOmit(canonDir)
+        const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+        const retryable = fastRec.code === "InstanceUnavailableDuringConfigRebuild"
+        return buildFailed(req, fastRec.code, fastRec.message, retryable, false, revision)
       }
 
       const existing = yield* MessageV2.get({ sessionID: sid, messageID: mid }).pipe(
@@ -393,31 +475,74 @@ export const layer = Layer.effect(
       }
       const ctx = acquired.value.ctx
       const release = acquired.value.release
-      const run = promptSvc
-        .prompt(input as unknown as Parameters<typeof promptSvc.prompt>[0])
-        .pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.void
-            return Effect.gen(function* () {
+      let transferred = false
+      const doReleaseIfNeeded = Effect.gen(function* () {
+        if (!transferred) yield* release.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+      })
+      const result = yield* Effect.gen(function* () {
+        // Cross-process atomic inception via immediate transaction (no process-local mutex as correctness gate)
+        const inceptionExit = yield* SessionOperation.ensurePromptInFlight(db, sid, req.opId).pipe(Effect.exit)
+        if (inceptionExit._tag === "Failure") {
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+          const detail = Cause.pretty(inceptionExit.cause)
+          return buildFailed(req, "internal", "internal error", false, false, revision, detail) as SessionPromptResult
+        }
+        const inception = inceptionExit.value
+        if (!inception.fresh) {
+          if (inception.rowSessionId !== (sid as unknown as string)) {
+            const curCfg = yield* readCfgOmit(canonDir)
+            const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+            return buildFailed(req, "scope_mismatch", "message belongs to another session", false, false, revision) as SessionPromptResult
+          }
+          if (inception.record.outcome === "in-flight" || inception.record.outcome === "succeeded") {
+            const curCfg = yield* readCfgOmit(canonDir)
+            const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+            return buildSucceeded(req, revision) as SessionPromptResult
+          }
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+          const retryable = inception.record.code === "InstanceUnavailableDuringConfigRebuild"
+          return buildFailed(req, inception.record.code, inception.record.message, retryable, false, revision) as SessionPromptResult
+        }
+        promptInflight.set(req.opId, sid)
+        const run = Effect.gen(function* () {
+          const exit = yield* promptSvc.prompt(input as unknown as Parameters<typeof promptSvc.prompt>[0]).pipe(Effect.exit)
+          if (exit._tag === "Success") {
+            if (isAbortedSuccess(exit.value)) {
+              yield* terminalizePrompt(req.opId, sid, "abandoned", "prompt.abandoned", "prompt abandoned")
+            } else {
+              yield* terminalizePrompt(req.opId, sid, "succeeded", "prompt.succeeded", "prompt succeeded")
+            }
+          } else {
+            const cause = exit.cause
+            if (Cause.hasInterruptsOnly(cause)) {
+              yield* terminalizePrompt(req.opId, sid, "abandoned", "prompt.abandoned", "prompt abandoned")
+            } else {
+              const err = Cause.squash(cause)
+              const raw = err instanceof Error ? err.message : String(err)
+              const detail = Cause.pretty(cause)
+              yield* terminalizePrompt(req.opId, sid, "failed", "prompt.failed", raw, detail)
               yield* Effect.logError("prompt_async private failed").pipe(Effect.annotateLogs({ sessionID: sid as unknown as string, cause }))
-              const error = Cause.squash(cause)
               yield* events
                 .publish("session.error" as never, {
                   sessionID: sid,
-                  error: AgentRequirementError.isInstance(error)
-                    ? (error as unknown as { toObject: () => unknown }).toObject()
+                  error: AgentRequirementError.isInstance(err)
+                    ? (err as unknown as { toObject: () => unknown }).toObject()
                     : new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
                 } as never)
                 .pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
-            })
-          }),
-          Effect.provideService(InstanceRef, ctx),
-          Effect.ensuring(release),
-        )
-      yield* Effect.forkIn(layerScope)(run).pipe(Effect.asVoid, Effect.ignore)
-      const curCfg = yield* readCfgOmit(canonDir)
-      const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
-      return buildSucceeded(req, revision)
+            }
+          }
+        }).pipe(Effect.provideService(InstanceRef, ctx), Effect.ensuring(release))
+        yield* Effect.forkIn(layerScope)(run).pipe(Effect.asVoid, Effect.ignore)
+        transferred = true
+        const curCfg = yield* readCfgOmit(canonDir)
+        const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
+        return buildSucceeded(req, revision) as SessionPromptResult
+      }).pipe(Effect.ensuring(doReleaseIfNeeded))
+
+      return result
     })
 
     return { dispatch }
