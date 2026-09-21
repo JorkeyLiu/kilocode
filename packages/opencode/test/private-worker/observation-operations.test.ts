@@ -172,4 +172,46 @@ describe("observation/operations wire validation", () => {
     p.client.dispose()
     p.server.dispose()
   })
+
+  it("valid recovery for failed/abandoned with exact shape passes, invalid recovery/mismatched outcome fails", async () => {
+    const goodFailed: ObservationOperationsResult = {
+      v: "1.0",
+      status: "found",
+      operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+    }
+    const goodAbandoned: ObservationOperationsResult = {
+      v: "1.0",
+      status: "found",
+      operations: [{ opId: "prompt:msg_a", outcome: "abandoned", code: "C", message: "m", time: 1, cancel: { source: "user_stop" }, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+    }
+    for (const good of [goodFailed, goodAbandoned]) {
+      const c = ctrlWith(async () => good)
+      const p = pair(c)
+      const res = (await p.client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: sid, limit: 1 })) as ObservationOperationsResult
+      expect(res.status).toBe("found")
+      if (res.status === "found") {
+        expect(res.operations[0]!.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
+      }
+      p.client.dispose()
+      p.server.dispose()
+    }
+    const bad: unknown[] = [
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 1, nextAt: null, provenance: "terminal" } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: 123, provenance: "terminal" } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "succeeded", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "in-flight", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }] },
+    ]
+    for (const fake of bad) {
+      const c = ctrlWith(async () => fake as ObservationOperationsResult)
+      const p = pair(c)
+      try {
+        await p.client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: sid, limit: 1 })
+        expect(false).toBe(true)
+      } catch (e) {
+        expect((e as { code?: number }).code).toBe(ErrorCode.InternalError)
+      }
+      p.client.dispose()
+      p.server.dispose()
+    }
+  })
 })

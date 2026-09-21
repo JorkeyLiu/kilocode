@@ -173,4 +173,84 @@ describe("AgentManagerProvider recentOps cleanup", () => {
     const p = makeProvider() as unknown as Record<string, unknown>
     expect(p["refreshRecentOpsForCurrent"]).toBeUndefined()
   })
+
+  it("fetchRecentOps valid failed/abandoned with recovery preserves exact shape", async () => {
+    const p = makeProvider()
+    for (const outcome of ["failed", "abandoned"] as const) {
+      p.coordinator = {
+        observationReader: () => ({
+          isEnabled: () => true,
+          isStarted: () => true,
+          operations: async () => ({
+            v: "1.0",
+            status: "found",
+            operations: [{ opId: "opRec", outcome, code: "E", message: "m", time: 999, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+          }),
+        }),
+      } as unknown as Prov["coordinator"]
+      await p.fetchRecentOps(["ses_a"])
+      const got = p.recentOps.get("ses_a") as unknown as Record<string, unknown>
+      expect(got.outcome).toBe(outcome)
+      expect(got.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
+    }
+  })
+
+  it("fetchRecentOps invalid/mismatched recovery is rejected", async () => {
+    const bad: unknown[] = [
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 1, nextAt: null, provenance: "terminal" } },
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: 123, provenance: "terminal" } },
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal", extra: 1 } },
+      { opId: "op1", outcome: "succeeded", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
+      { opId: "op1", outcome: "in-flight", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
+      { opId: "op1", outcome: "ambiguous", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
+    ]
+    for (const op of bad) {
+      const p = makeProvider()
+      p.recentOps.set("ses_a", { opId: "keep", outcome: "failed", code: "E", message: "keep", time: 1 })
+      p.coordinator = {
+        observationReader: () => ({
+          isEnabled: () => true,
+          isStarted: () => true,
+          operations: async () => ({ v: "1.0", status: "found", operations: [op] }),
+        }),
+      } as unknown as Prov["coordinator"]
+      await p.fetchRecentOps(["ses_a"])
+      // must not overwrite with invalid recovery; keeps previous or deletes? current implementation continues without set, so keeps previous
+      // For this test, we set previous and expect it stays (not overwritten to bad)
+      expect(p.recentOps.get("ses_a")?.opId).toBe("keep")
+      // also test fresh without previous stays empty
+      const p2 = makeProvider()
+      p2.recentOps.clear()
+      p2.coordinator = p.coordinator
+      await p2.fetchRecentOps(["ses_a"])
+      expect(p2.recentOps.has("ses_a")).toBe(false)
+    }
+  })
+
+  it("fetchRecentOps succeeded/in-flight absent recovery is stored, present recovery rejected", async () => {
+    const p = makeProvider()
+    p.coordinator = {
+      observationReader: () => ({
+        isEnabled: () => true,
+        isStarted: () => true,
+        operations: async () => ({ v: "1.0", status: "found", operations: [{ opId: "opS", outcome: "succeeded", code: "C", message: "ok", time: 10 }] }),
+      }),
+    } as unknown as Prov["coordinator"]
+    await p.fetchRecentOps(["ses_a"])
+    expect(p.recentOps.get("ses_a")).toEqual({ opId: "opS", outcome: "succeeded", code: "C", message: "ok", time: 10 })
+    // succeeded with recovery must be rejected
+    p.coordinator = {
+      observationReader: () => ({
+        isEnabled: () => true,
+        isStarted: () => true,
+        operations: async () => ({
+          v: "1.0",
+          status: "found",
+          operations: [{ opId: "opS2", outcome: "succeeded", code: "C", message: "ok", time: 10, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+        }),
+      }),
+    } as unknown as Prov["coordinator"]
+    await p.fetchRecentOps(["ses_a"])
+    expect(p.recentOps.get("ses_a")?.opId).toBe("opS") // still previous
+  })
 })

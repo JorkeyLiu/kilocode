@@ -23,6 +23,35 @@ const OPERATION_PROJECTION_BUDGET = 900_000
 
 const ALLOWED_OUTCOMES = new Set(["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"])
 const PANEL_SAFE_KEYS = new Set(["opId", "outcome", "code", "message", "time", "cancel"])
+const PANEL_SAFE_BASE_KEYS = new Set(["opId", "outcome", "code", "message", "time", "cancel"])
+function isValidPanelRecovery(op: Record<string, unknown>): boolean {
+  const rec = (op as Record<string, unknown>).recovery
+  if (rec === undefined) return true
+  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return false
+  const rv = rec as Record<string, unknown>
+  if (Object.keys(rv).length !== 3) return false
+  if (rv.budget !== 0) return false
+  if (rv.nextAt !== null) return false
+  if (rv.provenance !== "terminal") return false
+  const outcome = op.outcome as string
+  if (outcome !== "failed" && outcome !== "abandoned") return false
+  return true
+}
+function isPanelSafeWithRecovery(op: Record<string, unknown>): boolean {
+  for (const k of Object.keys(op)) {
+    if (k === "recovery") {
+      if (!isValidPanelRecovery(op)) return false
+      continue
+    }
+    if (!PANEL_SAFE_BASE_KEYS.has(k)) return false
+  }
+  if ("detail" in op || "stack" in op || "idempotencyHash" in op || "requestId" in op || "revision" in op) return false
+  if ("recovery" in op && op.recovery !== undefined) {
+    const outcome = op.outcome as string
+    if (outcome !== "failed" && outcome !== "abandoned") return false
+  }
+  return isValidPanelRecovery(op)
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -319,14 +348,11 @@ async function observeOperations(
           const outcomeOk = typeof outcome === "string" && ALLOWED_OUTCOMES.has(outcome)
           const time = op.time as unknown
           const timeOk = typeof time === "number" && Number.isFinite(time) && time > 0
-          const keys = Object.keys(op)
-          const onlySafe = keys.every((k) => PANEL_SAFE_KEYS.has(k))
-          const noLeak = !("detail" in op) && !("stack" in op) && !("idempotencyHash" in op) && !("requestId" in op)
           found = opIdOk
-          safe = onlySafe && noLeak
+          safe = isPanelSafeWithRecovery(op)
           finite = timeOk
           outcomeLegal = outcomeOk
-          if (opIdOk && outcomeOk && timeOk && onlySafe && noLeak) break
+          if (opIdOk && outcomeOk && timeOk && safe) break
         }
       }
     } catch (e) {
@@ -799,11 +825,7 @@ export async function serviceOperationProjectionBoundary(
         amOp = candidate as Record<string, unknown>
         amFound = true
         amOpIdMatch = (candidate as Record<string, unknown>).opId === `prompt:${messageId}`
-        const keys = Object.keys(candidate as object)
-        amSafe =
-          keys.every((k) => PANEL_SAFE_KEYS.has(k)) &&
-          !("detail" in (candidate as Record<string, unknown>)) &&
-          !("stack" in (candidate as Record<string, unknown>))
+        amSafe = isPanelSafeWithRecovery(candidate as Record<string, unknown>)
         diag.amRecentOp = candidate as Record<string, unknown>
         if (amFound && amOpIdMatch && amSafe) break
       }

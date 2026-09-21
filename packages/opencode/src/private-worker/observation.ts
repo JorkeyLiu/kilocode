@@ -527,7 +527,7 @@ function validateOperationsResult(res: unknown): asserts res is ObservationOpera
       const allowedRec = new Set(["budget", "nextAt", "provenance"])
       for (const k of Object.keys(rv)) if (!allowedRec.has(k)) throw internalError("operations returned invalid operation shape")
       if (rv.budget !== 0) throw internalError("operations returned invalid operation shape")
-      if (rv.nextAt !== null && rv.nextAt !== undefined && (typeof rv.nextAt !== "number" || !Number.isFinite(rv.nextAt))) throw internalError("operations returned invalid operation shape")
+      if (rv.nextAt !== null) throw internalError("operations returned invalid operation shape")
       if (rv.provenance !== "terminal") throw internalError("operations returned invalid operation shape")
       if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("operations returned invalid operation shape")
     }

@@ -104,9 +104,10 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
         const rp = (r as Record<string, unknown>).recovery_provenance as string | null | undefined
         if (rb !== null && rb !== undefined) {
           if (rb !== 0) throw internalError("invalid recovery budget")
+          if (rn !== null && rn !== undefined) throw internalError("invalid recovery nextAt")
           if (rp !== "terminal") throw internalError("invalid recovery provenance")
           if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("recovery only for failed/abandoned")
-          out.recovery = { budget: 0 as const, nextAt: rn ?? null, provenance: "terminal" as const }
+          out.recovery = { budget: 0 as const, nextAt: null, provenance: "terminal" as const }
         }
         return out as unknown as ObservationOperationsResult extends { status: "found"; operations: infer U } ? (U extends (infer E)[] ? E : never) : never
       })

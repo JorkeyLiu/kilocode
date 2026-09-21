@@ -76,4 +76,27 @@ describe("OperationStatus mapping", () => {
     expect(operationStatusText(undefined)).toBeUndefined()
     expect(operationStatusTone(undefined)).toBe("neutral")
   })
+
+  it("operation-status display unchanged with recovery present", () => {
+    const failedNoRec = op({ opId: "o1", outcome: "failed", code: "E_FOO", message: "boom" })
+    const failedWithRec = op({ opId: "o1", outcome: "failed", code: "E_FOO", message: "boom", recovery: { budget: 0, nextAt: null, provenance: "terminal" } })
+    expect(operationStatusText(failedWithRec)).toBe(operationStatusText(failedNoRec))
+    expect(operationStatusTone(failedWithRec)).toBe(operationStatusTone(failedNoRec))
+
+    const abandonedNoRec = op({ opId: "o2", outcome: "abandoned", code: "C", message: "m", cancel: { source: "timeout" } })
+    const abandonedWithRec = op({ opId: "o2", outcome: "abandoned", code: "C", message: "m", cancel: { source: "timeout" }, recovery: { budget: 0, nextAt: null, provenance: "terminal" } })
+    expect(operationStatusText(abandonedWithRec)).toBe(operationStatusText(abandonedNoRec))
+    expect(operationStatusTone(abandonedWithRec)).toBe(operationStatusTone(abandonedNoRec))
+
+    const inflightNoRec = op({ opId: "o3", outcome: "in-flight", code: "C", message: "m" })
+    const inflightWithRec = { ...inflightNoRec, recovery: { budget: 0, nextAt: null, provenance: "terminal" } } as unknown as PanelOperation
+    // in-flight with recovery is invalid panel fact but helper must ignore recovery for display
+    expect(operationStatusText(inflightWithRec)).toBe("Running")
+    expect(operationStatusTone(inflightWithRec)).toBe("running")
+
+    const succeededNoRec = op({ opId: "o4", outcome: "succeeded", code: "C", message: "m" })
+    const succeededWithRec = { ...succeededNoRec, recovery: { budget: 0, nextAt: null, provenance: "terminal" } } as unknown as PanelOperation
+    expect(operationStatusText(succeededWithRec)).toBeUndefined()
+    expect(operationStatusTone(succeededWithRec)).toBe("neutral")
+  })
 })

@@ -264,4 +264,84 @@ describe("observation/operations DB-backed adapter (vscode mirror, real DB)", ()
       cleanup()
     }
   })
+
+  it("recovery projection for failed/abandoned terminal is panel-safe, invalid shapes throw", async () => {
+    const { file, cleanup } = tmpDb()
+    try {
+      await withRuntime(file, async (db) => {
+        const dir = canonicalDirectory("/tmp/ws")
+        await ensureProject(db)
+        await insertSession(db, "ses_ops_rec", dir)
+        // failed with valid recovery
+        await Effect.runPromise(
+          db.insert(SessionOperationTable).values({
+            op_id: "prompt:msg_rec_failed" as never,
+            session_id: "ses_ops_rec" as never,
+            op_kind: "prompt" as never,
+            outcome: "failed" as never,
+            code: "E" as never,
+            message: "m" as never,
+            time: 100 as never,
+            cancel: null as never,
+            detail: null as never,
+            stack: null as never,
+            revision: 1 as never,
+            idempotency_hash: null as never,
+            request_id: null as never,
+            recovery_budget: 0 as never,
+            recovery_next_at: null as never,
+            recovery_provenance: "terminal" as never,
+          } as never).run().pipe(Effect.orDie),
+        )
+        const deps = createSessionOperationsDeps(db as never)
+        const out = await deps.operations({ directory: dir, sessionId: "ses_ops_rec", limit: 1 })
+        if (out.status !== "found") throw new Error("expected found")
+        expect(out.operations[0]!.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
+        expect(new Set(Object.keys(out.operations[0]!))).toEqual(new Set(["opId", "outcome", "code", "message", "time", "recovery"]))
+        // succeeded with recovery must throw internal error (invalid projection)
+        await insertSession(db, "ses_ops_rec2", dir)
+        await Effect.runPromise(
+          db.insert(SessionOperationTable).values({
+            op_id: "prompt:msg_rec_succ" as never,
+            session_id: "ses_ops_rec2" as never,
+            op_kind: "prompt" as never,
+            outcome: "succeeded" as never,
+            code: "C" as never,
+            message: "ok" as never,
+            time: 101 as never,
+            cancel: null as never,
+            detail: null as never,
+            stack: null as never,
+            revision: 1 as never,
+            idempotency_hash: null as never,
+            request_id: null as never,
+            recovery_budget: 0 as never,
+            recovery_next_at: null as never,
+            recovery_provenance: "terminal" as never,
+          } as never).run().pipe(Effect.orDie),
+        )
+        const deps2 = createSessionOperationsDeps(db as never)
+        const ctrl = new ObservationController({
+          getSnapshot: async () => ({ cursor: 0, snapshot: null }),
+          readAfter: async () => ({ type: "deltas", cursor: 0, entries: [] }),
+          ack: async () => {},
+          operations: deps2.operations as never,
+        })
+        const aToB = new PassThrough()
+        const bToA = new PassThrough()
+        const server = new JsonRpcPeer({ reader: aToB, writer: bToA, onRequest: (m, p) => ctrl.handle(m, p) })
+        const client = new JsonRpcPeer({ reader: bToA, writer: aToB })
+        try {
+          await client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: "ses_ops_rec2", limit: 1 })
+          expect(false).toBe(true)
+        } catch (e) {
+          expect((e as { code?: number }).code).toBe(ErrorCode.InternalError)
+        }
+        client.dispose()
+        server.dispose()
+      })
+    } finally {
+      cleanup()
+    }
+  })
 })

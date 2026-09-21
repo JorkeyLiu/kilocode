@@ -1572,11 +1572,52 @@ export class AgentManagerProvider implements Disposable {
         const raw = (await reader.operations({ directory: root, sessionId: sid, limit: 1 })) as { v?: string; status?: string; operations?: unknown[] }
         if (!raw || raw.v !== "1.0") continue
         if (raw.status === "found" && Array.isArray(raw.operations) && raw.operations.length > 0) {
-          const op = raw.operations[0] as unknown as import("./types").PanelOperation
-          // validate panel shape strictly
-          if (typeof op.opId !== "string" || typeof op.outcome !== "string" || typeof op.code !== "string" || typeof op.message !== "string" || typeof op.time !== "number") continue
-          if ((op as unknown as Record<string, unknown>).detail !== undefined || (op as unknown as Record<string, unknown>).stack !== undefined) continue
-          this.recentOps.set(sid, op)
+          const op = raw.operations[0] as unknown as import("./types").PanelOperation & Record<string, unknown>
+          // validate panel shape strictly — panel-safe derived fact only
+          const allowedOutcomes = new Set(["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"])
+          const allowedCancel = new Set(["user_stop", "steering", "timeout", "network_disconnect", "unknown"])
+          const allowedKeys = new Set(["opId", "outcome", "code", "message", "time", "cancel", "recovery"])
+          if (typeof op.opId !== "string" || op.opId.length === 0) continue
+          if (typeof op.outcome !== "string" || !allowedOutcomes.has(op.outcome)) continue
+          if (typeof op.code !== "string" || op.code.length === 0) continue
+          if (typeof op.message !== "string") continue
+          if (typeof op.time !== "number" || !Number.isFinite(op.time)) continue
+          // reject diagnostic/forbidden fields
+          let hasForbidden = false
+          for (const k of Object.keys(op as Record<string, unknown>)) {
+            if (!allowedKeys.has(k)) {
+              hasForbidden = true
+              break
+            }
+          }
+          if (hasForbidden) continue
+          if ((op as Record<string, unknown>).detail !== undefined || (op as Record<string, unknown>).stack !== undefined) continue
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if ((op as any).revision !== undefined || (op as any).idempotencyHash !== undefined || (op as any).requestId !== undefined || (op as any).opKind !== undefined) continue
+          // cancel validation
+          const cancelRaw = (op as Record<string, unknown>).cancel
+          if (cancelRaw !== undefined) {
+            if (cancelRaw === null || typeof cancelRaw !== "object" || Array.isArray(cancelRaw)) continue
+            const c = cancelRaw as Record<string, unknown>
+            if (typeof c.source !== "string" || !allowedCancel.has(c.source as string)) continue
+            if (Object.keys(c).length !== 1) continue
+          }
+          // recovery strict validation — panel-safe derived fact only
+          const rec = (op as Record<string, unknown>).recovery
+          if (rec !== undefined) {
+            if (rec === null || typeof rec !== "object" || Array.isArray(rec)) continue
+            const rv = rec as Record<string, unknown>
+            if (Object.keys(rv).length !== 3) continue
+            if (rv.budget !== 0) continue
+            if (rv.nextAt !== null) continue
+            if (rv.provenance !== "terminal") continue
+            if (op.outcome !== "failed" && op.outcome !== "abandoned") continue
+          }
+          // succeeded/in-flight must have no recovery (already covered: if outcome not failed/abandoned, rec must be undefined)
+          if ((op.outcome === "succeeded" || op.outcome === "in-flight") && rec !== undefined) continue
+          // ambiguous/superseded must also have no recovery
+          if ((op.outcome === "ambiguous" || op.outcome === "superseded") && rec !== undefined) continue
+          this.recentOps.set(sid, op as import("./types").PanelOperation)
         } else if (raw.status === "found" && Array.isArray(raw.operations) && raw.operations.length === 0) {
           this.recentOps.delete(sid)
         } else if (raw.status === "not_found" || raw.status === "scope_mismatch") {

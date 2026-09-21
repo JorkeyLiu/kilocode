@@ -51,6 +51,7 @@ export interface PanelOperation {
   message: string
   time: number
   cancel?: { source: "user_stop" | "steering" | "timeout" | "network_disconnect" | "unknown" }
+  recovery?: { budget: 0; nextAt: null; provenance: "terminal" }
 }
 
 interface StateMessage {
