@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   buildSessionViewedReq,
+  collectViewedSnapshot,
   freezeSnapshot,
   parseSessionViewedResult,
   sendViewedPrivateFirst,
@@ -243,5 +244,156 @@ describe("session/viewed private-first", () => {
     expect(out).toEqual({ kind: "ok", via: "sdk" })
     expect(privateCalls).toBe(1)
     expect(seen.length).toBe(1)
+  })
+})
+
+describe("collectViewedSnapshot", () => {
+  function m(entries: Array<[string, string[]]>): Map<string, Set<string>> {
+    const out = new Map<string, Set<string>>()
+    for (const [k, v] of entries) out.set(k, new Set(v))
+    return out
+  }
+
+  test("union dedups and keeps deterministic insertion order, visible ⊆ attached", () => {
+    const attached = m([
+      ["pA", ["ses_a", "ses_b"]],
+      ["pB", ["ses_b", "ses_d"]],
+    ])
+    const visible = m([
+      ["pA", ["ses_a", "ses_b"]],
+      ["pB", ["ses_b", "ses_c"]],
+    ])
+    const snapRes = collectViewedSnapshot(uid, true, 42, attached, visible)
+    expect(snapRes.viewer).toEqual({ id: uid, active: true, sequence: 42 })
+    // visible = provider iteration order, deduped
+    expect([...snapRes.visible]).toEqual(["ses_a", "ses_b", "ses_c"])
+    // attached = visible insertion order first, then attached-only in provider order
+    expect([...snapRes.attached]).toEqual(["ses_a", "ses_b", "ses_c", "ses_d"])
+    for (const id of snapRes.visible) expect(snapRes.attached.includes(id)).toBe(true)
+  })
+
+  test("visible-only ids are included in attached even if not in attached map", () => {
+    const attached = m([["pA", ["ses_x"]]])
+    const visible = m([["pA", ["ses_y"]]])
+    const s = collectViewedSnapshot(uid, true, 1, attached, visible)
+    expect([...s.visible]).toEqual(["ses_y"])
+    expect([...s.attached]).toEqual(["ses_y", "ses_x"])
+    expect(s.attached.includes("ses_y")).toBe(true)
+  })
+
+  test("duplicate ids across providers and within same set are deduped without sorting", () => {
+    const attached = m([
+      ["pA", ["ses_2", "ses_1", "ses_2"]],
+      ["pB", ["ses_1", "ses_3"]],
+    ])
+    const visible = m([
+      ["pA", ["ses_2", "ses_1"]],
+      ["pB", ["ses_1", "ses_2", "ses_3"]],
+    ])
+    const s = collectViewedSnapshot(uid, false, 5, attached, visible)
+    expect([...s.visible]).toEqual(["ses_2", "ses_1", "ses_3"])
+    expect([...s.attached]).toEqual(["ses_2", "ses_1", "ses_3"])
+  })
+
+  test("visible empty but attached non-empty", () => {
+    const attached = m([
+      ["pA", ["ses_a"]],
+      ["pB", ["ses_b"]],
+    ])
+    const visible = m([])
+    const s = collectViewedSnapshot(uid, true, 10, attached, visible)
+    expect([...s.visible]).toEqual([])
+    expect([...s.attached]).toEqual(["ses_a", "ses_b"])
+  })
+
+  test("visible non-empty but attached empty still yields attached == visible", () => {
+    const attached = m([])
+    const visible = m([["pA", ["ses_q", "ses_r"]]])
+    const s = collectViewedSnapshot(uid, true, 11, attached, visible)
+    expect([...s.visible]).toEqual(["ses_q", "ses_r"])
+    expect([...s.attached]).toEqual(["ses_q", "ses_r"])
+  })
+
+  test("both attached and visible empty", () => {
+    const s = collectViewedSnapshot(uid, false, 0, m([]), m([]))
+    expect([...s.visible]).toEqual([])
+    expect([...s.attached]).toEqual([])
+    expect(s.viewer).toEqual({ id: uid, active: false, sequence: 0 })
+  })
+
+  test("viewer id/active/sequence are copied exactly and deeply frozen", () => {
+    for (const active of [true, false] as const) {
+      const s = collectViewedSnapshot("viewer-x", active, 99, m([["p", ["ses_a"]]]), m([["p", ["ses_a"]]]))
+      expect(s.viewer.id).toBe("viewer-x")
+      expect(s.viewer.active).toBe(active)
+      expect(s.viewer.sequence).toBe(99)
+      expect(Object.isFrozen(s.viewer)).toBe(true)
+    }
+  })
+
+  test("returned snapshot, viewer, attached, visible are frozen and resistant to mutation", () => {
+    const attached = m([["pA", ["ses_a"]]])
+    const visible = m([["pA", ["ses_a"]]])
+    const s = collectViewedSnapshot(uid, true, 77, attached, visible)
+    expect(Object.isFrozen(s.viewer)).toBe(true)
+    expect(Object.isFrozen(s.attached)).toBe(true)
+    expect(Object.isFrozen(s.visible)).toBe(true)
+    const beforeAttached = [...s.attached]
+    const beforeVisible = [...s.visible]
+    const beforeViewer = { ...s.viewer }
+    // attempt mutations without relying on throw message
+    try {
+      ;(s.attached as string[]).push("ses_evil")
+    } catch {}
+    try {
+      ;(s.visible as string[]).push("ses_evil")
+    } catch {}
+    try {
+      ;(s.viewer as { id: string }).id = "evil"
+    } catch {}
+    expect([...s.attached]).toEqual(beforeAttached)
+    expect([...s.visible]).toEqual(beforeVisible)
+    expect(s.viewer).toEqual(beforeViewer)
+    expect(Object.isFrozen(s.attached)).toBe(true)
+    expect(Object.isFrozen(s.visible)).toBe(true)
+    expect(Object.isFrozen(s.viewer)).toBe(true)
+  })
+
+  test("subsequent source map mutations do not affect frozen snapshot", () => {
+    const attached = m([["pA", ["ses_a"]]])
+    const visible = m([["pA", ["ses_a"]]])
+    const s = collectViewedSnapshot(uid, true, 88, attached, visible)
+    attached.get("pA")!.add("ses_b")
+    visible.get("pA")!.add("ses_c")
+    attached.set("pB", new Set(["ses_d"]))
+    visible.set("pB", new Set(["ses_e"]))
+    expect([...s.attached]).toEqual(["ses_a"])
+    expect([...s.visible]).toEqual(["ses_a"])
+  })
+
+  test("provider insertion order is preserved, not sorted", () => {
+    const attached = m([
+      ["pB", ["ses_z"]],
+      ["pA", ["ses_a"]],
+    ])
+    const visible = m([
+      ["pB", ["ses_z"]],
+      ["pA", ["ses_a"]],
+    ])
+    const s = collectViewedSnapshot(uid, true, 3, attached, visible)
+    expect([...s.visible]).toEqual(["ses_z", "ses_a"])
+    expect([...s.attached]).toEqual(["ses_z", "ses_a"])
+    // reversed provider order yields reversed result, proving no sort
+    const attached2 = m([
+      ["pA", ["ses_a"]],
+      ["pB", ["ses_z"]],
+    ])
+    const visible2 = m([
+      ["pA", ["ses_a"]],
+      ["pB", ["ses_z"]],
+    ])
+    const s2 = collectViewedSnapshot(uid, true, 3, attached2, visible2)
+    expect([...s2.visible]).toEqual(["ses_a", "ses_z"])
+    expect([...s2.attached]).toEqual(["ses_a", "ses_z"])
   })
 })
