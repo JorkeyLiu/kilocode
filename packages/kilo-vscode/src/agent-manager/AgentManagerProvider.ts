@@ -2080,16 +2080,20 @@ export class AgentManagerProvider implements Disposable {
       const rows = msgOutcome.kind === "ok" ? msgOutcome.items : empty(`session.messages(${s.id})`)
       if (msgOutcome.kind !== "ok") unreadableMessages[s.id] = false
       messages[s.id] = (rows as Parameters<typeof summarizeMessage>[0][]).map(summarizeMessage)
-      // Private-first children read: one private attempt plus at most one
-      // same-parent/directory SDK fallback per session. Valid private success
-      // and SDK fallback produce the same fixture `children` id list; terminal
-      // and unavailable close fail-soft to empty with the existing log label.
-      // `compareChildrenParity` stays as pure diagnostic/test evidence only.
+      // Private-authority children read: one private attempt with zero SDK.
+      // Valid private `succeeded`+`accepted` (including valid empty) and
+      // validated terminal `failed` (`retryable === false`) are authoritative
+      // with zero SDK; every gate-off/not-started/worker-error/transport/
+      // protocol/malformed/ambiguous/retryable-fence/timeout/closed branch
+      // fails closed to explicit unavailable with zero SDK (`getClientAsync`,
+      // `client.session.children`); signal is transport-only cancellation
+      // via `$/cancelRequest` with abort-listener cleanup, never a wire
+      // payload. `compareChildrenParity` stays as pure diagnostic/test
+      // evidence only and issues no third request.
       const kids = await fetchSessionChildrenPrivateFirst({
         connection: this.connectionService as unknown as Parameters<
           typeof fetchSessionChildrenPrivateFirst
         >[0]["connection"],
-        client: client as unknown as Parameters<typeof fetchSessionChildrenPrivateFirst>[0]["client"],
         parentSessionId: s.id,
         directory: root,
       })

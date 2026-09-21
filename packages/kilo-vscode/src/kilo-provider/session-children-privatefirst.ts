@@ -9,17 +9,19 @@ import {
 } from "../services/cli-backend/serve-private-children"
 
 /**
- * Private-first `session/children` read (same parent-bound
+ * Private-authority `session/children` read (same parent-bound
  * `Session.Service.children` source as `client.session.children`).
  *
- * One private attempt plus at most one same-parent/directory SDK fallback
- * per read, never retried inside the helper. Valid private
- * `succeeded`+`accepted` returns the child list with zero SDK; validated
- * terminal `failed` (`retryable === false`) closes with zero SDK; retryable
- * fence plus unavailable/invalid/ambiguous/transport/closed/timeout takes
- * exactly one same-parent/directory SDK `client.session.children` fallback
- * with no retry. SDK error/malformed returns `unavailable` for the caller
- * to handle (fixture maps to fail-soft empty).
+ * Bounded authority: valid private `succeeded`+`accepted` (including valid
+ * empty) and validated terminal `failed` (`retryable === false`) are
+ * authoritative with zero SDK; every other branch — gate-off/not-started/
+ * worker-error/transport/protocol/malformed/ambiguous/retryable-fence/timeout/
+ * closed — fails closed to explicit `unavailable` with zero SDK calls
+ * (`getClientAsync`, `client.session.children`). No second private request,
+ * no SDK fallback. Signal is transport-only cancellation via existing
+ * `$/cancelRequest` exact-cancel with abort-listener cleanup and
+ * before-read `throwIfAborted` guard; signal never becomes a wire payload,
+ * no DB-query cancellation, no protocol/schema change.
  *
  * Parent directory is the strict scope; child entries keep their own
  * canonical directories and may differ from the parent directory (unordered
@@ -141,7 +143,13 @@ export async function attemptSessionChildrenPrivate(
   connection: SessionChildrenPrivateConnection | null | undefined,
   req: ServePrivateChildrenRequest,
   ms = 3000,
+  signal?: AbortSignal,
 ): Promise<SessionChildrenAttempt> {
+  if (signal?.aborted) {
+    const s = signal
+    if (typeof s.throwIfAborted === "function") s.throwIfAborted()
+    throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
+  }
   if (!connection) return { kind: "fallback", reason: "unavailable" }
   try {
     if (!connection.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
@@ -149,14 +157,36 @@ export async function attemptSessionChildrenPrivate(
     return { kind: "fallback", reason: "unavailable" }
   }
   let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean | "stale" } | null = null
+  let abortHandler: (() => void) | null = null
+  let abortPromise: Promise<never> | null = null
+  if (signal) {
+    abortPromise = new Promise<never>((_, reject) => {
+      const onAbort = () => {
+        try {
+          handle?.cancel?.(`private session-children signal abort opId=${req.opId}`)
+        } catch {}
+        const reason = (signal as unknown as { reason?: unknown }).reason ?? new DOMException("This operation was aborted", "AbortError")
+        reject(reason instanceof Error ? reason : new Error(String(reason)))
+      }
+      abortHandler = onAbort
+      if (signal.aborted) {
+        onAbort()
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true })
+      }
+    })
+  }
   try {
     handle = connection.privateChildrenOutcomeWithHandle(req)
-    const outcome = (await withTimeout(handle.promise, ms)) as
+    const outcomePromise = withTimeout(handle.promise, ms) as Promise<unknown>
+    const raced = abortPromise ? Promise.race([outcomePromise, abortPromise]) : outcomePromise
+    const outcome = (await raced) as
       | { kind: "valid"; result: unknown }
       | { kind: "invalid"; detail: string }
     if (outcome.kind === "invalid") return { kind: "fallback", reason: "invalid" }
     return parseSessionChildrenResult(outcome.result, req)
   } catch (e) {
+    if (signal?.aborted) throw e
     if (isPrivateChildrenValidationError(e)) return { kind: "fallback", reason: "invalid" }
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes("private session-children timeout") && handle) {
@@ -167,6 +197,12 @@ export async function attemptSessionChildrenPrivate(
     }
     if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "fallback", reason: "transport" }
     return { kind: "fallback", reason: msg.slice(0, 120) }
+  } finally {
+    if (abortHandler && signal) {
+      try {
+        signal.removeEventListener("abort", abortHandler)
+      } catch {}
+    }
   }
 }
 
@@ -180,9 +216,11 @@ type SdkClient = {
 }
 
 export type SessionChildrenPrivateFirstOutcome =
-  | { kind: "ok"; children: Session[]; via: "private" | "sdk" }
+  | { kind: "ok"; children: Session[]; via: "private" }
   | { kind: "terminal"; code?: string }
   | { kind: "unavailable"; cause?: unknown }
+
+export type SessionChildrenPrivateOutcome = SessionChildrenPrivateFirstOutcome
 
 export function coerceSdkChildren(data: unknown, parentSessionId: string): Session[] | null {
   if (!Array.isArray(data)) return null
@@ -190,32 +228,50 @@ export function coerceSdkChildren(data: unknown, parentSessionId: string): Sessi
   return data
 }
 
-// Shared private-first children read: valid private returns with zero SDK;
-// validated terminal closes with zero SDK; otherwise exactly one
-// same-parent/directory SDK fallback with no retry; SDK failure/malformed
-// returns unavailable for the caller to handle.
-export async function fetchSessionChildrenPrivateFirst(opts: {
+// Private-authority children read: valid private returns with zero SDK;
+// validated terminal closes with zero SDK; every other branch (gate-off/
+// not-started/worker-error/transport/protocol/malformed/ambiguous/
+// retryable-fence/timeout/closed) fails closed to explicit unavailable with
+// zero SDK; no second private request, no SDK fallback. Signal is
+// transport-only cancellation via existing `$/cancelRequest` exact-cancel
+// with abort-listener cleanup and before-read `throwIfAborted` guard.
+export async function fetchSessionChildrenPrivate(opts: {
   connection?: SessionChildrenPrivateConnection | null
-  client: SdkClient | null | undefined
   parentSessionId: string
   directory: string
+  signal?: AbortSignal
   timeoutMs?: number
-}): Promise<SessionChildrenPrivateFirstOutcome> {
+}): Promise<SessionChildrenPrivateOutcome> {
+  if (opts.signal?.aborted) {
+    const s = opts.signal
+    if (typeof s.throwIfAborted === "function") s.throwIfAborted()
+    throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
+  }
   const req = buildSessionChildrenReq(opts.parentSessionId, opts.directory)
-  const attempt = await attemptSessionChildrenPrivate(opts.connection ?? null, req, opts.timeoutMs ?? 3000)
+  const attempt = await attemptSessionChildrenPrivate(opts.connection ?? null, req, opts.timeoutMs ?? 3000, opts.signal)
   if (attempt.kind === "ok") return { kind: "ok", children: attempt.children, via: "private" }
   if (attempt.kind === "terminal") return { kind: "terminal", code: attempt.code }
-  const client = opts.client
-  if (!client?.session?.children) return { kind: "unavailable" }
-  try {
-    const res = await client.session.children({ sessionID: opts.parentSessionId, directory: opts.directory })
-    const coerced = coerceSdkChildren(res.data, opts.parentSessionId)
-    if (!coerced) {
-      if (res.error !== undefined && res.error !== null) return { kind: "unavailable", cause: res.error }
-      return { kind: "unavailable" }
-    }
-    return { kind: "ok", children: coerced, via: "sdk" }
-  } catch (e) {
-    return { kind: "unavailable", cause: e }
-  }
+  return { kind: "unavailable" }
+}
+
+// Legacy alias — now private-authority (zero SDK fallback). The `client`
+// parameter is accepted for compatibility but ignored: every gate-off/
+// not-started/worker-error/transport/protocol/malformed/ambiguous branch
+// fails closed with zero SDK calls and no second private request. Prefer
+// `fetchSessionChildrenPrivate` for new call sites.
+export async function fetchSessionChildrenPrivateFirst(opts: {
+  connection?: SessionChildrenPrivateConnection | null
+  client?: SdkClient | null | undefined
+  parentSessionId: string
+  directory: string
+  signal?: AbortSignal
+  timeoutMs?: number
+}): Promise<SessionChildrenPrivateFirstOutcome> {
+  return fetchSessionChildrenPrivate({
+    connection: opts.connection ?? null,
+    parentSessionId: opts.parentSessionId,
+    directory: opts.directory,
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
+  })
 }
