@@ -144,6 +144,7 @@ import { isValidObservationChangedNotification } from "../../src/services/cli-ba
 import { isIsolatedDataRoot, validateGateEvidence } from "../../script/e2e-canonical"
 import { servicePromptPrivateFirstBoundary } from "./prompt-private-first-boundary"
 import { serviceCommandPrivateFirstBoundary } from "./command-private-first-boundary"
+import { serviceOperationProjectionBoundary } from "./operation-projection-boundary"
 
 const EXTENSION_ID = "kilocode.kilo-code"
 const CMD_OPEN = "kilo-code.new.agentManagerOpen"
@@ -810,6 +811,7 @@ interface ScenarioFlags {
   runObservationProducerSandbox: boolean
   runPromptPrivateFirst: boolean
   runCommandPrivateFirst: boolean
+  runOperationProjection: boolean
 }
 
 /**
@@ -925,6 +927,13 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // sees user message (via init command args), idempotent replay yields same
     // message with no duplicate. Reuses prompt tuple prompt:<messageId>.
     runCommandPrivateFirst: scenario === "command-private-first",
+    // operation-projection is focused-only: bounded live E2E proof for
+    // durable operation -> private observation -> AgentManager recentOperations/
+    // OperationStatus. Reuses real sessionCreate + prompt-private path, then
+    // validates observation/operations panel-safe projection, observation/changed
+    // v1 5-key/cursor, AgentManager refresh recentOperations same opId, and
+    // OperationStatus hidden for succeeded vs visible for failed/abandoned/in-flight.
+    runOperationProjection: scenario === "operation-projection",
   }
 }
 
@@ -962,11 +971,12 @@ export async function run(): Promise<void> {
     "observation-producer-sandbox",
     "prompt-private-first",
     "command-private-first",
+    "operation-projection",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first | operation-projection (default: all)",
     )
   }
   const {
@@ -992,6 +1002,7 @@ export async function run(): Promise<void> {
     runObservationProducerSandbox,
     runPromptPrivateFirst,
     runCommandPrivateFirst,
+    runOperationProjection,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1299,6 +1310,11 @@ export async function run(): Promise<void> {
   // --- command-private-first bounded live E2E proof (focused only) ---
   if (runCommandPrivateFirst) {
     await serviceCommandPrivateFirstBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- operation-projection bounded live E2E proof (focused only) ---
+  if (runOperationProjection) {
+    await serviceOperationProjectionBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {

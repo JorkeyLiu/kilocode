@@ -1257,6 +1257,54 @@ export class AgentManagerProvider implements Disposable {
     return true
   }
 
+  /** Fixture-only: snapshot of recentOperations (panel-safe projection) for operation-projection E2E. */
+  fixtureGetRecentOperationsSnapshot(): Record<string, import("./types").PanelOperation> | null {
+    if (!isE2EFixtureEnabled()) return null
+    if (!this.recentOps || this.recentOps.size === 0) return {}
+    return Object.fromEntries(this.recentOps) as Record<string, import("./types").PanelOperation>
+  }
+
+  /** Fixture-only: trigger a single observation refresh and fetchRecentOps for current sessions. */
+  async fixtureRefreshRecentOperations(): Promise<Record<string, import("./types").PanelOperation>> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture refresh requires KILO_E2E_FIXTURE")
+    await this.waitForStateReady("fixtureRefreshRecentOperations")
+    await this.handleObservationRefresh()
+    const ids = [...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]
+    await this.fetchRecentOps(ids)
+    this.pushState()
+    return this.fixtureGetRecentOperationsSnapshot() ?? {}
+  }
+
+  /** Fixture-only: fetch recentOps for specific session(s) regardless of managedSessions membership. */
+  async fixtureFetchRecentOpsForSession(sessionId: string): Promise<Record<string, import("./types").PanelOperation>> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture fetch requires KILO_E2E_FIXTURE")
+    if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+    await this.waitForStateReady("fixtureFetchRecentOpsForSession")
+    await this.fetchRecentOps([sessionId])
+    this.pushState()
+    return this.fixtureGetRecentOperationsSnapshot() ?? {}
+  }
+
+  /** Fixture-only: forget a session (clear durable + recentOps) for close/forget verification. */
+  async fixtureForgetSessionForTest(sessionId: string): Promise<{ existed: boolean; recentOpsCleared: boolean }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture forget requires KILO_E2E_FIXTURE")
+    const existed = this.managedSessions.has(sessionId)
+    if (!this.recentSessions) this.recentSessions = new Set<string>()
+    this.recentSessions.delete(sessionId)
+    this.managedSessions.delete(sessionId)
+    const hadRecent = !!this.recentOps?.has(sessionId)
+    this.recentOps?.delete(sessionId)
+    this.timing.forget(sessionId)
+    if (this.tabOrder && this.LOCAL) {
+      const ord = this.tabOrder[this.LOCAL]
+      if (ord) this.tabOrder[this.LOCAL] = ord.filter((id) => id !== sessionId)
+      if (this.activeSessionId === sessionId) this.activeSessionId = this.tabOrder[this.LOCAL]?.[0] ?? [...this.managedSessions.keys()][0]
+    }
+    this.schedulePersist()
+    this.pushState()
+    return { existed, recentOpsCleared: !this.recentOps?.has(sessionId) }
+  }
+
   private shouldWaitForState(m: AgentManagerInMessage): boolean {
     switch (m.type) {
       case "agentManager.persistSession":

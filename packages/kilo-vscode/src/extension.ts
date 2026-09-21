@@ -1163,6 +1163,32 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerObservationRefreshClear", async () => {
         return agentManagerProvider.fixtureClearObservationRefreshTelemetry()
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationOperations", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.directory || typeof o.directory !== "string") throw new Error("directory required")
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        const limit = typeof o.limit === "number" ? (o.limit as number) : 1
+        return privateObservation.operations({ directory: o.directory as string, sessionId: o.sessionId as string, limit })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerRecentOperations", async () => {
+        return {
+          recentOperations: agentManagerProvider.fixtureGetRecentOperationsSnapshot(),
+          state: agentManagerProvider.fixtureGetRecentOperationsSnapshot(),
+        }
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerRefreshForFixture", async () => {
+        return agentManagerProvider.fixtureRefreshRecentOperations()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerFetchRecentOps", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        return agentManagerProvider.fixtureFetchRecentOpsForSession(o.sessionId as string)
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerForgetSession", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        return agentManagerProvider.fixtureForgetSessionForTest(o.sessionId as string)
+      }),
     )
   }
 

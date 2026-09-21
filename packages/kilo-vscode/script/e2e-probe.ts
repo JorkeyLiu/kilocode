@@ -295,6 +295,7 @@ import { assertObservationProducerRevertLifecycle } from "./e2e-probe-observatio
 import { assertObservationProducerSandboxLifecycle } from "./e2e-probe-observation-producer-sandbox"
 import { assertPromptPrivateFirstLifecycle } from "./e2e-probe-prompt-private"
 import { assertCommandPrivateFirstLifecycle } from "./e2e-probe-command-private"
+import { assertOperationProjectionLifecycle } from "./e2e-probe-operation-projection"
 import {
   COMMAND_PRIVATE_FIRST_SCENARIO,
   OBSERVATION_PRODUCER_DELETE_SCENARIO,
@@ -303,6 +304,7 @@ import {
   OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
   OBSERVATION_PRODUCER_SCENARIO,
   OBSERVATION_PRODUCER_UPDATE_SCENARIO,
+  OPERATION_PROJECTION_SCENARIO,
   PROMPT_PRIVATE_FIRST_SCENARIO,
   e2eTimeoutForScenario,
 } from "./e2e-observation-producer-registry"
@@ -381,6 +383,7 @@ const SCENARIO_VALUES = [
   OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
   PROMPT_PRIVATE_FIRST_SCENARIO,
   COMMAND_PRIVATE_FIRST_SCENARIO,
+  OPERATION_PROJECTION_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -406,7 +409,8 @@ export function parseScenarios(value: string): Set<string> {
     value === OBSERVATION_PRODUCER_REVERT_SCENARIO ||
     value === OBSERVATION_PRODUCER_SANDBOX_SCENARIO ||
     value === PROMPT_PRIVATE_FIRST_SCENARIO ||
-    value === COMMAND_PRIVATE_FIRST_SCENARIO
+    value === COMMAND_PRIVATE_FIRST_SCENARIO ||
+    value === OPERATION_PROJECTION_SCENARIO
   ) {
     return new Set([value])
   }
@@ -437,7 +441,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has(OBSERVATION_PRODUCER_REVERT_SCENARIO) ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO) ||
     parseScenarios(value).has(PROMPT_PRIVATE_FIRST_SCENARIO) ||
-    parseScenarios(value).has(COMMAND_PRIVATE_FIRST_SCENARIO)
+    parseScenarios(value).has(COMMAND_PRIVATE_FIRST_SCENARIO) ||
+    parseScenarios(value).has(OPERATION_PROJECTION_SCENARIO)
   )
 }
 
@@ -2547,6 +2552,7 @@ async function prepareRealLifecycle(workspace: string, real: boolean): Promise<S
 }
 
 /** Dispatch the selected focused scenarios to their assertion functions. */
+// eslint-disable-next-line complexity
 async function runScenario(
   browser: Browser,
   scenarios: Set<string>,
@@ -2641,6 +2647,10 @@ async function runScenario(
   if (scenarios.has(COMMAND_PRIVATE_FIRST_SCENARIO)) {
     await assertCommandPrivateFirstLifecycle(browser, plan, scratch)
     console.log("[probe] command-private-first lifecycle assertion passed")
+  }
+  if (scenarios.has(OPERATION_PROJECTION_SCENARIO)) {
+    await assertOperationProjectionLifecycle(browser, plan, scratch)
+    console.log("[probe] operation-projection lifecycle assertion passed")
   }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
@@ -2745,6 +2755,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO)) return "obs-prod-sandbox-ready"
   if (scenarios.has(PROMPT_PRIVATE_FIRST_SCENARIO)) return "prompt-private-ready"
   if (scenarios.has(COMMAND_PRIVATE_FIRST_SCENARIO)) return "command-private-ready"
+  if (scenarios.has(OPERATION_PROJECTION_SCENARIO)) return "operation-projection-ready"
   return "ready"
 }
 
@@ -3293,21 +3304,24 @@ async function verifyCleanup(userData: string, cdpPort: number, scratch: string)
   const free = await portFree(cdpPort)
   console.log(`[probe] cleanup: CDP port ${cdpPort} ${free ? "released" : "STILL BOUND"}`)
   if (!free) throw new Error(`cleanup: CDP port ${cdpPort} still bound by an owned process`)
-  // Prompt-private-first / command-private-first: retain scratch diagnostics on failure ONLY when
-  // explicitly opted in via KILO_E2E_KEEP_PROMPT_ON_FAIL=1 / KILO_E2E_KEEP_COMMAND_ON_FAIL=1 or an existing keep env
-  // (KILO_E2E_KEEP_SCRATCH / KILO_E2E_KEEP_PROMPT / KILO_E2E_KEEP_PROMPT_SCRATCH / KILO_E2E_KEEP_COMMAND).
+  // Prompt-private-first / command-private-first / operation-projection: retain scratch diagnostics on failure ONLY when
+  // explicitly opted in via KILO_E2E_KEEP_PROMPT_ON_FAIL=1 / KILO_E2E_KEEP_COMMAND_ON_FAIL=1 / KILO_E2E_KEEP_OPERATION_ON_FAIL=1 or an existing keep env
+  // (KILO_E2E_KEEP_SCRATCH / KILO_E2E_KEEP_PROMPT / KILO_E2E_KEEP_PROMPT_SCRATCH / KILO_E2E_KEEP_COMMAND / KILO_E2E_KEEP_OPERATION).
   // Default: failure still deletes the scratch after exact child/port cleanup.
-  const keepRequested = !!process.env.KILO_E2E_KEEP_SCRATCH || !!process.env.KILO_E2E_KEEP_PROMPT || !!process.env.KILO_E2E_KEEP_PROMPT_SCRATCH || !!process.env.KILO_E2E_KEEP_COMMAND
+  const keepRequested = !!process.env.KILO_E2E_KEEP_SCRATCH || !!process.env.KILO_E2E_KEEP_PROMPT || !!process.env.KILO_E2E_KEEP_PROMPT_SCRATCH || !!process.env.KILO_E2E_KEEP_COMMAND || !!process.env.KILO_E2E_KEEP_OPERATION
   const keepPromptOnFailOptIn = process.env.KILO_E2E_KEEP_PROMPT_ON_FAIL === "1"
   const keepCommandOnFailOptIn = process.env.KILO_E2E_KEEP_COMMAND_ON_FAIL === "1"
+  const keepOperationOnFailOptIn = process.env.KILO_E2E_KEEP_OPERATION_ON_FAIL === "1"
   const promptFailedMarker = existsSync(join(scratch, "prompt-private-failed")) || existsSync(join(scratch, "prompt-private-error.json"))
   const commandFailedMarker = existsSync(join(scratch, "command-private-failed")) || existsSync(join(scratch, "command-private-error.json"))
+  const operationFailedMarker = existsSync(join(scratch, "operation-projection-failed")) || existsSync(join(scratch, "operation-projection-error.json"))
   const shouldKeepPromptOnFail = promptFailedMarker && keepPromptOnFailOptIn
   const shouldKeepCommandOnFail = commandFailedMarker && keepCommandOnFailOptIn
-  const shouldKeep = keepRequested || shouldKeepPromptOnFail || shouldKeepCommandOnFail
+  const shouldKeepOperationOnFail = operationFailedMarker && keepOperationOnFailOptIn
+  const shouldKeep = keepRequested || shouldKeepPromptOnFail || shouldKeepCommandOnFail || shouldKeepOperationOnFail
   if (shouldKeep) {
     console.log(
-      `[probe] cleanup: KEEP scratch for diagnostics (keepRequested=${keepRequested} promptFailed=${promptFailedMarker} commandFailed=${commandFailedMarker} keepPromptOnFailOptIn=${keepPromptOnFailOptIn} keepCommandOnFailOptIn=${keepCommandOnFailOptIn}) — ${scratch} NOT removed`,
+      `[probe] cleanup: KEEP scratch for diagnostics (keepRequested=${keepRequested} promptFailed=${promptFailedMarker} commandFailed=${commandFailedMarker} operationFailed=${operationFailedMarker} keepPromptOnFailOptIn=${keepPromptOnFailOptIn} keepCommandOnFailOptIn=${keepCommandOnFailOptIn} keepOperationOnFailOptIn=${keepOperationOnFailOptIn}) — ${scratch} NOT removed`,
     )
     console.log(`[probe] cleanup: retained scratch: ${scratch}`)
     console.log(`[probe] cleanup: to manually remove retained scratch: rm -rf ${scratch}`)
