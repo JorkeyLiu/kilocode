@@ -16,6 +16,7 @@
   "include": [
     "runner.ts",
     "p0-bench-runner.ts",
+    "prompt-private-first-boundary.ts",
     "../../script/e2e-probe.ts",
     "../../script/e2e-probe-r9.ts",
     "../../script/e2e-probe-observation-producer.ts",
@@ -24,6 +25,7 @@
     "../../script/e2e-probe-observation-producer-fork.ts",
     "../../script/e2e-probe-observation-producer-revert.ts",
     "../../script/e2e-probe-observation-producer-sandbox.ts",
+    "../../script/e2e-probe-prompt-private.ts",
     "../../script/e2e-observation-producer-registry.ts",
     "../../script/e2e-evidence.ts",
     "../../script/e2e-probe-dom.ts",

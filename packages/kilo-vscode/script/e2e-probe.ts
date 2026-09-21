@@ -293,6 +293,7 @@ import { assertObservationProducerDeleteLifecycle } from "./e2e-probe-observatio
 import { assertObservationProducerForkLifecycle } from "./e2e-probe-observation-producer-fork"
 import { assertObservationProducerRevertLifecycle } from "./e2e-probe-observation-producer-revert"
 import { assertObservationProducerSandboxLifecycle } from "./e2e-probe-observation-producer-sandbox"
+import { assertPromptPrivateFirstLifecycle } from "./e2e-probe-prompt-private"
 import {
   OBSERVATION_PRODUCER_DELETE_SCENARIO,
   OBSERVATION_PRODUCER_FORK_SCENARIO,
@@ -300,6 +301,7 @@ import {
   OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
   OBSERVATION_PRODUCER_SCENARIO,
   OBSERVATION_PRODUCER_UPDATE_SCENARIO,
+  PROMPT_PRIVATE_FIRST_SCENARIO,
   e2eTimeoutForScenario,
 } from "./e2e-observation-producer-registry"
 import { runGcLifecycleBoundaries } from "./e2e-probe-lifecycle"
@@ -375,6 +377,7 @@ const SCENARIO_VALUES = [
   OBSERVATION_PRODUCER_FORK_SCENARIO,
   OBSERVATION_PRODUCER_REVERT_SCENARIO,
   OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
+  PROMPT_PRIVATE_FIRST_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -398,7 +401,8 @@ export function parseScenarios(value: string): Set<string> {
     value === OBSERVATION_PRODUCER_DELETE_SCENARIO ||
     value === OBSERVATION_PRODUCER_FORK_SCENARIO ||
     value === OBSERVATION_PRODUCER_REVERT_SCENARIO ||
-    value === OBSERVATION_PRODUCER_SANDBOX_SCENARIO
+    value === OBSERVATION_PRODUCER_SANDBOX_SCENARIO ||
+    value === PROMPT_PRIVATE_FIRST_SCENARIO
   ) {
     return new Set([value])
   }
@@ -427,7 +431,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has(OBSERVATION_PRODUCER_DELETE_SCENARIO) ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_FORK_SCENARIO) ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_REVERT_SCENARIO) ||
-    parseScenarios(value).has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO)
+    parseScenarios(value).has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO) ||
+    parseScenarios(value).has(PROMPT_PRIVATE_FIRST_SCENARIO)
   )
 }
 
@@ -2624,6 +2629,10 @@ async function runScenario(
     await assertObservationProducerSandboxLifecycle(browser, plan, scratch)
     console.log("[probe] observation-producer-sandbox lifecycle assertion passed")
   }
+  if (scenarios.has(PROMPT_PRIVATE_FIRST_SCENARIO)) {
+    await assertPromptPrivateFirstLifecycle(browser, plan, scratch)
+    console.log("[probe] prompt-private-first lifecycle assertion passed")
+  }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
     await runGcLifecycleBoundaries(browser, plan, scratch, workspace, lifecycleModel)
@@ -2725,6 +2734,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has(OBSERVATION_PRODUCER_FORK_SCENARIO)) return "obs-prod-fork-ready"
   if (scenarios.has(OBSERVATION_PRODUCER_REVERT_SCENARIO)) return "obs-prod-revert-ready"
   if (scenarios.has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO)) return "obs-prod-sandbox-ready"
+  if (scenarios.has(PROMPT_PRIVATE_FIRST_SCENARIO)) return "prompt-private-ready"
   return "ready"
 }
 
@@ -3273,6 +3283,24 @@ async function verifyCleanup(userData: string, cdpPort: number, scratch: string)
   const free = await portFree(cdpPort)
   console.log(`[probe] cleanup: CDP port ${cdpPort} ${free ? "released" : "STILL BOUND"}`)
   if (!free) throw new Error(`cleanup: CDP port ${cdpPort} still bound by an owned process`)
+  // Prompt-private-first: retain scratch diagnostics on prompt failure ONLY when
+  // explicitly opted in via KILO_E2E_KEEP_PROMPT_ON_FAIL=1 or an existing keep env
+  // (KILO_E2E_KEEP_SCRATCH / KILO_E2E_KEEP_PROMPT / KILO_E2E_KEEP_PROMPT_SCRATCH).
+  // Default: failure still deletes the scratch after exact child/port cleanup.
+  const keepRequested = !!process.env.KILO_E2E_KEEP_SCRATCH || !!process.env.KILO_E2E_KEEP_PROMPT || !!process.env.KILO_E2E_KEEP_PROMPT_SCRATCH
+  const keepPromptOnFailOptIn = process.env.KILO_E2E_KEEP_PROMPT_ON_FAIL === "1"
+  const promptFailedMarker = existsSync(join(scratch, "prompt-private-failed")) || existsSync(join(scratch, "prompt-private-error.json"))
+  const shouldKeepPromptOnFail = promptFailedMarker && keepPromptOnFailOptIn
+  const shouldKeep = keepRequested || shouldKeepPromptOnFail
+  if (shouldKeep) {
+    console.log(
+      `[probe] cleanup: KEEP scratch for diagnostics (keepRequested=${keepRequested} promptFailed=${promptFailedMarker} keepPromptOnFailOptIn=${keepPromptOnFailOptIn}) — ${scratch} NOT removed`,
+    )
+    console.log(`[probe] cleanup: retained scratch: ${scratch}`)
+    console.log(`[probe] cleanup: to manually remove retained scratch: rm -rf ${scratch}`)
+    // Still verify we could remove it (permissions) but do not delete when retention requested
+    return
+  }
   rmSync(scratch, { recursive: true, force: true })
   const gone = !existsSync(scratch)
   console.log(`[probe] cleanup: scratch dir removed: ${gone}`)

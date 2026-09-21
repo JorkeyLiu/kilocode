@@ -63,6 +63,7 @@ export type PromptResult =
       outcome: { type: "succeeded"; time: number }
       accepted: true
       data: { accepted: true; messageId: string; sessionId: string }
+      revision?: { session: number; config: number }
     }
   | {
       v: 1
@@ -74,6 +75,7 @@ export type PromptResult =
       outcome: { type: "failed"; time: number; failure: { code: string; message: string; retryable: boolean; detail?: string } }
       accepted: boolean
       failure: { code: string; message: string; retryable: boolean; detail?: string }
+      revision?: { session: number; config: number }
     }
   | {
       v: 1
@@ -85,6 +87,7 @@ export type PromptResult =
       outcome: { type: "ambiguous"; time: number }
       accepted: false
       transportUnknown?: boolean
+      revision?: { session: number; config: number }
     }
 
 export function makePromptAmbiguous(req: PromptContractRequest, transportUnknown = true): PromptResult {
@@ -170,12 +173,21 @@ export function validatePromptContractRequest(raw: unknown): PromptContractReque
   return raw as unknown as PromptContractRequest
 }
 
-const RESULT_ROOT_SUCCEEDED = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "data"])
-const RESULT_ROOT_FAILED = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "failure"])
-const RESULT_ROOT_AMBIGUOUS = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "transportUnknown"])
+const RESULT_ROOT_SUCCEEDED = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "data", "revision"])
+const RESULT_ROOT_FAILED = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "failure", "revision"])
+const RESULT_ROOT_AMBIGUOUS = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "transportUnknown", "revision"])
 const OUTCOME_SUCCEEDED_FIELDS = new Set(["type", "time"])
 const OUTCOME_FAILED_FIELDS = new Set(["type", "time", "failure"])
 const OUTCOME_AMBIGUOUS_FIELDS = new Set(["type", "time"])
+const REVISION_FIELDS = new Set(["session", "config"])
+
+function validateRevision(v: unknown): void {
+  if (v === undefined) return
+  if (!isRecord(v)) throw new Error("revision must be {session,config} integers")
+  assertAllowedKeys(v as Record<string, unknown>, REVISION_FIELDS, "revision")
+  const rec = v as Record<string, unknown>
+  if (!isSafeInt(rec.session) || !isSafeInt(rec.config)) throw new Error("revision must be {session,config} integers")
+}
 
 // eslint-disable-next-line complexity
 export function validatePromptResult(raw: unknown, req: PromptContractRequest): PromptResult {
@@ -194,6 +206,7 @@ export function validatePromptResult(raw: unknown, req: PromptContractRequest): 
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   const rec = raw as Record<string, unknown>
   const outRec = outcome as Record<string, unknown>
+  validateRevision(rec.revision)
   if (status === "succeeded") {
     assertAllowedKeys(rec, RESULT_ROOT_SUCCEEDED, "result")
     assertAllowedKeys(outRec, OUTCOME_SUCCEEDED_FIELDS, "outcome")

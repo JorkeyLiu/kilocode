@@ -290,6 +290,7 @@ export class KiloConnectionService {
     e2eSandboxPolicyReadWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxPolicyReadWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxPolicyReadWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxPolicyReadRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxPolicyReadResult> },
     e2eSandboxSetWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxSetWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxSetWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxSetRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxSetResult> },
     e2eSandboxGrantReadWithHandle: (req) => (this.privatePeer as unknown as { privateE2ESandboxGrantReadWithHandle: (r: unknown) => { promise: Promise<unknown> } }).privateE2ESandboxGrantReadWithHandle(req as unknown as import("./serve-private-e2e-sandbox").E2ESandboxGrantReadRequest) as unknown as { promise: Promise<import("./serve-private-e2e-sandbox").E2ESandboxGrantReadResult> },
+    promptWithHandle: (req) => this.privatePromptWithHandle(req as unknown as import("./serve-private-prompt-contract").PromptContractRequest) as unknown as { id: number; promise: Promise<import("./serve-private-prompt-contract").PromptResult>; cancel: (msg?: string) => boolean },
     getCurrentDirectory: () => this.currentDirectory,
     getRootDirectory: () => this.rootDirectory,
   })
@@ -4109,5 +4110,29 @@ export class KiloConnectionService {
     sessionId: string
   }> {
     return this.observationFixture.replayUnrevert(sessionId)
+  }
+
+  public async fixtureSessionPromptPrivate(input: { directory?: string; sessionId: string; messageId: string; text: string }): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-prompt-contract").PromptResult
+    sessionId: string
+    messageId: string
+  }> {
+    return this.observationFixture.prompt(input)
+  }
+
+  public async fixtureSessionPromptPrivateReplay(sessionId: string, messageId: string): Promise<{
+    opId: string
+    idempotencyKey: string
+    requestId: string
+    directory: string
+    result: import("./serve-private-prompt-contract").PromptResult
+    sessionId: string
+    messageId: string
+  }> {
+    return this.observationFixture.replayPrompt(sessionId, messageId)
   }
 }

@@ -60,6 +60,24 @@ export function validatedE2EProviderEnv(): Record<string, string | undefined> {
   return { KILO_E2E_PROVIDER_BASE_URL: baseURL }
 }
 
+function isFixtureScratchGateValid(): boolean {
+  if (!isE2EFixtureEnabled()) return false
+  try {
+    return isValidE2EScratch(process.env.KILO_E2E_SCRATCH)
+  } catch {
+    return false
+  }
+}
+
+function resolveE2EFixtureChildEnv(): Record<string, string> {
+  if (!isE2EFixtureEnabled()) return {}
+  const out: Record<string, string> = {}
+  if (isFixtureScratchGateValid() && process.env.KILO_E2E_SCRATCH) out.KILO_E2E_SCRATCH = process.env.KILO_E2E_SCRATCH
+  if (process.env.KILO_E2E_FIXTURE) out.KILO_E2E_FIXTURE = process.env.KILO_E2E_FIXTURE
+  if (process.env.KILO_E2E_FIXTURE_ID) out.KILO_E2E_FIXTURE_ID = process.env.KILO_E2E_FIXTURE_ID
+  return out
+}
+
 export function resolveServerCwd(folders: readonly WorkspaceFolderLike[] | undefined, storage: string): string {
   return folders?.[0]?.uri.fsPath ?? storage
 }
@@ -311,6 +329,7 @@ export class ServerManager {
           ...(!claudeCompat && { KILO_DISABLE_CLAUDE_CODE: "true" }),
           ...resolveTreeSitterEnv(this.context.extensionPath),
           ...bwrapEnv,
+          ...resolveE2EFixtureChildEnv(),
           // Narrowly validated E2E seam: only forward the run-owned loopback
           // baseURL when all gates pass (fixture, absolute scratch, loopback
           // /v1). Invalid or arbitrary payload is not forwarded.

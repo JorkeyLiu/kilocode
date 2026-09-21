@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import { buildPromptIdentity, ensurePromptMessageId, promptSessionPrivateFirst, sendPromptOnce } from "./session-prompt"
-import { canonicalPromptOpId, validatePromptContractRequest, validatePromptResult } from "../services/cli-backend/serve-private-prompt-contract"
+import { canonicalPromptOpId, normalizePrivatePromptWire, validatePromptContractRequest, validatePromptResult } from "../services/cli-backend/serve-private-prompt-contract"
 
 const SID = "ses_prompt000000000000001"
 const DIR = "/tmp/ws"
@@ -598,5 +598,47 @@ describe("prompt private-first", () => {
     expect(sdk).toBe(1)
     expect((seen[0] as Record<string, unknown>).messageID).toBe(MID)
     expect((seen[0] as Record<string, unknown>).sessionID).toBe(SID)
+  })
+
+  test("revision valid passes and invalid fail-closed", () => {
+    const { opId, idempotencyKey, requestId } = buildPromptIdentity(MID)
+    const req = {
+      v: 1,
+      requestId,
+      opId,
+      op: "session/prompt",
+      idempotencyKey,
+      context: { directory: DIR, sessionId: SID, parentSessionId: null },
+      payload: { messageId: MID, parts: PARTS },
+    } as unknown as Parameters<typeof validatePromptResult>[1]
+    const ok = succeededFor(req as unknown as Record<string, unknown>)
+    expect(() => validatePromptResult(ok, req)).not.toThrow()
+    // valid revision passes
+    expect(() => validatePromptResult({ ...ok, revision: { session: 0, config: 1 } }, req)).not.toThrow()
+    expect(() => validatePromptResult({ ...ok, revision: { session: 2, config: 3 } }, req)).not.toThrow()
+    // invalid: extra field
+    expect(() => validatePromptResult({ ...ok, revision: { session: 1, config: 1, extra: 1 } } as unknown as Record<string, unknown>, req)).toThrow()
+    // invalid: malformed type string
+    expect(() => validatePromptResult({ ...ok, revision: { session: "x", config: 1 } } as unknown as Record<string, unknown>, req)).toThrow()
+    // invalid: missing config
+    expect(() => validatePromptResult({ ...ok, revision: { session: 1 } } as unknown as Record<string, unknown>, req)).toThrow()
+    // invalid: negative
+    expect(() => validatePromptResult({ ...ok, revision: { session: -1, config: 0 } } as unknown as Record<string, unknown>, req)).toThrow()
+    // invalid: non-integer
+    expect(() => validatePromptResult({ ...ok, revision: { session: 1.5, config: 0 } } as unknown as Record<string, unknown>, req)).toThrow()
+    // invalid: non-object
+    expect(() => validatePromptResult({ ...ok, revision: "bad" } as unknown as Record<string, unknown>, req)).toThrow()
+    // normalizePrivatePromptWire fail-closed on bad revision
+    const badWire = normalizePrivatePromptWire({ ...ok, revision: { session: 1, config: 1, extra: 9 } }, req)
+    expect(badWire.kind).toBe("invalid")
+    const goodWire = normalizePrivatePromptWire({ ...ok, revision: { session: 1, config: 1 } }, req)
+    expect(goodWire.kind).toBe("valid")
+    // failed and ambiguous also allow valid revision, reject invalid
+    const failed = terminalFor(req as unknown as Record<string, unknown>)
+    expect(() => validatePromptResult({ ...failed, revision: { session: 0, config: 0 } }, req)).not.toThrow()
+    expect(() => validatePromptResult({ ...failed, revision: { session: "y", config: 0 } } as unknown as Record<string, unknown>, req)).toThrow()
+    const amb = ambiguousFor(req as unknown as Record<string, unknown>)
+    expect(() => validatePromptResult({ ...amb, revision: { session: 5, config: 2 } }, req)).not.toThrow()
+    expect(() => validatePromptResult({ ...amb, revision: null } as unknown as Record<string, unknown>, req)).toThrow()
   })
 })

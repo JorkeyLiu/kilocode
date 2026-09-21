@@ -1107,6 +1107,24 @@ export function activate(context: vscode.ExtensionContext) {
         if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
         return (connectionService as unknown as { fixtureSessionUnrevertPrivateReplay: (id: string) => Promise<unknown> }).fixtureSessionUnrevertPrivateReplay(sessionId as string)
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionPromptPrivate", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        if (!o.messageId || typeof o.messageId !== "string") throw new Error("messageId required")
+        if (!o.text || typeof o.text !== "string") throw new Error("text required")
+        return connectionService.fixtureSessionPromptPrivate({
+          directory: typeof o.directory === "string" ? (o.directory as string) : undefined,
+          sessionId: o.sessionId as string,
+          messageId: o.messageId as string,
+          text: o.text as string,
+        })
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sessionPromptPrivateReplay", async (opts?: unknown) => {
+        const o = (opts as Record<string, unknown> | undefined) ?? {}
+        if (!o.sessionId || typeof o.sessionId !== "string") throw new Error("sessionId required")
+        if (!o.messageId || typeof o.messageId !== "string") throw new Error("messageId required")
+        return connectionService.fixtureSessionPromptPrivateReplay(o.sessionId as string, o.messageId as string)
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationChangedSnapshot", async () => {
         return connectionService.fixturePrivateObservationChangedSnapshot()
       }),
