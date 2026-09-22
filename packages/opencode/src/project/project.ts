@@ -10,7 +10,9 @@ import { GlobalBus } from "@/bus/global"
 import { which } from "@opencode-ai/core/util/which"
 import { Command } from "@/command"
 import { InstanceState } from "@/effect/instance-state"
-import { Effect, Layer, Scope, Context, Stream, Types, Schema } from "effect"
+import { Effect, Layer, Scope, Context, Stream, Types, Schema, Option } from "effect"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { AppProcess } from "@opencode-ai/core/process"
@@ -183,7 +185,7 @@ export const layer = Layer.effect(
       if (oldID === ProjectV2.ID.global) return
       if (oldID === newID) return
 
-      yield* db
+      const entries = yield* db
         .transaction(
           (d) =>
             Effect.gen(function* () {
@@ -214,8 +216,10 @@ export const layer = Layer.effect(
                 .all()
                 .pipe(Effect.orDie)
               const now = Date.now()
+              const out: Changefeed.Entry[] = []
               for (const r of reassigned) {
-                yield* Changefeed.appendTx(d, { session_id: r.id as string, revision: r.revision, kind: "changed", time: now })
+                const e = yield* Changefeed.appendTx(d, { session_id: r.id as string, revision: r.revision, kind: "changed", time: now })
+                out.push(e)
               }
               yield* d
                 .update(WorkspaceTable)
@@ -225,10 +229,26 @@ export const layer = Layer.effect(
                 .pipe(Effect.orDie)
 
               if (oldProject) yield* d.delete(ProjectTable).where(eq(ProjectTable.id, oldID)).run().pipe(Effect.orDie)
+              return out
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
+
+      if (entries.length > 0) {
+        const sorted = [...entries].sort((a, b) => a.seq - b.seq)
+        const payload = {
+          v: OBSERVATION_VERSION,
+          cursor: sorted[sorted.length - 1]!.seq,
+          entries: sorted.map((e) => ({ seq: e.seq, session_id: e.session_id, revision: e.revision, kind: e.kind, time: e.time })),
+        }
+        yield* Effect.gen(function* () {
+          const opt = yield* Effect.serviceOption(PrivatePeerService)
+          if (Option.isNone(opt)) return
+          const peer = opt.value
+          yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+        }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+      }
     })
 
     const saveProjectDirectory = Effect.fn("Project.saveProjectDirectory")(function* (input: {
@@ -309,7 +329,7 @@ export const layer = Layer.effect(
         { concurrency: "unbounded" },
       ).pipe(Effect.map((arr) => arr.filter((x): x is string => x !== undefined)))
 
-      yield* db
+      const entries = yield* db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
@@ -364,14 +384,33 @@ export const layer = Layer.effect(
                   .all()
                   .pipe(Effect.orDie)
                 const now = Date.now()
+                const out: Changefeed.Entry[] = []
                 for (const r of reassigned) {
-                  yield* Changefeed.appendTx(tx, { session_id: r.id as string, revision: r.revision, kind: "changed", time: now })
+                  const e = yield* Changefeed.appendTx(tx, { session_id: r.id as string, revision: r.revision, kind: "changed", time: now })
+                  out.push(e)
                 }
+                return out
               }
+              return [] as Changefeed.Entry[]
             }),
           { behavior: "immediate" },
         )
         .pipe(Effect.orDie)
+
+      if (entries.length > 0) {
+        const sorted = [...entries].sort((a, b) => a.seq - b.seq)
+        const payload = {
+          v: OBSERVATION_VERSION,
+          cursor: sorted[sorted.length - 1]!.seq,
+          entries: sorted.map((e) => ({ seq: e.seq, session_id: e.session_id, revision: e.revision, kind: e.kind, time: e.time })),
+        }
+        yield* Effect.gen(function* () {
+          const opt = yield* Effect.serviceOption(PrivatePeerService)
+          if (Option.isNone(opt)) return
+          const peer = opt.value
+          yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+        }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+      }
 
       yield* saveProjectDirectory({
         projectID,
