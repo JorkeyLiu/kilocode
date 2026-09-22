@@ -48,6 +48,7 @@ function makeProvider(svc: any) {
   p.refreshSessions = null
   p.pendingChangedAckCursor = undefined
   p.pendingChangedBaseline = undefined
+  p.pendingChangedTrailing = false
   p.coordinator = new AgentManagerObservationCoordinator(svc)
   p.stateReady = Promise.resolve()
   p.log = () => {}
@@ -96,7 +97,15 @@ async function waitForRefresh(p: any, timeout = 500): Promise<void> {
 
 describe("AgentManager observation/changed bounded consumer", () => {
   it("valid changed notification triggers exactly one refresh and ack", async () => {
-    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 7 })
+    const { svc, store, ackLog, readLog } = fakePrivate({
+      enabled: true,
+      persisted: 7,
+    })
+    // private read from baseline 7 must return contiguous delta 8 (verified via decideFromReadResultWithValidity)
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 8, rehydrate: false, entries: [{ seq: 8, session_id: "ses_a", revision: 1, kind: "changed", time: 1 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -118,12 +127,17 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
     expect(refreshCount).toBe(1)
+    expect(readLog).toEqual([7])
     expect(ackLog).toEqual([8])
     expect(store.get()).toBe(8)
   })
 
   it("valid deleted notification triggers exactly one refresh and ack", async () => {
-    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 3 })
+    const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 3 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 4, rehydrate: false, entries: [{ seq: 4, session_id: "ses_b", revision: 0, kind: "deleted", time: 2 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -145,12 +159,17 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
     expect(refreshCount).toBe(1)
+    expect(readLog).toEqual([3])
     expect(ackLog).toEqual([4])
     expect(store.get()).toBe(4)
   })
 
   it("valid generation notification triggers exactly one refresh and ack (bounded consumer, no polling)", async () => {
     const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 7 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 8, rehydrate: false, entries: [{ seq: 8, session_id: "ses_g", revision: 5, kind: "generation", time: 7005 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -172,13 +191,26 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
     expect(refreshCount).toBe(1)
-    expect(readLog.length).toBe(0)
+    expect(readLog.length).toBe(1)
+    expect(readLog).toEqual([7])
     expect(ackLog).toEqual([8])
     expect(store.get()).toBe(8)
   })
 
   it("mixed changed+generation contiguous notification triggers single refresh+ack (generic kind)", async () => {
-    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 5 })
+    const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 5 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return {
+        v: "1.0",
+        cursor: 7,
+        rehydrate: false,
+        entries: [
+          { seq: 6, session_id: "ses_mix", revision: 5, kind: "changed", time: 7006 },
+          { seq: 7, session_id: "ses_mix", revision: 5, kind: "generation", time: 7006 },
+        ],
+      }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -203,12 +235,26 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
     expect(refreshCount).toBe(1)
+    expect(readLog).toEqual([5])
     expect(ackLog).toEqual([7])
     expect(store.get()).toBe(7)
   })
 
   it("burst multiple valid notifications coalesce to one refresh with latest cursor", async () => {
-    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 10 })
+    const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 10 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      // burst coalesced to baseline 10; private read must return contiguous delta 11,12 (read cursor is authority, not notification max alone)
+      return {
+        v: "1.0",
+        cursor: 12,
+        rehydrate: false,
+        entries: [
+          { seq: 11, session_id: "ses_a", revision: 1, kind: "changed", time: 1 },
+          { seq: 12, session_id: "ses_b", revision: 1, kind: "changed", time: 2 },
+        ],
+      }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -241,17 +287,22 @@ describe("AgentManager observation/changed bounded consumer", () => {
     // invoke second immediately before first's async wait resolves
     provider.handleObservationChanged(OBSERVATION_NOTIFICATION, n2)
     await new Promise((r) => setTimeout(r, 15))
-    // At this point one refresh should be in flight
+    // At this point one refresh should be in flight (read + refresh)
     expect(provider.refreshPromise).not.toBeNull()
     await waitForRefresh(provider, 1000)
     expect(refreshCount).toBe(1)
-    // Latest cursor should be acked (12) not just 11
+    expect(readLog).toEqual([10])
+    // ack is via read cursor (12), not directly via coalesced notification max alone - but value coincides for contiguous burst
     expect(ackLog).toEqual([12])
     expect(store.get()).toBe(12)
   })
 
   it("same burst with three notifications still one refresh", async () => {
-    const { svc, ackLog } = fakePrivate({ enabled: true, persisted: 20 })
+    const { svc, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 20 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 21, rehydrate: false, entries: [{ seq: 21, session_id: "ses_21", revision: 1, kind: "changed", time: 21 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -280,6 +331,7 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 15))
     await waitForRefresh(provider, 1000)
     expect(refreshCount).toBe(1)
+    expect(readLog).toEqual([20])
     expect(ackLog).toEqual([21])
   })
 
@@ -412,7 +464,11 @@ describe("AgentManager observation/changed bounded consumer", () => {
   })
 
   it("refresh failure does not ack", async () => {
-    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 5 })
+    const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 5 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 6, rehydrate: false, entries: [{ seq: 6, session_id: "ses_a", revision: 0, kind: "changed", time: 1 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -432,12 +488,17 @@ describe("AgentManager observation/changed bounded consumer", () => {
     provider.handleObservationChanged(OBSERVATION_NOTIFICATION, note)
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
+    expect(readLog).toEqual([5])
     expect(ackLog.length).toBe(0)
     expect(store.get()).toBe(5)
   })
 
   it("ack failure keeps persisted cursor not moved", async () => {
-    const { svc, store, ackLog } = fakePrivate({ enabled: true, persisted: 5, ackFails: true })
+    const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 5, ackFails: true })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 6, rehydrate: false, entries: [{ seq: 6, session_id: "ses_a", revision: 0, kind: "changed", time: 1 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -459,6 +520,7 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
     expect(refreshCount).toBe(1)
+    expect(readLog).toEqual([5])
     expect(ackLog).toEqual([6])
     expect(store.get()).toBe(5)
   })
@@ -520,8 +582,12 @@ describe("AgentManager observation/changed bounded consumer", () => {
     provider.coordinator.decideFromChangedNotificationWithValidity = orig
   })
 
-  it("does not trigger second private read (notification is read-equivalent)", async () => {
+  it("does not trigger second private read (notification schedules one bounded read)", async () => {
     const { svc, store, ackLog, readLog } = fakePrivate({ enabled: true, persisted: 7 })
+    svc.read = async (cur: number) => {
+      readLog.push(cur)
+      return { v: "1.0", cursor: 8, rehydrate: false, entries: [{ seq: 8, session_id: "ses_a", revision: 1, kind: "changed", time: 1 }] }
+    }
     const provider: any = makeProvider(svc)
     provider.generation = 1
     provider.hydrated = true
@@ -543,7 +609,8 @@ describe("AgentManager observation/changed bounded consumer", () => {
     await new Promise((r) => setTimeout(r, 20))
     await waitForRefresh(provider)
     expect(refreshCount).toBe(1)
-    expect(readLog.length).toBe(0)
+    expect(readLog.length).toBe(1)
+    expect(readLog).toEqual([7])
     expect(ackLog).toEqual([8])
     expect(store.get()).toBe(8)
   })

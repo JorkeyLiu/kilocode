@@ -160,6 +160,10 @@ export class AgentManagerObservationCoordinator {
     return this.decideFromReadResultWithValidity(raw, requestedCursor).decision
   }
 
+  async readRaw(cursor: number): Promise<unknown> {
+    return this.svc.read(cursor)
+  }
+
   async decide(): Promise<{ shouldRefresh: boolean; ackCursor?: number }> {
     if (!this.svc.isEnabled()) return { shouldRefresh: true }
     let cur: number | undefined

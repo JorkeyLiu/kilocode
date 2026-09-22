@@ -138,6 +138,7 @@ export class AgentManagerProvider implements Disposable {
   private refreshSessions: unknown | null = null
   private pendingChangedAckCursor: number | undefined
   private pendingChangedBaseline: number | undefined
+  private pendingChangedTrailing = false
   private fixObsCount = 0
   private fixObsAck: number | undefined
   private fixObsBase: number | undefined
@@ -441,6 +442,9 @@ export class AgentManagerProvider implements Disposable {
       this.catalogUnsub = ctx.sessions.onCatalog((update) => this.onCatalogUpdate(update))
     }
     this.generation++
+    this.pendingChangedTrailing = false
+    this.pendingChangedAckCursor = undefined
+    this.pendingChangedBaseline = undefined
     this.bumpContentGenForFixture(new Error("panel generation changed"))
     this.hydrated = false
     this.stateReady = this.initializeState()
@@ -462,6 +466,9 @@ export class AgentManagerProvider implements Disposable {
         // in memory and in workspaceStore for next attach. Do not mutate
         // durable fields or schedule a cleared snapshot here.
         // this.activeSessionId = undefined // intentionally not cleared; durable survives
+        this.pendingChangedTrailing = false
+        this.pendingChangedAckCursor = undefined
+        this.pendingChangedBaseline = undefined
         this.visiblePresence.clear()
         this.panel = undefined
         this.emitVisibilityChanged(false)
@@ -1104,15 +1111,16 @@ export class AgentManagerProvider implements Disposable {
   }
 
   /**
-    * Strictly bounded observation/changed consumer — payload-free, versioned, fail-closed.
-   * - Validates via coordinator.decideFromChangedNotificationWithValidity (v1.0, cursor, entries, seq/revision/time/kind)
-   * - Invalid/out-of-order/gap discarded: no refresh, no ack, no cursor mutation
-   * - Legal changed/deleted converted to single re-observe signal (refresh + ack after success)
-   * - Merges with existing refreshPromise/generation/singleflight; burst coalesces to one refresh (pending latest cursor)
-   * - Visible=false discarded (next visible trigger will re-read)
-   * - No second private read; notification is read-equivalent decision input
-   * - Consumer exceptions never bubble to JSON-RPC transport (service try/catch + local try/catch)
-   */
+     * Strictly bounded observation/changed consumer — payload-free, versioned, fail-closed.
+     * - Validates via coordinator.decideFromChangedNotificationWithValidity (v1.0, cursor, entries, seq/revision/time/kind)
+     * - Invalid/out-of-order/gap discarded: no refresh, no ack, no cursor mutation, no private read
+     * - Legal changed/deleted/generation coalesces burst to one re-observation signal (one private read from original baseline, one refresh, ack only via read decision)
+     * - Persisted cursor never advanced from coalesced notification max alone; before refresh/ack, one private `observation/read` from original baseline validates via `decideFromReadResultWithValidity` (existing rehydrate/gap semantics)
+     * - While one notification-triggered read/refresh/ack flight is in progress, a later valid notification coalesces to exactly one trailing cycle after that flight settles; trailing reads from then-current persisted cursor, never reuses stale baseline or notification max for ack; arbitrarily many late notifications coalesce to one trailing; invalid schedules nothing; no extra cycle if none
+     * - Merges with existing refreshPromise/generation/singleflight; burst coalesces to one refresh+read
+     * - Visible=false discarded (next visible trigger will re-read)
+     * - Consumer exceptions never bubble to JSON-RPC transport (service try/catch + local try/catch)
+     */
   public handleObservationChanged(method: string, params: unknown): void {
     try {
       if (method !== OBSERVATION_NOTIFICATION) return
@@ -1142,6 +1150,17 @@ export class AgentManagerProvider implements Disposable {
       }
       if (!res.valid) return
       if (!res.decision.shouldRefresh) return
+      const genAtCall = this.generation
+      const sessionsAtCall = panel.sessions
+      if (!sessionsAtCall) return
+      // Late-notification liveness: if a flight is already in progress and its pending has been consumed,
+      // coalesce this valid notification to exactly one trailing cycle after the flight settles.
+      const inFlight = this.refreshPromise !== null && this.refreshGen === genAtCall && this.refreshSessions === sessionsAtCall
+      const pendingConsumed = this.pendingChangedBaseline === undefined && this.pendingChangedAckCursor === undefined
+      if (inFlight && pendingConsumed) {
+        this.pendingChangedTrailing = true
+        return
+      }
       const ackCursor = res.decision.ackCursor
       if (ackCursor !== undefined) {
         if (this.pendingChangedAckCursor === undefined || ackCursor > this.pendingChangedAckCursor) {
@@ -1150,10 +1169,9 @@ export class AgentManagerProvider implements Disposable {
         } else if (this.pendingChangedBaseline === undefined) {
           this.pendingChangedBaseline = cur
         }
+      } else if (this.pendingChangedBaseline === undefined) {
+        this.pendingChangedBaseline = cur
       }
-      const genAtCall = this.generation
-      const sessionsAtCall = panel.sessions
-      if (!sessionsAtCall) return
       void this.trackOwned(
         this.waitForStateReady("observationChanged").then(async () => {
           const curPanel = this.panel
@@ -1168,6 +1186,10 @@ export class AgentManagerProvider implements Disposable {
               this.refreshPromise = null
               this.refreshGen = null
               this.refreshSessions = null
+            }
+            if (this.pendingChangedTrailing) {
+              this.pendingChangedTrailing = false
+              this.scheduleTrailingChangedRefresh()
             }
           })
           this.refreshPromise = p
@@ -1193,37 +1215,142 @@ export class AgentManagerProvider implements Disposable {
       this.fixObsCount++
       this.fixObsAt = Date.now()
     }
+    const baseline = this.pendingChangedBaseline
+    // Capture and clear pending before async read to allow next burst to schedule separately via singleflight
+    this.pendingChangedAckCursor = undefined
+    this.pendingChangedBaseline = undefined
+    if (baseline === undefined || !this.coordinator) {
+      return
+    }
+    // One bounded private read from original persisted baseline; use existing coordinator validity semantics.
+    // No duplicate reads, no new polling/scheduler, fail-closed on invalid/read failure.
+    let readRaw: unknown
+    try {
+      readRaw = await this.coordinator.readRaw(baseline)
+    } catch {
+      readRaw = undefined
+    }
+    let readValid = false
+    let readDecision: { shouldRefresh: boolean; ackCursor?: number } = { shouldRefresh: true }
+    if (readRaw !== undefined) {
+      try {
+        const r = this.coordinator.decideFromReadResultWithValidity(readRaw, baseline)
+        readValid = r.valid
+        readDecision = r.decision
+      } catch {
+        readValid = false
+        readDecision = { shouldRefresh: true }
+      }
+    } else {
+      readValid = false
+      readDecision = { shouldRefresh: true }
+    }
+    // Existing rehydrate/gap/valid semantics: valid==false falls back to shouldRefresh:true with no ack (same as coordinator.decide fallback)
+    // Valid rehydrate(true) or valid delta will have ackCursor; valid empty (shouldRefresh false) skips refresh.
+    if (!readDecision.shouldRefresh) {
+      return
+    }
     try {
       await sessions.refreshSessions()
     } catch {
-      this.pendingChangedAckCursor = undefined
-      this.pendingChangedBaseline = undefined
       return
     }
     if (this.generation !== gen || this.panel?.sessions !== sessions) {
-      this.pendingChangedAckCursor = undefined
-      this.pendingChangedBaseline = undefined
       return
     }
     void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
-    const latestAck = this.pendingChangedAckCursor
-    const latestBaseline = this.pendingChangedBaseline
-    this.pendingChangedAckCursor = undefined
-    this.pendingChangedBaseline = undefined
-    if (latestAck === undefined || !this.coordinator) return
-    if (latestBaseline === undefined) return
+    const ackCursor = readDecision.ackCursor
+    if (ackCursor === undefined) return
     if (isE2EFixtureEnabled()) {
-      this.fixObsAck = latestAck
-      this.fixObsBase = latestBaseline
+      this.fixObsAck = ackCursor
+      this.fixObsBase = baseline
     }
+    // Stale-baseline prevention and monotonicity: only ack if persisted still equals baseline and baseline <= ack
     try {
       const curNow = this.coordinator.getPersistedCursor()
-      if (curNow === undefined || curNow !== latestBaseline || curNow > latestAck) return
+      if (curNow === undefined || curNow !== baseline || curNow > ackCursor) return
     } catch {
       return
     }
     try {
-      await this.coordinator.ack(latestAck)
+      await this.coordinator.ack(ackCursor)
+    } catch {}
+  }
+
+  private scheduleTrailingChangedRefresh(): void {
+    const panel = this.panel
+    if (!panel || !panel.visible) return
+    if (!this.coordinator) return
+    if (!this.hydrated) return
+    const gen = this.generation
+    const sessions = panel.sessions
+    if (!sessions) return
+    if (this.refreshPromise && this.refreshGen === gen && this.refreshSessions === sessions) return
+    const p = this.doTrailingChangedObservationRefresh(gen, sessions).finally(() => {
+      if (this.refreshPromise === p) {
+        this.refreshPromise = null
+        this.refreshGen = null
+        this.refreshSessions = null
+      }
+      if (this.pendingChangedTrailing) {
+        this.pendingChangedTrailing = false
+        this.scheduleTrailingChangedRefresh()
+      }
+    })
+    this.refreshPromise = p
+    this.refreshGen = gen
+    this.refreshSessions = sessions
+    void this.trackOwned(p)
+  }
+
+  private async doTrailingChangedObservationRefresh(gen: number, sessions: PanelContext["sessions"]): Promise<void> {
+    if (this.generation !== gen || this.panel?.sessions !== sessions) return
+    if (!this.coordinator) return
+    if (isE2EFixtureEnabled()) {
+      this.fixObsCount++
+      this.fixObsAt = Date.now()
+    }
+    const baseline = this.coordinator.getPersistedCursor()
+    if (baseline === undefined) return
+    let readRaw: unknown
+    try {
+      readRaw = await this.coordinator.readRaw(baseline)
+    } catch {
+      readRaw = undefined
+    }
+    let readDecision: { shouldRefresh: boolean; ackCursor?: number } = { shouldRefresh: true }
+    if (readRaw !== undefined) {
+      try {
+        const r = this.coordinator.decideFromReadResultWithValidity(readRaw, baseline)
+        readDecision = r.decision
+      } catch {
+        readDecision = { shouldRefresh: true }
+      }
+    } else {
+      readDecision = { shouldRefresh: true }
+    }
+    if (!readDecision.shouldRefresh) return
+    try {
+      await sessions.refreshSessions()
+    } catch {
+      return
+    }
+    if (this.generation !== gen || this.panel?.sessions !== sessions) return
+    void this.fetchRecentOps([...(this.managedSessions?.keys() ?? []), ...(this.activeSessionId ? [this.activeSessionId] : [])]).then(() => this.pushState()).catch(() => {})
+    const ackCursor = readDecision.ackCursor
+    if (ackCursor === undefined) return
+    if (isE2EFixtureEnabled()) {
+      this.fixObsAck = ackCursor
+      this.fixObsBase = baseline
+    }
+    try {
+      const curNow = this.coordinator.getPersistedCursor()
+      if (curNow === undefined || curNow !== baseline || curNow > ackCursor) return
+    } catch {
+      return
+    }
+    try {
+      await this.coordinator.ack(ackCursor)
     } catch {}
   }
 
