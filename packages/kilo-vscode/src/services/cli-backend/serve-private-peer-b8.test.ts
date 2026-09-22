@@ -19,6 +19,15 @@ import {
   type ChildrenParityConnection,
 } from "../../kilo-provider/session-children-parity"
 
+function canonicalFixtureDir(p: string): string {
+  try {
+    return require("node:fs").realpathSync(p)
+  } catch {
+    return p
+  }
+}
+const CANONICAL_FIXTURE_DIR = canonicalFixtureDir("/tmp")
+
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
   const toClient = new PassThrough()
   const toBackend = new PassThrough()
@@ -1103,6 +1112,7 @@ describe("B8 session/children private peer", () => {
     })
     const invalid = () => ({ id: 2, promise: Promise.resolve({ kind: "invalid", detail: "bad" }) })
     async function snapWith(statusImpl: (req: never) => unknown, sdkImpl: () => Promise<unknown>, dir = "/tmp") {
+      const expectedDir = canonicalFixtureDir(dir)
       const observed: string[] = []
       let calls = 0
       const fakeClient = {
@@ -1110,7 +1120,7 @@ describe("B8 session/children private peer", () => {
           list: async () => ({ data: [{ id: PARENT, title: "p", agent: null, model: null, parentID: null, time: { created: 1, updated: 2 } }] }),
           status: async (params: { directory: string }) => {
             calls += 1
-            expect(params.directory).toBe(dir)
+            expect(params.directory).toBe(expectedDir)
             return sdkImpl()
           },
           messages: async () => ({ data: [] }),
@@ -2297,28 +2307,28 @@ describe("fixture backendSnapshot agent/provider/permission/question private-fir
       app: {
         agents: async (params: { directory: string }) => {
           sdk.agents += 1
-          expect(params.directory).toBe("/tmp")
+          expect(params.directory).toBe(CANONICAL_FIXTURE_DIR)
           return { data: [agentEntry("sdk-agent")] }
         },
       },
       provider: {
         catalog: async (params: { directory: string }) => {
           sdk.catalog += 1
-          expect(params.directory).toBe("/tmp")
+          expect(params.directory).toBe(CANONICAL_FIXTURE_DIR)
           return { data: catalogOk(["sdk-provider"]) }
         },
       },
       permission: {
         list: async (params: { directory: string }) => {
           sdk.perm += 1
-          expect(params.directory).toBe("/tmp")
+          expect(params.directory).toBe(CANONICAL_FIXTURE_DIR)
           return { data: [permEntry("per_sdk00000000000000001")], error: undefined }
         },
       },
       question: {
         list: async (params: { directory: string }) => {
           sdk.question += 1
-          expect(params.directory).toBe("/tmp")
+          expect(params.directory).toBe(CANONICAL_FIXTURE_DIR)
           return { data: [questionEntry("que_sdk00000000000000001")], error: undefined }
         },
       },
