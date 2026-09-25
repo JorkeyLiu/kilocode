@@ -30,7 +30,7 @@ This repository is independently governed. There is no upstream merge stream and
 - **Effect facade ratchet**: Do not add runtime-backed Promise facades to shared `packages/opencode/src` Effect services; use service dependencies, `AppRuntime`, or Kilo-owned boundaries. Run `bun run script/check-opencode-promise-facades.ts` when touching service adapters.
 - **workflow allowlist**: `bun run script/check-workflows.ts` from repo root. CI runs this in the repository-guards workflow — any `.yml` / `.yaml` file added to or removed from `.github/workflows/` must be reflected in the hardcoded list in `script/check-workflows.ts`. Prevents unvetted workflows from silently running with repository privileges in CI.
 - **Architecture docs impact**: Changing system boundaries, state ownership, lifecycle, persistence, concurrency, public protocol, config application semantics, a cross-client contract, or a guard/workflow model requires assessing the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md) and, for high-impact changes with a PR, a `## Documentation Impact` declaration in the PR body. When a change may touch those areas, or when preparing a commit, inspect the relevant diff and run `bun run script/check-architecture-impact.ts --worktree` from the repo root as guidance — see [Documentation impact governance](packages/kilo-docs/pages/contributing/architecture/index.md#documentation-impact-governance). Pure investigation and ordinary no-impact tasks need no check and no report.
-- **Backend/SDK programmatic testing**: see [TESTING.md](./TESTING.md) for spawning the local main-branch backend (`bun dev serve`) and driving it via `curl` — use this instead of `kilo serve` (prod binary) when testing backend fixes.
+- **Backend/SDK programmatic testing**: see [TESTING.md](./TESTING.md) for spawning the local source backend (`bun dev serve`) and driving it via `curl` — there is no public `kilo` binary.
 
 ## Runtime Conventions
 
@@ -105,16 +105,16 @@ investigation and ordinary no-impact tasks need no check and no report.
 
 ## Products
 
-All products are clients of the **CLI** (`packages/opencode/`), which contains the AI agent runtime, HTTP server, and session management. Each client spawns or connects to a `kilo serve` process and communicates via HTTP + SSE using `@kilocode/sdk`.
+The user product is the **Kilo VS Code extension** (`packages/kilo-vscode/`). The backend source (`packages/opencode/`) ships only the private `bin/kilo-serve` server binary — no public `bin/kilo` binary; full CLI/TUI source is retained only for dev and SDK generation. The extension owns one private `bin/kilo-serve serve --port 0` child (`KILO_PRIVATE_RUNTIME=1`, loopback `127.0.0.1` ephemeral port, `KILO_SERVER_PASSWORD` required) and drives it via the generated SDK over internal HTTP + SSE in the same process.
 
 | Product | Package | Description |
 |---|---|---|
-| Kilo CLI | `packages/opencode/` | Core engine. TUI, `kilo run`, `kilo serve`. Originated from OpenCode; independently governed. |
-| Kilo VS Code Extension | `packages/kilo-vscode/` | VS Code extension with Agent Manager (only chat UI). Bundles the CLI binary, spawns `kilo serve` as a child process. Ordinary webview bundle may still serve settings/profile surfaces (not chat). Includes the **Agent Manager** — a multi-session orchestration panel running concurrent root-local sessions. |
+| Kilo VS Code Extension | `packages/kilo-vscode/` | Supported user product with Agent Manager (only chat UI). Ships the private `bin/kilo-serve` binary, spawns `bin/kilo-serve serve --port 0` as a child process. Ordinary webview bundle may still serve settings/profile surfaces (not chat). Includes the **Agent Manager** — a multi-session orchestration panel running concurrent root-local sessions. |
+| Kilo backend source | `packages/opencode/` | Agent runtime, tools, sessions, and server source. Builds only `bin/kilo-serve`; full CLI/TUI entries are source-only dev/SDK-generation internals. Originated from OpenCode; independently governed. |
 
 **Agent Manager** refers to a feature inside `packages/kilo-vscode/` (extension code in `src/agent-manager/`, webview in `webview-ui/agent-manager/`). It is the only chat UI; internal session sidebar/tabs/terminals/navigation/persistence/hydration retained. See the extension's `AGENTS.md` for details.
 
-In each VS Code extension host, one `KiloConnectionService` is created for Agent Manager (only chat UI) and lazily reuses one current `kilo serve` backend at a time. Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
+In each VS Code extension host, one `KiloConnectionService` is created for Agent Manager (only chat UI) and lazily reuses one current `bin/kilo-serve serve --port 0` backend at a time. Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
 
 Extension-specific settings should live in the Kilo extension settings, not default VS Code settings, unless they are intentionally VS Code-wide. Experimental flags should follow existing flag patterns, not VS Code settings; they usually belong in the Kilo Experimental settings section.
 
@@ -124,7 +124,7 @@ Turborepo + Bun workspaces. The packages you'll work with most:
 
 | Package | Name | Purpose |
 |---|---|---|
-| `packages/opencode/` | `@kilocode/cli` | Core CLI -- agents, tools, sessions, server, TUI. This is where most work happens. |
+| `packages/opencode/` | `@kilocode/cli` | Backend source -- agents, tools, sessions, server. Ships only `bin/kilo-serve`; full CLI/TUI entries are source-only dev/SDK-generation internals. |
 | `packages/sdk/js/` | `@kilocode/sdk` | Auto-generated TypeScript SDK (client for the server API). Do not edit `src/gen/` by hand. |
 | `packages/kilo-vscode/` | `kilo-code` | VS Code extension with Agent Manager (only chat UI; ordinary webview bundle may still serve settings/profile, not chat). See its own `AGENTS.md` for details. |
 | `packages/kilo-gateway/` | `@kilocode/kilo-gateway` | Kilo auth, provider routing, API integration |
@@ -195,15 +195,15 @@ Do not pad markdown table cells for column alignment. Use the compact form with 
 ```
 | Command | What it runs |
 |---|---|
-| `kilo serve` | The prod CLI on `$PATH`. |
+| `bun run typecheck` | Typechecks workspace packages. |
 ```
 
 Do **not** right-pad cells to line up columns:
 
 ```
-| Command                       | What it runs             |
-| ----------------------------- | ------------------------ |
-| `kilo serve`                  | The prod CLI on `$PATH`. |
+| Command               | What it runs                |
+| --------------------- | --------------------------- |
+| `bun run typecheck`   | Typechecks workspace packages. |
 ```
 
 Padding makes every content change rewrite the entire table, which blows up diffs on untouched rows. Markdown files are excluded from prettier (see `.prettierignore`) so running the formatter won't re-pad them, and `script/check-md-table-padding.ts` enforces the rule in CI. Run `bun run script/check-md-table-padding.ts --fix` to auto-rewrite padded tables.

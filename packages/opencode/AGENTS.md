@@ -63,15 +63,15 @@ The MCP `StdioClientTransport` (third-party SDK) is handled separately via a pro
 
 ## Storage
 
-Filesystem-based JSON, not a database. Data lives in `~/.local/share/kilo/storage/`. Keys are path arrays: `Storage.write(["session", projectID, sessionID], data)`.
+Canonical session storage is SQLite, not filesystem JSON. The database lives at `Database.path()` (`KILO_DB` override, `:memory:` for hermetic runs). The canonical identity is the single-row `storage_identity` table (uuid / schema_version / cutover_archive_id); session state lives in the session/message/part tables plus the `session_changefeed` (+ state) tables. `JsonMigration.bootstrap()` (in `src/kilocode/storage/json-migration.ts`, run before the AppRuntime database initializes) is legacy bootstrap only: it imports the old `~/.local/share/kilo/storage/` JSON once, is skipped whenever canonical `storage_identity` already exists (never reimports after canonical), and fails closed on a malformed canonical identity.
 
-## TUI
+## TUI / full CLI (source-only dev)
 
-Built with **SolidJS + OpenTUI** (`@opentui/solid`) -- a terminal UI framework. JSX renders to the terminal using elements like `<box>`, `<text>`, `<scrollbox>`. The TUI communicates with the server via `@kilocode/sdk`.
+The full CLI entry (`src/index.ts`, including the SolidJS + OpenTUI TUI tree) is retained source-only for `bun` dev and SDK generation — it is not compiled, not published, and not shipped. The only build output is the serve-only `bin/kilo-serve` backend from `src/serve-entry.ts` (see `script/build.ts`). The TUI communicates with the server via `@kilocode/sdk`.
 
 ## Server
 
-Hono-based HTTP server with OpenAPI spec generation. SSE for real-time events. When you add/change routes, regenerate the SDK (see root AGENTS.md for the command).
+Effect-based HTTP server (`HttpRouter` + `NodeHttpServer` layer in `src/server/server.ts`) with OpenAPI spec generation. SSE for real-time events. When you add/change routes, regenerate the SDK (see root AGENTS.md for the command). The extension's private child (`KILO_PRIVATE_RUNTIME=1`) forces loopback `127.0.0.1`, ephemeral port `0`, and no mDNS/CORS before any bind, and requires `KILO_SERVER_PASSWORD` (see `src/cli/network.ts`, `src/server/server.ts`, `src/cli/cmd/serve.ts`).
 
 ## Config lifecycle
 

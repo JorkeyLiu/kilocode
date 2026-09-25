@@ -4,33 +4,33 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Product Context
 
-Kilo Code is an open source AI coding agent platform. It ships as a CLI and editor clients that all build on the same backend. This package (`packages/kilo-vscode/`) is the **VS Code extension**.
+Kilo Code is an open source AI coding agent platform. It ships as the VS Code extension backed by an internal serve-only backend. This package (`packages/kilo-vscode/`) is the **VS Code extension**.
 
 ### Products and How They Relate
 
-All products are thin clients over the **CLI** (`packages/opencode/`, published as `@kilocode/cli`). The CLI originated as a fork of [OpenCode](https://github.com/anomalyco/opencode) and is now independently governed, with Kilo-specific additions (gateway auth, telemetry, migration, code review, branding). It contains the full AI agent runtime, tool execution, session management, provider integrations (500+ models), and an HTTP API server.
+The backend source (`packages/opencode/`) is an internal runtime, not a published client. It originated as a fork of [OpenCode](https://github.com/anomalyco/opencode) and is now independently governed, with Kilo-specific additions (gateway auth, telemetry, migration, code review, branding). It contains the full AI agent runtime, tool execution, session management, provider integrations (500+ models), and an HTTP API server. The full CLI/TUI entry (`src/index.ts`) is retained source-only for dev and SDK generation; the only compiled output is the serve-only `bin/kilo-serve` backend (`src/serve-entry.ts`), which the extension bundles per platform into the VSIX.
 
-Every client spawns or connects to a `kilo serve` process and communicates via HTTP REST + SSE using the auto-generated `@kilocode/sdk`.
+The extension stages, bundles, and starts `bin/kilo-serve` as its private child (`kilo-serve serve --port 0` with `KILO_PRIVATE_RUNTIME=1`) and communicates via HTTP REST + SSE using the auto-generated `@kilocode/sdk`.
 
 ```
-                        @kilocode/cli  (packages/opencode/)
+                        backend source  (packages/opencode/)
                      ┌────────────────────────────────┐
                      │  AI agents, tools, sessions,    │
                      │  providers, config, MCP, LSP    │
-                     │  Hono HTTP server + SSE         │
+                     │  Effect HttpServer + SSE        │
                      └──┬──────────┬──────────────────┘
                         │          │
                 ┌───────┴──┐ ┌────┴────┐
-                │ TUI      │ │ VS Code │
-                │ (builtin)│ │Extension│
+                │ TUI/full │ │ VS Code │
+                │ CLI(src- │ │Extension│
+                │ only dev)│ │         │
                 └──────────┘ └─────────┘
 ```
 
-| Product | Package | What it is | How it uses the CLI |
+| Product | Package | What it is | How it uses the backend |
 |---|---|---|---|
-| Kilo CLI (TUI) | `packages/opencode/` | Interactive terminal UI (SolidJS + OpenTUI) | In-process — TUI and server run together |
-| Kilo CLI (`kilo run`) | `packages/opencode/` | Non-interactive headless mode for scripting | In-process — no network socket |
-| **Kilo VS Code Extension** | **`packages/kilo-vscode/`** | VS Code extension with Agent Manager (only chat UI). Ordinary webview bundle may still serve settings/profile (not chat) | Bundles CLI binary, spawns `kilo serve --port 0` as child process |
+| Kilo TUI / full CLI | `packages/opencode/` (`src/index.ts`) | Source-only dev entry (SolidJS + OpenTUI TUI, `run` headless mode). Not compiled, not published, not shipped | Dev-only — never a production client of the extension backend |
+| **Kilo VS Code Extension** | **`packages/kilo-vscode/`** | VS Code extension with Agent Manager (only chat UI). Ordinary webview bundle may still serve settings/profile (not chat) | Stages/bundles/starts serve-only `bin/kilo-serve`, spawns `kilo-serve serve --port 0` as private child (`KILO_PRIVATE_RUNTIME=1`, loopback, `KILO_SERVER_PASSWORD`) |
 
 ### Kilo-Domain Packages
 
@@ -39,7 +39,7 @@ Every client spawns or connects to a `kilo serve` process and communicates via H
 | `packages/kilo-vscode/` | `kilo-code` | **This package.** VS Code extension. |
 | `packages/kilo-gateway/` | `@kilocode/kilo-gateway` | Auth (device flow), AI provider routing (OpenRouter), Kilo API integration (profile, balance, teams) |
 | `packages/kilo-ui/` | `@kilocode/kilo-ui` | SolidJS component library (40+ components, built on `@kobalte/core`). Shared by this extension's webview and docs screenshot stories |
-| `packages/kilo-telemetry/` | `@kilocode/kilo-telemetry` | PostHog analytics + OpenTelemetry tracing for the CLI |
+| `packages/kilo-telemetry/` | `@kilocode/kilo-telemetry` | PostHog analytics + OpenTelemetry tracing for the backend |
 | `packages/kilo-i18n/` | `@kilocode/kilo-i18n` | Translation strings (16 languages) |
 | `packages/kilo-docs/` | `@kilocode/kilo-docs` | Documentation site (Next.js + Markdoc) |
 
@@ -47,7 +47,7 @@ Every client spawns or connects to a `kilo serve` process and communicates via H
 
 | Package | Name | Role |
 |---|---|---|
-| `packages/opencode/` | `@kilocode/cli` | Core CLI — originated from OpenCode. AI agents, tools, sessions, server. |
+| `packages/opencode/` | `@kilocode/cli` | Backend source (workspace package name only) — originated from OpenCode. AI agents, tools, sessions, server. Only `bin/kilo-serve` is shipped. |
 | `packages/sdk/js/` | `@kilocode/sdk` | Auto-generated TypeScript SDK client for the server API. Do not edit `src/gen/` by hand. |
 | `packages/ui/` | `@opencode-ai/ui` | Shared UI primitives |
 | `packages/util/` | `@opencode-ai/util` | Shared utilities (error, path, retry, slug) |
@@ -84,7 +84,7 @@ Mandatory rules:
 
 ## CLI Binary
 
-The extension bundles its own CLI binary at `bin/kilo` — it does NOT use a system-installed CLI. To build it:
+The extension bundles and starts its own serve-only backend at `bin/kilo-serve` (`kilo-serve.exe` on Windows) — it does NOT use a system-installed CLI, and there is no public `bin/kilo` binary. To stage it for dev:
 
 ```bash
 bun script/local-bin.ts
@@ -96,7 +96,7 @@ Or use `--force` to rebuild:
 bun script/local-bin.ts --force
 ```
 
-The script checks for a prebuilt binary in `packages/opencode/dist/`, builds the CLI if needed, and copies it to `bin/kilo`.
+The script stages serve-only `bin/kilo-serve`: it reuses the binary when already staged with resources, else locates a prebuilt `kilo-serve` under `packages/opencode/dist/**/bin/`, else builds it via the opencode serve-only build, else falls back to a source wrapper proxying `src/serve-entry.ts`. Any stale `bin/kilo` from previous full-binary staging is removed.
 
 ### Packaging a Distributable VSIX
 
@@ -112,23 +112,25 @@ bun run package:vsix -- --target <target>
 
 ### Extension ↔ CLI Backend
 
-The extension is a client of the CLI. Activation creates one shared `KiloConnectionService`; on its first connection, `ServerManager` spawns `bin/kilo serve --port 0`, captures the dynamically assigned port from stdout, and communicates over HTTP + SSE. The current child process is reused unless it exits. A random password is generated and passed via `KILO_SERVER_PASSWORD` env var for basic auth.
+The extension is a client of the internal backend. Activation creates one shared `KiloConnectionService`; on its first connection, `ServerManager` spawns `bin/kilo-serve serve --port 0`, captures the dynamically assigned port from stdout, and communicates over HTTP + SSE. The current child process is reused unless it exits. A random password is generated and passed via `KILO_SERVER_PASSWORD` env var for basic auth. The serve child always runs with `KILO_PRIVATE_RUNTIME=1`, which forces loopback `127.0.0.1`, ephemeral port `0`, and no mDNS/CORS before any bind, and requires `KILO_SERVER_PASSWORD`.
 
 ```
-Extension (Node.js)                          CLI Backend (child process)
+Extension (Node.js)                          Backend (private child process)
 ┌──────────────────────────┐                ┌──────────────────────┐
-│ KiloConnectionService    │── HTTP/SSE ──> │ kilo serve --port 0  │
-│   ├── ServerManager      │                │   Hono REST API      │
-│   ├── HttpClient         │                │   SSE event stream   │
-│   └── SSEClient          │                │   Session management │
+│ KiloConnectionService    │── HTTP/SSE ──> │ kilo-serve serve     │
+│   ├── ServerManager      │                │   --port 0           │
+│   ├── HttpClient         │                │   Effect HttpServer  │
+│   └── SSEClient          │                │   REST API           │
+│                          │                │   SSE event stream   │
+│                          │                │   Session management │
 │                          │                │   AI agent runtime   │
 │ Agent Manager (only chat UI, internal KiloProvider) │                └──────────────────────┘
 └──────────────────────────┘
 ```
 
 - **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared by Agent Manager (the only chat UI). It owns the current server process, HTTP client, and SSE connection.
-- **`ServerManager`** (`src/services/cli-backend/server-manager.ts`) lazily spawns the CLI binary, reuses its current process, and can start a replacement if that process exits.
-- Agent Manager (only chat UI) reuses this connection; its internal session sidebar/tabs/terminals/navigation/persistence are retained. SSE events are filtered per-session via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo serve` processes.
+- **`ServerManager`** (`src/services/cli-backend/server-manager.ts`) lazily spawns the staged serve-only binary (`bin/kilo-serve`, falling back to `bin/kilo` only when the serve entry is absent in dev/older bundles), reuses its current process, and can start a replacement if that process exits.
+- Agent Manager (only chat UI) reuses this connection; its internal session sidebar/tabs/terminals/navigation/persistence are retained. SSE events are filtered per-session via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo-serve serve` processes.
 - Backend state follows where it is allocated, not the panel shown in an editor tab. Snapshot repository state uses directory-keyed `InstanceState`, while `trackState` is created once in the active Snapshot service closure. For these shared VS Code session paths, its slow-track `asked` guard spans the root-local requests; choosing **Continue with snapshots** resets `asked` only when continued tracking returns a snapshot hash.
 
 ### Builds
@@ -182,7 +184,7 @@ The Agent Manager is a feature within this extension (not a separate product). I
 
 ### Architecture
 
-Agent Manager root-local sessions use the current shared `kilo serve` process owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the workspace root as `directory`, which resolves directory-scoped backend state. Terminal PTYs, git subprocesses, and the extension host are separate process or extension-host boundaries, not per-session `kilo serve` instances. Because every session runs in the same workspace directory, concurrent sessions can conflict on file edits; sessions targeting distinct areas of work are the safe pattern.
+Agent Manager root-local sessions use the current shared `kilo-serve serve` private child owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the workspace root as `directory`, which resolves directory-scoped backend state. Terminal PTYs, git subprocesses, and the extension host are separate process or extension-host boundaries, not per-session `kilo-serve serve` instances. Because every session runs in the same workspace directory, concurrent sessions can conflict on file edits; sessions targeting distinct areas of work are the safe pattern.
 
 Extension-side code lives in `src/agent-manager/`, webview code in `webview-ui/agent-manager/`. The webview reuses the shared chat provider chain and `ChatView` component with a root-local tab layout; there is no worktree-mode context provider.
 
@@ -235,7 +237,7 @@ On Windows, any `spawn`/`execFile`/`exec` call that does not set `windowsHide: t
 import { spawn, exec } from "../util/process"
 ```
 
-The `spawn` wrapper covers long-lived processes (e.g. `kilo serve`). The `exec` wrapper covers short commands (e.g. `git`, `tar`). If you need the raw callback form of `execFile` for some reason, pass `windowsHide: true` explicitly in the options object.
+The `spawn` wrapper covers long-lived processes (e.g. `kilo-serve serve`). The `exec` wrapper covers short commands (e.g. `git`, `tar`). If you need the raw callback form of `execFile` for some reason, pass `windowsHide: true` explicitly in the options object.
 
 ## Style
 

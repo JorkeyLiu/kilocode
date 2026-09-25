@@ -26,7 +26,7 @@ rm -f /tmp/kilo-serve.pid /tmp/kilo-serve.log
 
 ## 1. What this doc is for
 
-Testing local backend fixes against a real running server, talking to it over HTTP the same way the VS Code extension, TUI, and `kilo run --attach` do — but without any of those clients. Every request is a `curl` the agent can copy-paste.
+Testing local backend fixes against a real running server, talking to it over HTTP the same way the VS Code extension's private `kilo-serve` child does — but without that client. Every request is a `curl` the agent can copy-paste. (The TUI / full CLI entry is source-only dev, not a test client here.)
 
 For in-process tests (no socket, fastest loop) see `packages/opencode/test/kilocode/server/permission-allow-everything.test.ts` for the `Server.Default().app.request(...)` pattern. That's the right tool inside the `packages/opencode/` test suite; this doc is for out-of-process HTTP testing.
 
@@ -34,15 +34,19 @@ For in-process tests (no socket, fastest loop) see `packages/opencode/test/kiloc
 
 | Command | What it runs |
 |---|---|
-| `kilo serve` | The npm-installed production CLI on `$PATH`. **Not the code in this repo.** |
-| `bun dev serve …` (repo root) | The local main-branch backend from this worktree. **This is what you want.** |
-| `bun run --cwd packages/opencode --conditions=browser src/index.ts serve …` | Same as `bun dev serve`, fully expanded. |
+| `kilo serve` | No public npm-installed `kilo` exists. A `kilo` binary on `$PATH` (if any) is a stale/retired name — never this repo's code. Do not use it. |
+| `bun dev serve …` (repo root) | The local main-branch backend from this worktree, via the local source path `bun run --cwd packages/opencode --conditions=browser src/index.ts serve …`. **This is what you want.** |
+| `bun run --cwd packages/opencode --conditions=browser src/index.ts serve …` | Same as `bun dev serve`, fully expanded. The full CLI entry is source-only dev (not compiled/shipped); it is only the local launcher here. |
 
-Root `package.json` defines `"dev"` as the full `bun run --cwd packages/opencode --conditions=browser src/index.ts` invocation, so `bun dev <args>` forwards `<args>` to the local CLI entry point (`packages/opencode/src/index.ts`) without touching the installed binary.
+Root `package.json` defines `"dev"` as the full `bun run --cwd packages/opencode --conditions=browser src/index.ts` invocation, so `bun dev <args>` forwards `<args>` to the local CLI entry point (`packages/opencode/src/index.ts`) without touching any installed binary.
 
 `bun dev` imports the source directly — no rebuild is needed between code edits. Just kill the running server and relaunch.
 
-Do **not** use `createKiloServer()` from `@kilocode/sdk/v2` to test local code: it spawns the PATH `kilo` binary (`packages/sdk/js/src/v2/server.ts:38-136`), which is the wrong tool here.
+Do **not** use `createKiloServer()` from `@kilocode/sdk` / `@kilocode/sdk/v2` to test local code: it still launches the retired `kilo` name on `PATH` (`packages/sdk/js/src/server.ts`, `packages/sdk/js/src/v2/server.ts`) and is currently unsupported for workspace backend testing — it does not run your worktree. Launch `bun dev serve` above instead.
+
+Private runtime note: the extension always spawns its staged serve-only `bin/kilo-serve` child with `KILO_PRIVATE_RUNTIME=1`, which forces loopback `127.0.0.1`, ephemeral port `0`, and no mDNS/CORS, and requires `KILO_SERVER_PASSWORD` (`packages/opencode/src/cli/network.ts`, `src/server/server.ts`). Manual `bun dev serve` runs without those forced semantics unless you set `KILO_PRIVATE_RUNTIME=1` yourself — keep it unset for ordinary local testing so `--port`/`--hostname` behave as passed.
+
+Extension staging note: `bun script/local-bin.ts` (from `packages/kilo-vscode/`) stages the serve-only `bin/kilo-serve` backend (prebuilt `packages/opencode/dist/**/bin/kilo-serve`, else serve-only build, else source-wrapper fallback) and removes stale `bin/kilo`. It is the dev-staging path for the extension backend, not a test launcher.
 
 ## 3. Starting the backend (background)
 
@@ -236,11 +240,11 @@ PORT="$PORT" KILO_SERVER_PASSWORD="$KILO_SERVER_PASSWORD" bun /tmp/probe.ts
 rm /tmp/probe.ts
 ```
 
-Reminder: this script **connects to** the server you launched in Section 3 — it does not start one. `createKiloServer()` from the SDK would spawn the PATH `kilo` binary (production CLI), which defeats the point of testing local code.
+Reminder: this script **connects to** the server you launched in Section 3 — it does not start one. `createKiloServer()` would launch the retired `kilo` name on `PATH` and is currently unsupported for workspace backend testing — do not use it here.
 
 ## 9. Pitfalls
 
-- Running `kilo serve` instead of `bun dev serve` runs the installed prod binary, not your edits.
+- Running `kilo serve` does not test this repo — no public npm-installed `kilo` exists, and any `kilo` on `PATH` is the retired name. Use `bun dev serve` so your edits actually run.
 - Missing `x-kilo-directory` (or `?directory=`) returns `400` from `InstanceMiddleware`.
 - `curl` without `-N` buffers SSE output — you won't see events until the connection closes.
 - Hardcoding port `4096` breaks when a previous run didn't exit cleanly. Parse the log instead.
@@ -302,4 +306,4 @@ Test-only debugging/failure flags (env-gated, not a public API):
 
 ### Linux E2E workflow (manual dispatch only)
 
-The manual-only `vscode-e2e` workflow (`.github/workflows/vscode-e2e.yml`) runs the identical `bun run test:e2e` entrypoint on Linux under Xvfb and is available only via `workflow_dispatch` — no `push`, `pull_request`, `schedule`, `workflow_call`, hook, or aggregate package script. It validates the requested same-repository branch, resolves it to one immutable commit SHA, and checks out exactly that SHA with `persist-credentials: false`, `fetch-depth: 1`, and `contents: read` only (no repository secrets, no write scopes). The clean checkout runs `bun install` (shared setup action) and builds the extension's bundled CLI with `bun script/local-bin.ts`, with `KILO_SKIP_BUNDLED_BWRAP=1` scoped to that one step: the Linux runner installs no Zig, and the E2E fixture path never invokes sandbox tooling — the production `ServerManager` tolerates a missing local bwrap, so the CLI runs without a bundled bwrap, and release/package validation (`bun run package:vsix`) remains the separate path that stages bundled sandbox resources. The probe then builds the extension/webview bundles and auto-downloads VS Code into `packages/kilo-vscode/.vscode-test/` — proving the harness works from scratch. The VS Code download is cached under a Linux/x64 key tied to the resolved SHA and the extension package manifest, so an executable cache can never be restored across different target commits. Complete E2E stdout/stderr is captured with `set -o pipefail` + `tee` into a runner-owned diagnostics directory and uploaded on failure or cancellation (7-day retention); GitHub hard job cancellation can still prevent later steps, in which case the console log survives only in the Actions UI. Harness scratch and exact-PID cleanup are untouched. Xvfb is verified or installed explicitly, and the job timeout (30 min) bounds the whole run above the harness watchdog (`KILO_E2E_TIMEOUT`). E2E remains never-automatic: triggering the workflow is an explicit, read-only, manual act, and macOS runs stay local-only.
+The manual-only `vscode-e2e` workflow (`.github/workflows/vscode-e2e.yml`) runs the identical `bun run test:e2e` entrypoint on Linux under Xvfb and is available only via `workflow_dispatch` — no `push`, `pull_request`, `schedule`, `workflow_call`, hook, or aggregate package script. It validates the requested same-repository branch, resolves it to one immutable commit SHA, and checks out exactly that SHA with `persist-credentials: false`, `fetch-depth: 1`, and `contents: read` only (no repository secrets, no write scopes). The clean checkout runs `bun install` (shared setup action) and stages the extension's serve-only backend with `bun script/local-bin.ts` (produces `bin/kilo-serve`; stale `bin/kilo` is removed), with `KILO_SKIP_BUNDLED_BWRAP=1` scoped to that one step: the Linux runner installs no Zig, and the E2E fixture path never invokes sandbox tooling — the production `ServerManager` tolerates a missing local bwrap, so the CLI runs without a bundled bwrap, and release/package validation (`bun run package:vsix`) remains the separate path that stages bundled sandbox resources. The probe then builds the extension/webview bundles and auto-downloads VS Code into `packages/kilo-vscode/.vscode-test/` — proving the harness works from scratch. The VS Code download is cached under a Linux/x64 key tied to the resolved SHA and the extension package manifest, so an executable cache can never be restored across different target commits. Complete E2E stdout/stderr is captured with `set -o pipefail` + `tee` into a runner-owned diagnostics directory and uploaded on failure or cancellation (7-day retention); GitHub hard job cancellation can still prevent later steps, in which case the console log survives only in the Actions UI. Harness scratch and exact-PID cleanup are untouched. Xvfb is verified or installed explicitly, and the job timeout (30 min) bounds the whole run above the harness watchdog (`KILO_E2E_TIMEOUT`). E2E remains never-automatic: triggering the workflow is an explicit, read-only, manual act, and macOS runs stay local-only.
