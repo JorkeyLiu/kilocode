@@ -6,11 +6,10 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">Open source'owy agent kodujący do pracy z AI w VS Code lub CLI.</p>
+<p align="center">Open source'owy agent kodujący do pracy z AI w VS Code.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
-  <a href="https://www.npmjs.com/package/@kilocode/cli"><img alt="npm" src="https://raster.shields.io/npm/v/@kilocode/cli?style=flat" height="20" /></a>
   <a href="https://x.com/kilocode"><img src="https://raster.shields.io/badge/kilocode-000000?style=flat&logo=x&logoColor=white" alt="X (Twitter)" height="20"></a>
   <a href="https://blog.kilo.ai"><img src="https://raster.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Blog" height="20"></a>
   <a href="https://kilo.ai/discord"><img src="https://raster.shields.io/badge/Join%20Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" height="20"></a>
@@ -21,7 +20,7 @@
 
 ---
 
-Kilo Code to agent kodujący z AI, który działa wszędzie tam, gdzie pracujesz: w [VS Code](https://kilo.ai/landing/vs-code) i [CLI](https://kilo.ai/cli). Jest open source i ma otwarte ceny. Wybierasz spośród ponad 500 modeli, przełączasz się między nimi w trakcie zadania i płacisz stawkę dostawcy modelu bez narzutów. Do rozpoczęcia nie są wymagane klucze API.
+Kilo Code to agent kodujący z AI, który działa wszędzie tam, gdzie pracujesz: w [VS Code](https://kilo.ai/landing/vs-code). Jest open source i ma otwarte ceny. Wybierasz spośród ponad 500 modeli, przełączasz się między nimi w trakcie zadania i płacisz stawkę dostawcy modelu bez narzutów. Do rozpoczęcia nie są wymagane klucze API.
 
 ### Instalacja
 
@@ -33,70 +32,6 @@ Wybierz, gdzie chcesz uruchomić Kilo.
 <br>
 
 Zainstaluj bezpośrednio [rozszerzenie Kilo Code](vscode:extension/kilocode.kilo-code) albo pobierz je z [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code). Utwórz konto, a otrzymasz dostęp do ponad 500 modeli, w tym GPT-5.5, Claude Opus 4.7, Claude Sonnet 4.6 i Gemini 3.1 Pro Preview, wszystkie w cenach dostawców.
-
-</details>
-
-<details open>
-<summary><strong>CLI</strong></summary>
-
-<br>
-
-```bash
-# npm
-npm install -g @kilocode/cli
-
-# curl
-curl -fsSL https://kilo.ai/cli/install | bash
-
-# pnpm
-pnpm add -g @kilocode/cli
-
-# bun
-bun add -g @kilocode/cli
-
-# Homebrew (macOS / Linux)
-brew install Kilo-Org/tap/kilo
-
-# Arch Linux (AUR)
-paru -S kilo-bin
-```
-
-Następnie uruchom `kilo` w dowolnym katalogu projektu.
-
-</details>
-
-<details>
-<summary><strong>Cloud Agent</strong></summary>
-
-<br>
-
-Uruchom Kilo z poziomu przeglądarki, bez lokalnej maszyny, na [app.kilo.ai/cloud](https://app.kilo.ai/cloud).
-
-</details>
-
-<details>
-<summary><strong>Przeglądy kodu</strong></summary>
-
-<br>
-
-Skonfiguruj automatyczne przeglądy kodu AI dla swoich pull requestów na [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary>Zainstaluj CLI z GitHub Releases (pliki binarne)</summary>
-
-Pobierz najnowszy plik binarny ze [strony Releases](https://github.com/Kilo-Org/kilocode/releases).
-
-| Platforma | Zasób |
-|---|---|
-| Windows (większość PC) | `kilo-windows-x64.zip` |
-| macOS (Apple Silicon) | `kilo-darwin-arm64.zip` |
-| macOS (Intel) | `kilo-darwin-x64.zip` |
-| Linux x64 | `kilo-linux-x64.tar.gz` |
-| Linux ARM | `kilo-linux-arm64.tar.gz` |
-
-Uwagi: `x64-baseline` to build zgodności dla starszych CPU bez AVX. `musl` to statycznie linkowany build dla Alpine lub minimalnych obrazów Docker bez glibc. `kilo-vscode-*.vsix` to pakiet rozszerzenia VS Code, nie CLI. Archiwa `Source code` służą do budowania ze źródeł.
 
 </details>
 
@@ -121,15 +56,6 @@ Dowiedz się więcej o [agents i niestandardowych agents](https://kilo.ai/docs/c
 - **Configuration MCP** do znajdowania i podłączania serwerów MCP rozszerzających możliwości agenta.
 - **Ponad 500 modeli** z przełączaniem w trakcie zadania, aby dopasować opóźnienie, koszt i rozumowanie do pracy.
 
-### Tryb autonomiczny (CI/CD)
-
-Uruchom `kilo run` z `--auto`, aby działać w pełni autonomicznie bez promptów, z myślą o pipeline'ach CI/CD:
-
-```bash
-kilo run --auto "run tests and fix any failures"
-```
-
-`--auto` wyłącza wszystkie pytania o uprawnienia i pozwala agentowi wykonywać dowolne działania bez potwierdzenia. Używaj tylko w zaufanych środowiskach.
 
 ### Dokumentacja
 
@@ -137,7 +63,7 @@ Konfigurację i wszystko inne znajdziesz w [dokumentacji](https://kilo.ai/docs).
 
 ### Wkład
 
-Zapraszamy do wkładu programistów, autorów i wszystkich innych. Zacznij od [Contributing Guide](/CONTRIBUTING.md), aby skonfigurować środowisko, poznać standardy kodowania i sposób otwierania pull requestów. Zobacz [RELEASING.md](../RELEASING.md) dla procesu wydawania rozszerzenia VS Code i CLI.
+Zapraszamy do wkładu programistów, autorów i wszystkich innych. Zacznij od [Contributing Guide](/CONTRIBUTING.md), aby skonfigurować środowisko, poznać standardy kodowania i sposób otwierania pull requestów. Zobacz [RELEASING.md](../RELEASING.md) dla procesu wydawania rozszerzenia VS Code.
 
 Przed zaangażowaniem przeczytaj nasz [Code of Conduct](/CODE_OF_CONDUCT.md).
 

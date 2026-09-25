@@ -71,7 +71,7 @@ console.log("\n🔄 Rebuilding SDK types (ensures dist/ is in sync with server A
 await $`bun run --cwd ${join(import.meta.dir, "..", "..", "sdk", "js")} build`
 
 console.log("\n📦 Compiling extension...")
-await $`bun run check-types`
+await $`bun run check-types:extension`
 await $`bun run lint`
 await $`node ${join(import.meta.dir, "..", "esbuild.js")} --production`
 
@@ -83,32 +83,35 @@ for (const config of targets) {
   }
   mkdirSync(binDir, { recursive: true })
 
-  const sourceBinary = join(cliDistDir, config.cliDir, "bin", config.binary)
-  const targetBinary = join(binDir, config.binary)
   const sourceServe = join(cliDistDir, config.cliDir, "bin", serveBinaryFor(config))
   const targetServe = join(binDir, serveBinaryFor(config))
 
-  if (!existsSync(sourceBinary)) {
-    throw new Error(`CLI binary not found at ${sourceBinary}`)
-  }
   if (!existsSync(sourceServe)) {
     throw new Error(`Serve CLI binary not found at ${sourceServe}`)
   }
 
-  console.log(`  📥 Copying binary from ${config.cliDir}/bin/${config.binary}...`)
-  await $`cp ${sourceBinary} ${targetBinary}`
   console.log(`  📥 Copying serve binary from ${config.cliDir}/bin/${serveBinaryFor(config)}...`)
   await $`cp ${sourceServe} ${targetServe}`
-  await copyTreeSitterResources(sourceBinary, targetBinary)
-  await copySandboxResources(sourceBinary, targetBinary)
-  await copyKiloSandboxWorker(sourceBinary, targetBinary)
+  await copyTreeSitterResources(sourceServe, targetServe)
+  await copySandboxResources(sourceServe, targetServe)
+  await copyKiloSandboxWorker(sourceServe, targetServe)
 
-  if (config.binary !== "kilo.exe") {
-    chmodSync(targetBinary, 0o755)
+  if (serveBinaryFor(config) !== "kilo-serve.exe") {
     chmodSync(targetServe, 0o755)
   }
 
-  console.log(`  ✅ Binary ready at ${targetBinary}`)
+  console.log(`  ✅ Binary ready at ${targetServe}`)
+
+  // Serve-only VSIX: ensure no stale full CLI binary is staged and thus
+  // packaged via `!bin/**` in .vscodeignore. Only remove owned files inside
+  // the staged extension bin dir; never touch a user CLI outside it.
+  for (const stale of [config.binary, config.binary === "kilo.exe" ? "kilo" : "kilo.exe"]) {
+    const p = join(binDir, stale)
+    if (existsSync(p)) {
+      rmSync(p, { force: true })
+      console.log(`  🧹 Removed stale full CLI ${stale} (serve-only VSIX)`)
+    }
+  }
 
   console.log("Adding bundled FFmpeg helper...")
   await ensureFfmpegForTarget(config.target, binDir)
@@ -120,7 +123,7 @@ for (const config of targets) {
   const vsixPath = join(outDir, `kilo-vscode-${config.target}.vsix`)
   const args = ["--no-dependencies", "--skip-license", "--target", config.target, "-o", vsixPath]
   if (prerelease) args.push("--pre-release")
-  await $`vsce package ${args}`.env({
+  await $`bunx vsce package ${args}`.env({
     ...process.env,
     npm_config_ignore_scripts: "true",
   })

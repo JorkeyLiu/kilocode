@@ -5,7 +5,7 @@ description: "Architecture of the Kilo CLI runtime, daemon, server, config updat
 
 # CLI Runtime Architecture
 
-The CLI (`packages/opencode/`) is Kilo Code's local agent engine. It owns agent execution, tools, sessions, provider integration, configuration, local persistence, directory routing, and HTTP surfaces used by editor clients.
+The CLI (`packages/opencode/`) is Kilo Code's local agent engine source. It owns agent execution, tools, sessions, provider integration, configuration, local persistence, directory routing, and HTTP surfaces used by the VS Code extension. Full `bin/kilo` CLI/TUI, `kilo run`, and daemon entries are source-only dev/test internals with no public release; the supported runtime is the VS Code-packaged private `bin/kilo-serve` server owned by the VS Code extension.
 
 {% callout type="info" title="Scope" %}
 This page describes repository-defined local runtime behavior. It is not an endpoint catalog or a statement about cloud deployment configuration.
@@ -34,25 +34,25 @@ One `kilo serve` process can host several local runtime instances. Directory-key
 
 | Entry point | Command or caller | Runtime model |
 |---|---|---|
-| Interactive TUI | `kilo` | Attaches to local daemon when available; otherwise starts Bun worker and sends SDK-shaped requests over RPC |
-| Headless run | `kilo run` | Uses daemon attach when available, then embedded server fetch fallback |
-| Attached run | `kilo run --attach <url>` | Targets explicit running `kilo serve` server |
-| Explicit API server | `kilo serve` | Starts HTTP + SSE server for external local clients |
-| Local daemon | `kilo daemon start` | Starts detached `kilo serve` child for reuse |
-| Editor-spawned server | VS Code client | Starts bundled `kilo serve --port 0` child owned by editor client, not local daemon manager |
+| Interactive TUI (source-only dev/test, no public release) | `kilo` | Source-retained attach to local daemon when available; otherwise starts Bun worker and sends SDK-shaped requests over RPC |
+| Headless run (source-only dev/test, no public release) | `kilo run` | Source-retained daemon attach when available, then embedded server fetch fallback |
+| Attached run (source-only dev/test, no public release) | `kilo run --attach <url>` | Source-retained explicit running `kilo serve` server target |
+| Explicit API server source entry (dev/test internal) | `kilo serve` | Source HTTP + SSE server entry for local dev/test clients; supported only as the VS Code-packaged private `kilo-serve` server |
+| Local daemon (source-only dev/test, no public release) | `kilo daemon start` | Source-retained detached `kilo serve` child for reuse |
+| Editor-spawned server (supported product, VS Code private owner) | VS Code client | Starts bundled `bin/kilo-serve serve --port 0` child (prefers `bin/kilo-serve` / `bin/kilo-serve.exe` when staged, falls back to full `bin/kilo` only when serve binary absent; `KILO_PRIVATE_RUNTIME=1` strictly, loopback ephemeral password-required, no mDNS/config network overrides; internal HTTP/SSE still same `AppLayer`); the VS Code extension is the private owner, not local daemon manager |
 
 ```mermaid
 flowchart LR
-  run["kilo run"]
-  tui["kilo TUI"]
-  daemon["Detached daemon: kilo serve"]
+  run["kilo run (source-only dev/test)"]
+  tui["kilo TUI (source-only dev/test)"]
+  daemon["Detached daemon: kilo serve (source-only dev/test)"]
   worker["Bun worker"]
   rpc["RPC-backed fetch and global events"]
   embedded["Embedded Server.Default().app.fetch"]
-  serve["Explicit kilo serve"]
-  editors["VS Code"]
-  editorServer["Editor-owned kilo serve --port 0"]
-  runtime["Kilo CLI runtime"]
+  serve["Explicit kilo serve (source entry)"]
+  editors["VS Code (supported product)"]
+  editorServer["VS Code-owned bin/kilo-serve serve --port 0 (private)"]
+  runtime["Kilo CLI runtime (serve-entry.ts)"]
 
   run -->|"default first choice"| daemon
   run -->|"fallback"| embedded
@@ -110,7 +110,7 @@ Three credential boundaries coexist. Keep them separate when tracing request pat
 
 ### Local `kilo serve` access
 
-Server Basic Auth is optional. It becomes required when `KILO_SERVER_PASSWORD` is non-empty. Default username is `kilo`; `KILO_SERVER_USERNAME` can override it.
+Server Basic Auth is optional. It becomes required when `KILO_SERVER_PASSWORD` is non-empty. Default username is `kilo`; `KILO_SERVER_USERNAME` can override it. VS Code managed child sets `KILO_PRIVATE_RUNTIME=1` strictly (exact `1` only); server requires non-empty `KILO_SERVER_PASSWORD` fail-closed, forces loopback `127.0.0.1` ephemeral `port 0` with no mDNS and ignores config/CLI `hostname`/`port`/`mdns`/`cors`; internal HTTP/SSE remains the same `AppLayer` (no separate private runtime).
 
 | Path or mode | Authentication behavior |
 |---|---|
@@ -120,6 +120,7 @@ Server Basic Auth is optional. It becomes required when `KILO_SERVER_PASSWORD` i
 | PTY ticket issue | Authenticated `POST /pty/{ptyID}/connect-token` requires expected ticket header and allowed origin |
 | PTY ticket connect | `GET /pty/{ptyID}/connect?ticket=...` bypasses Basic middleware, then consumes single-use, scope-bound ticket in PTY handler |
 | PTY shell child | Removes `KILO_SERVER_PASSWORD` and `KILO_SERVER_USERNAME` from spawned user-shell environment |
+| Private legacy sync/warp | Private `KILO_PRIVATE_RUNTIME=1`: canonicalized path (`%`-decode, collapse slashes/dot-segments, lowercase, strip `;` params, reject `%2F`/`%5C`/malformed) → `sync`/`sync/*`/`experimental/workspace/warp`/`api/workspace/warp` = `410 Gone` (`400` if malformed); public mode unchanged |
 
 PTY connect supports two browser-oriented modes: loopback query credential mode (`auth_token`) used by the VS Code Agent Manager path, and short-lived ticket mode exposed by server API.
 
@@ -137,9 +138,9 @@ Provider auth records use `api`, `oauth`, or `wellknown` variants in `${Global.P
 | Stored-credential model discovery | Runtime-owned narrow endpoint `POST /provider/:providerID/models` (same authenticated provider group, `WorkspaceRouting` directory scoping): exact provider ID plus exact stored `baseURL` only, both URLs strictly plain `http(s)` with no userinfo/query/fragment, credential gate mirrors the explicit-read source rules (`api`/`custom` with key, `config` with key plus empty env; `kilo` rejected), `GET <baseURL>/models` with server-side Bearer auth and 15 s timeout, redirects never followed (`manual`; any 3xx rejected), bounded byte-counted streaming body (declared length pre-reject, missing/chunked accumulate to 1 MiB then cancel) with strictly validated `{id,name}[]` (500 models, 256-char ids), redacted `BadRequest`/`Unauthorized`/`InvalidResponse`/`UpstreamError` with no secret persistence or logging; regular provider reads use the redacted catalog below, never this credential path |
 | Redacted provider catalog | Authenticated `GET /provider/catalog` (`provider.catalog`, same provider group `Authorization` + `WorkspaceRouting` + `InstanceContext`): closed `ProviderCatalogResult` envelope (`all,default,connected,failed`) with `CatalogProvider` (`id,name,description?,source,env,metadata?,hasCredential,models`) and `CatalogModel` (`id,providerID,api,name,family?,capabilities,cost,limit,status,release_date,variants?,recommendedIndex?,isFree?,mayTrainOnYourPrompts?,hasUserByokAvailable?,terminalBench?,autoRouting?`); provider `key`/`options` and model `options`/`headers` are never projected, variants keep only canonical safe keys (`enable_thinking,reasoningEffort,effort,thinking,reasoning_split,chat_template_args`), `hasCredential` derives from non-empty runtime key, no secret logging; legacy explicit reveal stays on unchanged `GET /provider` (`provider.list`) for compatibility and is unreachable in production canonical mode |
 
-Preset catalog and models.dev fallback are fully removed. Generic `BUNDLED_PROVIDERS` adapters, `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` helpers, and custom-provider save/delete/auth paths are retained; old CLI/TUI/server/generated-SDK surfaces remain.
+Preset catalog and models.dev fallback are fully removed. Generic `BUNDLED_PROVIDERS` adapters, `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` helpers, and custom-provider save/delete/auth paths are retained; source-only CLI/TUI dev/test server surfaces remain in source only (no public release).
 
-The full capability above is CLI-runtime scope. The VS Code product surface has a custom-only provider boundary exposing only the custom-provider subset (custom ID plus `baseURL` plus `openai/completions` / `openai/responses` / `anthropic/messages`); VS Code provider OAuth, built-in providers, and Anaconda setup are removed from the VS Code surface with no migration. See [VS Code Extension](/docs/contributing/architecture/vscode-extension#custom-only-provider-boundary) for that product-surface boundary; CLI/TUI scope is unchanged.
+The full capability above is CLI-runtime source scope. The VS Code product surface has a custom-only provider boundary exposing only the custom-provider subset (custom ID plus `baseURL` plus `openai/completions` / `openai/responses` / `anthropic/messages`); VS Code provider OAuth, built-in providers, and Anaconda setup are removed from the VS Code surface with no migration. See [VS Code Extension](/docs/contributing/architecture/vscode-extension#custom-only-provider-boundary) for that product-surface boundary; source-only CLI/TUI dev/test scope is unchanged (no public release).
 
 ### Remote MCP OAuth
 
@@ -232,11 +233,15 @@ SQLite is default structured store.
 | Snapshot v2 journal | See Snapshot v2 journal details below |
 | Operation table | `session_operation` (session-scoped `session_id REFERENCES session(id) ON DELETE CASCADE`, `CHECK` for `op_kind`/`outcome`, indexes on `session_id`/kind/time; stores the full already-redacted `select(record,"persist")` nine-field FailureRecord with identity/session/kind/outcome/time/revision inspectable; not a file artifact, not a new DB/store, not a retry ledger) |
 | Retention tables | `session_changefeed` (bounded payload-free deltas: global monotonic `seq`, `session_id`, `revision`, `kind`, `time`, no FK to `session`, `UNIQUE(session_id, revision, kind)`, 50,000 rows / 64 MiB logical caps), `session_changefeed_state` (singleton `latest_seq` / retained counts), and `retention_obligation` (durable artifact-cleanup obligations) |
-| Legacy migration | On first database creation, CLI runs one-time JSON-to-SQLite migration for projects, sessions, messages, parts, todos, permissions, and shares |
+| Legacy migration | No migration: fresh first-boot directly bootstraps canonical DB in place via `bootstrapFreshStaged` at `dataRoot` under exclusive data-root lease (`INCREMENTAL` auto_vacuum, empty `storage/session_*` dirs checked before identity, `fsyncDir`/`fsyncFile`, no archive, no staged→handoff legacy rename); legacy cutover under same lease stages fresh DB via `bootstrapFreshStaged` with `fsync`'d staged→handoff marker and atomically `rename` legacy→backup then staged→canonical, archiving legacy to sibling `<data-basename>-archive/p4.2/<UTC>-<uuid>/` retained (`core/cutover/archive-path.ts` `deriveArchive`); `probeCanonicalIdentity` (read-only `storage_identity` uuid/schema/archive/autovacuum + single-row via `bun:sqlite` readonly) unconditionally prevents rerun even after new sessions, malformed identity/marker/lease fail closed; post-cutover `JsonMigration.bootstrap` at `Database.path()` is canonical-identity hard stop — even stale `<db>.json-migration` pending does not import, malformed/unreadable DB fail-closed, never deletes pending |
 
 ### Database activation marker gate
 
-Shared `Database.assertNoActivationMarker` in `@opencode-ai/core/database/database.ts` is sourced from the same `.cutover-*.marker.json`/`.rollback-*.marker.json` via `markerPathsForFile` and is fail-closed (`:memory:` bypasses). Writer `Database.layer` and `Database.layerFromPath` acquire the data-root lease first, then run the marker check before opening the DB; failure releases the lease via the finalizer and the DB is not opened. Standalone private observation (`packages/opencode/src/private-worker/standalone-worker.ts` `createStandaloneDeps`) checks before any `layerNoLease`/`ManagedRuntime` creation and remains a no-lease pure observer. Legacy `AppLayer`/session-store authority and runtime/store cutover are unchanged.
+Shared `Database.assertNoActivationMarker` in `@opencode-ai/core/database/database.ts` is sourced from the same `.cutover-*.marker.json`/`.rollback-*.marker.json` via `markerPathsForFile` and is fail-closed (`:memory:` bypasses). One-time pre-serve `__internal-storage-cutover status`/`cutover` via `bin/kilo-serve` Bun hidden command (prefers `bin/kilo-serve` / `bin/kilo-serve.exe` when staged, falls back to full `bin/kilo` only when serve binary absent; `detached:false`, `KILO_PRIVATE_RUNTIME` omitted, 30 s bounded `killDirect`/`SIGKILL` fallback, generation-coherent, `KILO_DB`-derived `dataRoot`) under exclusive data-root lease: hidden `__internal-storage-cutover` is registered in lightweight `serve-entry.ts` (not full `src/index.ts`) and bypasses `KiloBootstrap.bootstrap`/`shutdown` (precise `_[0]==="__internal-storage-cutover"` positional, not `args.includes`) to avoid self-lease; fresh first-boot bootstraps canonical DB in place via `bootstrapFreshStaged` (`INCREMENTAL` auto_vacuum, empty `storage/session_*` dirs checked before identity, `fsyncDir`/`fsyncFile`, no archive); legacy cutover stages fresh DB via `bootstrapFreshStaged` with `fsync`'d staged→handoff marker, atomically `rename` legacy→backup then staged→canonical, and archives legacy to sibling `<data-basename>-archive/p4.2/<UTC>-<uuid>/` retained with no migration; `probeCanonicalIdentity` read-only `storage_identity` uuid/schema/archive/autovacuum + single-row check unconditionally prevents rerun even after new sessions, malformed identity/marker/lease fail closed. Writer `Database.layer` and `Database.layerFromPath` acquire the lease first, then run the marker check before opening the DB; failure releases the lease via finalizer and the DB is not opened. Activation fences no-lease observation (`PrivateObservationService` `canonicalStorageGate` via `ServerManager.ensureCanonicalStorage()` before any `layerNoLease`/`ManagedRuntime` or `initialize()` — `extension.ts` `ensureCanonicalStorage().then(initialize)` with shared singleflight). Standalone private observation (`packages/opencode/src/private-worker/standalone-worker.ts` `createStandaloneDeps`) checks before any `layerNoLease`/`ManagedRuntime` creation and remains a no-lease pure observer; post-cutover `JsonMigration.bootstrap` at `Database.path()` is canonical-identity hard stop even with stale `<db>.json-migration` pending, malformed/unreadable fail-closed. `AppLayer` is still the same single `kilo-serve` child (no separate private headless runtime; private fd carrier and observation notification route into same `AppLayer` dispatch). `ServerManager.resolveHiddenCliPath`/`resolveCliPath` prefer `bin/kilo-serve` when staged; VSIX validator rejects staged full `bin/kilo` (no public full CLI release is built or published; full source is retained for dev and SDK generation only, and the full-binary fallback covers dev/source-wrapper transition only).
+
+### Legacy EventV2 post-commit observation notification
+
+`@opencode-ai/core/event` `EventV2` layer captures `SessionChangefeedTable` before/after `commitSyncEvent` for `LEGACY_OBSERVABLE_TYPES` (`session.updated`, `message.updated`, `message.removed`, `message.part.updated`, `message.part.removed`) and, when `seq` and `revision` advance with `kind:"changed"`, best-effort `ObservationNotifier.notify` via `PrivatePeerRegistry` (`observation/changed` `v:"1.0"` payload-free `{seq,session_id,revision,kind,time}` `cursor===seq`, `Effect.catch` isolation) after commit; `notify` failure/unsupported/unavailable never affects the mutation result and idempotent replay produces no new `seq`. Implemented via `@opencode/opencode/src/event-v2-bridge` `observationNotifierLayer` (provided in `AppLayer` alongside `PrivatePeerRegistry`) over the same single `kilo serve` `AppLayer` backend process — no separate private headless runtime exists; private `observation/changed` is best-effort post-commit assist, not complete mutation coverage/recovery.
 
 ### Snapshot v2 journal
 
@@ -299,7 +304,7 @@ B1 adds one private transport narrowly for `session/cancelQueued` over the exist
 
 | Aspect | Behavior |
 |---|---|
-| Carrier | `ServerManager` spawns `bin/kilo serve --port 0` with 5 stdio entries (`stdio[3]` private writer, `stdio[4]` private reader). `kilo serve` (`cli/cmd/serve.ts`) after `Server.listen` dynamically imports `kilocode/server/fd-carrier.ts` and calls `tryStartFdCarrier()`; failure warns and keeps `null`. `shutdown` disposes the carrier before `InstanceRuntime.disposeAllInstances` and `server.stop`. Both fds must pass `fstatSync` and env must have `KILO_PARENT_PID` or `KILO_CLIENT=vscode` — otherwise fail-closed and SDK keeps working (Bun FIFO quirk requires both fds, not just fd3). `stdout` port discovery (`kilo server listening on http://127.0.0.1:<port>`) remains unpolluted. |
+| Carrier | `ServerManager` spawns `bin/kilo-serve serve --port 0` (prefers `bin/kilo-serve`, falls back to `bin/kilo` only when serve binary absent) with 5 stdio entries (`stdio[3]` private writer, `stdio[4]` private reader). `kilo-serve serve` (`cli/cmd/serve.ts` via `serve-entry.ts`) after `Server.listen` dynamically imports `kilocode/server/fd-carrier.ts` and calls `tryStartFdCarrier()`; failure warns and keeps `null`. `shutdown` disposes the carrier before `InstanceRuntime.disposeAllInstances` and `server.stop`. Both fds must pass `fstatSync` and env must have `KILO_PARENT_PID` or `KILO_CLIENT=vscode` — otherwise fail-closed and SDK keeps working (Bun FIFO quirk requires both fds, not just fd3). `stdout` port discovery (`kilo server listening on http://127.0.0.1:<port>`) remains unpolluted. |
 | Protocol | JSON-RPC 2.0 length-framed (`private-worker/peer.ts` + `frame.ts`) over fd3/fd4. `initialize` with `protocol:{name:"kilo-private",major:1,minor:0}` + `capabilities:["session/cancelQueued"]` must match `validateProtocolVersion` and `buildInitializeResult()` (`protocolVersion "1.0"`). Minor is ignored, major 2 is `InvalidParams` fail-closed, second init is `InvalidRequest Already initialized`, pre-init domain call is `InvalidRequest Not initialized`, unknown method is `MethodNotFound`, malformed `Content-Length` is `ParseError` and closes poison. EOF pending is `InternalError`. Supports pipelined frames and UTF-8 split. |
 | Ownership | Single authority remains `CancelQueuedDispatch` in `AppLayer`. `fd-carrier.ts` routes `session/cancelQueued` after `isInitialized()` via `AppRuntime.runPromise(Effect.gen { yield* CancelQueuedDispatchService; yield* svc.dispatch(params) })` using the same envelope (`v:1`, `normalize`/`scrub`/`cap`, optional `revision`). No `Promise` facade, no new DB, no new authority. |
 | Lifecycle | `ServerManager` owns the two private streams and `epoch`/`pid`; `releasePrivateStreams` destroys both on exit/dispose with exact-PID kill (decoy pid never killed). `KiloConnectionService` owns `ServePrivatePeer` and clears `privatePeer`/`privateAvailable`/`privateEpoch`/`privatePid` on dispose/reset/exit; `initPrivatePeer` is void-fired after connection, epoch-coherent, handles null streams/unavailable/timeout/mismatch/capability-missing as fail-closed. Restart proves new `epoch`/`pid`/`port` with 5 stdio and re-negotiation; unavailable peer keeps SDK HTTP working. |
@@ -748,7 +753,7 @@ CLI server contract flows through generated and handwritten layers. This describ
 3. Kilo-specific API groups and handlers live under `packages/opencode/src/kilocode/server/httpapi/` and enter shared API through narrow injection seams.
 4. `packages/sdk/js/script/build.ts` generates TypeScript v2 client from CLI OpenAPI.
 5. `packages/sdk/js/src/v2/client.ts` adds `createKiloClient()` wrapper for directory and workspace routing, Electron and Node fetch compatibility, and clearer empty-response errors.
-6. Root `./script/generate.ts` runs SDK generation, emits tracked OpenAPI artifact, updates CLI docs, and formats outputs.
+6. Root `./script/generate.ts` runs SDK generation, emits tracked OpenAPI artifact, and formats outputs.
 
 Regenerate checked-in JavaScript SDK output after server endpoint changes. Do not hand-edit generated client files.
 

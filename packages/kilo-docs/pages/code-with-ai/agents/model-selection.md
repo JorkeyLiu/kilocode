@@ -21,25 +21,11 @@ While the specifics change constantly, some principles stay consistent:
 
 ### How to Select and Switch Models
 
-{% tabs %}
-{% tab label="VSCode" %}
-
 - Use the **model selector** in the chat prompt area to pick a model for the current session. You can also type `/models` to open the model picker.
 - When the selected model supports variants, type `/variant` to open the reasoning effort selector.
 - Set per-agent defaults and a global default in the **Settings** panel (Models tab), or directly in the `kilo.jsonc` config file.
 - **Model precedence:** Session override → Last picked per agent → Per-agent config → Global config → [Auto Free](/docs/code-with-ai/agents/auto-model#tiers) (note: Auto Free may route to providers that log prompts — see the Auto Model page for details).
 - The model selector remembers the last model you picked for each agent — switching agents restores your previous choice. A manual pick always beats config settings; use the **reset button** (visible when your active model differs from config) to go back to the config default.
-
-{% /tab %}
-{% tab label="CLI" %}
-
-- In the TUI, use the **model picker** (`Ctrl+X m` or `/models`) to switch models.
-- For non-interactive use, pass `--model` flag to `kilo run` (e.g., `kilo run --model claude-sonnet-4-20250514`).
-- Set the global default with the `model` key in `kilo.jsonc`, or configure per-agent models in the `agent` section.
-- **Model precedence:** `--model` flag → Per-agent config → Last used in session → Global config → Recent models → First available.
-
-{% /tab %}
-{% /tabs %}
 
 **For complex coding tasks**: Premium models (Claude Sonnet/Opus, GPT-5 class, Gemini Pro) typically handle nuanced requirements, large refactors, and architectural decisions better.
 
@@ -84,24 +70,6 @@ Check [our provider docs](/docs/ai-providers) for specific context limits on eac
 
 When an agent delegates work to a subagent (via the `task` tool), the subagent **inherits the parent agent's model** by default. You can override this per subagent in your config:
 
-{% tabs %}
-{% tab label="CLI" %}
-
-```json
-{
-  "agent": {
-    "explore": {
-      "model": "anthropic/claude-haiku-4-20250514"
-    }
-  }
-}
-```
-
-This sets the `explore` subagent to always use Haiku regardless of the parent's model. Any subagent without a `model` override uses whatever model the invoking agent is running.
-
-{% /tab %}
-{% tab label="VSCode" %}
-
 Subagents inherit the model currently active in the primary agent session — the model shown in the selector at the bottom of the chat. To bypass inheritance and pin a specific model for a subagent:
 
 - **Via Settings** — open **Settings → Models → Model per Mode**, find the subagent, and pick its model.
@@ -118,9 +86,6 @@ Subagents inherit the model currently active in the primary agent session — th
 ```
 
 The Settings UI writes the same `agent.<name>.model` entry, so either method produces the same override. Subagents without an explicit model continue to inherit whatever the invoking agent is running.
-
-{% /tab %}
-{% /tabs %}
 
 For details on configuring subagent models, see [Custom Subagents](/docs/customize/custom-subagents).
 

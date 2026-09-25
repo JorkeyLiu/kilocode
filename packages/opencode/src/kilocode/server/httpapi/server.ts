@@ -5,6 +5,7 @@ import { compressionLayer } from "@/server/routes/instance/httpapi/middleware/co
 import { corsVaryFix } from "@/server/routes/instance/httpapi/middleware/cors-vary"
 import { errorLayer } from "@/server/routes/instance/httpapi/middleware/error"
 import { fenceLayer } from "@/server/routes/instance/httpapi/middleware/fence"
+import { privateLegacyDenyLayer } from "@/server/routes/instance/httpapi/middleware/private-legacy"
 import * as AnacondaDesktop from "@/kilocode/anaconda-desktop/service"
 import { BackgroundJob } from "@/background/job"
 
@@ -51,6 +52,7 @@ export function provideListener(opts?: CorsOptions) {
     { global: true },
   )
   return Layer.provide([
+    privateLegacyDenyLayer,
     errorLayer,
     compressionLayer,
     corsVaryFix,

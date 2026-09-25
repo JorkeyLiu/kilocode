@@ -408,6 +408,9 @@ export class KiloConnectionService {
     return this.config
   }
 
+  async ensureCanonicalStorage(): Promise<void> { return this.serverManager.ensureCanonicalStorage() }
+  getServerManager(): ServerManager { return this.serverManager }
+
   /**
    * Set the remote status service. When remote is disabled, flushViewed()
    * is a no-op. When remote becomes enabled (startup refresh, user toggle,

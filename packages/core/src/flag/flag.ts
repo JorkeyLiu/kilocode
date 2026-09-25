@@ -107,4 +107,8 @@ export const Flag = {
   get KILO_SESSION_RETRY_LIMIT() {
     return number("KILO_SESSION_RETRY_LIMIT")
   },
+  get KILO_PRIVATE_RUNTIME() {
+    // Strict === '1': invalid values do not activate; extension always sets exactly "1".
+    return process.env["KILO_PRIVATE_RUNTIME"] === "1"
+  },
 }

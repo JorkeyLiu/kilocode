@@ -6,11 +6,10 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">VS Code বা CLI-তে AI দিয়ে তৈরি করার জন্য ওপেন সোর্স কোডিং এজেন্ট।</p>
+<p align="center">VS Code-তে AI দিয়ে তৈরি করার জন্য ওপেন সোর্স কোডিং এজেন্ট।</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
-  <a href="https://www.npmjs.com/package/@kilocode/cli"><img alt="npm" src="https://raster.shields.io/npm/v/@kilocode/cli?style=flat" height="20" /></a>
   <a href="https://x.com/kilocode"><img src="https://raster.shields.io/badge/kilocode-000000?style=flat&logo=x&logoColor=white" alt="X (Twitter)" height="20"></a>
   <a href="https://blog.kilo.ai"><img src="https://raster.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Blog" height="20"></a>
   <a href="https://kilo.ai/discord"><img src="https://raster.shields.io/badge/Join%20Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" height="20"></a>
@@ -21,7 +20,7 @@
 
 ---
 
-Kilo Code হলো একটি AI কোডিং এজেন্ট যা আপনি যেখানে কাজ করেন সেখানেই কাজ করে: [VS Code](https://kilo.ai/landing/vs-code) এবং [CLI](https://kilo.ai/cli)। এটি ওপেন সোর্স এবং খোলা মূল্যনীতির। আপনি 500টির বেশি মডেল থেকে বেছে নিতে পারেন, কাজের মাঝখানে মডেল বদলাতে পারেন এবং কোনো অতিরিক্ত চার্জ ছাড়াই মডেল প্রদানকারীর রেট পরিশোধ করেন। শুরু করতে API key দরকার নেই।
+Kilo Code হলো একটি AI কোডিং এজেন্ট যা আপনি যেখানে কাজ করেন সেখানেই কাজ করে: [VS Code](https://kilo.ai/landing/vs-code)। এটি ওপেন সোর্স এবং খোলা মূল্যনীতির। আপনি 500টির বেশি মডেল থেকে বেছে নিতে পারেন, কাজের মাঝখানে মডেল বদলাতে পারেন এবং কোনো অতিরিক্ত চার্জ ছাড়াই মডেল প্রদানকারীর রেট পরিশোধ করেন। শুরু করতে API key দরকার নেই।
 
 ### ইনস্টলেশন
 
@@ -33,70 +32,6 @@ Kilo Code হলো একটি AI কোডিং এজেন্ট যা �
 <br>
 
 [Kilo Code extension](vscode:extension/kilocode.kilo-code) সরাসরি ইনস্টল করুন, অথবা [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code) থেকে নিন। একটি অ্যাকাউন্ট তৈরি করলে GPT-5.5, Claude Opus 4.7, Claude Sonnet 4.6 এবং Gemini 3.1 Pro Preview সহ 500টির বেশি মডেলে প্রদানকারীর দামে অ্যাক্সেস পাবেন।
-
-</details>
-
-<details open>
-<summary><strong>CLI</strong></summary>
-
-<br>
-
-```bash
-# npm
-npm install -g @kilocode/cli
-
-# curl
-curl -fsSL https://kilo.ai/cli/install | bash
-
-# pnpm
-pnpm add -g @kilocode/cli
-
-# bun
-bun add -g @kilocode/cli
-
-# Homebrew (macOS / Linux)
-brew install Kilo-Org/tap/kilo
-
-# Arch Linux (AUR)
-paru -S kilo-bin
-```
-
-তারপর শুরু করতে যেকোনো প্রজেক্ট ডিরেক্টরিতে `kilo` চালান।
-
-</details>
-
-<details>
-<summary><strong>Cloud Agent</strong></summary>
-
-<br>
-
-লোকাল মেশিন ছাড়াই ওয়েব থেকে [app.kilo.ai/cloud](https://app.kilo.ai/cloud)-এ Kilo চালান।
-
-</details>
-
-<details>
-<summary><strong>Code Reviews</strong></summary>
-
-<br>
-
-[app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews)-এ আপনার pull request-এ স্বয়ংক্রিয় AI code review সেট আপ করুন।
-
-</details>
-
-<details>
-<summary>GitHub Releases থেকে CLI ইনস্টল করুন (বাইনারি)</summary>
-
-[Releases page](https://github.com/Kilo-Org/kilocode/releases) থেকে সর্বশেষ বাইনারি ডাউনলোড করুন।
-
-| প্ল্যাটফর্ম | Asset |
-|---|---|
-| Windows (বেশিরভাগ PC) | `kilo-windows-x64.zip` |
-| macOS (Apple Silicon) | `kilo-darwin-arm64.zip` |
-| macOS (Intel) | `kilo-darwin-x64.zip` |
-| Linux x64 | `kilo-linux-x64.tar.gz` |
-| Linux ARM | `kilo-linux-arm64.tar.gz` |
-
-নোট: `x64-baseline` হলো AVX ছাড়া পুরোনো CPU-এর জন্য compatibility build। `musl` হলো Alpine বা glibc ছাড়া minimal Docker image-এর জন্য statically linked build। `kilo-vscode-*.vsix` হলো VS Code extension package, CLI নয়। `Source code` archive source থেকে build করার জন্য।
 
 </details>
 
@@ -121,15 +56,6 @@ Kilo বিশেষায়িত agents সহ আসে, কাজ অনু
 - agent-এর ক্ষমতা বাড়ায় এমন MCP server খুঁজে ও যুক্ত করার জন্য **MCP configuration**।
 - latency, cost এবং reasoning কাজের সাথে মেলাতে mid-task switching সহ **500টির বেশি model**।
 
-### Autonomous Mode (CI/CD)
-
-CI/CD pipeline-এর জন্য prompts ছাড়া পুরোপুরি autonomous operation পেতে `kilo run`-এর সাথে `--auto` ব্যবহার করুন:
-
-```bash
-kilo run --auto "run tests and fix any failures"
-```
-
-`--auto` সব permission prompt বন্ধ করে এবং agent-কে confirmation ছাড়া যেকোনো action execute করতে দেয়। শুধু trusted environment-এ ব্যবহার করুন।
 
 ### ডকুমেন্টেশন
 
@@ -137,7 +63,7 @@ Configuration এবং বাকি সবকিছুর জন্য [docs](h
 
 ### Contributing
 
-Developer, writer এবং সবাইকে contribution-এর জন্য স্বাগতম। environment setup, coding standard এবং pull request খোলার পদ্ধতির জন্য [Contributing Guide](/CONTRIBUTING.md) দিয়ে শুরু করুন। VS Code extension এবং CLI release process-এর জন্য [RELEASING.md](../RELEASING.md) দেখুন।
+Developer, writer এবং সবাইকে contribution-এর জন্য স্বাগতম। environment setup, coding standard এবং pull request খোলার পদ্ধতির জন্য [Contributing Guide](/CONTRIBUTING.md) দিয়ে শুরু করুন। VS Code extension release process-এর জন্য [RELEASING.md](../RELEASING.md) দেখুন।
 
 অংশ নেওয়ার আগে আমাদের [Code of Conduct](/CODE_OF_CONDUCT.md) পড়ুন।
 

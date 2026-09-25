@@ -139,14 +139,11 @@ Kilo has auto-models that can help you control costs; more information is availa
 
 ### Manually selecting a model
 
-Use the **model selector dropdown** in the Kilo Code chat interface to switch models for the current session. In the CLI, pass the `--model` flag to `kilo run` or use the model picker in the TUI (`Ctrl+X m` or `/models`).
+Use the **model selector dropdown** in the Kilo Code chat interface to switch models for the current session.
 
 ### Configuring a model per agent or mode
 
-You can set a default model for each agent (Code, Architect, Debug, Plan, or a custom subagent) independently:
-
-- **VS Code:** Settings → Models → Model per Mode, or edit `kilo.jsonc` directly.
-- **CLI:** Set `agent.<name>.model` in `kilo.jsonc`.
+You can set a default model for each agent (Code, Architect, Debug, Plan, or a custom subagent) independently in **Settings → Models → Model per Mode**, or by setting `agent.<name>.model` in `kilo.jsonc` directly.
 
 ```jsonc
 {

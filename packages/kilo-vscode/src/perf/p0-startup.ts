@@ -40,7 +40,7 @@ export const P0_HTTP_READY = "http.ready"
 export const P0_CATALOG_PROGRESS_FIRST = "catalog.progress.first"
 export const P0_CATALOG_LOADED_FIRST = "catalog.loaded.first"
 /** Webview surface stage emitted via the existing `p0Perf` channel. */
-export const P0_AM_OPERABLE_FIRST = "agentManager.operable.first"
+const P0_AM_OPERABLE_FIRST = "agentManager.operable.first"
 
 export type P0StartupEmit = (stage: string, extra?: Record<string, unknown>) => void
 

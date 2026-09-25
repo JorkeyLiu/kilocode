@@ -19,7 +19,10 @@ export const ServeCommand = effectCmd({
     const modTimer = P0Perf.span("server_module_import") // kilocode_change - P0 instrumentation
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
     modTimer.end()
-    if (!Flag.KILO_SERVER_PASSWORD) {
+    if (Flag.KILO_PRIVATE_RUNTIME) {
+      const pwd = process.env.KILO_SERVER_PASSWORD ?? Flag.KILO_SERVER_PASSWORD
+      if (!pwd) return yield* Effect.die(new Error("KILO_PRIVATE_RUNTIME requires KILO_SERVER_PASSWORD"))
+    } else if (!Flag.KILO_SERVER_PASSWORD) {
       console.log("Warning: KILO_SERVER_PASSWORD is not set; server is unsecured.")
     }
     const netTimer = P0Perf.span("resolve_network_options") // kilocode_change - P0 instrumentation

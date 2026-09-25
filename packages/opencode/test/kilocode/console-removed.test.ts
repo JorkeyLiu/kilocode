@@ -64,10 +64,8 @@ describe("P3.3 Kilo Console product removal", () => {
   })
 
   test("user docs no longer list a kilo console command", async () => {
-    const table = await read("packages/kilo-docs/markdoc/partials/cli-commands-table.md")
-    const reference = await read("packages/kilo-docs/pages/code-with-ai/platforms/cli-reference.md")
-    expect(table).not.toContain("`kilo console`")
-    expect(reference).not.toContain("## kilo console")
+    expect(await read("packages/kilo-docs/markdoc/partials/cli-commands-table.md")).toBeUndefined()
+    expect(await read("packages/kilo-docs/pages/code-with-ai/platforms/cli-reference.md")).toBeUndefined()
   })
 
   test("console-only tests and env are gone, generic console.log stays", async () => {

@@ -20,6 +20,6 @@ export const Scoop = {
   manifest: "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/kilo.json",
 }
 
-export const Release = {
-  install: "https://kilo.ai/cli/install",
-}
+// Release.install retired: Kilo Code is now VS Code extension-only
+// (VSIX bundles kilo-serve); standalone installer and GH release
+// archives are no longer published. See https://kilo.ai/docs

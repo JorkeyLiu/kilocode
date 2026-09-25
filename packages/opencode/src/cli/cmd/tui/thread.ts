@@ -318,10 +318,6 @@ export const TuiThreadCommand = cmd({
             events: createEventSource(client),
           }
 
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: canonicalCwd }).catch(() => {})
-      }, 1000).unref?.()
-
       try {
         try {
           await validateSession({

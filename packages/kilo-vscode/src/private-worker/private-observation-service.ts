@@ -71,6 +71,8 @@ export interface PrivateObservationServiceOptions {
   initializeTimeoutMs?: number
   /** Optional bounded cursor store (single integer, no timers). Injected per instance, no singleton. */
   cursorStore?: ObservationCursorStore
+  /** Minimal shared singleflight canonical storage gate — must complete before any DB open. Injected via extension wiring. */
+  canonicalStorageGate?: () => Promise<void>
 }
 
 export function isPrivateObservationGateEnabled(opts: PrivateObservationServiceOptions): boolean {
@@ -113,6 +115,7 @@ export class PrivateObservationService implements Disposable {
   private consumer: ((method: string, params: unknown) => void) | undefined
   private readonly opts: PrivateObservationServiceOptions
   private readonly cursorStore: ObservationCursorStore | undefined
+  private gate: (() => Promise<void>) | undefined
   // R9 fixture-only bounded notification recorder at onNotification boundary:
   // small in-memory sequence of JSON-safe envelopes, not production state,
   // enabled only under KILO_E2E_FIXTURE. No persistence, no second store.
@@ -142,7 +145,8 @@ export class PrivateObservationService implements Disposable {
         "args" in (contextOrOpts as Record<string, unknown>) ||
         "env" in (contextOrOpts as Record<string, unknown>) ||
         "initializeTimeoutMs" in (contextOrOpts as Record<string, unknown>) ||
-        "cursorStore" in (contextOrOpts as Record<string, unknown>))
+        "cursorStore" in (contextOrOpts as Record<string, unknown>) ||
+        "canonicalStorageGate" in (contextOrOpts as Record<string, unknown>))
     ) {
       this.opts = contextOrOpts as PrivateObservationServiceOptions
     } else if (
@@ -159,6 +163,7 @@ export class PrivateObservationService implements Disposable {
     }
     this.consumer = this.opts.onNotification
     this.cursorStore = this.opts.cursorStore
+    this.gate = this.opts.canonicalStorageGate
     this.isFixtureRecorderEnabled = isE2EFixtureEnabled()
   }
 
@@ -231,6 +236,11 @@ export class PrivateObservationService implements Disposable {
     if (!this.isEnabled()) return undefined
     const p = this.opts.dbPath
     return typeof p === "string" && isAbsolute(p) ? p : undefined
+  }
+
+  /** Inject or replace the canonical storage gate — must complete before any DB open. */
+  setCanonicalStorageGate(gate: (() => Promise<void>) | null | undefined): void {
+    this.gate = gate ?? undefined
   }
 
   /** Verifiable runtime status snapshot — pure snapshot of existing real state, no side effects. */
@@ -421,8 +431,32 @@ export class PrivateObservationService implements Disposable {
     }
   }
 
-  private async doInitialize(): Promise<unknown> {
+  private throwIfDisposed(): void {
     if (this.disposed) throw new Error("Service disposed")
+  }
+
+  private disposeHostAfterDispose(host: PrivateWorkerHost): Error {
+    this.runSuppressed(() => {
+      try {
+        host.dispose()
+      } catch {}
+    })
+    if (this.host === host) this.host = null
+    if (this.pendingShutdownHost === host) {
+      this.pendingShutdownHost = null
+      this.pendingShutdownProc = null
+    }
+    return new Error("Service disposed")
+  }
+
+  private async doInitialize(): Promise<unknown> {
+    this.throwIfDisposed()
+    if (this.gate) await this.gate()
+    // Dispose during gate hold must not construct/spawn a worker. Re-check
+    // after every await before worker construction — service guard makes the
+    // extension activation fire-and-forget (ensureCanonicalStorage.then(init))
+    // and reconnect paths fail closed without extra caller guards.
+    this.throwIfDisposed()
     const hostEnv: NodeJS.ProcessEnv = {
       ...(this.opts.env ?? {}),
       KILO_PRIVATE_WORKER_STANDALONE: "1",
@@ -466,6 +500,10 @@ export class PrivateObservationService implements Disposable {
     try {
       // Suppressed: host.start internal timeout dispose must not invoke lifecycle hook; external close after success still fires because suppress is scoped to this await.
       const res = await this.runSuppressedAsync(() => host.start())
+      // Dispose during start must not leave a live host retained. Tear down
+      // without epoch bump and without pending ownership — dispose already
+      // owns cleanup, resurrecting pending here would leak after dispose.
+      if (this.disposed) throw this.disposeHostAfterDispose(host)
       try {
         assertObservationCapable(res)
       } catch (e) {
@@ -475,11 +513,15 @@ export class PrivateObservationService implements Disposable {
             host.dispose()
           } catch {}
         })
+        if (this.disposed) throw this.disposeHostAfterDispose(host)
         throw e
       }
       this.epoch += 1
       return res
     } catch (e) {
+      // Dispose during start/handshake must never resurrect pending ownership
+      // — dispose already owns cleanup. Fail closed with disposed signal.
+      if (this.disposed) throw this.disposeHostAfterDispose(host)
       console.warn("[Kilo] PrivateObservationService initialize failed:", e)
       // Ensure failed host is torn down and not retained as started; if exact child remains live after
       // graceful SIGTERM, retain explicit ownership in pending fields (no orphan, no replacement while live).

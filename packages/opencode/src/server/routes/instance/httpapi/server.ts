@@ -24,7 +24,6 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
-import { Installation } from "@/installation"
 import { InstanceLayer } from "@/project/instance-layer"
 import { Plugin } from "@/plugin"
 import { Project } from "@/project/project"
@@ -106,6 +105,7 @@ import { compressionLayer } from "./middleware/compression"
 import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
+import { privateLegacyDenyLayer } from "./middleware/private-legacy"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { AppLayer, makeAppLayer } from "@/effect/app-runtime" // kilocode_change
 
@@ -193,6 +193,15 @@ const legacyGlobalHealthRoute = HttpRouter.use((router) =>
   ),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
+// No standalone CLI is distributed: the self-upgrade transport is removed.
+// Deny POST /global/upgrade with 404 on production listener paths instead of
+// falling through to the UI catch-all.
+const legacyGlobalUpgradeRoute = HttpRouter.use((router) =>
+  router.add("POST", "/global/upgrade", () =>
+    Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })),
+  ),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -239,9 +248,11 @@ export function createRoutes(
     v2Routes,
     docRoute,
     legacyGlobalHealthRoute,
+    legacyGlobalUpgradeRoute,
     uiRoute,
   ).pipe(
     Layer.provide([
+      privateLegacyDenyLayer,
       errorLayer,
       compressionLayer,
       corsVaryFix,
@@ -271,6 +282,7 @@ export function createListenerRoutesUnprovided(corsOptions?: CorsOptions) {
     instanceRoutes,
     docRoute,
     legacyGlobalHealthRoute,
+    legacyGlobalUpgradeRoute,
     uiRoute,
   ).pipe(provideKiloListenerRoutes(corsOptions))
 }

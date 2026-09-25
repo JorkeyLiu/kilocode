@@ -68,6 +68,7 @@ interface Materialized {
   readonly ref: string
 }
 
+// eslint-disable-next-line complexity -- branch-heavy canonical validation keeps granular codes; existing parity contracts use narrow disables
 const materialize = (input: CanonicalHttpExecuteInput): Materialized => {
   if (typeof input.providerId !== "string" || input.providerId.length === 0 || typeof input.modelId !== "string" || input.modelId.length === 0)
     throw new CanonicalHttpExecuteError("invalid-record", "Invalid canonical provider entry")
@@ -163,6 +164,7 @@ export const executeHttp = async (
   deps: CanonicalHttpDeps,
   signal: AbortSignal,
   emit: (event: unknown) => boolean,
+  // eslint-disable-next-line complexity -- streaming executor carries branch-heavy protocol/secret/redaction/error paths; existing provider-execute peers use narrow disables
 ): Promise<ProviderHttpExecuteResult> => {
   if (signal.aborted) throw new DOMException("Aborted", "AbortError")
   const built = materialize(input)

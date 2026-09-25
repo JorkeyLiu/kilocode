@@ -1,12 +1,16 @@
 #!/usr/bin/env bun
 /**
- * Watches packages/opencode/src/ for changes and rebuilds the CLI binary,
- * then copies it into packages/kilo-vscode/bin/kilo.
+ * Watches packages/opencode/src/ for changes and rebuilds the serve-only CLI backend,
+ * then copies it into packages/kilo-vscode/bin/kilo-serve.
+ *
+ * Bounded cut: public full `bin/kilo` is no longer produced; `watch-cli` is now
+ * serve-only. The full CLI source tree remains on disk for SDK generation but
+ * is not compiled or staged.
  *
  * Used during development so the VS Code extension always has an up-to-date
  * CLI backend without manual rebuild steps.
  */
-import { watch, chmodSync } from "node:fs"
+import { watch, chmodSync, existsSync, rmSync } from "node:fs"
 import { join, relative } from "node:path"
 import { $ } from "bun"
 import { copySandboxResources, copyTreeSitterResources } from "../src/services/cli-backend/cli-resources"
@@ -17,11 +21,11 @@ const opencodeDir = join(packagesDir, "opencode")
 const opencodeSrcDir = join(opencodeDir, "src")
 const targetBinDir = join(kiloVscodeDir, "bin")
 // Platform naming mirrors script/local-bin.ts, server-manager.ts, and
-// script/artifact-validation.ts: kilo(.exe) + kilo-serve(.exe).
+// script/artifact-validation.ts: serve-only `kilo-serve(.exe)`; full `kilo(.exe)` is stale.
 const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
 const serveName = binName === "kilo.exe" ? "kilo-serve.exe" : "kilo-serve"
-const targetBinPath = join(targetBinDir, binName)
 const targetServePath = join(targetBinDir, serveName)
+const targetBinPath = join(targetBinDir, binName)
 
 let building = false
 let pending = false
@@ -34,10 +38,6 @@ function log(msg: string) {
 function platformTag(): string {
   const os = process.platform === "win32" ? "windows" : process.platform
   return `@kilocode/cli-${os}-${process.arch}`
-}
-
-function sourceBinaryPath(): string {
-  return join(opencodeDir, "dist", platformTag(), "bin", binName)
 }
 
 function sourceServePath(): string {
@@ -53,7 +53,7 @@ async function rebuild() {
   pending = false
 
   try {
-    log("Rebuilding CLI binary...")
+    log("Rebuilding serve CLI binary...")
     const start = performance.now()
 
     const args = installed ? ["run", "build", "--single", "--skip-install"] : ["run", "build", "--single"]
@@ -64,29 +64,31 @@ async function rebuild() {
     }
     installed = true
 
-    const source = sourceBinaryPath()
-    if (!(await Bun.file(source).exists())) {
-      log(`ERROR: Build completed but no binary found at ${relative(packagesDir, source)}`)
+    const serve = sourceServePath()
+    if (!(await Bun.file(serve).exists())) {
+      log(`ERROR: Build completed but no serve binary found at ${relative(packagesDir, serve)}`)
       return
     }
 
     await $`mkdir -p ${targetBinDir}`
-    await $`cp ${source} ${targetBinPath}`
-    await copyTreeSitterResources(source, targetBinPath)
-    await copySandboxResources(source, targetBinPath)
-    if (binName !== "kilo.exe") chmodSync(targetBinPath, 0o755)
-
-    const serve = sourceServePath()
-    if (await Bun.file(serve).exists()) {
-      await $`cp ${serve} ${targetServePath}`
-      if (serveName !== "kilo-serve.exe") chmodSync(targetServePath, 0o755)
-      log(`Serve binary updated: ${relative(packagesDir, serve)} -> bin/${serveName}`)
-    } else {
-      log(`Serve binary not found at ${relative(packagesDir, serve)}; keeping full-CLI fallback.`)
-    }
+    await $`cp ${serve} ${targetServePath}`
+    await copyTreeSitterResources(serve, targetServePath)
+    await copySandboxResources(serve, targetServePath)
+    if (serveName !== "kilo-serve.exe") chmodSync(targetServePath, 0o755)
+    // Clean stale full binary (serve-only staging forbids `bin/kilo`).
+    try {
+      if (existsSync(targetBinPath)) {
+        const content = await Bun.file(targetBinPath).text().catch(() => "")
+        const isWrapper = content.startsWith("#!")
+        if (!isWrapper) {
+          rmSync(targetBinPath, { force: true })
+          log(`Removed stale full binary ${relative(kiloVscodeDir, targetBinPath)} (serve-only)`)
+        }
+      }
+    } catch {}
 
     const elapsed = ((performance.now() - start) / 1000).toFixed(1)
-    log(`Binary updated (${elapsed}s): ${relative(packagesDir, source)} -> bin/${binName}`)
+    log(`Serve binary updated (${elapsed}s): ${relative(packagesDir, serve)} -> bin/${serveName}`)
   } catch (err) {
     log(`ERROR: ${err instanceof Error ? err.message : String(err)}`)
   } finally {

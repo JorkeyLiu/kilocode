@@ -45,7 +45,7 @@ When using VS Code Remote SSH, check the remote Linux machine, not your local Wi
 Close VS Code or stop the Kilo backend first. On Linux or Remote SSH, run:
 
 ```bash
-pkill -f "kilo serve"
+pkill -f "kilo-serve"
 mkdir -p ~/.local/share/kilo
 mv ~/.local/share/kilo/kilo.db ~/.local/share/kilo/kilo.db.bak
 mv ~/.local/share/kilo/kilo.db-wal ~/.local/share/kilo/kilo.db-wal.bak 2>/dev/null
@@ -67,7 +67,7 @@ If resetting the database does not fix the issue, you can fully reset Kilo Code'
 On Linux or VS Code Remote SSH, run this on the machine where Kilo Code is running:
 
 ```bash
-pkill -f "kilo serve"
+pkill -f "kilo-serve"
 mv ~/.local/share/kilo ~/.local/share/kilo.bak 2>/dev/null
 mv ~/.config/kilo ~/.config/kilo.bak 2>/dev/null
 mv ~/.cache/kilo ~/.cache/kilo.bak 2>/dev/null

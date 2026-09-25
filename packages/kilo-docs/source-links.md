@@ -92,17 +92,16 @@
   <!-- packages/opencode/src/mcp/oauth-provider.ts -->
   <!-- packages/opencode/src/session/network.ts -->
 - <https://kilo.ai/>
-  <!-- packages/opencode/src/cli/cmd/generate.ts -->
   <!-- packages/opencode/src/kilocode/server/httpapi/public.ts -->
   <!-- packages/opencode/src/provider/provider.ts -->
-- <https://kilo.ai/cli/install>
-  <!-- packages/opencode/src/kilocode/installation/index.ts -->
+  <!-- packages/opencode/src/server/generate-openapi.ts -->
 - <https://kilo.ai/discord>
   <!-- packages/kilo-vscode/webview-ui/src/components/chat/FeedbackDialog.tsx -->
   <!-- packages/kilo-vscode/webview-ui/src/components/settings/AboutKiloCodeTab.tsx -->
 - <https://kilo.ai/docs>
   <!-- packages/kilo-vscode/webview-ui/src/hooks/useSlashCommand.ts -->
   <!-- packages/opencode/src/kilocode/cli/cmd/tui/app.tsx -->
+  <!-- packages/opencode/src/kilocode/installation/index.ts -->
 - <https://kilo.ai/docs/ai-providers/cloudflare>
   <!-- packages/opencode/src/cli/cmd/providers.ts -->
 - <https://kilo.ai/docs/ai-providers/gemini>
@@ -121,8 +120,8 @@
 - <https://kilocode.ai>
   <!-- packages/opencode/src/kilocode/const.ts -->
 - <https://opencode.ai/>
-  <!-- packages/opencode/src/cli/cmd/generate.ts -->
   <!-- packages/opencode/src/kilocode/server/httpapi/public.ts -->
+  <!-- packages/opencode/src/server/generate-openapi.ts -->
 - <https://opencode.ai/zen>
   <!-- packages/kilo-vscode/webview-ui/src/i18n/en.ts -->
 - <https://openrouter.ai/api/v1/chat/completions>

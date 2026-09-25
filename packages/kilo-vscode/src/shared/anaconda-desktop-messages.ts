@@ -31,6 +31,6 @@ export type AnacondaDesktopExtensionMessage =
       message: string
     }
 
-export type AnacondaDesktopRequest = Exclude<AnacondaDesktopWebviewMessage, { type: "cancelAnacondaDesktopRequest" }>
-export type AnacondaDesktopResult = Exclude<AnacondaDesktopExtensionMessage, { type: "anacondaDesktopActionError" }>
-export type AnacondaDesktopError = Extract<AnacondaDesktopExtensionMessage, { type: "anacondaDesktopActionError" }>
+type AnacondaDesktopRequest = Exclude<AnacondaDesktopWebviewMessage, { type: "cancelAnacondaDesktopRequest" }>
+type AnacondaDesktopResult = Exclude<AnacondaDesktopExtensionMessage, { type: "anacondaDesktopActionError" }>
+type AnacondaDesktopError = Extract<AnacondaDesktopExtensionMessage, { type: "anacondaDesktopActionError" }>

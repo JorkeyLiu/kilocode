@@ -43,7 +43,23 @@ import { GlobalApi } from "./groups/global"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
-const EventSchema = Schema.Union([...BusEvent.effectPayloads(), InstanceDisposed]).annotate({ identifier: "Event" }) // kilocode_change
+const EventPayloads = [...BusEvent.effectPayloads(), InstanceDisposed]
+  .sort((a, b) =>
+    String((a as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier ?? "").localeCompare(
+      String((b as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier ?? ""),
+    ),
+  )
+  .filter(
+    (v, i, a) =>
+      a.findIndex(
+        (x) =>
+          String((x as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier) ===
+          String((v as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier),
+      ) === i,
+  )
+const EventSchema = Schema.Union(EventPayloads as unknown as [typeof EventPayloads[number], ...typeof EventPayloads[number][]]).annotate({
+  identifier: "Event",
+}) // kilocode_change - sorted for deterministic OpenAPI snapshot (import-order independent)
 
 export const RootHttpApi = HttpApi.make("opencode-root")
   .addHttpApi(ControlApi)

@@ -394,10 +394,6 @@
     "packages/opencode": {
       "name": "@kilocode/cli",
       "version": "7.4.11",
-      "bin": {
-        "kilo": "./bin/kilo",
-        "kilocode": "./bin/kilo",
-      },
       "dependencies": {
         "@actions/core": "1.11.1",
         "@actions/github": "6.0.1",

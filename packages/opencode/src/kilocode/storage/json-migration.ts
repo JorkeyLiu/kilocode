@@ -68,10 +68,69 @@ type Options = {
   progress?: (event: Progress) => void
 }
 
+async function probeCanonicalIdentity(
+  dbPath: string,
+): Promise<{ kind: "canonical" | "malformed" | "none"; error?: string; archiveID?: string }> {
+  if (!(await Filesystem.exists(dbPath))) return { kind: "none" }
+  let db: any
+  try {
+    db = new BunDatabase(dbPath, { readonly: true, create: false } as any)
+  } catch (e: any) {
+    throw new Error(`canonical DB open failed fail-closed at ${dbPath}: ${String(e?.message ?? e)}`)
+  }
+  try {
+    let row: any
+    try {
+      row = db.query("SELECT uuid, schema_version, cutover_archive_id FROM storage_identity WHERE id = 1").get() as any
+    } catch (e: any) {
+      const msg = String(e?.message ?? e)
+      if (msg.includes("no such table")) return { kind: "none" }
+      return { kind: "malformed", error: `storage_identity probe failed: ${msg}` }
+    }
+    if (!row) return { kind: "none" }
+    const isUUID = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+    const isValidArchiveID = (id: string) =>
+      /^\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    if (!isUUID(row.uuid)) return { kind: "malformed", error: `invalid storage uuid ${row.uuid}` }
+    if (row.schema_version !== "1") return { kind: "malformed", error: `schema version mismatch ${row.schema_version}` }
+    if (!row.cutover_archive_id || !isValidArchiveID(row.cutover_archive_id))
+      return { kind: "malformed", error: `invalid cutover archive id ${row.cutover_archive_id}` }
+    let av: any
+    try {
+      av = db.query("PRAGMA auto_vacuum").get() as any
+    } catch (e: any) {
+      return { kind: "malformed", error: `auto_vacuum probe failed: ${String(e?.message ?? e)}` }
+    }
+    const avVal = (av as any)?.auto_vacuum
+    if (avVal !== 2) return { kind: "malformed", error: `auto_vacuum must be 2, got ${avVal}` }
+    try {
+      const cnt = db.query("SELECT count(*) as c FROM storage_identity").get() as any
+      if ((cnt as any)?.c !== 1) return { kind: "malformed", error: `storage_identity must have 1 row, got ${(cnt as any)?.c}` }
+    } catch (e: any) {
+      return { kind: "malformed", error: `storage_identity count failed: ${String(e?.message ?? e)}` }
+    }
+    return { kind: "canonical", archiveID: row.cutover_archive_id }
+  } finally {
+    try {
+      db.close()
+    } catch {}
+  }
+}
+
 export async function bootstrap() {
   const marker = Database.path()
   if (marker === ":memory:") return
   const pending = marker + ".json-migration"
+  // Fail-closed invariant: if canonical storage_identity exists at current Database.path(), never import legacy JSON
+  // even if <db>.json-migration pending marker exists. Do not delete/mutate the pending file.
+  const probe = await probeCanonicalIdentity(marker)
+  if (probe.kind === "malformed") {
+    throw new Error(`malformed canonical identity fail-closed at ${marker}: ${probe.error}`)
+  }
+  if (probe.kind === "canonical") {
+    log.info("json-migration skipped: canonical DB already active, refusing legacy import", { archiveID: probe.archiveID, marker })
+    return
+  }
   if ((await Filesystem.exists(marker)) && !(await Filesystem.exists(pending))) return
   await Filesystem.write(pending, "1")
 

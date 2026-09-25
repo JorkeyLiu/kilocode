@@ -15,18 +15,7 @@ Chat is the primary way to interact with Kilo Code. Describe what you want in pl
 
 ## Quick Setup
 
-{% tabs %}
-{% tab label="VSCode" %}
-
 Open Kilo Code's chat from the **Agent Manager** — press `Cmd/Ctrl+Shift+M` or run **Kilo Code: Agent Manager** from the Command Palette. Each conversation lives in its own editor tab, and you can also open a standalone chat panel with **Kilo Code: Open in Tab** (or the "Open in Tab" button in the chat header).
-
-{% /tab %}
-{% tab label="CLI" %}
-
-Open your terminal and run `kilo` to launch the interactive terminal interface (TUI). You'll see a prompt where you can start typing requests immediately. The TUI is fully keyboard-driven — no mouse required.
-
-{% /tab %}
-{% /tabs %}
 
 ## How to Talk to Kilo Code
 
@@ -56,9 +45,6 @@ Open your terminal and run `kilo` to launch the interactive terminal interface (
 
 ## The Chat Interface
 
-{% tabs %}
-{% tab label="VSCode" %}
-
 **Essential controls:**
 
 - **Input prompt** - Type your requests and press Enter to send
@@ -81,25 +67,6 @@ Kilo builds the export from the complete local session history, not only the mes
 Double-click the current session title at the top of the chat to edit it inline. Press `Enter` or click outside the field to save, or press `Escape` to cancel.
 
 You can also rename local sessions from **History** using the edit button or the session's context menu.
-
-{% /tab %}
-{% tab label="CLI" %}
-
-**Essential controls:**
-
-- **Input prompt** - Type your requests and press Enter to send
-- **Action buttons** - Approve or reject proposed changes, answer questions
-- **Agent cycling** - Switch between agents using keybinds or slash commands
-- **Session management** - Start new sessions or resume previous ones
-- **New task** - Start a new task, available using the `+` button at the top or `New Task` button above the chat input
-- **File changes** - Shows the number of lines changed and opens a diff view
-
-**Providing context:**
-
-Type `@` in the TUI to get file autocomplete suggestions, or mention file paths directly in your message (e.g., "look at src/utils.ts") and the agent will read them. When using the non-interactive `kilo run` command, you can pass `-f path/to/file.ts` to explicitly include files. The agent can also discover files on its own using its built-in tools.
-
-{% /tab %}
-{% /tabs %}
 
 ## Quick Interactions
 
@@ -149,9 +116,6 @@ This feature streamlines the interaction when Kilo Code requires clarification, 
 
 ## Tips for Better Workflow
 
-{% tabs %}
-{% tab label="VSCode" %}
-
 {% callout type="tip" %}
 **Switch agents for different tasks.** Use the agent dropdown, `/agents` slash command, or `Cmd+.` (`Ctrl+.` on Windows/Linux) to switch between agents like Code, Ask, and Plan. Each agent is tuned for a different type of task — see [Using Agents](/docs/code-with-ai/agents/using-agents) for details.
 {% /callout %}
@@ -167,19 +131,5 @@ This feature streamlines the interaction when Kilo Code requires clarification, 
 {% callout type="tip" %}
 **Open a standalone chat panel.** Use **Kilo Code: Open in Tab** from the Command Palette (or the "Open in Tab" button in the chat header) to pin a full-size chat panel in its own editor group.
 {% /callout %}
-
-{% /tab %}
-{% tab label="CLI" %}
-
-{% callout type="tip" %}
-**Switch agents for different tasks.** Use `/agents`, press `Tab` to cycle agents, or use `Ctrl+X a` to open the agent picker. Each agent is tuned for a different type of task — see [Using Agents](/docs/code-with-ai/agents/using-agents) for details.
-{% /callout %}
-
-{% callout type="tip" %}
-**The TUI is keyboard-driven.** Navigate, approve changes, and switch agents entirely from the keyboard — no mouse needed.
-{% /callout %}
-
-{% /tab %}
-{% /tabs %}
 
 Ready to start coding? Start a session in Kilo Code and describe what you want to build!

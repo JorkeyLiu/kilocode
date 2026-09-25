@@ -53,10 +53,6 @@ jobs:
       # kilocode_change start - install deps for version script workspace resolution
       - name: Install dependencies
         run: bun install
-
-      - name: Install Kilo
-        if: inputs.bump || inputs.version
-        run: bun i -g @kilocode/cli
       # kilocode_change end
 
       - id: version
@@ -130,7 +126,12 @@ jobs:
     outputs:
       version: ${{ needs.version.outputs.version }}
 
-  # kilocode_change start - execute supported Unix CLI binaries before packaging VSIX artifacts
+  # VSCode-only cut: validate serve-only binary from build-cli artifact.
+  # Previously validated full `bin/kilo` + bwrap + models list; now validates
+  # `bin/kilo-serve` --version / serve --help plus bundled resources (tree-sitter
+  # wasms, sandbox worker/network, bwrap, licenses). Build-cli remains
+  # serve-only artifact supplier to VSIX; this is bounded smoke of the downloaded
+  # artifact, not equivalent to external kilo-bench agent harness smoke.
   validate-cli-unix:
     name: Validate CLI (${{ matrix.target }})
     needs: build-cli
@@ -190,36 +191,34 @@ jobs:
 
           smoke_host() {
             binary="$1"
+            echo "Checking $binary --version"
             "$binary" --version
-            helper="$(dirname "$binary")/bwrap"
+            echo "Checking $binary serve --help"
+            "$binary" serve --help
+            base="$(dirname "$binary")"
+            echo "Validating bundled resources in $base"
+            test -f "$base/tree-sitter/tree-sitter.wasm"
+            test -f "$base/kilo-sandbox-mutation-worker.js"
+            # At least one language wasm should be present
+            ls "$base"/tree-sitter/*.wasm | head -n 1
             if [[ "${{ matrix.target }}" == linux-* ]]; then
-              test -x "$helper"
-              grep -q '^SPDX-License-Identifier: LGPL-2.0-or-later$' "$(dirname "$binary")/licenses/bubblewrap/NOTICE"
-              "$helper" --version
+              test -x "$base/bwrap"
+              grep -q '^SPDX-License-Identifier: LGPL-2.0-or-later$' "$base/licenses/bubblewrap/NOTICE"
+              "$base/bwrap" --version
+              test -f "$base/kilo-sandbox-network-relay" || test -f "$base/kilo-sandbox-network-relay.exe" || echo "relay optional for non-linux"
               # The live user-namespace bootstrap depends on the runner's kernel/AppArmor policy
               # (GitHub-hosted Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1), not on
               # the shipped artifact. The runtime probe degrades gracefully, so keep this check non-fatal.
-              "$helper" --unshare-user --disable-userns --unshare-pid --die-with-parent --new-session \
-                --ro-bind / / --dev /dev --proc /proc -- "$helper" --version \
+              "$base/bwrap" --unshare-user --disable-userns --unshare-pid --die-with-parent --new-session \
+                --ro-bind / / --dev /dev --proc /proc -- "$base/bwrap" --version \
                 || echo "unprivileged user namespaces unavailable on this runner; skipping live sandbox check"
             fi
-            root="$(mktemp -d)"
-            trap 'rm -rf "$root"' RETURN
-            mkdir -p "$root/config/kilo"
-            printf '%s' '{"provider":{"test-provider":{"name":"Test","npm":"@ai-sdk/openai-compatible","api":"https://example.test/v1","models":{"test-model":{"name":"Test Model"}}}}}' > "$root/config/kilo/kilo.jsonc"
-            (
-              unset KILO_CONFIG KILO_CONFIG_DIR
-              export XDG_DATA_HOME="$root/data"
-              export XDG_CACHE_HOME="$root/cache"
-              export XDG_CONFIG_HOME="$root/config"
-              export XDG_STATE_HOME="$root/state"
-              export KILO_DISABLE_PROJECT_CONFIG=1
-              "$binary" --pure models test-provider | grep -q '^test-provider/test-model'
-            )
+            # Verify version output is non-empty and mentions serve
+            "$binary" --version | grep -Eq '[0-9]+\.[0-9]+\.[0-9]+'
           }
 
           if [ "${{ matrix.mode }}" = "host" ]; then
-            smoke_host "./dist/${{ matrix.package }}/bin/kilo"
+            smoke_host "./dist/${{ matrix.package }}/bin/kilo-serve"
             exit 0
           fi
 
@@ -230,26 +229,19 @@ jobs:
             alpine:3.22 \
             sh -c '
               set -eu
-              # kilocode_change start - Bun musl binaries link against libstdc++ and libgcc_s
-              # (GCC C++ runtime). Alpine does not ship these by default; they are available
-              # as optional packages and must be installed for any Bun-compiled musl binary to run.
               apk add --no-cache libstdc++ libgcc
-              # kilocode_change end
-              binary="/dist/$PACKAGE/bin/kilo" # kilocode_change
-              "$binary" --version # kilocode_change
-              "/dist/$PACKAGE/bin/bwrap" --version # kilocode_change
-              grep -q '\''^SPDX-License-Identifier: LGPL-2.0-or-later$'\'' "/dist/$PACKAGE/bin/licenses/bubblewrap/NOTICE" # kilocode_change
-              root="$(mktemp -d)"
-              trap '\''rm -rf "$root"'\'' EXIT
-              mkdir -p "$root/config/kilo"
-              printf '\''%s'\'' '\''{"provider":{"test-provider":{"name":"Test","npm":"@ai-sdk/openai-compatible","api":"https://example.test/v1","models":{"test-model":{"name":"Test Model"}}}}}'\'' > "$root/config/kilo/kilo.jsonc"
-              unset KILO_CONFIG KILO_CONFIG_DIR
-              export XDG_DATA_HOME="$root/data"
-              export XDG_CACHE_HOME="$root/cache"
-              export XDG_CONFIG_HOME="$root/config"
-              export XDG_STATE_HOME="$root/state"
-              export KILO_DISABLE_PROJECT_CONFIG=1
-              "$binary" --pure models test-provider | grep -q "^test-provider/test-model"
+              binary="/dist/$PACKAGE/bin/kilo-serve"
+              echo "Checking $binary --version"
+              "$binary" --version
+              echo "Checking $binary serve --help"
+              "$binary" serve --help
+              base="$(dirname "$binary")"
+              test -f "$base/tree-sitter/tree-sitter.wasm"
+              test -f "$base/kilo-sandbox-mutation-worker.js"
+              test -x "$base/bwrap"
+              grep -q '\''^SPDX-License-Identifier: LGPL-2.0-or-later$'\'' "$base/licenses/bubblewrap/NOTICE"
+              "$binary" --version | grep -Eq "[0-9]+\.[0-9]+\.[0-9]+"
+              "$base/bwrap" --version
             '
 
   validate-cli-windows:
@@ -291,34 +283,21 @@ jobs:
         shell: pwsh
         run: |
           $package = "${{ matrix.package }}".Replace("/", "\")
-          $binary = ".\dist\$package\bin\kilo.exe"
+          $binary = ".\dist\$package\bin\kilo-serve.exe"
+          Write-Host "Checking $binary --version"
           & $binary --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Checking $binary serve --help"
+          & $binary serve --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $root = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString())
-          New-Item -ItemType Directory -Force -Path $root | Out-Null
-          try {
-            foreach ($name in "KILO_CONFIG", "KILO_CONFIG_DIR") {
-              Remove-Item "Env:$name" -ErrorAction SilentlyContinue
-            }
-            $env:XDG_DATA_HOME = Join-Path $root "data"
-            $env:XDG_CACHE_HOME = Join-Path $root "cache"
-            $env:XDG_CONFIG_HOME = Join-Path $root "config"
-            $env:XDG_STATE_HOME = Join-Path $root "state"
-            $env:KILO_DISABLE_PROJECT_CONFIG = "1"
-            $configDir = Join-Path $env:XDG_CONFIG_HOME "kilo"
-            New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-            $configFile = Join-Path $configDir "kilo.jsonc"
-            Set-Content -Path $configFile -Value '{"provider":{"test-provider":{"name":"Test","npm":"@ai-sdk/openai-compatible","api":"https://example.test/v1","models":{"test-model":{"name":"Test Model"}}}}}'
-            $output = & $binary --pure models test-provider
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if (-not ($output -match "(?m)^test-provider/test-model")) {
-              throw "Compiled Windows binary did not list custom test-provider model"
-            }
-          } finally {
-            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
-          }
-  # kilocode_change end
+          $base = Split-Path $binary -Parent
+          if (-not (Test-Path "$base\tree-sitter\tree-sitter.wasm")) { throw "missing tree-sitter.wasm in $base" }
+          if (-not (Test-Path "$base\kilo-sandbox-mutation-worker.js")) { throw "missing kilo-sandbox-mutation-worker.js in $base" }
+          $versionOut = & $binary --version
+          if (-not ($versionOut -match "[0-9]+\.[0-9]+\.[0-9]+")) { throw "version output missing semver: $versionOut" }
+          Write-Host "Windows serve-only smoke passed for $binary"
+
   build-vscode:
     needs:
       - build-cli
@@ -365,29 +344,28 @@ jobs:
           name: kilo-vscode
           path: packages/kilo-vscode/out
 
-  # kilocode_change start
-  # Run smoke tests against CLI assets uploaded to the draft GitHub release
-  # before publishing the release and package artifacts.
-  smoke-test:
-    name: Smoke Test (pre-publish gate)
-    needs:
-      - version
-      - build-cli
-    if: github.repository == 'Kilo-Org/kilocode'
-    uses: ./.github/workflows/smoke-test.yml
-    with:
-      cli_version: ${{ needs.version.outputs.version }}
-    secrets: inherit
-  # kilocode_change end
+  # VSCode-only cut: external kilo-bench smoke disabled. That job consumed the public
+  # kilo archive (kilo-linux-x64.tar.gz from GH release) which no longer exists once
+  # CLI public archive upload is removed. validate-cli-unix/windows above provide a
+  # meaningful bounded smoke of the downloaded build-cli artifact (kilo-serve
+  # --version / serve --help + bwrap/resources). Not equivalent to agent harness
+  # smoke - no Harbor eval, no model invocation - but validates the shipped
+  # serve-only binary that gets bundled into the VSIX. The smoke-test.yml workflow
+  # file has been removed (not retained), and the workflow allowlist in
+  # script/check-workflows.ts stays in sync with no entry for it; restore the
+  # file plus the allowlist entry if a manual trigger is needed again.
+  # Removed job:
+  #   smoke-test:
+  #     uses: ./.github/workflows/smoke-test.yml
+  #     with: { cli_version: ... }
 
   publish:
     needs:
       - version
       - build-cli
       - build-vscode
-      - validate-cli-unix # kilocode_change
-      - validate-cli-windows # kilocode_change
-      - smoke-test
+      - validate-cli-unix
+      - validate-cli-windows
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6 # kilocode_change
@@ -397,19 +375,6 @@ jobs:
         # kilocode_change end
 
       - uses: ./.github/actions/setup-bun
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - uses: actions/setup-node@v6 # kilocode_change
         with:
@@ -429,7 +394,7 @@ jobs:
           kilo-maintainer-app-secret: ${{ secrets.KILO_MAINTAINER_APP_SECRET }}
           # kilocode_change end
 
-      # kilocode_change start - download into /tmp and extract the tar.zst packed by build-cli
+      # VSCode-only: download internal serve-only artifact for VSIX publishing; no GHCR/Docker/AUR steps.
       - uses: actions/download-artifact@v8
         with:
           name: kilo-cli.tar.zst
@@ -440,30 +405,11 @@ jobs:
         run: |
           mkdir -p packages/opencode/dist
           tar --zstd -xf /tmp/kilo-cli.tar.zst -C packages/opencode/dist
-      # kilocode_change end
+
       - uses: actions/download-artifact@v8
         with:
           name: kilo-vscode
           path: packages/kilo-vscode/out
-
-      - name: Cache apt packages (AUR)
-        uses: actions/cache@v5 # kilocode_change
-        with:
-          path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-aur-${{ hashFiles('.github/workflows/publish.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-apt-aur-
-
-      - name: Setup SSH for AUR
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pacman-package-manager
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          git config --global user.email "kilo-maintainer[bot]@users.noreply.github.com"
-          git config --global user.name "kilo-maintainer[bot]"
-          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
 
       - run: ./script/publish.ts
         env:
@@ -471,7 +417,6 @@ jobs:
           KILO_RELEASE: ${{ needs.version.outputs.release }}
           KILO_PRE_RELEASE: ${{ inputs.pre_release }}
           GH_REPO: ${{ github.repository }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
           NPM_CONFIG_PROVENANCE: true
           VSCE_PAT: ${{ secrets.VSCE_TOKEN }}

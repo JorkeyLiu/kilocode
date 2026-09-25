@@ -42,7 +42,6 @@ const active = new Set([
   "nix-eval.yml",
   "nix-hashes.yml",
   "publish.yml",
-  "smoke-test.yml",
   "source-check-links.yml",
   "test-vscode.yml",
   "test.yml",

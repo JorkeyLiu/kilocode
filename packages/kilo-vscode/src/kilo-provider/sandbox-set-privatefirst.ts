@@ -60,36 +60,40 @@ export type SandboxSetAttempt =
   | { kind: "terminal"; code?: string }
   | { kind: "fallback"; reason: string }
 
+function parseSandboxSetSucceeded(result: unknown, req: ServePrivateSandboxSetRequest): SandboxSetAttempt {
+  try {
+    const out = validateSandboxSetResult(result, req)
+    if (out.status !== "succeeded" || out.accepted !== true) return { kind: "fallback", reason: "invalid" }
+    const st = out.data.status as unknown as Record<string, unknown>
+    if (typeof st.directory !== "string" || typeof st.enabled !== "boolean" || typeof st.available !== "boolean")
+      return { kind: "fallback", reason: "invalid" }
+    if (st.reason !== undefined && typeof st.reason !== "string") return { kind: "fallback", reason: "invalid" }
+    if (typeof st.version !== "number" || !Number.isInteger(st.version)) return { kind: "fallback", reason: "invalid" }
+    return { kind: "ok", status: st as unknown as SandboxSetStatus }
+  } catch {
+    return { kind: "fallback", reason: "invalid" }
+  }
+}
+
+function parseSandboxSetFailed(result: unknown, req: ServePrivateSandboxSetRequest): SandboxSetAttempt {
+  try {
+    const out = validateSandboxSetResult(result, req)
+    if (out.status !== "failed") return { kind: "fallback", reason: "invalid" }
+    if (out.failure.retryable === true) return { kind: "fallback", reason: out.failure.code }
+    if (out.failure.retryable === false) return { kind: "terminal", code: out.failure.code }
+    return { kind: "fallback", reason: "failed without retryable" }
+  } catch {
+    return { kind: "fallback", reason: "invalid" }
+  }
+}
+
 export function parseSandboxSetResult(result: unknown, req: ServePrivateSandboxSetRequest): SandboxSetAttempt {
   const rec = result as { status?: unknown; accepted?: unknown; transportUnknown?: unknown } | null
   if (!rec || typeof rec !== "object") return { kind: "fallback", reason: "invalid" }
   if (rec.transportUnknown === true) return { kind: "fallback", reason: "transportUnknown" }
   if (rec.status === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
-  if (rec.status === "succeeded") {
-    try {
-      const out = validateSandboxSetResult(result, req)
-      if (out.status !== "succeeded" || out.accepted !== true) return { kind: "fallback", reason: "invalid" }
-      const st = out.data.status as unknown as Record<string, unknown>
-      if (typeof st.directory !== "string" || typeof st.enabled !== "boolean" || typeof st.available !== "boolean")
-        return { kind: "fallback", reason: "invalid" }
-      if (st.reason !== undefined && typeof st.reason !== "string") return { kind: "fallback", reason: "invalid" }
-      if (typeof st.version !== "number" || !Number.isInteger(st.version)) return { kind: "fallback", reason: "invalid" }
-      return { kind: "ok", status: st as unknown as SandboxSetStatus }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
-    }
-  }
-  if (rec.status === "failed") {
-    try {
-      const out = validateSandboxSetResult(result, req)
-      if (out.status !== "failed") return { kind: "fallback", reason: "invalid" }
-      if (out.failure.retryable === true) return { kind: "fallback", reason: out.failure.code }
-      if (out.failure.retryable === false) return { kind: "terminal", code: out.failure.code }
-      return { kind: "fallback", reason: "failed without retryable" }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
-    }
-  }
+  if (rec.status === "succeeded") return parseSandboxSetSucceeded(result, req)
+  if (rec.status === "failed") return parseSandboxSetFailed(result, req)
   return { kind: "fallback", reason: `private not succeeded: ${String(rec.status)}` }
 }
 

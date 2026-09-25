@@ -390,6 +390,7 @@ export function activate(context: vscode.ExtensionContext) {
       dbPath,
       cursorStore: createMementoCursorStore(context.globalState),
       ...(isFixture ? { testBridge: true } : {}),
+      canonicalStorageGate: () => connectionService.ensureCanonicalStorage(),
     })
     if (isFixture) {
       console.log("[Kilo] PrivateObservationService testBridge enabled for KILO_E2E_FIXTURE")
@@ -408,6 +409,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
     privateObservation = fallback
   }
+  privateObservation.setCanonicalStorageGate(() => connectionService.ensureCanonicalStorage())
   context.subscriptions.push(privateObservation)
   const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context)
   context.subscriptions.push(privateObservationTriggers)
@@ -531,9 +533,21 @@ export function activate(context: vscode.ExtensionContext) {
   // with strict validation and coalesced refresh, keeping standalone-worker path compatible and deduped via coordinator.
   connectionService.setObservationChangedHandler(observationChangedForwarder)
 
-  privateObservation.initialize().catch((err) => {
-    console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
-  })
+  // Correct ordering: no standalone no-lease worker may open DB before
+  // canonical storage pre-serve cutover gate completes. Shared singleflight
+  // ServerManager.ensureCanonicalStorage via KiloConnectionService, reused by
+  // startServer. Prevents existing worker already open during cutover in this
+  // host; across multiple windows, live serve lease makes status fail closed
+  // without killing the other process. Lazy server startup preserved (gate
+  // does not spawn serve).
+  void connectionService
+    .ensureCanonicalStorage()
+    .then(() =>
+      privateObservation.initialize().catch((err) => {
+        console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
+      }),
+    )
+    .catch((err) => console.warn("[Kilo] Canonical storage gate failed (fail-closed), private observation not started:", err))
 
   const attention = new AttentionService(connectionService)
 

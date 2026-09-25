@@ -1,12 +1,12 @@
 ---
 title: "Plugins"
-description: "Extend the Kilo CLI with custom hooks, tools, auth providers, and more"
+description: "Extend Kilo with custom hooks, tools, auth providers, and more"
 platform: new
 ---
 
 # Plugins
 
-Plugins extend Kilo by hooking into events, adding custom tools, registering auth or model providers, and customizing runtime behavior. They are TypeScript or JavaScript modules loaded at startup, and work in both the Kilo CLI and the VS Code extension.
+Plugins extend Kilo by hooking into events, adding custom tools, registering auth or model providers, and customizing runtime behavior. They are TypeScript or JavaScript modules loaded at startup, and work in the VS Code extension including its bundled runtime.
 
 ## What plugins can do
 
@@ -51,7 +51,7 @@ Each entry can be:
 | `["package-name", { options }]` | npm package with options passed to the plugin function |
 | `"./path/plugin.ts"` / `"file:///..."` | Local file (relative to the config file or absolute `file:` URL) |
 
-Config files live in the same locations as the rest of your CLI configuration — see the [CLI configuration reference](/docs/code-with-ai/platforms/cli#configuration).
+Config files live in the same locations as the rest of your Kilo configuration — see the [settings reference](/docs/getting-started/settings).
 
 ### From a plugin directory
 
@@ -90,7 +90,7 @@ The command resolves the package, reads its `package.json` for plugin entrypoint
 
 ### How plugins are installed
 
-- **npm plugins** are installed automatically at startup using Bun. Packages and their dependencies are cached under `packages/` in the current CLI XDG cache directory (`~/.cache/opencode/packages/` by default, or `$XDG_CACHE_HOME/opencode/packages/` when `XDG_CACHE_HOME` is set).
+- **npm plugins** are installed automatically at startup using Bun. Packages and their dependencies are cached under `packages/` in the current runtime XDG cache directory (`~/.cache/opencode/packages/` by default, or `$XDG_CACHE_HOME/opencode/packages/` when `XDG_CACHE_HOME` is set).
 - **Pinned npm versions** like `my-plugin@1.2.3` install that exact version and do not check for newer registry versions. Bare package names resolve to `latest` and can refresh when the cached copy becomes stale.
 - **Install scripts are disabled** for npm plugins. Kilo installs packages with lifecycle scripts such as `install` and `postinstall` blocked.
 - **Local plugins** are loaded directly from the plugin directory. If your plugin imports external packages, add a `package.json` to your config directory (see [Dependencies](#dependencies)) — Kilo runs `bun install` on startup so imports resolve.
@@ -263,7 +263,7 @@ Kilo automatically creates a `package.json` in config directories that contain a
 
 ### Engine compatibility
 
-Declare a CLI version range to prevent a plugin from loading against an incompatible build:
+Declare a runtime version range to prevent a plugin from loading against an incompatible build:
 
 ```json
 {
@@ -272,7 +272,7 @@ Declare a CLI version range to prevent a plugin from loading against an incompat
 }
 ```
 
-If the running CLI does not satisfy the range, the plugin is skipped and a warning is surfaced.
+If the running runtime does not satisfy the range, the plugin is skipped and a warning is surfaced.
 
 ### Dependencies
 
@@ -452,11 +452,11 @@ For tools that don't need the full plugin context, drop them in a `tool/` or `to
 
 ## Examples
 
-### Configure CLI completion notifications
+### Configure completion notifications
 
-The CLI has built-in attention alerts for session completion, errors, and prompts that need input. You do not need a plugin or platform-specific notification command.
+Kilo has built-in attention alerts for session completion, errors, and prompts that need input. You do not need a plugin or platform-specific notification command.
 
-Enable notifications and sounds through the `attention` section of `tui.json` (or `tui.jsonc`). See [CLI Notifications and Sounds](/docs/code-with-ai/platforms/cli#cli-notifications-and-sounds) for configuration and custom sound overrides.
+Enable notifications and sounds through the `attention` section of `tui.json` (or `tui.jsonc`).
 
 ### Block reads of `.env` files
 
@@ -569,7 +569,7 @@ Host slots include `home_prompt_right`, `session_prompt`, `session_prompt_right`
 
 ## Troubleshooting
 
-- **Plugin failed to load** — check the CLI logs with `kilo --print-logs --log-level DEBUG`. Load failures are also surfaced as session errors in the TUI and VS Code extension.
+- **Plugin failed to load** — check the extension logs for runtime load errors. Load failures are also surfaced as session errors in the VS Code extension.
 - **Plugin loaded but hooks never fire** — make sure the default export includes `server`:
 
   ```ts
@@ -581,8 +581,8 @@ Host slots include `home_prompt_right`, `session_prompt`, `session_prompt_right`
 - **Package installed but not active in one runtime** — make sure the package exposes the matching entrypoint. Server plugins need `exports["./server"]` or `main`; TUI plugins need `exports["./tui"]` or valid `oc-themes`. Packages that only support the other runtime are skipped with a warning instead of causing a fatal load error.
 
 - **Local plugin can't find an npm import** — add a `package.json` in the config directory so `bun install` picks up the dependency (see [Dependencies](#dependencies)).
-- **Plugin loads in dev but not in CI** — verify `KILO_PURE` is not set, and that npm-installed plugins are cached under `packages/` in the current CLI XDG cache directory (`~/.cache/opencode/packages/` by default, or `$XDG_CACHE_HOME/opencode/packages/` when `XDG_CACHE_HOME` is set). Run with `--log-level DEBUG` to see install output.
-- **Reset the plugin cache** — delete the plugin package folder under the CLI's `packages/` cache directory (or the `node_modules` cache under your config directory) and restart Kilo.
+- **Plugin loads in dev but not in CI** — verify `KILO_PURE` is not set, and that npm-installed plugins are cached under `packages/` in the current runtime XDG cache directory (`~/.cache/opencode/packages/` by default, or `$XDG_CACHE_HOME/opencode/packages/` when `XDG_CACHE_HOME` is set). Run with `--log-level DEBUG` to see install output.
+- **Reset the plugin cache** — delete the plugin package folder under the runtime's `packages/` cache directory (or the `node_modules` cache under your config directory) and restart Kilo.
 
 ---
 
@@ -590,5 +590,4 @@ Host slots include `home_prompt_right`, `session_prompt`, `session_prompt_right`
 
 - Types: [`@kilocode/plugin`](https://github.com/Kilo-Org/kilocode/tree/main/packages/plugin) — `Plugin`, `Hooks`, `PluginInput`, `ToolDefinition`, `AuthHook`, `ProviderHook`.
 - Example plugin: [`packages/plugin/src/example.ts`](https://github.com/Kilo-Org/kilocode/blob/main/packages/plugin/src/example.ts)
-- CLI command: [`kilo plugin`](/docs/code-with-ai/platforms/cli-reference#kilo-plugin)
 - Upstream docs (behavior is identical to OpenCode): [opencode.ai/docs/plugins](https://opencode.ai/docs/plugins) and [opencode.ai/docs/custom-tools](https://opencode.ai/docs/custom-tools)

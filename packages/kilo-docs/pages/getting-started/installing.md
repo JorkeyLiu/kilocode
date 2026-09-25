@@ -14,7 +14,7 @@ Get started with Kilo Code by installing it on your preferred platform. Choose y
 
 ## VS Code Extension
 
-The current Kilo Code extension is built on the [Kilo CLI](https://github.com/Kilo-Org/kilocode) and is distributed as the **pre-release version** on the VS Code Marketplace.
+The Kilo Code extension is distributed as the **pre-release version** on the VS Code Marketplace. The extension bundles the internal `kilo-serve` runtime — no separate CLI install is required.
 
 1. Open VS Code
 2. Go to Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`)
@@ -92,13 +92,6 @@ If you plan to remain on that version for a while, you may also want to temporar
   2. Under **System variables**, select **Path** → **Edit** → **New**
   3. Add: `C:\Windows\System32\WindowsPowerShell\v1.0\`
   4. Click **OK** and restart VS Code
-
-{% /tab %}
-{% tab label="CLI" %}
-
-## Command Line Interface
-
-{% partial file="install-cli.md" /%}
 
 {% /tab %}
 {% tab label="Slack" %}

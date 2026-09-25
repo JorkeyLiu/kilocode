@@ -11,7 +11,7 @@ import { createClient } from "@hey-api/openapi-ts"
 
 const opencode = path.resolve(dir, "../../opencode")
 
-await $`bun dev generate > ${dir}/openapi.json`.cwd(opencode)
+await $`bun --conditions=browser ./src/server/generate-openapi.ts > ${dir}/openapi.json`.cwd(opencode)
 
 // Patch openapi.json parentSessionId to be nullable (Effect OpenAPI generator drops null for optional NullOr, source is correct)
 for (const p of [`${dir}/openapi.json`, path.resolve(dir, "../openapi.json")]) {

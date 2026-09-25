@@ -40,7 +40,11 @@ describe("source wrapper — P4.4-G2 preset catalog removed", () => {
 
   it("local-bin.ts defines source wrapper via source-wrapper import", () => {
     const src = fs.readFileSync(LOCAL_BIN_TS, "utf-8")
-    expect(src).toContain('import { generateSourceWrapperContent } from "./source-wrapper"')
+    expect(src).toContain('generateSourceWrapperContent')
+    expect(src).toContain('from "./source-wrapper"')
+    // Bounded cut: dev staging now primarily serve-only, so local-bin must also
+    // import the serve wrapper and never require a nonexistent full binary.
+    expect(src).toContain('generateServeSourceWrapperContent')
   })
 })
 

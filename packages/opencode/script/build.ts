@@ -4,7 +4,6 @@ import { $ } from "bun"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
-import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { createRequire } from "module" // kilocode_change
 
 const __filename = fileURLToPath(import.meta.url)
@@ -26,7 +25,6 @@ const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
-const plugin = createSolidTransformPlugin()
 
 // kilocode_change start - codebase indexing
 async function copyTreeSitterWasms(outputDir: string) {
@@ -190,89 +188,13 @@ for (const item of targets) {
       : undefined
   // kilocode_change end
 
-  const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
-  const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
-  const parserWorker = fs.realpathSync(fs.existsSync(localPath) ? localPath : rootPath)
-  const workerPath = "./src/cli/cmd/tui/worker.ts"
-  // kilocode_change start
+  // Bounded cut: public full `bin/kilo` removed; only `bin/kilo-serve` is produced.
+  // Full-specific parser/TUI worker, Solid transform, and full smoke/patchelf are
+  // intentionally not built. Source CLI (src/index.ts / TUI tree) is retained on
+  // disk for SDK generation and local dev -- see local-bin source wrapper -- but
+  // compiled full binary is no longer an output. Hidden cutover + serve resources
+  // (tree-sitter wasm, sandbox worker/network, bwrap) are retained.
   const sessionExportWorkerPath = "./src/kilocode/session-export/worker.ts"
-  // kilocode_change end
-
-  // Use platform-specific bunfs root path based on target OS
-  const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
-  const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
-
-  await Bun.build({
-    conditions: ["bun", "node"], // kilocode_change - port anomalyco/opencode#30873; current form from #31566
-    tsconfig: "./tsconfig.json",
-    // kilocode_change start - force bare jsonc-parser to ESM so the UMD
-    // runtime require("./impl/format") is never bundled (missing from bunfs
-    // in compiled binary; source mode runs from disk). Static imports already
-    // resolve to ESM; the dynamic require in config-file-convergence needs this.
-    // Mirrors packages/kilo-vscode/esbuild.js jsoncParserEsmPlugin.
-    plugins: [
-      plugin,
-      {
-        name: "jsonc-parser-esm",
-        setup(build) {
-          build.onResolve({ filter: /^jsonc-parser$/ }, () => {
-            const pkg = require.resolve("jsonc-parser/package.json")
-            return { path: path.join(path.dirname(pkg), "lib", "esm", "main.js") }
-          })
-        },
-      },
-    ],
-    // kilocode_change end
-    // kilocode_change start - skip sourcemaps for release builds (each .js.map adds ~50 MB per target → ~600 MB total)
-    sourcemap: Script.release ? "none" : "external",
-    external: ["node-gyp"],
-    // kilocode_change end
-    format: "esm",
-    minify: true,
-    // kilocode_change start - disable code-splitting to avoid a Bun 1.3.14 codegen bug.
-    // With splitting:true Bun emits cross-chunk re-exports like `import{vn as G9}` whose
-    // binding isn't top-level, so the compiled binary crashes at startup on the baseline
-    // target: "SyntaxError: Exported binding 'G9' needs to refer to a top-level declared
-    // variable." (Bun oven-sh/bun#25621, #5344, #7265; also opencode#23349). Fixed upstream
-    // in Bun#26089, post-1.3.14. Splitting only deduped shared code between the entrypoints;
-    // turning it off inlines per entrypoint and produces a valid binary.
-    splitting: false,
-    // kilocode_change end
-    compile: {
-      autoloadBunfig: false,
-      autoloadDotenv: false,
-      autoloadTsconfig: true,
-      autoloadPackageJson: true,
-      target: name.replace(pkg.name, "bun") as any,
-      // kilocode_change start
-      outfile: `dist/${name}/bin/kilo`,
-      execArgv: [`--user-agent=kilo/${Script.version}`, "--use-system-ca", "--"],
-      // kilocode_change end
-      windows: {},
-    },
-    // kilocode_change start - packages/app was removed; no embedded web UI
-    files: {},
-    entrypoints: ["./src/index.ts", parserWorker, workerPath, sessionExportWorkerPath],
-    // kilocode_change end
-    define: {
-      KILO_VERSION: `'${Script.version}'`,
-      OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
-      KILO_WORKER_PATH: workerPath,
-      // kilocode_change start
-      KILO_SESSION_EXPORT_WORKER_PATH: sessionExportWorkerPath,
-      KILO_SANDBOX_MUTATION_WORKER_PATH: JSON.stringify(KiloSandboxWorker.filename),
-      KILO_SANDBOX_NETWORK_RELAY_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.relay) : "undefined",
-      KILO_SANDBOX_SECCOMP_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.seccomp) : "undefined",
-      // kilocode_change end
-      KILO_CHANNEL: `'${Script.channel}'`,
-      KILO_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
-      // kilocode_change start
-      KILO_BWRAP_SHA256: bwrap ? `'${bwrap}'` : "undefined",
-      KILO_BUILD_KIND: Script.release ? `'release'` : `'source'`,
-      // kilocode_change end
-      ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
-    },
-  })
 
   // kilocode_change start - lightweight serve-only backend for VS Code cold
   // start. Static graph is serve-entry.ts + ServeCommand + shared bootstrap
@@ -312,8 +234,6 @@ for (const item of targets) {
     entrypoints: ["./src/serve-entry.ts", sessionExportWorkerPath],
     define: {
       KILO_VERSION: `'${Script.version}'`,
-      OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
-      KILO_WORKER_PATH: workerPath,
       KILO_SESSION_EXPORT_WORKER_PATH: sessionExportWorkerPath,
       KILO_SANDBOX_MUTATION_WORKER_PATH: JSON.stringify(KiloSandboxWorker.filename),
       KILO_SANDBOX_NETWORK_RELAY_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.relay) : "undefined",
@@ -344,50 +264,38 @@ for (const item of targets) {
     const key = item.abi === "musl" ? `${item.arch}-musl` : item.arch
     const interpreter = interpreters[key]
     if (interpreter) {
-      try {
-        await $`patchelf --set-interpreter ${interpreter} dist/${name}/bin/kilo`
-        console.log(`patched interpreter for ${name} -> ${interpreter}`)
-      } catch {
-        console.warn(`patchelf not available, skipping interpreter fix for ${name}`)
-      }
-      // kilocode_change start - same interpreter for the serve-only binary
+      // Serve-only interpreter patch; full `bin/kilo` is no longer produced.
       try {
         await $`patchelf --set-interpreter ${interpreter} dist/${name}/bin/kilo-serve`
         console.log(`patched interpreter for ${name}/kilo-serve -> ${interpreter}`)
       } catch {
         console.warn(`patchelf not available, skipping interpreter fix for ${name}/kilo-serve`)
       }
-      // kilocode_change end
     }
   }
   // kilocode_change end
 
-  // Smoke test: only run if binary is for current platform
+  // Smoke test: only run if binary is for current platform — serve-only
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/kilo` // kilocode_change
-      console.log(`Running smoke test: ${binaryPath} --version`)
+    const servePath = `dist/${name}/bin/kilo-serve`
+    console.log(`Running smoke test: ${servePath} --version`)
     try {
-      const versionOutput = await $`${binaryPath} --version`.text()
-      console.log(`Smoke test passed: ${versionOutput.trim()}`)
-      // kilocode_change start
-      await KiloSandboxWorker.smoke(binaryPath)
-      console.log("Kilo sandbox mutation worker smoke test passed")
-      const servePath = `dist/${name}/bin/kilo-serve`
       const serveVersion = await $`${servePath} --version`.text()
       console.log(`Serve smoke test passed: ${serveVersion.trim()}`)
       const serveHelp = await $`${servePath} serve --help`.nothrow().quiet()
       if (serveHelp.exitCode !== 0) throw new Error("kilo-serve serve --help exited non-zero")
       console.log("Serve help smoke test passed")
-      // kilocode_change end
-      // kilocode_change start
     } catch (e) {
       console.error(`Smoke test failed for ${name}:`, e)
       process.exit(1)
     }
   }
-  // kilocode_change end
 
-  await $`rm -rf ./dist/${name}/bin/tui`
+  // Clean stale full binary from output (previous builds / dev artifacts) and
+  // legacy tui folder; do not produce or retain `bin/kilo`.
+  await $`rm -rf ./dist/${name}/bin/kilo`.nothrow().quiet()
+  await $`rm -rf ./dist/${name}/bin/kilo.exe`.nothrow().quiet()
+  await $`rm -rf ./dist/${name}/bin/tui`.nothrow().quiet()
   // kilocode_change start
   if (item.os === "linux") {
     const content = await Promise.all([
@@ -429,24 +337,10 @@ for (const item of targets) {
 }
 
 if (Script.release) {
-  const archives: string[] = [] // kilocode_change
-  for (const key of Object.keys(binaries)) {
-    const archive = key.replace(pkg.name, "kilo") // kilocode_change
-    if (key.includes("linux")) {
-      // kilocode_change start
-      const out = path.resolve("dist", `${archive}.tar.gz`)
-      await $`tar -czf ${out} *`.cwd(`dist/${key}/bin`)
-      archives.push(out)
-      // kilocode_change end
-    } else {
-      // kilocode_change start
-      const out = path.resolve("dist", `${archive}.zip`)
-      await $`zip -r ${out} *`.cwd(`dist/${key}/bin`)
-      archives.push(out)
-      // kilocode_change end
-    }
-  }
-  await $`gh release upload v${Script.version} ${archives} --clobber` // kilocode_change
+  // VSCode-only target: CLI public archive `gh release upload` removed. Build-cli stays
+  // as serve-only artifact supplier to VSIX via the kilo-cli.tar.zst internal artifact,
+  // not via per-platform kilo-*.tar.gz/zip GH release assets. No public archive upload.
+  console.log("Skipping CLI archive gh release upload (VSCode-only target: VSIX is the release artifact)")
 }
 
 export { binaries }

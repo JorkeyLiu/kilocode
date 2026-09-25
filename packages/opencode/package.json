@@ -4,7 +4,7 @@
   "name": "@kilocode/cli",
   "type": "module",
   "license": "MIT",
-  "private": false,
+  "private": true,
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "test": "bun run script/test-runner.ts",
@@ -17,10 +17,6 @@
     "dev": "bun run --conditions=browser ./src/index.ts",
     "dev:temporary": "bun run --conditions=browser ./src/temporary.ts",
     "storage:baseline": "bun run script/storage-baseline.ts"
-  },
-  "bin": {
-    "kilo": "./bin/kilo",
-    "kilocode": "./bin/kilo"
   },
   "exports": {
     "./permission/trusted-context": null,

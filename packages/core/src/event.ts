@@ -1,13 +1,23 @@
 export * as EventV2 from "./event"
 
-import { Cause, Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
-import { and, asc, eq, gt } from "drizzle-orm"
+import { Cause, Context, Effect, Exit, Layer, Option, PubSub, Schema, Stream } from "effect"
+import { and, asc, desc, eq, gt } from "drizzle-orm"
 import { Database } from "./database/database"
 import { EventSequenceTable, EventTable } from "./event/sql"
+import { SessionChangefeedTable } from "./retention/sql"
 import { Location } from "./location"
 import { externalID, type ExternalID, NonNegativeInt, withStatics } from "./schema"
 import { Identifier } from "./util/identifier"
 import { isDeepStrictEqual } from "node:util"
+
+const LEGACY_OBSERVABLE_TYPES = new Set<string>([
+  "session.updated",
+  "message.updated",
+  "message.removed",
+  "message.part.updated",
+  "message.part.removed",
+])
+export class ObservationNotifier extends Context.Service<ObservationNotifier, { readonly notify: (entry: { seq: number; session_id: string; revision: number; kind: string; time: number }) => Effect.Effect<void> }>()("EventV2.ObservationNotifier") {}
 
 export const ID = Schema.String.check(Schema.isStartsWith("evt_")).pipe(
   Schema.brand("Event.ID"),
@@ -341,6 +351,26 @@ export const layerWith = (options?: LayerOptions) =>
                                 message: `Event ${event.id} already exists at aggregate ${stored.aggregateID} sequence ${stored.seq}`,
                               }),
                             )
+                          let beforeEntry: { seq: number; revision: number } | undefined = undefined
+                          let beforeFailed = false
+                          if (LEGACY_OBSERVABLE_TYPES.has(event.type)) {
+                            const beforeResult = yield* db
+                              .select()
+                              .from(SessionChangefeedTable)
+                              .where(eq(SessionChangefeedTable.session_id, aggregateID))
+                              .orderBy(desc(SessionChangefeedTable.seq))
+                              .limit(1)
+                              .get()
+                              .pipe(Effect.exit)
+                            if (Exit.isSuccess(beforeResult)) {
+                              const v = beforeResult.value as unknown as { seq: number; revision: number } | undefined
+                              if (v && typeof v.seq === "number" && typeof v.revision === "number") beforeEntry = { seq: v.seq, revision: v.revision }
+                              else if (v) beforeEntry = undefined
+                              else beforeEntry = undefined
+                            } else {
+                              beforeFailed = true
+                            }
+                          }
                           for (const guard of commitGuards) {
                             yield* guard(event)
                           }
@@ -373,13 +403,59 @@ export const layerWith = (options?: LayerOptions) =>
                             ])
                             .run()
                             .pipe(Effect.orDie)
-                          return { aggregateID, seq }
+                          let capturedEntry: { seq: number; session_id: string; revision: number; kind: string; time: number } | undefined
+                          if (LEGACY_OBSERVABLE_TYPES.has(event.type) && !beforeFailed) {
+                            const afterResult = yield* db
+                              .select()
+                              .from(SessionChangefeedTable)
+                              .where(eq(SessionChangefeedTable.session_id, aggregateID))
+                              .orderBy(desc(SessionChangefeedTable.seq))
+                              .limit(1)
+                              .get()
+                              .pipe(Effect.exit)
+                            if (Exit.isSuccess(afterResult) && afterResult.value) {
+                              const row = afterResult.value as unknown as { seq: number; session_id: string; revision: number; kind: string; time: number }
+                              const seqAdvanced = beforeEntry ? row.seq !== beforeEntry.seq && row.seq > beforeEntry.seq : true
+                              const revAdvanced = beforeEntry ? row.revision !== beforeEntry.revision && row.revision > beforeEntry.revision : true
+                              if (
+                                typeof row.seq === "number" &&
+                                typeof row.session_id === "string" &&
+                                typeof row.revision === "number" &&
+                                typeof row.time === "number" &&
+                                typeof row.kind === "string" &&
+                                row.session_id === aggregateID &&
+                                row.kind === "changed" &&
+                                seqAdvanced &&
+                                revAdvanced
+                              ) {
+                                capturedEntry = { seq: row.seq, session_id: row.session_id, revision: row.revision, kind: row.kind, time: row.time }
+                              }
+                            }
+                          }
+                          return { aggregateID, seq, capturedEntry }
                         }),
                       { behavior: "immediate" },
                     )
                     .pipe(Effect.orDie)
                   if (committed) {
                     yield* wakeAggregate(committed.aggregateID)
+                    if (committed.capturedEntry) {
+                      yield* Effect.gen(function* () {
+                        const opt = yield* Effect.serviceOption(ObservationNotifier)
+                        if (Option.isNone(opt)) return
+                        const notifier = opt.value
+                        const entry = committed.capturedEntry!
+                        yield* notifier
+                          .notify({
+                            seq: entry.seq,
+                            session_id: entry.session_id,
+                            revision: entry.revision,
+                            kind: entry.kind,
+                            time: entry.time,
+                          })
+                          .pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+                      }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+                    }
                   }
                   return committed
                 }),

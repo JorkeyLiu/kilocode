@@ -1,6 +1,7 @@
 import type { Argv, InferredOptionTypes } from "yargs"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import type { Config } from "@/config/config"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { Effect } from "effect"
 
 const options = {
@@ -65,6 +66,11 @@ export const resolveNetworkOptions = Effect.fn("Cli.resolveNetworkOptions")(func
 })
 
 export function resolveNetworkOptionsNoConfig(args: NetworkOptions, config?: ConfigV1.Info) {
+  // kilocode_change start - private runtime forces loopback/ephemeral/no mdns/no cors
+  if (Flag.KILO_PRIVATE_RUNTIME) {
+    return { hostname: "127.0.0.1", port: 0, mdns: false, mdnsDomain: "kilo.local", cors: [] as string[], fallback: false }
+  }
+  // kilocode_change end
   // kilocode_change start
   const explicit = explicitNetworkOptions()
   const portExplicitlySet = explicit.includes("port")

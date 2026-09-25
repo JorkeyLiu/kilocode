@@ -1719,8 +1719,13 @@ export class AgentManagerProvider implements Disposable {
           }
           if (hasForbidden) continue
           if ((op as Record<string, unknown>).detail !== undefined || (op as Record<string, unknown>).stack !== undefined) continue
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if ((op as any).revision !== undefined || (op as any).idempotencyHash !== undefined || (op as any).requestId !== undefined || (op as any).opKind !== undefined) continue
+          if (
+            (op as Record<string, unknown>).revision !== undefined ||
+            (op as Record<string, unknown>).idempotencyHash !== undefined ||
+            (op as Record<string, unknown>).requestId !== undefined ||
+            (op as Record<string, unknown>).opKind !== undefined
+          )
+            continue
           // cancel validation
           const cancelRaw = (op as Record<string, unknown>).cancel
           if (cancelRaw !== undefined) {

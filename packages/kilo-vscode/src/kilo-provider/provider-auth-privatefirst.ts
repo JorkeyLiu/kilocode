@@ -13,7 +13,7 @@ import type {
 } from "../services/cli-backend/serve-private-provider-auth-contract"
 
 export type { ProviderAuthData }
-export type ProviderAuthSdkData = Record<string, Array<{ type: "oauth" | "api"; label: string; prompts?: unknown }>>
+type ProviderAuthSdkData = Record<string, Array<{ type: "oauth" | "api"; label: string; prompts?: unknown }>>
 
 /**
  * Private-first `provider/auth` read-only observation (the same

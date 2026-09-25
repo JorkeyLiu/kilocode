@@ -6,11 +6,10 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">Open source agent za kodiranje s AI-jem u VS Codeu ili CLI-ju.</p>
+<p align="center">Open source agent za kodiranje s AI-jem u VS Codeu.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
-  <a href="https://www.npmjs.com/package/@kilocode/cli"><img alt="npm" src="https://raster.shields.io/npm/v/@kilocode/cli?style=flat" height="20" /></a>
   <a href="https://x.com/kilocode"><img src="https://raster.shields.io/badge/kilocode-000000?style=flat&logo=x&logoColor=white" alt="X (Twitter)" height="20"></a>
   <a href="https://blog.kilo.ai"><img src="https://raster.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Blog" height="20"></a>
   <a href="https://kilo.ai/discord"><img src="https://raster.shields.io/badge/Join%20Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" height="20"></a>
@@ -21,7 +20,7 @@
 
 ---
 
-Kilo Code je AI agent za kodiranje koji vas prati svugdje gdje radite: [VS Code](https://kilo.ai/landing/vs-code) i [CLI](https://kilo.ai/cli). Open source je i ima otvorene cijene. Birate između više od 500 modela, mijenjate ih usred zadatka i plaćate cijenu pružaoca modela bez dodatne marže. API ključevi nisu potrebni za početak.
+Kilo Code je AI agent za kodiranje koji vas prati svugdje gdje radite: [VS Code](https://kilo.ai/landing/vs-code). Open source je i ima otvorene cijene. Birate između više od 500 modela, mijenjate ih usred zadatka i plaćate cijenu pružaoca modela bez dodatne marže. API ključevi nisu potrebni za početak.
 
 ### Instalacija
 
@@ -33,70 +32,6 @@ Odaberite gdje želite pokrenuti Kilo.
 <br>
 
 Instalirajte [Kilo Code ekstenziju](vscode:extension/kilocode.kilo-code) direktno ili je preuzmite sa [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code). Kreirajte račun i imat ćete pristup za više od 500 modela, uključujući GPT-5.5, Claude Opus 4.7, Claude Sonnet 4.6 i Gemini 3.1 Pro Preview, sve po cijenama pružaoca.
-
-</details>
-
-<details open>
-<summary><strong>CLI</strong></summary>
-
-<br>
-
-```bash
-# npm
-npm install -g @kilocode/cli
-
-# curl
-curl -fsSL https://kilo.ai/cli/install | bash
-
-# pnpm
-pnpm add -g @kilocode/cli
-
-# bun
-bun add -g @kilocode/cli
-
-# Homebrew (macOS / Linux)
-brew install Kilo-Org/tap/kilo
-
-# Arch Linux (AUR)
-paru -S kilo-bin
-```
-
-Zatim pokrenite `kilo` u bilo kojem direktoriju projekta.
-
-</details>
-
-<details>
-<summary><strong>Cloud Agent</strong></summary>
-
-<br>
-
-Pokrenite Kilo s weba, bez lokalne mašine, na [app.kilo.ai/cloud](https://app.kilo.ai/cloud).
-
-</details>
-
-<details>
-<summary><strong>Pregledi koda</strong></summary>
-
-<br>
-
-Postavite automatske AI preglede koda na svojim pull requestovima na [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary>Instalirajte CLI iz GitHub Releases (binarne datoteke)</summary>
-
-Preuzmite najnoviju binarnu datoteku sa [Releases stranice](https://github.com/Kilo-Org/kilocode/releases).
-
-| Platforma | Asset |
-|---|---|
-| Windows (većina PC računara) | `kilo-windows-x64.zip` |
-| macOS (Apple Silicon) | `kilo-darwin-arm64.zip` |
-| macOS (Intel) | `kilo-darwin-x64.zip` |
-| Linux x64 | `kilo-linux-x64.tar.gz` |
-| Linux ARM | `kilo-linux-arm64.tar.gz` |
-
-Napomene: `x64-baseline` je kompatibilna verzija za starije CPU-e bez AVX-a. `musl` je statički linkovana verzija za Alpine ili minimalne Docker slike bez glibc-a. `kilo-vscode-*.vsix` je paket VS Code ekstenzije, ne CLI. `Source code` arhive služe za build iz izvornog koda.
 
 </details>
 
@@ -121,15 +56,6 @@ Saznajte više o [agents i prilagođenim agents](https://kilo.ai/docs/code-with-
 - **MCP configuration** za pronalaženje i povezivanje MCP servera koji proširuju mogućnosti agenta.
 - **Više od 500 modela** sa prebacivanjem usred zadatka, da uskladite latenciju, cijenu i rezonovanje s poslom.
 
-### Autonomni način rada (CI/CD)
-
-Pokrenite `kilo run` s `--auto` za potpuno autonoman rad bez promptova, napravljen za CI/CD pipelineove:
-
-```bash
-kilo run --auto "run tests and fix any failures"
-```
-
-`--auto` isključuje sve upite za dozvole i dopušta agentu da izvrši bilo koju radnju bez potvrde. Koristite samo u pouzdanim okruženjima.
 
 ### Dokumentacija
 
@@ -137,7 +63,7 @@ Za konfiguraciju i sve ostalo posjetite [dokumentaciju](https://kilo.ai/docs).
 
 ### Doprinos
 
-Doprinosi su dobrodošli od developera, pisaca i svih ostalih. Počnite sa [Contributing Guide](/CONTRIBUTING.md) za podešavanje okruženja, standarde kodiranja i otvaranje pull requesta. Pogledajte [RELEASING.md](../RELEASING.md) za proces izdavanja VS Code ekstenzije i CLI-ja.
+Doprinosi su dobrodošli od developera, pisaca i svih ostalih. Počnite sa [Contributing Guide](/CONTRIBUTING.md) za podešavanje okruženja, standarde kodiranja i otvaranje pull requesta. Pogledajte [RELEASING.md](../RELEASING.md) za proces izdavanja VS Code ekstenzije.
 
 Prije uključivanja pročitajte naš [Code of Conduct](/CODE_OF_CONDUCT.md).
 

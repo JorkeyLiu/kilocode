@@ -7,6 +7,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { FormatError } from "./cli/error"
 import { ServeCommand } from "./cli/cmd/serve"
+import { InternalStorageCommand } from "./cli/cmd/internal-storage"
 import { EOL } from "os"
 import { errorMessage } from "./util/error"
 import { Heap } from "./cli/heap"
@@ -17,11 +18,13 @@ import { installFatalHandlers } from "@/kilocode/fatal-handler"
 import * as P0Perf from "@/kilocode/perf/instrument"
 
 // Lightweight serve-only entry for the VS Code extension backend.
-// Static graph: yargs + ServeCommand + shared bootstrap helper only. It must
-// not import the full CLI command tree (full index entry, setup command
-// registration, TUI/run/agent/... commands). Serve semantics
-// (Server.listen, fd carrier, watchdog, signals, network flags, port line)
-// are reused from ServeCommand — never copied here.
+// Static graph: yargs + ServeCommand + InternalStorageCommand (hidden) + shared
+// bootstrap helper only. It must not import the full CLI command tree (full
+// index entry, setup command registration, TUI/run/agent/... commands). Serve
+// semantics (Server.listen, fd carrier, watchdog, signals, network flags, port
+// line) are reused from ServeCommand — never copied here. The hidden storage
+// cutover command is the sole additional yargs command and stays hidden
+// (describe:false) with no SDK generation.
 P0Perf.mark("cli_entry", { id: String(process.pid) })
 
 const processMetadata = ensureProcessMetadata("main")
@@ -29,6 +32,9 @@ const processMetadata = ensureProcessMetadata("main")
 installFatalHandlers()
 
 const args = hideBin(process.argv)
+
+// kilocode_change - track hidden cutover for bootstrap/shutdown bypass (precise positional, not args.includes)
+let isInternalCutover = false
 
 if (await KiloBootstrap.runner()) process.exit()
 
@@ -100,14 +106,23 @@ const cli = yargs(args)
       run_id: processMetadata.runID,
     })
 
-    const bootstrapTimer = P0Perf.span("cli_bootstrap")
-    await KiloBootstrap.bootstrap()
-    bootstrapTimer.end()
+    // kilocode_change - hidden cutover must bypass global bootstrap which would hold the canonical DB lease
+    // before status/cutover's own lease/marker lifecycle. Match precisely via parsed positional, not args.includes.
+    isInternalCutover = (opts as any)?._?.[0] === "__internal-storage-cutover"
+    if (isInternalCutover) {
+      // Preserve logs/metrics; skip KiloBootstrap.bootstrap (telemetry/auth/AppRuntime DB) for this hidden command.
+      P0Perf.mark("cli_bootstrap_skip_internal_cutover", { meta: { op: String((opts as any)?._?.[1] ?? "") } })
+    } else {
+      const bootstrapTimer = P0Perf.span("cli_bootstrap")
+      await KiloBootstrap.bootstrap()
+      bootstrapTimer.end()
+    }
   })
   .usage("")
   .completion("completion", "generate shell completion script")
   .command(ServeCommand)
-  .demandCommand(1, "kilo-serve only runs the serve command")
+  .command(InternalStorageCommand as any)
+  .demandCommand(1, "kilo-serve only runs serve or hidden storage commands")
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||
@@ -176,7 +191,12 @@ try {
   process.exitCode = 1
 } finally {
   parseTimer.end()
-  await KiloBootstrap.shutdown()
+  if (isInternalCutover) {
+    // kilocode_change - hidden cutover owns its own lease/marker lifecycle; skip heavy AppRuntime shutdown that would acquire DB lease
+    P0Perf.mark("cli_shutdown_skip_internal_cutover")
+  } else {
+    await KiloBootstrap.shutdown()
+  }
 
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless

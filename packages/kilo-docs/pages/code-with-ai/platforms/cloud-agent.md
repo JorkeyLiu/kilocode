@@ -55,7 +55,7 @@ Your work is always pushed to GitHub, ensuring nothing is lost.
 - Containers are **ephemeral**:
   - Spindown occurs after inactivity
   - Expect slightly longer setup after idle periods
-  - Inactive cloud agent sessions are deleted after **7 days** during the beta, expired sessions are still accessible via the CLI
+  - Inactive cloud agent sessions are deleted after **7 days** during the beta, expired sessions remain listed but are no longer restorable in the web UI
 
 ## Agent Environment Profiles
 
@@ -96,37 +96,10 @@ You can customize each Cloud Agent session by also defining env vars and startup
 
 ## Skills
 
-Cloud Agents support project-level [skills](/docs/code-with-ai/platforms/cli#skills) stored in your repository. When your repo is cloned, any skills in `.kilocode/skills/` are automatically available.
+Cloud Agents support project-level [skills](/docs/customize/skills) stored in your repository. When your repo is cloned, any skills in `.kilocode/skills/` are automatically available.
 
 {% callout type="note" %}
 Global skills (`~/.kilocode/skills/`) are not available in Cloud Agents since there is no persistent user home directory.
-{% /callout %}
-
-## Remote Connections
-
-Remote Connections let you access and control local CLI sessions from the Cloud Agents web interface. Your computer handles the compute; the cloud gives you a window into it from any device.
-
-### How It Works
-
-When remote mode is enabled in the CLI, your active local sessions appear in the Cloud Agents dashboard. The connection is two-way:
-
-- **Messages and responses** sync in real-time
-- **Agent questions** appear in both places — answer wherever you are
-- **Permission requests** route to your active connection
-- **Full editing capabilities** work remotely
-
-### Enabling Remote Mode
-
-Remote mode must be enabled from the CLI. See [CLI Remote Connections](/docs/code-with-ai/platforms/cli#remote-connections) for setup instructions.
-
-### Requirements
-
-- Same Kilo account on both CLI and Cloud Agent
-- Active internet connection on the local machine
-- CLI must remain running
-
-{% callout type="warning" title="Security Warning" %}
-Anyone with access to your Kilo account can send messages to your computer when remote mode is enabled.
 {% /callout %}
 
 ## Perfect For

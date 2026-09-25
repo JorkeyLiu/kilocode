@@ -255,7 +255,7 @@ export class PrivatePromptValidationError extends Error {
   }
 }
 
-export function isPrivatePromptValidationError(v: unknown): v is PrivatePromptValidationError {
+function isPrivatePromptValidationError(v: unknown): v is PrivatePromptValidationError {
   return !!v && typeof v === "object" && (v as { kind?: unknown }).kind === "private-prompt-validation"
 }
 

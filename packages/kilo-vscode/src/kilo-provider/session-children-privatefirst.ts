@@ -139,47 +139,79 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   }) as Promise<T>
 }
 
+function guardChildrenSignal(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  const s = signal
+  if (typeof s.throwIfAborted === "function") s.throwIfAborted()
+  throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
+}
+
+function isChildrenPrivateReady(conn: SessionChildrenPrivateConnection): boolean {
+  try {
+    return conn.isPrivateAvailable()
+  } catch {
+    return false
+  }
+}
+
+function buildChildrenAbort(
+  signal: AbortSignal | undefined,
+  req: ServePrivateChildrenRequest,
+  ref: { current: { cancel?: (msg?: string) => boolean | "stale" } | null },
+): { promise: Promise<never> | null; handler: (() => void) | null } {
+  if (!signal) return { promise: null, handler: null }
+  let handler: (() => void) | null = null
+  const promise = new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      try {
+        ref.current?.cancel?.(`private session-children signal abort opId=${req.opId}`)
+      } catch {}
+      const reason = (signal as unknown as { reason?: unknown }).reason ?? new DOMException("This operation was aborted", "AbortError")
+      reject(reason instanceof Error ? reason : new Error(String(reason)))
+    }
+    handler = onAbort
+    if (signal.aborted) {
+      onAbort()
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true })
+    }
+  })
+  return { promise, handler }
+}
+
+function fallbackForChildrenError(
+  e: unknown,
+  handle: { cancel?: (msg?: string) => boolean | "stale" } | null,
+  req: ServePrivateChildrenRequest,
+): SessionChildrenAttempt {
+  if (isPrivateChildrenValidationError(e)) return { kind: "fallback", reason: "invalid" }
+  const msg = e instanceof Error ? e.message : String(e)
+  if (msg.includes("private session-children timeout") && handle) {
+    try {
+      handle.cancel?.(`private session-children timeout opId=${req.opId}`)
+    } catch {}
+    return { kind: "fallback", reason: "timeout" }
+  }
+  if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "fallback", reason: "transport" }
+  return { kind: "fallback", reason: msg.slice(0, 120) }
+}
+
 export async function attemptSessionChildrenPrivate(
   connection: SessionChildrenPrivateConnection | null | undefined,
   req: ServePrivateChildrenRequest,
   ms = 3000,
   signal?: AbortSignal,
 ): Promise<SessionChildrenAttempt> {
-  if (signal?.aborted) {
-    const s = signal
-    if (typeof s.throwIfAborted === "function") s.throwIfAborted()
-    throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
-  }
+  guardChildrenSignal(signal)
   if (!connection) return { kind: "fallback", reason: "unavailable" }
+  if (!isChildrenPrivateReady(connection)) return { kind: "fallback", reason: "unavailable" }
+  const handleRef: { current: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean | "stale" } | null } = { current: null }
+  const abort = buildChildrenAbort(signal, req, handleRef)
   try {
-    if (!connection.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
-  } catch {
-    return { kind: "fallback", reason: "unavailable" }
-  }
-  let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean | "stale" } | null = null
-  let abortHandler: (() => void) | null = null
-  let abortPromise: Promise<never> | null = null
-  if (signal) {
-    abortPromise = new Promise<never>((_, reject) => {
-      const onAbort = () => {
-        try {
-          handle?.cancel?.(`private session-children signal abort opId=${req.opId}`)
-        } catch {}
-        const reason = (signal as unknown as { reason?: unknown }).reason ?? new DOMException("This operation was aborted", "AbortError")
-        reject(reason instanceof Error ? reason : new Error(String(reason)))
-      }
-      abortHandler = onAbort
-      if (signal.aborted) {
-        onAbort()
-      } else {
-        signal.addEventListener("abort", onAbort, { once: true })
-      }
-    })
-  }
-  try {
-    handle = connection.privateChildrenOutcomeWithHandle(req)
+    const handle = connection.privateChildrenOutcomeWithHandle(req)
+    handleRef.current = handle
     const outcomePromise = withTimeout(handle.promise, ms) as Promise<unknown>
-    const raced = abortPromise ? Promise.race([outcomePromise, abortPromise]) : outcomePromise
+    const raced = abort.promise ? Promise.race([outcomePromise, abort.promise]) : outcomePromise
     const outcome = (await raced) as
       | { kind: "valid"; result: unknown }
       | { kind: "invalid"; detail: string }
@@ -187,20 +219,11 @@ export async function attemptSessionChildrenPrivate(
     return parseSessionChildrenResult(outcome.result, req)
   } catch (e) {
     if (signal?.aborted) throw e
-    if (isPrivateChildrenValidationError(e)) return { kind: "fallback", reason: "invalid" }
-    const msg = e instanceof Error ? e.message : String(e)
-    if (msg.includes("private session-children timeout") && handle) {
-      try {
-        handle.cancel?.(`private session-children timeout opId=${req.opId}`)
-      } catch {}
-      return { kind: "fallback", reason: "timeout" }
-    }
-    if (/unavailable|capability|disposed|closed/i.test(msg)) return { kind: "fallback", reason: "transport" }
-    return { kind: "fallback", reason: msg.slice(0, 120) }
+    return fallbackForChildrenError(e, handleRef.current, req)
   } finally {
-    if (abortHandler && signal) {
+    if (abort.handler && signal) {
       try {
-        signal.removeEventListener("abort", abortHandler)
+        signal.removeEventListener("abort", abort.handler)
       } catch {}
     }
   }

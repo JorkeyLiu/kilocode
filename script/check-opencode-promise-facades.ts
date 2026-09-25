@@ -269,6 +269,56 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "production AppRuntime canonical provenance regression via AppRuntime and InstanceRef (distinct scopes, duplicate suppression, credential/invalid classes, resolver via Config.Service + resolveFromSnapshot, atomic withConfigSnapshot + withGenerationAdmission pinning, recoverable failures, parse secrecy token, no provenance in public JSON)",
   },
+  "kilocode/session/session-create-sandbox.test.ts": {
+    count: 90,
+    reason:
+      "B4 sandbox inheritance durable create integration test via AppRuntime and InstanceRef (plaintext token never persisted, hash/operation/changefeed/observation payload-free verification, single-deduction replay, concurrent singleflight, tx defect release, grant-exhausted replay, stale configVersion and fence admission refund, cross-directory target canonDir, private replay)",
+  },
+  "kilocode/session/revert-observation-notify.test.ts": {
+    count: 43,
+    reason:
+      "revert/unrevert observation/changed producer integration test via AppRuntime and InstanceRef (five-key v1.0 payload-free changed with cursor===seq and committed revision/time, peer unavailable/throw isolation, tx failure no residual, idempotent replay no duplicate, dispatchPrivate never notifies)",
+  },
+  "kilocode/session/revert-atomic.test.ts": {
+    count: 57,
+    reason:
+      "revert/unrevert atomic dispatch integration test via AppRuntime and InstanceRef (revision/changefeed/operation/event/sequence atomic commit, conflict and stale non-mutating, inside-tx failure leaves no residual, no-op boundary inserts operation at current revision without feed/event bump)",
+  },
+  "kilocode/session/session-create-observation-notify.test.ts": {
+    count: 14,
+    reason:
+      "session/create observation/changed producer integration test via AppRuntime and InstanceRef (five-key v1.0 payload-free changed with cursor===seq, tx failure no residual, peer unavailable/throw isolation, replay no duplicate seq)",
+  },
+  "kilocode/session/session-fork-observation-notify.test.ts": {
+    count: 25,
+    reason:
+      "session/fork observation/changed producer integration test via AppRuntime and InstanceRef (single five-key child@0 changed with cursor===seq, source unchanged, tx failure no residual, peer isolation, replay no duplicate, dispatchPrivate never notifies)",
+  },
+  "kilocode/session/session-delete-observation-notify.test.ts": {
+    count: 27,
+    reason:
+      "session/delete observation/changed producer integration test via AppRuntime and InstanceRef (family multi-entry deleted with ascending seq cursor==last, revision before+1, tx failure no residual, peer isolation, replay idempotent, dispatchPrivate never notifies)",
+  },
+  "kilocode/session/dispatch-atomic.test.ts": {
+    count: 68,
+    reason:
+      "dispatch atomic S1 integration test via AppRuntime and InstanceRef (create/update/delete before/inside-tx failure atomic rollback, success path commits session/operation/changefeed/event/sequence/tombstone and remains idempotent, replay no duplicate)",
+  },
+  "kilocode/session/session-update-observation-notify.test.ts": {
+    count: 23,
+    reason:
+      "session/update observation/changed producer integration test via AppRuntime and InstanceRef (five-key v1.0 payload-free changed with committed revision, tx failure no residual, peer isolation, replay no duplicate seq, dispatchPrivate replay never notifies)",
+  },
+  "kilocode/server/e2e-revert-seed.test.ts": {
+    count: 5,
+    reason:
+      "e2e revert seed integration test via AppRuntime and InstanceStore (real session/message/part checkpoint seeded via e2eRevertSeed handler under KILO_E2E_FIXTURE and consumed by production SessionRevertDispatch with revision chaining; local layer cannot prove instance-directory binding)",
+  },
+  "kilocode/server/fd-carrier-session-viewed.test.ts": {
+    count: 2,
+    reason:
+      "fd-carrier session/viewed presence integration test via the canonical production runtime (presence snapshot over AppRuntime-owned KiloViewers with live fd-carrier negotiation and KiloSessions attached side-effect; local layer cannot serve the carrier path or monotonicity)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

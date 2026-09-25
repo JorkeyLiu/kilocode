@@ -53,10 +53,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   installPhase = ''
     runHook preInstall
 
-    install -Dm755 dist/@kilocode/cli-*/bin/kilo $out/bin/kilo
+    install -Dm755 dist/@kilocode/cli-*/bin/kilo-serve $out/bin/kilo-serve
     install -Dm644 schema.json $out/share/kilo/schema.json
 
-    wrapProgram $out/bin/kilo \
+    wrapProgram $out/bin/kilo-serve \
       ${lib.optionalString stdenvNoCC.hostPlatform.isLinux "--set KILO_BWRAP_PATH ${bubblewrap}/bin/bwrap"} \
       --prefix PATH : ${
         lib.makeBinPath (
@@ -73,9 +73,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   postInstall = lib.optionalString (stdenvNoCC.buildPlatform.canExecute stdenvNoCC.hostPlatform) ''
     # trick yargs into also generating zsh completions
-    installShellCompletion --cmd kilo \
-      --bash <($out/bin/kilo completion) \
-      --zsh <(SHELL=/bin/zsh $out/bin/kilo completion)
+    installShellCompletion --cmd kilo-serve \
+      --bash <($out/bin/kilo-serve completion) \
+      --zsh <(SHELL=/bin/zsh $out/bin/kilo-serve completion)
   '';
 
   nativeInstallCheckInputs = [
@@ -96,7 +96,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     description = "AI-powered development tool";
     homepage = "https://kilo.ai/";
     license = [ lib.licenses.mit ] ++ lib.optional stdenvNoCC.hostPlatform.isLinux lib.licenses.lgpl2Plus;
-    mainProgram = "kilo";
+    mainProgram = "kilo-serve";
     inherit (node_modules.meta) platforms;
   };
 })

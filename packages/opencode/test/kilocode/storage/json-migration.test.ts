@@ -18,6 +18,11 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { remove as cleanup } from "../cleanup"
+import os from "os"
+import { randomUUID } from "crypto"
+import { Database as CoreDatabase } from "@opencode-ai/core/database/database"
+import { Effect } from "effect"
+import { sql } from "drizzle-orm"
 
 // Test fixtures
 const fixtures = {
@@ -1498,5 +1503,259 @@ describe("JSON to SQLite migration", () => {
 
     // No rows from any family should persist — outer ROLLBACK undoes everything
     expect(db.select().from(SessionTable).all().length).toBe(0)
+  })
+
+  test("bootstrap fail-closed: canonical DB with stale pending marker does not import legacy JSON and leaves pending untouched", async () => {
+    // Owned temp XDG/file DB: isolate via mkdtemp and mutate Global.Path.data + Flag.KILO_DB
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kilo-json-migration-canonical-"))
+    const origData = Global.Path.data
+    const origFlag = Flag.KILO_DB
+    const origStorage = path.join(origData, "storage")
+    let marker: string = ""
+    let pending: string = ""
+    try {
+      ;(Global.Path as { data: string }).data = tmp
+      await fs.mkdir(tmp, { recursive: true })
+      marker = path.join(tmp, "kilo.db")
+      pending = marker + ".json-migration"
+      Flag.KILO_DB = marker
+
+      // Create canonical DB at marker with valid storage_identity + auto_vacuum=2 via CoreDatabase layer (ensures full migrations + auto_vacuum)
+      const archiveID = `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "Z").replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1$2$3T$4$5$6Z")}-${randomUUID()}`
+      const uuid = randomUUID()
+      const layer = CoreDatabase.layerFromPath(marker)
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const { db } = yield* CoreDatabase.Service
+          // migrations already applied by layer; insert canonical identity
+          yield* db.run(sql`INSERT INTO storage_identity (id, uuid, schema_version, created_at, cutover_archive_id) VALUES (1, ${uuid}, '1', ${Date.now()}, ${archiveID})`).pipe(Effect.orDie)
+          const row = yield* db.get<{ uuid: string }>(sql`SELECT uuid FROM storage_identity WHERE id=1`).pipe(Effect.orDie)
+          if (row?.uuid !== uuid) throw new Error("identity insert failed")
+          const av = yield* db.get<{ auto_vacuum: number }>(sql`PRAGMA auto_vacuum`).pipe(Effect.orDie)
+          if ((av as any)?.auto_vacuum !== 2) throw new Error(`auto_vacuum not 2 got ${(av as any)?.auto_vacuum}`)
+        }).pipe(Effect.provide(layer), Effect.scoped, Effect.orDie),
+      )
+
+      // Record canonical DB state before
+      const beforeRaw = new Database(marker, { readonly: true } as any)
+      let projCountBefore = 0
+      try {
+        const c = beforeRaw.query("SELECT count(*) as c FROM project").get() as any
+        projCountBefore = Number(c?.c ?? 0)
+      } finally {
+        beforeRaw.close()
+      }
+      expect(projCountBefore).toBe(0)
+
+      // Create legacy JSON under owned temp storage (tmp/storage)
+      const storageDir = path.join(tmp, "storage")
+      await fs.mkdir(path.join(storageDir, "project"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "session", "proj_test123abc"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "message", "ses_test456def"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "part", "msg_test789ghi"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "session_share"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "todo"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "permission"), { recursive: true })
+      await Bun.write(
+        path.join(storageDir, "project", "proj_test123abc.json"),
+        JSON.stringify({ id: "proj_test123abc", worktree: "/test/path", vcs: "git", time: { created: 1700000000000, updated: 1700000001000 }, sandboxes: [] }),
+      )
+      await Bun.write(
+        path.join(storageDir, "session", "proj_test123abc", "ses_test456def.json"),
+        JSON.stringify({ id: "ses_test456def", projectID: "proj_test123abc", slug: "test", directory: "/test", title: "Test", version: "1", time: { created: 1700000000000, updated: 1700000001000 } }),
+      )
+
+      // Create stale pending marker with known content
+      await Bun.write(pending, "stale-pending-content")
+      const statBefore = await fs.stat(pending)
+      const contentBefore = await fs.readFile(pending, "utf8")
+      expect(contentBefore).toBe("stale-pending-content")
+      const bytesBefore = (await fs.stat(marker)).size
+
+      // Run bootstrap — should be fail-closed, no import, pending untouched
+      await JsonMigration.bootstrap()
+
+      expect(await Bun.file(pending).exists()).toBe(true)
+      const contentAfter = await fs.readFile(pending, "utf8")
+      expect(contentAfter).toBe("stale-pending-content")
+      const statAfter = await fs.stat(pending)
+      expect(statAfter.size).toBe(statBefore.size)
+      // mtime should not change (write would update it); allow equality check
+      expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs)
+      // DB should not have imported legacy project
+      const afterRaw = new Database(marker, { readonly: true } as any)
+      try {
+        const c = afterRaw.query("SELECT count(*) as c FROM project").get() as any
+        expect(Number(c?.c ?? 0)).toBe(0)
+        const s = afterRaw.query("SELECT count(*) as c FROM session").get() as any
+        expect(Number(s?.c ?? 0)).toBe(0)
+      } finally {
+        afterRaw.close()
+      }
+      const bytesAfter = (await fs.stat(marker)).size
+      expect(bytesAfter).toBe(bytesBefore)
+    } finally {
+      ;(Global.Path as { data: string }).data = origData
+      Flag.KILO_DB = origFlag as any
+      // restore original storage dir if it was cleaned by beforeEach? beforeEach will recreate origStorage next test, but ensure tmp cleaned
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
+      // clean lease/marker sibling files that Database.layer may have created
+      try {
+        const { parent, base } = await import("@opencode-ai/core/cutover/archive-path").then((m) => m.deriveArchive(path.dirname(marker)))
+        await fs.rm(path.join(parent, `.kilo-${base}.lease.json`), { force: true }).catch(() => {})
+      } catch {}
+      if (marker) {
+        await Promise.all([marker, marker + "-shm", marker + "-wal", pending].map((p) => cleanup(p))).catch(() => {})
+      }
+    }
+  })
+
+  test("bootstrap fail-closed on malformed canonical identity leaves pending untouched", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kilo-json-migration-malformed-"))
+    const origData = Global.Path.data
+    const origFlag = Flag.KILO_DB
+    let marker = ""
+    let pending = ""
+    try {
+      ;(Global.Path as { data: string }).data = tmp
+      await fs.mkdir(tmp, { recursive: true })
+      marker = path.join(tmp, "kilo.db")
+      pending = marker + ".json-migration"
+      Flag.KILO_DB = marker
+
+      const archiveID = `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "Z").replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1$2$3T$4$5$6Z")}-${randomUUID()}`
+      const uuid = randomUUID()
+      const layer2 = CoreDatabase.layerFromPath(marker)
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const { db } = yield* CoreDatabase.Service
+          yield* db.run(sql`INSERT INTO storage_identity (id, uuid, schema_version, created_at, cutover_archive_id) VALUES (1, ${uuid}, '1', ${Date.now()}, ${archiveID})`).pipe(Effect.orDie)
+          yield* db.run(sql`UPDATE storage_identity SET uuid='bad-uuid' WHERE id=1`).pipe(Effect.orDie)
+        }).pipe(Effect.provide(layer2), Effect.scoped, Effect.orDie),
+      )
+
+      const storageDir = path.join(tmp, "storage")
+      await fs.mkdir(path.join(storageDir, "project"), { recursive: true })
+      await Bun.write(
+        path.join(storageDir, "project", "proj_test123abc.json"),
+        JSON.stringify({ id: "proj_test123abc", worktree: "/test", vcs: "git", time: { created: 1, updated: 1 }, sandboxes: [] }),
+      )
+      await Bun.write(pending, "stale-pending-malformed")
+      const contentBefore = await fs.readFile(pending, "utf8")
+      const statBefore = await fs.stat(pending)
+      const bytesBefore = (await fs.stat(marker)).size
+
+      await expect(JsonMigration.bootstrap()).rejects.toThrow(/malformed|fail-closed/)
+
+      expect(await Bun.file(pending).exists()).toBe(true)
+      expect(await fs.readFile(pending, "utf8")).toBe(contentBefore)
+      const statAfter = await fs.stat(pending)
+      expect(statAfter.size).toBe(statBefore.size)
+      expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs)
+      const afterRaw = new Database(marker, { readonly: true } as any)
+      try {
+        const c = afterRaw.query("SELECT count(*) as c FROM project").get() as any
+        expect(Number(c?.c ?? 0)).toBe(0)
+      } finally {
+        afterRaw.close()
+      }
+      const bytesAfter = (await fs.stat(marker)).size
+      expect(bytesAfter).toBe(bytesBefore)
+    } finally {
+      ;(Global.Path as { data: string }).data = origData
+      Flag.KILO_DB = origFlag as any
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
+      if (marker) await Promise.all([marker, marker + "-shm", marker + "-wal", pending].map(cleanup)).catch(() => {})
+    }
+  })
+
+  test("bootstrap fail-closed divergent paths Global.Path.data=/owned/source JSON vs Flag.KILO_DB=/owned/target/kilo.db canonical + stale pending: no import", async () => {
+    const owned = await fs.mkdtemp(path.join(os.tmpdir(), "kilo-json-migration-divergent-"))
+    const source = path.join(owned, "source")
+    const target = path.join(owned, "target")
+    await fs.mkdir(source, { recursive: true })
+    await fs.mkdir(target, { recursive: true })
+    const origData = Global.Path.data
+    const origFlag = Flag.KILO_DB
+    const marker = path.join(target, "kilo.db")
+    const pending = marker + ".json-migration"
+    try {
+      ;(Global.Path as { data: string }).data = source
+      Flag.KILO_DB = marker
+
+      const archiveID = `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "Z").replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1$2$3T$4$5$6Z")}-${randomUUID()}`
+      const uuid = randomUUID()
+      const layer = CoreDatabase.layerFromPath(marker)
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const { db } = yield* CoreDatabase.Service
+          yield* db.run(sql`INSERT INTO storage_identity (id, uuid, schema_version, created_at, cutover_archive_id) VALUES (1, ${uuid}, '1', ${Date.now()}, ${archiveID})`).pipe(Effect.orDie)
+          const av = yield* db.get<{ auto_vacuum: number }>(sql`PRAGMA auto_vacuum`).pipe(Effect.orDie)
+          if ((av as any)?.auto_vacuum !== 2) throw new Error(`auto_vacuum not 2 got ${(av as any)?.auto_vacuum}`)
+        }).pipe(Effect.provide(layer), Effect.scoped, Effect.orDie),
+      )
+
+      const beforeRaw = new Database(marker, { readonly: true } as any)
+      let projCountBefore = 0
+      try {
+        const c = beforeRaw.query("SELECT count(*) as c FROM project").get() as any
+        projCountBefore = Number(c?.c ?? 0)
+      } finally {
+        beforeRaw.close()
+      }
+      expect(projCountBefore).toBe(0)
+
+      const storageDir = path.join(source, "storage")
+      await fs.mkdir(path.join(storageDir, "project"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "session", "proj_test123abc"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "message", "ses_test456def"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "part", "msg_test789ghi"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "todo"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "permission"), { recursive: true })
+      await fs.mkdir(path.join(storageDir, "session_share"), { recursive: true })
+      await Bun.write(
+        path.join(storageDir, "project", "proj_test123abc.json"),
+        JSON.stringify({ id: "proj_test123abc", worktree: "/test/path", vcs: "git", time: { created: 1700000000000, updated: 1700000001000 }, sandboxes: [] }),
+      )
+      await Bun.write(
+        path.join(storageDir, "session", "proj_test123abc", "ses_test456def.json"),
+        JSON.stringify({ id: "ses_test456def", projectID: "proj_test123abc", slug: "test", directory: "/test", title: "Test", version: "1", time: { created: 1700000000000, updated: 1700000001000 } }),
+      )
+
+      await Bun.write(pending, "stale-pending-divergent")
+      const statBefore = await fs.stat(pending)
+      const contentBefore = await fs.readFile(pending, "utf8")
+      expect(contentBefore).toBe("stale-pending-divergent")
+      const bytesBefore = (await fs.stat(marker)).size
+
+      await JsonMigration.bootstrap()
+
+      expect(await Bun.file(pending).exists()).toBe(true)
+      const contentAfter = await fs.readFile(pending, "utf8")
+      expect(contentAfter).toBe("stale-pending-divergent")
+      const statAfter = await fs.stat(pending)
+      expect(statAfter.size).toBe(statBefore.size)
+      expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs)
+      const afterRaw = new Database(marker, { readonly: true } as any)
+      try {
+        const c = afterRaw.query("SELECT count(*) as c FROM project").get() as any
+        expect(Number(c?.c ?? 0)).toBe(0)
+        const s = afterRaw.query("SELECT count(*) as c FROM session").get() as any
+        expect(Number(s?.c ?? 0)).toBe(0)
+      } finally {
+        afterRaw.close()
+      }
+      const bytesAfter = (await fs.stat(marker)).size
+      expect(bytesAfter).toBe(bytesBefore)
+    } finally {
+      ;(Global.Path as { data: string }).data = origData
+      Flag.KILO_DB = origFlag as any
+      await fs.rm(owned, { recursive: true, force: true }).catch(() => {})
+      try {
+        const { parent, base } = await import("@opencode-ai/core/cutover/archive-path").then((m) => m.deriveArchive(path.dirname(marker)))
+        await fs.rm(path.join(parent, `.kilo-${base}.lease.json`), { force: true }).catch(() => {})
+      } catch {}
+      await Promise.all([marker, marker + "-shm", marker + "-wal", pending].map(cleanup)).catch(() => {})
+    }
   })
 })

@@ -52,7 +52,7 @@ export const OBSERVATION_REQUIRED_CAPABILITIES = [
   "observation/operations",
 ] as const
 
-export type ObservationRequiredCapability = (typeof OBSERVATION_REQUIRED_CAPABILITIES)[number]
+type ObservationRequiredCapability = (typeof OBSERVATION_REQUIRED_CAPABILITIES)[number]
 
 export function buildObservationCapabilities(): Record<string, unknown> {
   const caps: Record<string, unknown> = {
@@ -88,7 +88,7 @@ export function assertObservationCapable(result: unknown): void {
   }
 }
 
-export function isObservationCapable(result: unknown): boolean {
+function isObservationCapable(result: unknown): boolean {
   try {
     assertObservationCapable(result)
     return true

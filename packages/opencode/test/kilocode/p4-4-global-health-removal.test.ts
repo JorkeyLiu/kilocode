@@ -34,7 +34,7 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(src).toContain('"/global/event"')
     expect(src).toContain('"/global/config"')
     expect(src).toContain('"/global/dispose"')
-    expect(src).toContain('"/global/upgrade"')
+    expect(src).not.toContain('"/global/upgrade"')
     expect(src).toContain("GlobalPaths = {")
     expect(src).toContain("event: \"/global/event\"")
     expect(src).toContain("config: \"/global/config\"")
@@ -42,7 +42,9 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(src).toContain("HttpApiEndpoint.get(\"configGet\"")
     expect(src).toContain("HttpApiEndpoint.patch(\"configUpdate\"")
     expect(src).toContain("HttpApiEndpoint.post(\"dispose\"")
-    expect(src).toContain("HttpApiEndpoint.post(\"upgrade\"")
+    expect(src).not.toContain("HttpApiEndpoint.post(\"upgrade\"")
+    expect(src).not.toContain('identifier: "global.upgrade"')
+    expect(src).not.toContain("GlobalUpgrade")
   })
 
   test("handlers/global.ts no longer implements health", () => {
@@ -58,7 +60,12 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(src).toContain("GlobalHttpApi.configGet")
     expect(src).toContain("GlobalHttpApi.configUpdate")
     expect(src).toContain("GlobalHttpApi.dispose")
-    expect(src).toContain("GlobalHttpApi.upgrade")
+    expect(src).not.toContain("GlobalHttpApi.upgrade")
+    expect(src).not.toContain("global.upgrade")
+    expect(src).not.toContain("/global/upgrade")
+    expect(src).not.toContain("GlobalUpgrade")
+    expect(src).not.toContain("installation.upgrade")
+    expect(src).not.toContain("Installation.Event")
     expect(src).toContain('handleRaw("event"')
     expect(src).toContain('handle("configGet"')
     expect(src).toContain('handle("dispose"')
@@ -76,7 +83,8 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(openapi).toContain("global.config.get")
     expect(openapi).toContain("/global/dispose")
     expect(openapi).toContain("global.dispose")
-    expect(openapi).toContain("/global/upgrade")
+    expect(openapi).not.toContain("/global/upgrade")
+    expect(openapi).not.toContain("global.upgrade")
   })
 
   test("generated SDK v2 no longer exposes global health", () => {
@@ -93,9 +101,14 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(sdkGen).toContain('url: "/global/event"')
     expect(sdkGen).toContain('url: "/global/config"')
     expect(sdkGen).toContain('url: "/global/dispose"')
-    expect(sdkGen).toContain('url: "/global/upgrade"')
+    expect(sdkGen).not.toContain('url: "/global/upgrade"')
+    expect(sdkGen).not.toContain("global.upgrade")
+    expect(sdkGen).not.toContain("GlobalUpgrade")
     expect(typesGen).toContain('url: "/global/event"')
     expect(typesGen).toContain('url: "/global/config"')
+    expect(typesGen).not.toContain('url: "/global/upgrade"')
+    expect(typesGen).not.toContain("GlobalUpgrade")
+    expect(typesGen).not.toContain("global.upgrade")
   })
 
   test("httpapi exercise no longer covers /global/health", () => {
@@ -104,6 +117,13 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(exercise).not.toContain("global.health")
     expect(exercise).toContain("/global/event")
     expect(exercise).toContain("global.event")
+  })
+
+  test("httpapi exercise no longer covers /global/upgrade", () => {
+    const exercise = readRepo("packages/opencode/test/server/httpapi-exercise/index.ts")
+    expect(exercise).not.toContain("/global/upgrade")
+    expect(exercise).not.toContain("global.upgrade")
+    expect(exercise).not.toContain("GlobalUpgrade")
   })
 
   test("httpapi instance OpenAPI doc expectation no longer requires health", () => {
@@ -198,5 +218,44 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     // must not reintroduce OpenAPI/SDK health exposure
     const openapi = readRepo("packages/sdk/openapi.json")
     expect(openapi).not.toContain("/global/health")
+  })
+
+  test("production routes explicitly deny removed /global/upgrade with 404 (UI fallback guard)", () => {
+    const server = read("server/routes/instance/httpapi/server.ts")
+    expect(server).toContain('"/global/upgrade"')
+    expect(server).toContain("legacyGlobalUpgradeRoute")
+    expect(server).toContain("status: 404")
+    const routesCount = (server.match(/legacyGlobalUpgradeRoute/g) ?? []).length
+    expect(routesCount).toBeGreaterThanOrEqual(3)
+    const openapi = readRepo("packages/sdk/openapi.json")
+    expect(openapi).not.toContain("/global/upgrade")
+    expect(openapi).not.toContain("global.upgrade")
+  })
+
+  test("private runtime denies removed /global/upgrade with 410", () => {
+    const legacy = read("server/routes/instance/httpapi/middleware/private-legacy.ts")
+    expect(legacy).toContain('"/global/upgrade"')
+  })
+
+  test("no auto-upgrade path remains in CLI/TUI/installation", () => {
+    expect(read("cli/cmd/tui/worker.ts")).not.toContain("checkUpgrade")
+    expect(read("cli/cmd/tui/worker.ts")).not.toContain("cli/upgrade")
+    expect(read("cli/cmd/tui/thread.ts")).not.toContain("checkUpgrade")
+    expect(read("cli/cmd/tui/app.tsx")).not.toContain("installation.update-available")
+    expect(read("cli/cmd/tui/app.tsx")).not.toContain("global.upgrade")
+    expect(read("installation/index.ts")).not.toContain("Installation.upgrade")
+    expect(read("installation/index.ts")).not.toContain("Installation.latest")
+    expect(read("installation/index.ts")).not.toContain("Installation.info")
+    expect(read("installation/index.ts")).not.toContain("installation.update-available")
+    expect(read("installation/index.ts")).not.toContain("installation.updated")
+    expect(read("index.ts")).not.toContain("UpgradeCommand")
+    const barrel = readRepo("packages/opencode/src/kilocode/commands.ts")
+    expect(barrel).not.toContain("UpgradeCommand")
+    // version display + install-method probing remain
+    const installation = read("installation/index.ts")
+    expect(installation).toContain("InstallationVersion")
+    expect(installation).toContain("userAgent")
+    expect(installation).toContain("isLocal")
+    expect(installation).toContain("isPreview")
   })
 })

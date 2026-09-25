@@ -37,13 +37,11 @@ function vcs(branch: string): Event {
   }
 }
 
-function update(version: string): Event {
+function global(): Event {
   return {
-    id: `evt_update_${version}`,
-    type: "installation.update-available",
-    properties: {
-      version,
-    },
+    id: `evt_global_connected`,
+    type: "server.connected",
+    properties: {},
   }
 }
 
@@ -150,11 +148,11 @@ describe("useEvent", () => {
 
     try {
       project.workspace.set("ws_a")
-      emit(event(update("1.2.3"), { directory: "global" }))
+      emit(event(global(), { directory: "global" }))
 
       await wait(() => seen.length === 1)
 
-      expect(seen).toEqual([update("1.2.3")])
+      expect(seen).toEqual([global()])
     } finally {
       app.renderer.destroy()
     }

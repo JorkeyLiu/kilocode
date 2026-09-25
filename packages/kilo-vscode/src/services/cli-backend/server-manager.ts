@@ -26,8 +26,52 @@ export interface ServerInstance {
 }
 
 const STARTUP_TIMEOUT_SECONDS = 30
+const CUTOVER_TIMEOUT_MS = 30_000
+const HIDDEN_SIGKILL_DELAY_MS = 5_000
 
 type WorkspaceFolderLike = { uri: { fsPath: string } }
+
+/**
+ * Resolve the CLI binary for hidden storage commands.
+ * Production prefers the lightweight serve-only `bin/kilo-serve` backend
+ * when staged, falling back to the full `bin/kilo` binary during the
+ * transition window where kilo-serve may be absent (dev wrapper / older
+ * bundle). Both entries accept the same `__internal-storage-cutover`
+ * hidden command, so args remain unchanged — only the path varies. The
+ * hidden child never receives `KILO_PRIVATE_RUNTIME`; serve children do
+ * via `buildServeChildEnvAugment`. Prefer the same resolved serve binary
+ * that `resolveCliPath` would pick so storage cutover and serve run from
+ * the same artifact.
+ */
+export function resolveHiddenCliPath(extensionPath: string, env?: NodeJS.ProcessEnv): string {
+  const override = env?.KILO_P0_BACKEND_CLI
+  if (override && override.trim() !== "") return override
+  const serve = path.join(extensionPath, "bin", resolveServeBinaryName())
+  try {
+    if (fs.existsSync(serve)) return serve
+  } catch {
+    // fail-closed to full CLI fallback
+  }
+  return path.join(extensionPath, "bin", resolveFullBinaryName())
+}
+
+function parseCutoverJson(stdout: string): Record<string, unknown> {
+  const lines = stdout
+    .trim()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!
+    try {
+      const obj = JSON.parse(line) as Record<string, unknown>
+      if (obj && obj.ok === true) return obj
+    } catch {
+      continue
+    }
+  }
+  throw new Error(`hidden cutover output missing ok JSON: ${stdout.slice(0, 2000)}`)
+}
 type ServerExitListener = (code: number | null) => void
 
 export function isValidE2EBaseURLForServerManager(value: string | undefined): boolean {
@@ -106,6 +150,32 @@ export function resolveManagedServerEnv(env: NodeJS.ProcessEnv, canonicalOverrid
 }
 
 /**
+ * Hidden cutover child must never see the internal private marker even when
+ * the extension host env has KILO_PRIVATE_RUNTIME=1. Cleanly omit the key
+ * (delete) rather than setting `undefined` which would become string "undefined".
+ */
+export function buildHiddenChildEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    NODE_USE_SYSTEM_CA: "1",
+    ...resolveManagedServerEnv(baseEnv),
+    ...buildProxyEnv(),
+    MIMALLOC_PURGE_DELAY: "0",
+  }
+  // Private runtime is for the serve child only, never the hidden storage helper.
+  delete env.KILO_PRIVATE_RUNTIME
+  return env
+}
+
+/**
+ * Serve child is the sole owner of the internal private marker; always set
+ * exactly "1" (extension invariant). Callers spread host env then override.
+ */
+export function buildServeChildEnvAugment(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // Strict === '1' at flag read ensures invalid values never activate; extension always sets "1".
+  return { ...baseEnv, KILO_PRIVATE_RUNTIME: "1" }
+}
+
+/**
  * Resolve the CLI binary path to spawn.
  *
  * Production prefers the lightweight serve-only `bin/kilo-serve` backend and
@@ -154,6 +224,10 @@ export class ServerManager {
   private disposed = false
   private startupGeneration = 0
   private startingProc: ChildProcess | null = null
+  private canonicalStorageGeneration = 0
+  private canonicalStoragePromise: Promise<void> | null = null
+  private canonicalStorageDone = false
+  private canonicalStorageError: ServerStartupError | Error | null = null
 
   /**
    * E2E fixture generation-request collector (KILO_E2E_FIXTURE only): sees
@@ -214,9 +288,200 @@ export class ServerManager {
     } finally {
       if (this.startupGeneration === genAtStart) {
         this.startupPromise = null
-        this.startingProc = null
+        // Retain exact child handle until exit; avoid race clearing newer startingProc.
+        // Hidden commands own their handle until exit; main server's handle transitions to instance ownership.
+        if (this.startingProc && this.startingProc.exitCode !== null) {
+          this.startingProc = null
+        } else if (this.instance && this.startingProc === this.instance.process) {
+          this.startingProc = null
+        } else if (!this.startingProc) {
+          // already cleared
+        } else if (this.startingProc && this.instance === null && this.startupPromise === null) {
+          // Startup failed without instance; if no live hidden child retained, allow clear on next tick via exit handler.
+          // Do not blindly null a live hidden child; its exit handler will clear when it exits.
+          if (this.startingProc.exitCode !== null) this.startingProc = null
+        }
       }
     }
+  }
+
+  /**
+   * Minimal shared singleflight canonical storage pre-serve cutover gate.
+   * Accessible via KiloConnectionService.ensureCanonicalStorage and reused by
+   * startServer. No standalone no-lease worker may open DB before this
+   * completes. Singleflight within this extension host; failure is cached
+   * fail-closed (no retry) and prevents worker open. Across multiple windows,
+   * live serve lease in another window makes status fail closed without killing
+   * the other process. Uses owned XDG-derived dataRoot, never user DB in tests
+   * when caller injects temp XDG.
+   */
+  async ensureCanonicalStorage(): Promise<void> {
+    if (this.disposed) throw new Error("ServerManager disposed")
+    if (this.canonicalStorageDone) return
+    if (this.canonicalStorageError) throw this.canonicalStorageError
+    if (this.canonicalStoragePromise) return this.canonicalStoragePromise
+    const gen = ++this.canonicalStorageGeneration
+    const p = this.ensureCanonicalStorageInternal(gen)
+    this.canonicalStoragePromise = p
+    try {
+      await p
+      this.canonicalStorageDone = true
+      this.canonicalStorageError = null
+    } catch (e) {
+      this.canonicalStorageError = e as Error
+      throw e
+    } finally {
+      if (this.canonicalStoragePromise === p) this.canonicalStoragePromise = null
+    }
+  }
+
+  // eslint-disable-next-line complexity
+  private async ensureCanonicalStorageInternal(generation: number): Promise<void> {
+    let dataRoot: string
+    try {
+      const dbPath = resolveCanonicalDbPath({ env: process.env, homedir: os.homedir() })
+      if (!path.isAbsolute(dbPath)) throw new Error(`canonical DB path not absolute: ${dbPath}`)
+      dataRoot = path.dirname(path.resolve(dbPath))
+    } catch (e) {
+      throw new ServerStartupError("Failed to resolve canonical storage path", String((e as Error)?.message ?? e))
+    }
+    if (!path.isAbsolute(dataRoot)) {
+      throw new ServerStartupError("Canonical data root not absolute", dataRoot)
+    }
+    const hiddenCli = resolveHiddenCliPath(this.context.extensionPath, process.env)
+    if (!fs.existsSync(hiddenCli)) {
+      throw new ServerStartupError(
+        "CLI binary not found for storage cutover",
+        `hidden CLI missing at ${hiddenCli} — failing closed, not spawning legacy`,
+      )
+    }
+    let statusRes: { stdout: string; stderr: string }
+    try {
+      statusRes = await this.runHiddenCutoverCommand(hiddenCli, ["__internal-storage-cutover", "status", "--data-root", dataRoot], generation, CUTOVER_TIMEOUT_MS)
+    } catch (e) {
+      if (e instanceof ServerStartupError) throw e
+      throw new ServerStartupError("Storage status check failed", String((e as Error)?.message ?? e))
+    }
+    let status: Record<string, unknown>
+    try {
+      status = parseCutoverJson(statusRes.stdout)
+    } catch (e) {
+      const tail = statusRes.stderr || statusRes.stdout
+      const { userMessage, userDetails } = toErrorMessage(String((e as Error)?.message ?? e), tail.split("\n"), hiddenCli)
+      throw new ServerStartupError(userMessage, userDetails)
+    }
+    if (status.canonical === true) {
+      console.log("[Kilo New] ServerManager: canonical storage already active, skipping cutover", { dataRoot, archiveID: String(status.archiveID ?? "") })
+      return
+    }
+    // Non-canonical: legacy DB present (hasDb true) or fresh (hasDb false) — run offline cutover under lease before serve
+    console.log("[Kilo New] ServerManager: non-canonical storage detected, running offline cutover", status)
+    try {
+      const cutRes = await this.runHiddenCutoverCommand(hiddenCli, ["__internal-storage-cutover", "cutover", "--data-root", dataRoot], generation, CUTOVER_TIMEOUT_MS)
+      const out = parseCutoverJson(cutRes.stdout)
+      console.log("[Kilo New] ServerManager: cutover succeeded", out)
+    } catch (e: unknown) {
+      const msg = String((e as Error)?.message ?? e) + " " + String((e as ServerStartupError)?.userDetails ?? "")
+      if (msg.includes("fresh canonical DB already active") || msg.includes("rerun blocked") || msg.includes("already active")) {
+        console.log("[Kilo New] ServerManager: cutover raced to canonical, continuing", msg.slice(0, 500))
+        return
+      }
+      if (e instanceof ServerStartupError) throw e
+      throw new ServerStartupError("Storage cutover failed", msg.slice(0, 4000))
+    }
+  }
+
+  private runHiddenCutoverCommand(cliPath: string, args: string[], generation: number, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      if (this.disposed || this.canonicalStorageGeneration !== generation) {
+        reject(new ServerStartupError("Server startup superseded by dispose", `generation ${generation} superseded before hidden command ${args.join(" ")}`))
+        return
+      }
+      console.log("[Kilo New] ServerManager: spawning hidden CLI:", cliPath, args.join(" "))
+      const child = spawn(cliPath, args, {
+        env: buildHiddenChildEnv(process.env),
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+      })
+      ;(child as unknown as { __kiloHidden?: boolean }).__kiloHidden = true
+      // Retain exact child handle until exit; avoid race clearing newer startingProc.
+      this.startingProc = child
+      let stdout = ""
+      let stderr = ""
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        if (settled) return
+        settled = true
+        console.error(`[Kilo New] ServerManager: hidden command timeout after ${timeoutMs}ms`, args.join(" "))
+        if (child.exitCode === null) ServerManager.killDirect(child, "SIGTERM")
+        // SIGKILL fallback 5s after timeout; retained until child exit.
+        let killTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+          if (child.exitCode === null) ServerManager.killDirect(child, "SIGKILL")
+        }, HIDDEN_SIGKILL_DELAY_MS)
+        ;(killTimer as unknown as { unref?: () => void })?.unref?.()
+        const clearKill = () => {
+          if (killTimer) {
+            clearTimeout(killTimer)
+            killTimer = null
+          }
+        }
+        child.on("exit", clearKill)
+        timer = null
+        const tail = stderr || stdout
+        const { userMessage, userDetails } = toErrorMessage(
+          `Storage cutover timeout after ${timeoutMs / 1000}s`,
+          tail.split("\n"),
+          cliPath,
+        )
+        // Do not clear this.startingProc here; retain until exit.
+        reject(new ServerStartupError(userMessage, userDetails))
+      }, timeoutMs)
+      ;(timer as unknown as { unref?: () => void })?.unref?.()
+      const clearTimer = () => {
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+      }
+      const clearIfOurs = () => {
+        if (this.startingProc === child) this.startingProc = null
+      }
+      child.stdout?.on("data", (d: Buffer) => {
+        stdout += d.toString()
+      })
+      child.stderr?.on("data", (d: Buffer) => {
+        stderr += d.toString()
+      })
+      child.on("error", (err: Error) => {
+        if (settled) return
+        settled = true
+        clearTimer()
+        clearIfOurs()
+        reject(new ServerStartupError("Failed to spawn hidden storage command", `${String(err.message ?? err)} ${stderr.slice(0, 2000)}`))
+      })
+      child.on("exit", (code: number | null) => {
+        clearTimer()
+        clearIfOurs()
+        if (settled) return
+        settled = true
+        if (this.disposed || this.canonicalStorageGeneration !== generation) {
+          if (child.exitCode === null) ServerManager.killDirect(child, "SIGTERM")
+          reject(new ServerStartupError("Server startup superseded by dispose", `generation ${generation} superseded during hidden command ${args.join(" ")} code ${String(code)}`))
+          return
+        }
+        if (code === 0) {
+          resolve({ stdout, stderr })
+          return
+        }
+        const combined = stderr || stdout
+        const { userMessage, userDetails } = toErrorMessage(
+          `Storage cutover command failed with code ${code ?? "null"}`,
+          combined.split("\n"),
+          cliPath,
+        )
+        reject(new ServerStartupError(userMessage, userDetails))
+      })
+    })
   }
 
   private async startServer(generation: number): Promise<ServerInstance> {
@@ -224,6 +489,15 @@ export class ServerManager {
     const cliPath = this.getCliPath()
     console.log("[Kilo New] ServerManager: 📍 CLI path:", cliPath)
     console.log("[Kilo New] ServerManager: 🔐 Generated password (length):", password.length)
+
+    // One-time canonical storage cutover: must complete before serve spawn.
+    // Uses the bundled full CLI hidden command (Bun context) under lease, same
+    // canonical dataRoot as KILO_DB, read-only identity existence check, fail
+    // closed on lease/marked/corruption/CLI missing, never silently spawn legacy.
+    await this.ensureCanonicalStorage()
+    if (this.disposed || this.startupGeneration !== generation) {
+      throw new ServerStartupError("Server startup superseded by dispose", `generation ${generation} cancelled after cutover gate`)
+    }
 
     // E2E fixture generation-request collection (KILO_E2E_FIXTURE only): the
     // run-owned scratch store is created lazily on the first spawn so every
@@ -311,6 +585,8 @@ export class ServerManager {
           // See oven-sh/bun#18265 and Jarred's workaround note in #21560.
           MIMALLOC_PURGE_DELAY: "0",
           KILO_SERVER_PASSWORD: password,
+          // Strict "1" marker: invalid values never activate; extension always sets exactly "1".
+          KILO_PRIVATE_RUNTIME: "1",
           // The CLI watches this PID and exits if the extension host is hard-killed without a
           // chance to run dispose(), so it is never orphaned. See parent-watchdog.ts.
           KILO_PARENT_PID: String(process.pid),
@@ -338,6 +614,7 @@ export class ServerManager {
         stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
         detached: true,
       })
+      ;(serverProcess as unknown as { __kiloHidden?: boolean }).__kiloHidden = false
       console.log("[Kilo New] ServerManager: 📦 Process spawned with PID:", serverProcess.pid)
       this.startingProc = serverProcess
       this.epochCounter += 1
@@ -626,11 +903,25 @@ export class ServerManager {
   }
 
   /**
+   * Kill hidden `detached:false` child directly via child.kill — never group -pid,
+   * which would target the parent group for non-detached children.
+   */
+  private static killDirect(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+    if (proc.pid === undefined) return
+    try {
+      proc.kill(signal)
+    } catch (err) {
+      console.warn("[Kilo ServerManager] killDirect failed (already gone?):", String(err))
+    }
+  }
+
+  /**
    * Kill a process and its entire process group.
    * On Unix, we send the signal to -pid (negative) to reach the whole group.
    * On Windows, process.kill() on the child handle is sufficient.
+   * Used only for serve `detached:true` children.
    */
-  private static killProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  private static killGroup(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
     if (proc.pid === undefined) {
       return
     }
@@ -642,8 +933,19 @@ export class ServerManager {
         proc.kill(signal)
       }
     } catch (err) {
-      console.warn("[Kilo ServerManager] killProcess failed (already gone?):", String(err))
+      console.warn("[Kilo ServerManager] killGroup failed (already gone?):", String(err))
     }
+  }
+
+  private static killProcess(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+    // Backward-compat alias for serve detached:true paths; hidden paths must use killDirect.
+    ServerManager.killGroup(proc, signal)
+  }
+
+  private static killForStartingProc(proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+    const isHidden = (proc as unknown as { __kiloHidden?: boolean }).__kiloHidden === true
+    if (isHidden) ServerManager.killDirect(proc, signal)
+    else ServerManager.killGroup(proc, signal)
   }
 
   private static releasePrivateStreams(inst: Pick<ServerInstance, "privateReader" | "privateWriter"> | null): void {
@@ -664,33 +966,53 @@ export class ServerManager {
 
   dispose(): void {
     if (this.disposed) {
-      // Already disposed — ensure starting proc also cleaned if still pending
-      if (this.startingProc && this.startingProc.exitCode === null) {
-        ServerManager.killProcess(this.startingProc, "SIGTERM")
+      // Already disposed — ensure starting proc also cleaned if still pending, retain handle until exit.
+      const cur = this.startingProc
+      if (cur && cur.exitCode === null) {
+        ServerManager.killForStartingProc(cur, "SIGTERM")
         ServerManager.releasePrivateStreams({
-          privateReader: (this.startingProc.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
-          privateWriter: (this.startingProc.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
+          privateReader: (cur.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
+          privateWriter: (cur.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
         } as unknown as ServerInstance)
+        // Retain handle until exit; clear only if still ours to avoid race with newer startingProc.
+        const timer = setTimeout(() => {
+          if (cur.exitCode === null) ServerManager.killForStartingProc(cur, "SIGKILL")
+        }, 5000)
+        ;(timer as unknown as { unref?: () => void })?.unref?.()
+        cur.on("exit", () => {
+          clearTimeout(timer)
+          if (this.startingProc === cur) this.startingProc = null
+        })
+      } else if (cur && this.startingProc === cur) {
+        this.startingProc = null
       }
-      this.startingProc = null
       return
     }
     this.disposed = true
     this.startupGeneration += 1
+    this.canonicalStorageGeneration += 1
+    this.canonicalStoragePromise = null
+    this.canonicalStorageDone = false
+    this.canonicalStorageError = null
     const starting = this.startingProc
-    this.startingProc = null
+    // Retain exact child handle until exit; clear only if still ours.
     if (starting && starting.exitCode === null) {
       console.log("[Kilo New] ServerManager: 🔴 Disposing — killing in-flight startup PID:", starting.pid)
       ServerManager.releasePrivateStreams({
         privateReader: (starting.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
         privateWriter: (starting.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
       } as unknown as ServerInstance)
-      ServerManager.killProcess(starting, "SIGTERM")
+      ServerManager.killForStartingProc(starting, "SIGTERM")
       const timer = setTimeout(() => {
-        if (starting.exitCode === null) ServerManager.killProcess(starting, "SIGKILL")
+        if (starting.exitCode === null) ServerManager.killForStartingProc(starting, "SIGKILL")
       }, 5000)
-      timer.unref()
-      starting.on("exit", () => clearTimeout(timer))
+      ;(timer as unknown as { unref?: () => void })?.unref?.()
+      starting.on("exit", () => {
+        clearTimeout(timer)
+        if (this.startingProc === starting) this.startingProc = null
+      })
+    } else if (starting && this.startingProc === starting) {
+      this.startingProc = null
     }
     if (!this.instance) {
       return

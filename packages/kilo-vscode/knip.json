@@ -6,7 +6,6 @@
     "webview-ui/agent-manager/index.tsx",
     "webview-ui/pierre-worker.ts",
     "webview-ui/src/index.tsx",
-    "src/**/__tests__/**/*.{ts,spec.ts}",
     "src/**/*.test.ts",
     "tests/**/*.{ts,mts}",
     "script/*.ts"

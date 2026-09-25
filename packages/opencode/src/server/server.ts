@@ -7,6 +7,7 @@ import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { MDNS } from "./mdns"
 import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
@@ -92,11 +93,22 @@ export async function openapi() {
 
 export let url: URL
 
+function effectiveListenOptions(opts: ListenOptions): ListenOptions {
+  if (!Flag.KILO_PRIVATE_RUNTIME) return opts
+  return { ...opts, hostname: "127.0.0.1", port: 0, mdns: false, cors: [], fallback: false }
+}
+
 export async function listen(opts: ListenOptions): Promise<Listener> {
+  // kilocode_change - private runtime enforces loopback/ephemeral/no mdns before any bind
+  const effective = effectiveListenOptions(opts)
+  if (Flag.KILO_PRIVATE_RUNTIME) {
+    const pwd = process.env.KILO_SERVER_PASSWORD ?? Flag.KILO_SERVER_PASSWORD
+    if (!pwd) throw new Error("KILO_PRIVATE_RUNTIME requires KILO_SERVER_PASSWORD")
+  }
   // kilocode_change - P0 instrumentation: start → listening (address resolved)
-  const timer = P0Perf.span("listener", { id: `${opts.hostname}:${opts.port}` })
-  const listener = await Effect.runPromise(listenEffect(opts))
-  timer.end({ meta: { hostname: opts.hostname, port: listener.port } }) // kilocode_change
+  const timer = P0Perf.span("listener", { id: `${effective.hostname}:${effective.port}` })
+  const listener = await Effect.runPromise(listenEffect(effective))
+  timer.end({ meta: { hostname: effective.hostname, port: listener.port } }) // kilocode_change
   return {
     hostname: listener.hostname,
     port: listener.port,
@@ -108,6 +120,12 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
 
 const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
   function* (opts: ListenOptions) {
+    // kilocode_change - private runtime fail-closed and network forcing is already applied in listen(), but keep defense-in-depth here
+    if (Flag.KILO_PRIVATE_RUNTIME) {
+      const pwd = process.env.KILO_SERVER_PASSWORD ?? Flag.KILO_SERVER_PASSWORD
+      if (!pwd) return yield* Effect.fail(new Error("KILO_PRIVATE_RUNTIME requires KILO_SERVER_PASSWORD"))
+      opts = effectiveListenOptions(opts)
+    }
     const state = yield* startWithPortFallback(opts)
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)

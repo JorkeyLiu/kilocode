@@ -33,7 +33,7 @@ jobs:
           # kilocode_change end
 
       - name: Generate
-        run: bun script/generate.ts # kilocode_change - offline: SDK/openapi + CLI docs generation only (no catalog snapshot)
+        run: bun script/generate.ts # kilocode_change - offline: SDK/openapi generation only (no catalog snapshot)
 
       - name: Commit and push
         run: |

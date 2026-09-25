@@ -11,9 +11,9 @@ const terminalContent = {
       <span className="terminal-prompt">$</span> code --install-extension kilocode.kilo-code
       {"\n"}
       {"\n"}
-      <span className="terminal-comment"># Or install via CLI</span>
+      <span className="terminal-comment"># Or install from VS Code Marketplace</span>
       {"\n"}
-      <span className="terminal-prompt">$</span> npm install -g @kilocode/cli
+      <span className="terminal-prompt">$</span> open vscode:extension/kilocode.kilo-code
     </>
   ),
   gateway: (
@@ -30,21 +30,19 @@ const terminalContent = {
   ),
   firstTask: (
     <>
-      <span className="terminal-comment"># Start a new task with Kilo Code</span>
+      <span className="terminal-comment"># Open Kilo Code in VS Code</span>
       {"\n"}
-      <span className="terminal-prompt">$</span> kilo "Create a React component for a user profile"
-      {"\n"}
-      {"\n"}
-      <span className="terminal-comment">
-        # Or for interactive sessions, just run the Kilo CLI in your project folder
-      </span>
-      {"\n"}
-      <span className="terminal-prompt">$</span> kilo
+      <span className="terminal-prompt">$</span> code .
       {"\n"}
       {"\n"}
-      <span className="terminal-comment"># Run in architect mode for planning</span>
+      <span className="terminal-comment"># Use the chat panel to start a task</span>
       {"\n"}
-      <span className="terminal-prompt">$</span> kilo --mode architect "Design a REST API"
+      <span className="terminal-prompt">$</span> Ask: "Create a React component for a user profile"
+      {"\n"}
+      {"\n"}
+      <span className="terminal-comment"># Switch to Plan or Architect mode in the UI for planning</span>
+      {"\n"}
+      <span className="terminal-prompt">$</span> Select "Plan" mode in the Kilo Code sidebar
     </>
   ),
   customRules: (
@@ -54,16 +52,16 @@ const terminalContent = {
       <span className="terminal-prompt">$</span> touch .kilocode/rules.md
       {"\n"}
       {"\n"}
-      <span className="terminal-comment"># Or use the CLI to add rules</span>
+      <span className="terminal-comment"># Add rules to your project</span>
       {"\n"}
-      <span className="terminal-prompt">$</span> kilo rules add "Always use TypeScript"
+      <span className="terminal-prompt">$</span> echo "Always use TypeScript" &gt;&gt; .kilocode/rules.md
       {"\n"}
-      <span className="terminal-prompt">$</span> kilo rules add "Follow React best practices"
+      <span className="terminal-prompt">$</span> echo "Follow React best practices" &gt;&gt; .kilocode/rules.md
       {"\n"}
       {"\n"}
-      <span className="terminal-comment"># List all active rules</span>
+      <span className="terminal-comment"># Rules are applied automatically in the chat</span>
       {"\n"}
-      <span className="terminal-prompt">$</span> kilo rules list
+      <span className="terminal-prompt">$</span> cat .kilocode/rules.md
     </>
   ),
 }
@@ -200,7 +198,7 @@ export default function HomePage() {
   return (
     <div className="homepage">
       <Head>
-        <title>Kilo Code Docs: Setup, Models, MCP, Custom Modes & CLI</title>
+        <title>Kilo Code Docs: Setup, Models, MCP & Custom Modes</title>
       </Head>
       {/* Dotted background pattern */}
       <div className="dot-pattern" />
@@ -239,11 +237,8 @@ export default function HomePage() {
           <div className="quick-section">
             <h3 className="quick-title">PLATFORMS</h3>
             <div className="quick-links">
-              <Link href="/code-with-ai" className="quick-link">
+              <Link href="/code-with-ai/platforms/vscode" className="quick-link">
                 VS Code Extension
-              </Link>
-              <Link href="/code-with-ai" className="quick-link">
-                CLI
               </Link>
             </div>
           </div>

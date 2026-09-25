@@ -78,6 +78,7 @@ import * as SessionRevertDispatch from "@/kilocode/session/session-revert-dispat
 import * as SessionPromptDispatch from "@/kilocode/session/session-prompt-dispatch" // kilocode_change - private-first prompt accept
 import * as SessionCommandDispatch from "@/kilocode/session/session-command-dispatch" // kilocode_change - private-first command accept
 import * as ProviderHttpExecuteBroker from "@/kilocode/server/provider-http-execute-broker" // kilocode_change - provider http execute broker
+import { observationNotifierLayer } from "@/event-v2-bridge" // kilocode_change - legacy observation convergence
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers (P4.4-G2: no preset catalog)
@@ -228,7 +229,7 @@ const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   )
   const dispatch = dispatchRaw.pipe(Layer.provideMerge(lifecycle))
   const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(lifecycle))
-  return Layer.mergeAll(lifecycle, dispatch, maintenance)
+  return Layer.mergeAll(lifecycle, dispatch, maintenance, observationNotifierLayer)
 }
 // kilocode_change end
 

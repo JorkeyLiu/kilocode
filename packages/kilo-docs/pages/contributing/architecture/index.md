@@ -40,11 +40,11 @@ Architecture pages cross two repositories:
 
 | Layer | Responsibility | Typical boundaries |
 |---|---|---|
-| Local runtime and clients | Runs local coding sessions and connects editor surfaces to one local agent engine | Kilo CLI runtime, `kilo serve` server, local daemon, VS Code extension |
+| Local runtime and clients | Runs local coding sessions and connects the supported editor surface to one local agent engine | Kilo CLI runtime source (dev/test internal, no public release), VS Code-packaged private `kilo-serve` server, VS Code extension (supported product) |
 | Kilo Cloud shared services | Handles hosted identity, authorization, model routing, billing, orchestration, and shared product services | Web control plane, Kilo Gateway, Workers, queues, Durable Objects, persistence |
 | Hosted product runtimes and automation | Runs scoped cloud work for coding, app generation, assistants, security analysis, and multi-agent orchestration | Cloud Agent, Automation Services, App Builder, Security Agent, Gas Town, Wasteland |
 
-Local execution and hosted execution are separate boundaries. Editor clients use a local `kilo serve` server. Hosted automation can launch Cloud Agent execution sessions when cloud coding work is required.
+Local execution and hosted execution are separate boundaries. The VS Code extension uses its packaged private `kilo-serve` server. Hosted automation can launch Cloud Agent execution sessions when cloud coding work is required.
 
 ## Terms used throughout
 
@@ -52,8 +52,8 @@ Local execution and hosted execution are separate boundaries. Editor clients use
 |---|---|
 | Kilo Code | Umbrella product across local clients, Kilo CLI runtime, and Kilo Cloud services |
 | Kilo CLI runtime | Local agent engine in `packages/opencode/`; owns tools, sessions, config, persistence, and provider routing |
-| `kilo serve` server | Local HTTP and SSE process used by editor clients; selected browser-oriented paths also use WebSocket |
-| Local daemon | Detached reusable `kilo serve` server managed by `kilo daemon` commands |
+| `kilo serve` server | Local HTTP and SSE process source entry (supported only as the VS Code-packaged private `kilo-serve` server); selected browser-oriented paths also use WebSocket |
+| Local daemon | Detached reusable `kilo serve` server managed by source-only dev/test `kilo daemon` commands (no public release) |
 | Directory context | Normalized local filesystem directory used to select local runtime state |
 | Local runtime instance | Directory-keyed runtime context inside one Kilo CLI process |
 | Local routing workspace | Optional routing context that can resolve to a local directory or remote target |
@@ -68,15 +68,15 @@ The three layers appear in two primary execution shapes: local client requests a
 
 ```mermaid
 flowchart LR
-  subgraph clients ["Local clients"]
-    tui["Kilo CLI TUI"]
-    run["kilo run"]
-    editors["VS Code"]
+  subgraph clients ["Local clients (only VS Code is supported)"]
+    tui["Kilo CLI TUI (source-only dev/test, no public release)"]
+    run["kilo run (source-only dev/test, no public release)"]
+    editors["VS Code (supported product)"]
   end
 
-  subgraph local ["Local Kilo CLI boundary"]
-    daemon["Local daemon manager"]
-    server["kilo serve server"]
+  subgraph local ["Local Kilo CLI boundary (source; VS Code-packaged server is the supported runtime)"]
+    daemon["Local daemon manager (source-only dev/test)"]
+    server["kilo-serve server (VS Code-packaged private)"]
     runtime["Kilo CLI runtime"]
     router["Provider router"]
   end
@@ -158,10 +158,10 @@ These local surfaces live in [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/k
 
 | Surface | Package in `Kilo-Org/kilocode` | Runtime model |
 |---|---|---|
-| Kilo CLI TUI | `packages/opencode/` | Interactive local client with daemon attach and worker-backed fallback paths |
-| `kilo run` | `packages/opencode/` | Headless prompt execution through explicit attach, daemon attach, or embedded fallback |
-| `kilo serve` | `packages/opencode/` | Local HTTP + SSE server for local clients |
-| VS Code extension | `packages/kilo-vscode/` | Extension host starts one shared editor-owned `kilo serve` server and routes webviews through HTTP + global SSE; SDK directory selects local runtime instance |
+| Kilo CLI TUI (source-only dev/test internal, no public release) | `packages/opencode/` | Source-retained interactive local client with daemon attach and worker-backed fallback paths; not a supported product |
+| `kilo run` (source-only dev/test internal, no public release) | `packages/opencode/` | Source-retained headless prompt execution through explicit attach, daemon attach, or embedded fallback; not a supported product |
+| `kilo serve` source entry (dev/test internal; supported only as VS Code-packaged private `kilo-serve`) | `packages/opencode/` | Local HTTP + SSE server source used by dev/test; the supported runtime is the VS Code-packaged private `kilo-serve` server |
+| VS Code extension (supported product) | `packages/kilo-vscode/` | Extension host starts one shared VS Code-packaged private `kilo-serve` server and routes webviews through HTTP + global SSE; SDK directory selects local runtime instance; the extension is the private owner of that server |
 
 ## Cloud service families
 

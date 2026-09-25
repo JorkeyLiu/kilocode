@@ -6,11 +6,10 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">用于在 VS Code 或 CLI 中借助 AI 构建的开源编码代理。</p>
+<p align="center">用于在 VS Code 中借助 AI 构建的开源编码代理。</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
-  <a href="https://www.npmjs.com/package/@kilocode/cli"><img alt="npm" src="https://raster.shields.io/npm/v/@kilocode/cli?style=flat" height="20" /></a>
   <a href="https://x.com/kilocode"><img src="https://raster.shields.io/badge/kilocode-000000?style=flat&logo=x&logoColor=white" alt="X (Twitter)" height="20"></a>
   <a href="https://blog.kilo.ai"><img src="https://raster.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Blog" height="20"></a>
   <a href="https://kilo.ai/discord"><img src="https://raster.shields.io/badge/Join%20Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" height="20"></a>
@@ -21,7 +20,7 @@
 
 ---
 
-Kilo Code 是一个 AI 编码代理，可以在你工作的任何地方使用：[VS Code](https://kilo.ai/landing/vs-code) 和 [CLI](https://kilo.ai/cli)。它是开源的，并采用开放定价。你可以从 500 多个模型中选择，在任务中途切换模型，并按模型提供商的价格付费，没有加价。开始使用无需 API 密钥。
+Kilo Code 是一个 AI 编码代理，可以在你工作的任何地方使用：[VS Code](https://kilo.ai/landing/vs-code)。它是开源的，并采用开放定价。你可以从 500 多个模型中选择，在任务中途切换模型，并按模型提供商的价格付费，没有加价。开始使用无需 API 密钥。
 
 ### 安装
 
@@ -33,70 +32,6 @@ Kilo Code 是一个 AI 编码代理，可以在你工作的任何地方使用：
 <br>
 
 直接安装 [Kilo Code 扩展](vscode:extension/kilocode.kilo-code)，或从 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code) 获取。创建账户后，你可以按提供商价格访问 500 多个模型，包括 GPT-5.5、Claude Opus 4.7、Claude Sonnet 4.6 和 Gemini 3.1 Pro Preview。
-
-</details>
-
-<details open>
-<summary><strong>CLI</strong></summary>
-
-<br>
-
-```bash
-# npm
-npm install -g @kilocode/cli
-
-# curl
-curl -fsSL https://kilo.ai/cli/install | bash
-
-# pnpm
-pnpm add -g @kilocode/cli
-
-# bun
-bun add -g @kilocode/cli
-
-# Homebrew (macOS / Linux)
-brew install Kilo-Org/tap/kilo
-
-# Arch Linux (AUR)
-paru -S kilo-bin
-```
-
-然后在任意项目目录中运行 `kilo` 即可开始。
-
-</details>
-
-<details>
-<summary><strong>Cloud Agent</strong></summary>
-
-<br>
-
-无需本地机器，在 Web 上通过 [app.kilo.ai/cloud](https://app.kilo.ai/cloud) 运行 Kilo。
-
-</details>
-
-<details>
-<summary><strong>代码审查</strong></summary>
-
-<br>
-
-在 [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews) 为你的 Pull Request 设置自动 AI 代码审查。
-
-</details>
-
-<details>
-<summary>从 GitHub Releases 安装 CLI（二进制文件）</summary>
-
-从 [Releases 页面](https://github.com/Kilo-Org/kilocode/releases) 下载最新二进制文件。
-
-| 平台 | 资源 |
-|---|---|
-| Windows（大多数 PC） | `kilo-windows-x64.zip` |
-| macOS（Apple Silicon） | `kilo-darwin-arm64.zip` |
-| macOS（Intel） | `kilo-darwin-x64.zip` |
-| Linux x64 | `kilo-linux-x64.tar.gz` |
-| Linux ARM | `kilo-linux-arm64.tar.gz` |
-
-说明：`x64-baseline` 是面向不支持 AVX 的旧 CPU 的兼容构建。`musl` 是面向 Alpine 或无 glibc 的极简 Docker 镜像的静态链接构建。`kilo-vscode-*.vsix` 是 VS Code 扩展包，不是 CLI。`Source code` 压缩包用于从源码构建。
 
 </details>
 
@@ -121,15 +56,6 @@ Kilo 内置了可按任务切换的专用 Agents。你也可以构建自己的�
 - **MCP 市场**：查找并连接 MCP 服务器，扩展代理能力。
 - **500 多个模型**：支持任务中途切换，让你根据延迟、成本和推理能力匹配任务。
 
-### 自主模式（CI/CD）
-
-使用 `--auto` 运行 `kilo run`，可在 CI/CD 流水线中实现无提示的完全自主操作：
-
-```bash
-kilo run --auto "run tests and fix any failures"
-```
-
-`--auto` 会禁用所有权限提示，并允许代理在无需确认的情况下执行任何操作。仅在可信环境中使用。
 
 ### 文档
 
@@ -137,7 +63,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### 贡献
 
-欢迎开发者、写作者以及所有人参与贡献。请先阅读 [Contributing Guide](/CONTRIBUTING.md)，了解环境设置、编码标准以及如何创建 Pull Request。VS Code 扩展和 CLI 的发布流程请参阅 [RELEASING.md](../RELEASING.md)。
+欢迎开发者、写作者以及所有人参与贡献。请先阅读 [Contributing Guide](/CONTRIBUTING.md)，了解环境设置、编码标准以及如何创建 Pull Request。VS Code 扩展 的发布流程请参阅 [RELEASING.md](../RELEASING.md)。
 
 参与前请阅读我们的 [Code of Conduct](/CODE_OF_CONDUCT.md)。
 

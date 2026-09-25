@@ -10,9 +10,37 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import "@opencode-ai/core/account"
 import "@opencode-ai/core/catalog"
 import "@opencode-ai/core/session/event"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
+import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 
 export class Service extends Context.Service<Service, EventV2.Interface>()("@opencode/EventV2Bridge") {}
+
+export const observationNotifierLayer = Layer.succeed(EventV2.ObservationNotifier, {
+  notify: (entry) =>
+    Effect.gen(function* () {
+      const opt = yield* Effect.serviceOption(PrivatePeerService)
+      if (Option.isNone(opt)) return
+      const peer = opt.value
+      const payload = {
+        v: OBSERVATION_VERSION,
+        cursor: entry.seq,
+        entries: [
+          {
+            seq: entry.seq,
+            session_id: entry.session_id,
+            revision: entry.revision,
+            kind: entry.kind,
+            time: entry.time,
+          },
+        ],
+      }
+      yield* peer.notify(OBSERVATION_NOTIFICATION, payload).pipe(
+        Effect.catch(() => Effect.void),
+        Effect.catchDefect(() => Effect.void),
+      )
+    }).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void)),
+})
 
 export const layer = Layer.effect(
   Service,

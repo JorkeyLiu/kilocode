@@ -13,15 +13,11 @@ This guide provides actionable strategies to improve each dimension of your AI A
 
 ### Expand Beyond the IDE
 
-A lot of development work happens in the terminal—git operations, debugging, scripting. Bringing AI to those contexts increases daily touchpoints.
+A lot of development work happens beyond composing code — reviewing PRs, debugging, and automating workflows.
 
-**Action:** Install the Kilo CLI to enable AI-assisted terminal workflows:
+**Action:** Bring AI into more of your existing flow with Code Reviews, chat, and agent workflows in VS Code.
 
-```bash
-npm install -g @kilocode/cli
-```
-
-Teams that use both IDE and CLI surfaces tend to show higher daily engagement because AI is available wherever they're working.
+Teams that use multiple Kilo surfaces tend to show higher daily engagement because AI is available wherever they're working.
 
 ### Start with Quick Wins
 

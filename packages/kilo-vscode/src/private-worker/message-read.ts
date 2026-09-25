@@ -70,7 +70,7 @@ export function decodeMessageCursor(raw: unknown): MessageCursor {
   return { id: rec.id as string, time: rec.time as number }
 }
 
-export const cursor = {
+const cursor = {
   encode(input: MessageCursor) {
     return encodeMessageCursor(input)
   },
@@ -238,8 +238,8 @@ export function validatePart(raw: unknown): SessionV1.Part {
   return raw as SessionV1.Part
 }
 
-export const decodeInfo = validateInfo
-export const decodePart = validatePart
+const decodeInfo = validateInfo
+const decodePart = validatePart
 
 function messageTimeCreated(info: { time: { created: number } }): number {
   return (info as { time: { created: number } }).time.created

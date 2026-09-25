@@ -6,11 +6,10 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">VS Code 또는 CLI에서 AI로 개발하기 위한 오픈 소스 코딩 에이전트입니다.</p>
+<p align="center">VS Code에서 AI로 개발하기 위한 오픈 소스 코딩 에이전트입니다.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
-  <a href="https://www.npmjs.com/package/@kilocode/cli"><img alt="npm" src="https://raster.shields.io/npm/v/@kilocode/cli?style=flat" height="20" /></a>
   <a href="https://x.com/kilocode"><img src="https://raster.shields.io/badge/kilocode-000000?style=flat&logo=x&logoColor=white" alt="X (Twitter)" height="20"></a>
   <a href="https://blog.kilo.ai"><img src="https://raster.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Blog" height="20"></a>
   <a href="https://kilo.ai/discord"><img src="https://raster.shields.io/badge/Join%20Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" height="20"></a>
@@ -21,7 +20,7 @@
 
 ---
 
-Kilo Code는 [VS Code](https://kilo.ai/landing/vs-code), [CLI](https://kilo.ai/cli) 등 작업하는 모든 곳에서 사용할 수 있는 AI 코딩 에이전트입니다. 오픈 소스이며 투명한 가격 정책을 제공합니다. 500개 이상의 모델 중에서 선택하고, 작업 중간에 모델을 전환하며, 추가 요금 없이 모델 제공업체의 요금만 지불합니다. 시작할 때 API 키가 필요하지 않습니다.
+Kilo Code는 [VS Code](https://kilo.ai/landing/vs-code) 등 작업하는 모든 곳에서 사용할 수 있는 AI 코딩 에이전트입니다. 오픈 소스이며 투명한 가격 정책을 제공합니다. 500개 이상의 모델 중에서 선택하고, 작업 중간에 모델을 전환하며, 추가 요금 없이 모델 제공업체의 요금만 지불합니다. 시작할 때 API 키가 필요하지 않습니다.
 
 ### 설치
 
@@ -33,70 +32,6 @@ Kilo를 실행할 위치를 선택하세요.
 <br>
 
 [Kilo Code 확장](vscode:extension/kilocode.kilo-code)을 직접 설치하거나 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code)에서 설치하세요. 계정을 만들면 GPT-5.5, Claude Opus 4.7, Claude Sonnet 4.6, Gemini 3.1 Pro Preview를 포함한 500개 이상의 모델을 제공업체 가격으로 사용할 수 있습니다.
-
-</details>
-
-<details open>
-<summary><strong>CLI</strong></summary>
-
-<br>
-
-```bash
-# npm
-npm install -g @kilocode/cli
-
-# curl
-curl -fsSL https://kilo.ai/cli/install | bash
-
-# pnpm
-pnpm add -g @kilocode/cli
-
-# bun
-bun add -g @kilocode/cli
-
-# Homebrew (macOS / Linux)
-brew install Kilo-Org/tap/kilo
-
-# Arch Linux (AUR)
-paru -S kilo-bin
-```
-
-그런 다음 아무 프로젝트 디렉터리에서 `kilo`를 실행해 시작하세요.
-
-</details>
-
-<details>
-<summary><strong>Cloud Agent</strong></summary>
-
-<br>
-
-로컬 머신 없이 웹에서 [app.kilo.ai/cloud](https://app.kilo.ai/cloud)로 Kilo를 실행하세요.
-
-</details>
-
-<details>
-<summary><strong>코드 리뷰</strong></summary>
-
-<br>
-
-[app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews)에서 pull request에 자동 AI 코드 리뷰를 설정하세요.
-
-</details>
-
-<details>
-<summary>GitHub Releases에서 CLI 설치하기(바이너리)</summary>
-
-[Releases 페이지](https://github.com/Kilo-Org/kilocode/releases)에서 최신 바이너리를 다운로드하세요.
-
-| 플랫폼 | 에셋 |
-|---|---|
-| Windows(대부분의 PC) | `kilo-windows-x64.zip` |
-| macOS(Apple Silicon) | `kilo-darwin-arm64.zip` |
-| macOS(Intel) | `kilo-darwin-x64.zip` |
-| Linux x64 | `kilo-linux-x64.tar.gz` |
-| Linux ARM | `kilo-linux-arm64.tar.gz` |
-
-참고: `x64-baseline`은 AVX가 없는 구형 CPU용 호환 빌드입니다. `musl`은 Alpine 또는 glibc가 없는 최소 Docker 이미지용 정적 링크 빌드입니다. `kilo-vscode-*.vsix`는 CLI가 아니라 VS Code 확장 패키지입니다. `Source code` 아카이브는 소스에서 빌드할 때 사용합니다.
 
 </details>
 
@@ -121,15 +56,6 @@ Kilo에는 작업에 따라 전환할 수 있는 특화된 agents가 포함되�
 - 에이전트 기능을 확장하는 MCP 서버를 찾고 연결하는 **MCP 마켓플레이스**.
 - 지연 시간, 비용, 추론 능력을 작업에 맞출 수 있는 작업 중 전환 지원 **500개 이상의 모델**.
 
-### 자율 모드(CI/CD)
-
-CI/CD 파이프라인용으로 프롬프트 없이 완전 자율 실행하려면 `kilo run`에 `--auto`를 사용하세요.
-
-```bash
-kilo run --auto "run tests and fix any failures"
-```
-
-`--auto`는 모든 권한 프롬프트를 비활성화하고 에이전트가 확인 없이 모든 작업을 실행할 수 있게 합니다. 신뢰할 수 있는 환경에서만 사용하세요.
 
 ### 문서
 
@@ -137,7 +63,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### 기여
 
-개발자, 작성자 등 누구나 기여할 수 있습니다. 환경 설정, 코딩 표준, pull request 여는 방법은 [Contributing Guide](/CONTRIBUTING.md)에서 시작하세요. VS Code 확장과 CLI 릴리스 절차는 [RELEASING.md](../RELEASING.md)를 참조하세요.
+개발자, 작성자 등 누구나 기여할 수 있습니다. 환경 설정, 코딩 표준, pull request 여는 방법은 [Contributing Guide](/CONTRIBUTING.md)에서 시작하세요. VS Code 확장 릴리스 절차는 [RELEASING.md](../RELEASING.md)를 참조하세요.
 
 참여하기 전에 [Code of Conduct](/CODE_OF_CONDUCT.md)를 읽어 주세요.
 

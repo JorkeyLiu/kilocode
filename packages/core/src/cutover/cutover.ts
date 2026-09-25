@@ -68,12 +68,70 @@ async function isGateOk(dataRoot: string): Promise<boolean> {
   return false
 }
 
+// Unconditional canonical-identity probe: read-only, no migrations/PRAGMAs side-effect.
+// Returns "canonical" when storage_identity row exists and passes uuid/schema/archive/autovacuum checks,
+// "malformed" when row exists but fails validation (fail-closed), "none" when legacy (no DB, no table, no row).
+async function probeCanonicalIdentity(dataRoot: string): Promise<{ kind: "canonical" | "malformed" | "none"; error?: string; archiveID?: string }> {
+  const dbPath = path.join(path.resolve(dataRoot), "kilo.db")
+  if (!(await fileExists(dbPath))) return { kind: "none" }
+  let db: any
+  try {
+    const { Database: BunDB } = await import("bun:sqlite")
+    db = new (BunDB as any)(dbPath, { readonly: true, create: false } as any)
+  } catch (e: any) {
+    throw new Error(`canonical DB open failed fail-closed at ${dbPath}: ${String(e?.message ?? e)}`)
+  }
+  try {
+    let row: any
+    try {
+      row = db.query("SELECT uuid, schema_version, cutover_archive_id FROM storage_identity WHERE id = 1").get() as any
+    } catch (e: any) {
+      const msg = String(e?.message ?? e)
+      if (msg.includes("no such table")) return { kind: "none" }
+      return { kind: "malformed", error: `storage_identity probe failed: ${msg}` }
+    }
+    if (!row) return { kind: "none" }
+    const isUUID = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+    const isValidArchiveID = (id: string) => /^\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    if (!isUUID(row.uuid)) return { kind: "malformed", error: `invalid storage uuid ${row.uuid}` }
+    if (row.schema_version !== "1") return { kind: "malformed", error: `schema version mismatch ${row.schema_version}` }
+    if (!row.cutover_archive_id || !isValidArchiveID(row.cutover_archive_id)) return { kind: "malformed", error: `invalid cutover archive id ${row.cutover_archive_id}` }
+    let av: any
+    try {
+      av = db.query("PRAGMA auto_vacuum").get() as any
+    } catch (e: any) {
+      return { kind: "malformed", error: `auto_vacuum probe failed: ${String(e?.message ?? e)}` }
+    }
+    const avVal = (av as any)?.auto_vacuum
+    if (avVal !== 2) return { kind: "malformed", error: `auto_vacuum must be 2, got ${avVal}` }
+    try {
+      const cnt = db.query("SELECT count(*) as c FROM storage_identity").get() as any
+      if ((cnt as any)?.c !== 1) return { kind: "malformed", error: `storage_identity must have 1 row, got ${(cnt as any)?.c}` }
+    } catch (e: any) {
+      return { kind: "malformed", error: `storage_identity count failed: ${String(e?.message ?? e)}` }
+    }
+    return { kind: "canonical", archiveID: row.cutover_archive_id }
+  } finally {
+    try {
+      db.close()
+    } catch {}
+  }
+}
+
 export async function bootstrapFreshStaged(stagedRoot: string, archiveID: string): Promise<void> {
   const root = path.resolve(stagedRoot)
   await fsp.mkdir(root, { recursive: true })
   for (const k of ["session_diff", "session_diff_base", "session_share"]) {
     const dir = path.join(root, "storage", k)
     await fsp.mkdir(dir, { recursive: true })
+  }
+  for (const k of ["session_diff", "session_diff_base", "session_share"]) {
+    const dir = path.join(root, "storage", k)
+    const entries = await fsp.readdir(dir).catch((e: any) => {
+      if (e.code === "ENOENT") return [] as string[]
+      throw e
+    })
+    if (entries.length !== 0) throw new Error(`staged family artifact not empty ${k}`)
   }
   const dbPath = path.join(root, "kilo.db")
   const layer = Database.layerNoLease(dbPath)
@@ -84,14 +142,6 @@ export async function bootstrapFreshStaged(stagedRoot: string, archiveID: string
       yield* verifyGate(db, root, archiveID)
     }).pipe(Effect.provide(layer), Effect.scoped, Effect.orDie),
   )
-  for (const k of ["session_diff", "session_diff_base", "session_share"]) {
-    const dir = path.join(root, "storage", k)
-    const entries = await fsp.readdir(dir).catch((e: any) => {
-      if (e.code === "ENOENT") return [] as string[]
-      throw e
-    })
-    if (entries.length !== 0) throw new Error(`staged family artifact not empty ${k}`)
-  }
   await fsyncDir(root)
   await fsyncDir(path.join(root, "storage"))
   for (const k of ["session_diff", "session_diff_base", "session_share"]) {
@@ -179,9 +229,9 @@ export async function runCutover(opts: { dataRoot: string; archiveID?: string })
   let archiveID = opts.archiveID
   try {
     await recoverIfNeeded(root)
-    if (await hasIdentity(root)) {
-      if (await isGateOk(root)) throw new Error(`cutover rerun blocked: fresh canonical DB already active`)
-    }
+    const probe = await probeCanonicalIdentity(root)
+    if (probe.kind === "malformed") throw new Error(probe.error)
+    if (probe.kind === "canonical") throw new Error(`cutover rerun blocked: fresh canonical DB already active ${probe.archiveID ?? ""}`.trim())
     let created: { archiveID: string; archivePath: string; manifest: any } | undefined
     try {
       created = await createArchive({ dataRoot: root, archiveID })
@@ -270,30 +320,52 @@ export async function recoverCutover(dataRoot: string): Promise<void> {
 
 export async function bootstrapFreshDB(dataRoot: string, archiveID: string): Promise<void> {
   const staged = path.resolve(dataRoot)
-  if (await hasIdentity(staged)) {
-    if (await isGateOk(staged)) throw new Error("fresh DB already active")
-  }
-  const parent = path.dirname(staged)
-  const tmpStaged = path.join(parent, `.tmp-bootstrap-${archiveID}-${Date.now()}`)
-  await bootstrapFreshStaged(tmpStaged, archiveID)
-  const backup = `${staged}.bootstrap-backup-${Date.now()}`
-  let moved = false
+  const probe = await probeCanonicalIdentity(staged)
+  if (probe.kind === "malformed") throw new Error(probe.error)
+  if (probe.kind === "canonical") throw new Error(`fresh canonical DB already active ${probe.archiveID ?? ""}`.trim())
+  const lease = await acquireLease(staged)
   try {
-    await fsp.rename(staged, backup)
-    moved = true
-    await fsp.rename(tmpStaged, staged)
-    await fsyncDir(parent)
-    const ok = await isGateOk(staged)
-    if (!ok) throw new Error("bootstrap gate failed")
-    await fsp.rm(backup, { recursive: true, force: true })
-    await fsyncDir(parent)
-  } catch (e) {
-    if (moved) {
-      await fsp.rm(staged, { recursive: true, force: true }).catch(() => {})
-      await fsp.rename(backup, staged).catch(() => {})
-      await fsyncDir(parent).catch(() => {})
+    const probe2 = await probeCanonicalIdentity(staged)
+    if (probe2.kind === "malformed") throw new Error(probe2.error)
+    if (probe2.kind === "canonical") throw new Error(`fresh canonical DB already active ${probe2.archiveID ?? ""}`.trim())
+    // Fresh no-DB bootstrap must check family artifact dirs empty BEFORE creating identity/DB, otherwise fail closed without leaving activated canonical identity.
+    for (const k of ["session_diff", "session_diff_base", "session_share"]) {
+      const dir = path.join(staged, "storage", k)
+      const entries = await fsp.readdir(dir).catch((e: any) => {
+        if (e.code === "ENOENT") return [] as string[]
+        throw e
+      })
+      if (entries.length !== 0) throw new Error(`staged family artifact not empty ${k}`)
     }
-    await fsp.rm(tmpStaged, { recursive: true, force: true }).catch(() => {})
-    throw e
+    const parent = path.dirname(staged)
+    const tmpStaged = path.join(parent, `.tmp-bootstrap-${archiveID}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+    await bootstrapFreshStaged(tmpStaged, archiveID)
+    const backup = `${staged}.bootstrap-backup-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    let moved = false
+    try {
+      const stagedExists = await fileExists(staged)
+      if (stagedExists) {
+        await fsp.rename(staged, backup)
+        moved = true
+      }
+      await fsp.rename(tmpStaged, staged)
+      await fsyncDir(parent)
+      const ok = await isGateOk(staged)
+      if (!ok) throw new Error("bootstrap gate failed")
+      if (moved) {
+        await fsp.rm(backup, { recursive: true, force: true })
+        await fsyncDir(parent)
+      }
+    } catch (e) {
+      if (moved) {
+        await fsp.rm(staged, { recursive: true, force: true }).catch(() => {})
+        await fsp.rename(backup, staged).catch(() => {})
+        await fsyncDir(parent).catch(() => {})
+      }
+      await fsp.rm(tmpStaged, { recursive: true, force: true }).catch(() => {})
+      throw e
+    }
+  } finally {
+    await lease.release()
   }
 }

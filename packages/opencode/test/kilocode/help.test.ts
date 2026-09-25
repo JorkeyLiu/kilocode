@@ -8,7 +8,6 @@ import { GenerateCommand } from "../../src/cli/cmd/generate"
 import { DebugCommand } from "../../src/cli/cmd/debug"
 import { ProvidersCommand } from "../../src/cli/cmd/providers" // kilocode_change — upstream renamed auth → providers
 import { AgentCommand } from "../../src/cli/cmd/agent"
-import { UpgradeCommand } from "../../src/cli/cmd/upgrade"
 import { UninstallCommand } from "../../src/cli/cmd/uninstall"
 import { ServeCommand } from "../../src/cli/cmd/serve"
 import { WebCommand } from "../../src/cli/cmd/web"
@@ -58,7 +57,6 @@ const commands = [
   DebugCommand,
   ProvidersCommand,
   AgentCommand,
-  UpgradeCommand,
   UninstallCommand,
   ServeCommand,
   WebCommand,
@@ -257,5 +255,16 @@ describe("Kilo CLI customizations are wired into index.ts", () => {
     const except = new Set(["CompletionCommand", "HelpCommand"])
     const missing = entries.filter((name) => !except.has(name) && !registered.has(name))
     expect(missing).toEqual([])
+  })
+
+  test("standalone self-upgrade command is removed (no public CLI distribution)", async () => {
+    const index = await file(INDEX)
+    const barrel = await file(BARREL)
+    expect(index).not.toContain("UpgradeCommand")
+    expect(index).not.toContain("cli/cmd/upgrade")
+    expect(barrel).not.toContain("UpgradeCommand")
+    expect(barrel).not.toContain("cli/cmd/upgrade")
+    expect(await Bun.file(path.resolve(import.meta.dir, "../../src/cli/cmd/upgrade.ts")).exists()).toBe(false)
+    expect(await Bun.file(path.resolve(import.meta.dir, "../../src/cli/upgrade.ts")).exists()).toBe(false)
   })
 })

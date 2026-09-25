@@ -28,7 +28,7 @@ describe("sitemap.xml", () => {
     expect(xml).toContain("https://kilo.ai/docs/getting-started/installing")
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/vscode")
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/vscode/whats-new")
-    expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/cli")
+    expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/cloud-agent")
     expect(xml).toContain("https://kilo.ai/docs/automate/tools")
   })
 
@@ -48,6 +48,9 @@ describe("sitemap.xml", () => {
       "/code-with-ai/features/git-commit-generation",
       "/customize/context/codebase-indexing",
       "/automate/tools/semantic-search",
+      "/code-with-ai/platforms/cli",
+      "/code-with-ai/platforms/cli-reference",
+      "/automate/mcp/using-in-cli",
     ]
 
     for (const route of removed) expect(xml).not.toContain(`https://kilo.ai/docs${route}`)

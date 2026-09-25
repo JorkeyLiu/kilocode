@@ -448,16 +448,14 @@ export function requiredStagedFiles(target: string): string[] {
 }
 
 /**
- * Validate the staged bin/ directory before packaging (LOCK-005): native
- * binary present with correct magic/arch, no `.cli-version` marker, and all
- * required staged resources present.
+ * Validate the staged bin/ directory before packaging (LOCK-005): serve-only
+ * native binary present with correct magic/arch, no `.cli-version` marker, no
+ * stale full CLI binary (`bin/kilo` / `bin/kilo.exe`), and all required staged
+ * resources present. Only the lightweight `kilo-serve` backend is staged for
+ * production; the full `kilo` CLI remains a dev/local fallback.
  */
 export function validateStagedBinDir(binDir: string, target: string): void {
   const cfg = targetConfig(target)
-  const binary = join(binDir, cfg.binary)
-  if (!existsSync(binary)) {
-    throw new ValidationError("missing-binary", `CLI binary not found at ${binary}`)
-  }
   const serve = join(binDir, serveBinaryFor(cfg))
   if (!existsSync(serve)) {
     throw new ValidationError("missing-binary", `Serve CLI binary not found at ${serve}`)
@@ -466,7 +464,15 @@ export function validateStagedBinDir(binDir: string, target: string): void {
   if (existsSync(marker)) {
     throw new ValidationError("marker", `Source build marker ${marker} must not be staged for production`)
   }
-  validateNativeBinaryFile(binary, target)
+  // Serve-only packaging: the staged full CLI must not be present. This
+  // prevents a stale dev `bin/kilo` from being packaged via `!bin/**`.
+  // Only check owned staged paths inside the extension bin dir.
+  for (const stale of [cfg.binary, cfg.binary === "kilo.exe" ? "kilo" : "kilo.exe"]) {
+    const p = join(binDir, stale)
+    if (existsSync(p)) {
+      throw new ValidationError("forbidden-binary", `Staged full CLI binary ${p} must not be present for serve-only packaging`)
+    }
+  }
   validateNativeBinaryFile(serve, target)
   for (const file of requiredStagedFiles(target)) {
     const staged = join(binDir, file)
@@ -645,13 +651,12 @@ export function zipEntryNames(buf: Uint8Array): string[] {
   return listZipEntries(buf).map((e) => e.name)
 }
 
-/** Required VSIX entries (paths inside the archive, `extension/` prefix). */
+/** Required VSIX entries (paths inside the archive, `extension/` prefix). Serve-only. */
 export function requiredVsixEntries(target: string): string[] {
   const cfg = targetConfig(target)
   const files = [
     "extension/package.json",
     "extension/dist/extension.js",
-    `extension/bin/${cfg.binary}`,
     `extension/bin/${serveBinaryFor(cfg)}`,
     "extension/bin/tree-sitter/tree-sitter.wasm",
     "extension/bin/kilo-sandbox-mutation-worker.js",
@@ -664,10 +669,11 @@ export function requiredVsixEntries(target: string): string[] {
 
 /**
  * Validate a produced .vsix archive for a target: required entries present,
- * no `.cli-version` marker, every required entry passing local/central
- * consistency, size, and CRC-32 checks, and the packaged CLI being a native
- * binary matching the target format, architecture, and libc ABI
- * (LOCK-005 / LOCK-006).
+ * no `.cli-version` marker, no forbidden full CLI binary
+ * (`extension/bin/kilo` / `extension/bin/kilo.exe`), every required entry
+ * passing local/central consistency, size, and CRC-32 checks, and the packaged
+ * serve-only CLI being a native binary matching the target format,
+ * architecture, and libc ABI (LOCK-005 / LOCK-006). Only `kilo-serve` ships.
  */
 export function validateVsixBuffer(buf: Uint8Array, target: string): void {
   const cfg = targetConfig(target)
@@ -684,13 +690,23 @@ export function validateVsixBuffer(buf: Uint8Array, target: string): void {
       "VSIX contains extension/bin/.cli-version; the source build marker must not ship",
     )
   }
-  const binaryName = `extension/bin/${cfg.binary}`
+  // Serve-only VSIX must not contain the full public CLI binary. Reject
+  // either `kilo` or `kilo.exe` regardless of target to prevent stale
+  // packaging via `!bin/**`.
+  for (const bad of ["extension/bin/kilo", "extension/bin/kilo.exe"]) {
+    if (names.has(bad)) {
+      throw new ValidationError(
+        "forbidden-binary",
+        `VSIX must not contain ${bad}; only the serve-only binary may ship`,
+      )
+    }
+  }
   const serveName = `extension/bin/${serveBinaryFor(cfg)}`
   for (const name of requiredVsixEntries(target)) {
     const zipEntry = entries.find((e) => e.name === name)
     if (!zipEntry) throw new ValidationError("missing-entry", `VSIX is missing required entry ${name}`)
     const content = readZipEntry(buf, zipEntry)
-    if (name === binaryName || name === serveName) {
+    if (name === serveName) {
       validateNativeBinary(content, target)
     }
   }

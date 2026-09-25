@@ -132,8 +132,6 @@ import type {
   GlobalDisposeResponses,
   GlobalEventErrors,
   GlobalEventResponses,
-  GlobalUpgradeErrors,
-  GlobalUpgradeResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   InstanceReloadErrors,
@@ -1444,30 +1442,6 @@ export class Global extends HeyApiClient {
     return (options?.client ?? this.client).post<GlobalDisposeResponses, GlobalDisposeErrors, ThrowOnError>({
       url: "/global/dispose",
       ...options,
-    })
-  }
-
-  /**
-   * Upgrade kilo
-   *
-   * Upgrade kilo to the specified version or latest if not specified.
-   */
-  public upgrade<ThrowOnError extends boolean = false>(
-    parameters?: {
-      target?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "target" }] }])
-    return (options?.client ?? this.client).post<GlobalUpgradeResponses, GlobalUpgradeErrors, ThrowOnError>({
-      url: "/global/upgrade",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
     })
   }
 

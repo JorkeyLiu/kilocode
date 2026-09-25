@@ -9,7 +9,7 @@ Kilo Code can be used completely free of charge. There are two places where Kilo
 
 ## Where Kilo Uses Models
 
-1. **Agentic interactions** — Conversations with coding agents in IDE extensions (VS Code), CLI, and cloud services like App Builder and Code Reviewer
+1. **Agentic interactions** — Conversations with coding agents in the VS Code extension and cloud services like App Builder and Code Reviewer
 2. **Background tasks** — Automatic session titles and context summarization
 
 Each of these consumes credits by default. **To use Kilo entirely for free, configure both to use free models.**
@@ -38,12 +38,6 @@ You can also browse and select individual free models. In the model picker, type
 2. Type `free` in the search box
 3. Select any model labeled "(free)"
 
-**In the CLI:**
-
-1. Run `kilo` to open the CLI
-2. Use the `/models` command
-3. Type `free` to filter the list
-
 {% callout type="note" %}
 Some free models may be rate limited by the upstream provider. If you hit a rate limit, try switching to a different free model.
 {% /callout %}
@@ -64,17 +58,8 @@ To avoid credit usage for background tasks, set the small model to a free model:
 
 **In the VS Code extension:** Go to **Settings → Models** and change the small model to any free model.
 
-**In the CLI:** Set the `small_model` parameter in `~/.config/kilo/config.json`:
-
-```json
-{
-  "small_model": "your-preferred-free-model"
-}
-```
-
 Replace `your-preferred-free-model` with any free model from the model picker.
 
 ## Related Resources
 
 - [Auto Model](/docs/code-with-ai/agents/auto-model) — Smart model routing including the free tier
-- [CLI Documentation](/docs/code-with-ai/platforms/cli) — Complete CLI reference

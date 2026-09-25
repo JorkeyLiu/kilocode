@@ -48,12 +48,10 @@ for (const file of pkgjsons) {
   await Bun.file(file).write(pkg)
 }
 
-const extensionToml = fileURLToPath(new URL("../packages/extensions/zed/extension.toml", import.meta.url))
-let toml = await Bun.file(extensionToml).text()
-toml = toml.replace(/^version = "[^"]+"/m, `version = "${Script.version}"`)
-toml = toml.replaceAll(/releases\/download\/v[^/]+\//g, `releases/download/v${Script.version}/`)
-console.log("updated:", extensionToml)
-await Bun.file(extensionToml).write(toml)
+// Zed extension removed: public CLI archives (opencode-*.zip/tar.gz) are no
+// longer shipped via GH releases (VSCode-only target via kilo-cli.tar.zst).
+// The prior extension.toml version + releases/download URL auto-rewrite wrote
+// URLs to missing archives and no active workflow builds/publishes Zed.
 
 await $`bun install`
 await import(`../packages/sdk/js/script/build.ts`)
@@ -99,9 +97,15 @@ if (Script.release) {
   // kilocode_change end
 }
 
+// VSCode-only target: CLI public publishing disabled. Build-cli remains serve-only
+// artifact supplier to VSIX via kilo-cli.tar.zst; public CLI archive upload, npm /
+// Homebrew / AUR / Docker / GHCR execution removed. See
+// packages/opencode/script/publish.ts (now a no-op stub) for details. Do not
+// re-enable without restoring GH release archive distribution and external smoke
+// harness compatibility.
 console.log("\n=== cli ===\n")
-await import(`../packages/opencode/script/publish.ts`)
-
+console.log("Skipping CLI publish (VSCode-only target: VSIX is the release artifact)")
+// await import(`../packages/opencode/script/publish.ts`) // disabled: VSCode-only cut
 // kilocode_change - Kilo does not ship the upstream preview CLI package
 
 console.log("\n=== sdk ===\n")

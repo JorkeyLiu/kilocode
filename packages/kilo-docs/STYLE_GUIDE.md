@@ -20,7 +20,7 @@ Kilo Code documentation should be:
 
 - Write in the second person ("you")
 - Use present tense
-- Be specific: "Run `kilo run` to execute a task" not "You can run kilo run"
+- Be specific: "Ask the agent in VS Code to execute a task" not "You can use the agent"
 
 ### Don't
 
@@ -40,7 +40,7 @@ Kilo Code documentation should be:
 
 ### VS Code Extension
 
-### CLI
+### Source-only CLI entries (dev/test internal, no public release)
 ```
 
 ## Procedures
@@ -97,10 +97,11 @@ Bad: [Click here](/docs/getting-started/quickstart)
 - Use fenced code blocks with language specified
 - Include comments in code where helpful
 - Show realistic, working examples
-- Use `kilo run` for CLI examples, not hypothetical commands
+- Use VS Code-supported flows for user-facing examples, not hypothetical commands. When `kilo run` / `kilo serve` must appear, label them source-only dev/test internal (no public release).
 
 ````markdown
 ```bash
+# source-only dev/test internal (no public release)
 kilo run "create a utils.py file with a function that adds two numbers"
 ```
 ````
@@ -135,7 +136,7 @@ Use compact markdown tables without padding:
 ```markdown
 | Command | What it runs |
 |---|---|
-| `kilo serve` | The prod CLI on `$PATH`. |
+| `kilo-serve serve` | The VS Code-packaged private server (source `kilo serve` entry is dev/test internal, no public CLI release). |
 ```
 
 ### Tabs
@@ -149,9 +150,9 @@ Use tabs for platform-specific content:
 Content for VS Code
 
 {% /tab %}
-{% tab label="CLI" %}
+{% tab label="Source-only CLI (dev/test internal)" %}
 
-Content for CLI
+Content for source-only dev/test entries (no public release)
 
 {% /tab %}
 {% /tabs %}
@@ -184,10 +185,10 @@ Use consistent terms throughout:
 | Term | Use for |
 |---|---|
 | Kilo Code | The product name |
-| kilo CLI | The command-line interface |
-| VS Code extension | The VS Code extension |
-| `kilo serve` | The local HTTP server |
-| `kilo run` | The headless execution command |
+| kilo CLI (source-only dev/test internal) | The command-line source entries (no public release) |
+| VS Code extension | The supported VS Code extension |
+| `kilo-serve serve` | The VS Code-packaged private local HTTP server (`kilo serve` source entry is dev/test internal) |
+| `kilo run` (source-only dev/test internal) | The source-retained headless execution entry (no public release) |
 | agent | The AI assistant |
 
 ## Navigation

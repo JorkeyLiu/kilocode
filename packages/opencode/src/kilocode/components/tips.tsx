@@ -103,7 +103,6 @@ const TIPS = [
   "Use {highlight}--format json{/highlight} for machine-readable output in scripts",
   "Run {highlight}kilo serve{/highlight} for headless API access to Kilo",
   "Use {highlight}kilo run --attach{/highlight} to connect to a running server",
-  "Run {highlight}kilo upgrade{/highlight} to update to the latest version",
   "Run {highlight}kilo auth list{/highlight} to see all configured providers",
   "Run {highlight}/unshare{/highlight} to remove a session from public access",
   "Use {highlight}--print-logs{/highlight} flag to see detailed logs in stderr",

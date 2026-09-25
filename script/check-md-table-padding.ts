@@ -27,7 +27,7 @@
  */
 
 import { spawnSync } from "node:child_process"
-import { readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const ROOT = path.resolve(import.meta.dir, "..")
@@ -94,7 +94,17 @@ function isSep(row: string) {
 }
 
 function check(file: string): Issue[] {
-  const src = readFileSync(path.join(ROOT, file), "utf8")
+  let src: string
+  try {
+    src = readFileSync(path.join(ROOT, file), "utf8")
+  } catch (err) {
+    // Ignore deleted/inaccessible paths (e.g. a retired docs partial deleted
+    // from the worktree but still listed by `git ls-files` before the
+    // deletion is staged). Do not restore the file; just skip it.
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") return []
+    throw err
+  }
   const lines = src.split("\n")
   const issues: Issue[] = []
   let fence: string | null = null
@@ -174,7 +184,15 @@ function rewriteRow(row: string, separator: boolean) {
 }
 
 function fix(file: string) {
-  const src = readFileSync(path.join(ROOT, file), "utf8")
+  let src: string
+  try {
+    src = readFileSync(path.join(ROOT, file), "utf8")
+  } catch (err) {
+    // Same deleted/inaccessible-path handling as check(): skip, don't restore.
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") return false
+    throw err
+  }
   const lines = src.split("\n")
   let changed = false
   let fence: string | null = null
@@ -206,7 +224,15 @@ function fix(file: string) {
 const argv = process.argv.slice(2)
 const fixFlag = argv.includes("--fix")
 const paths = argv.filter((a) => a !== "--fix")
-const files = (paths.length > 0 ? paths : tracked()).filter((f) => !skip(f))
+// Skip deleted/inaccessible paths so a retired docs partial deleted from the
+// worktree (staged or unstaged) doesn't crash the guard. `git ls-files`
+// still lists unstaged deletions until the deletion is staged, so the
+// existence filter plus the read guards in check()/fix() keep the documented
+// `bun run script/check-md-table-padding.ts` invocation green without
+// restoring the retired file.
+const files = (paths.length > 0 ? paths : tracked())
+  .filter((f) => !skip(f))
+  .filter((f) => existsSync(path.join(ROOT, f)))
 
 if (fixFlag) {
   let n = 0

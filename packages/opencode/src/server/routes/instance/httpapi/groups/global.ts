@@ -6,12 +6,12 @@ import { BusEvent } from "@/bus/bus-event" // kilocode_change - include legacy K
 import "@opencode-ai/core/account"
 import "@/server/event"
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
 import { ConfigOverlayInvalidError } from "@/kilocode/server/httpapi/groups/config-console" // kilocode_change
 
-const SyncEventSchemas = EventV2.registry
-  .values()
+const SyncEventSchemas = [...EventV2.registry.values()]
+  .sort((a, b) => String(a.type).localeCompare(String(b.type)))
   .flatMap((definition) => {
     if (!definition.sync) return []
     return [
@@ -28,7 +28,25 @@ const SyncEventSchemas = EventV2.registry
       }).annotate({ identifier: `SyncEvent.${definition.type}` }),
     ]
   })
-  .toArray()
+
+const GlobalEventPayloads = [
+  ...BusEvent.effectPayloads(), // kilocode_change
+  InstanceDisposed,
+  ...SyncEventSchemas,
+]
+  .sort((a, b) =>
+    String((a as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier ?? "").localeCompare(
+      String((b as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier ?? ""),
+    ),
+  )
+  .filter(
+    (v, i, a) =>
+      a.findIndex(
+        (x) =>
+          String((x as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier) ===
+          String((v as unknown as { ast: { annotations: Record<string, unknown> } }).ast.annotations?.identifier),
+      ) === i,
+  )
 
 const GlobalEventSchema = Schema.Struct({
   directory: Schema.String,
@@ -39,33 +57,15 @@ const GlobalEventSchema = Schema.Struct({
   // clients can group them into one logical save (LOCK-004).
   transaction: Schema.optional(Schema.String),
   // kilocode_change end
-  payload: Schema.Union([
-    ...BusEvent.effectPayloads(), // kilocode_change
-    InstanceDisposed,
-    ...SyncEventSchemas,
-  ]),
-}).annotate({ identifier: "GlobalEvent" })
-
-export const GlobalUpgradeInput = Schema.Struct({
-  target: Schema.optional(Schema.String),
-})
-
-const GlobalUpgradeResult = Schema.Union([
-  Schema.Struct({
-    success: Schema.Literal(true),
-    version: Schema.String,
-  }),
-  Schema.Struct({
-    success: Schema.Literal(false),
-    error: Schema.String,
-  }),
-])
+  payload: Schema.Union(
+    GlobalEventPayloads as unknown as [typeof GlobalEventPayloads[number], ...typeof GlobalEventPayloads[number][]],
+  ),
+}).annotate({ identifier: "GlobalEvent" }) // kilocode_change - sorted for deterministic OpenAPI snapshot
 
 export const GlobalPaths = {
   event: "/global/event",
   config: "/global/config",
   dispose: "/global/dispose",
-  upgrade: "/global/upgrade",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -107,17 +107,6 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.dispose",
           summary: "Dispose instance",
           description: "Clean up and dispose all Kilo instances, releasing all resources.", // kilocode_change
-        }),
-      ),
-      HttpApiEndpoint.post("upgrade", GlobalPaths.upgrade, {
-        payload: [HttpApiSchema.NoContent, GlobalUpgradeInput],
-        success: described(GlobalUpgradeResult, "Upgrade result"),
-        error: HttpApiError.BadRequest,
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "global.upgrade",
-          summary: "Upgrade kilo", // kilocode_change
-          description: "Upgrade kilo to the specified version or latest if not specified.", // kilocode_change
         }),
       ),
     )

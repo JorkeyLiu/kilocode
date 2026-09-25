@@ -462,7 +462,6 @@ describe("validateStagedBinDir", () => {
     const cfg = targetConfig(target)
     const dir = path.join(root, target)
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
-    fs.writeFileSync(path.join(dir, cfg.binary), binary)
     fs.writeFileSync(path.join(dir, serveBinaryFor(cfg)), binary)
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
@@ -495,7 +494,7 @@ describe("validateStagedBinDir", () => {
     expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "marker")
   })
 
-  it("rejects a missing native binary", () => {
+  it("rejects a missing serve binary", () => {
     const cfg = targetConfig("darwin-arm64")
     const dir = path.join(root, "no-bin")
     fs.mkdirSync(dir, { recursive: true })
@@ -503,9 +502,10 @@ describe("validateStagedBinDir", () => {
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
     fs.writeFileSync(path.join(dir, "ffmpeg"), "ffmpeg")
-    // no bin/kilo written
+    // no bin/kilo-serve written
     expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "missing-binary")
     expect(cfg.binary).toBe("kilo")
+    expect(serveBinaryFor(cfg)).toBe("kilo-serve")
   })
 
   it("rejects a source wrapper staged as the binary", () => {
@@ -522,7 +522,6 @@ describe("validateStagedBinDir", () => {
     const cfg = targetConfig("darwin-arm64")
     const dir = path.join(root, "partial")
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, cfg.binary), machoThin(CPU_ARM64))
     fs.writeFileSync(path.join(dir, serveBinaryFor(cfg)), machoThin(CPU_ARM64))
     // no tree-sitter.wasm, no worker, no ffmpeg
     expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "missing-staged")
@@ -532,7 +531,6 @@ describe("validateStagedBinDir", () => {
     const cfg = targetConfig("win32-arm64")
     const dir = path.join(root, "win32-arm64")
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
-    fs.writeFileSync(path.join(dir, cfg.binary), pe(0xaa64))
     fs.writeFileSync(path.join(dir, serveBinaryFor(cfg)), pe(0xaa64))
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
@@ -544,20 +542,25 @@ describe("validateStagedBinDir", () => {
   })
 
   it("rejects a staged dir missing the serve binary", () => {
-    const cfg = targetConfig("darwin-arm64")
     const dir = path.join(root, "no-serve")
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
-    fs.writeFileSync(path.join(dir, cfg.binary), machoThin(CPU_ARM64))
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
     fs.writeFileSync(path.join(dir, "ffmpeg"), "ffmpeg")
     expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "missing-binary")
   })
 
+  it("rejects a staged dir containing a stale full binary", () => {
+    const cfg = targetConfig("darwin-arm64")
+    const dir = stageDir("darwin-arm64", machoThin(CPU_ARM64))
+    // Simulate stale dev `bin/kilo` left from local-bin before serve-only packaging.
+    fs.writeFileSync(path.join(dir, cfg.binary), machoThin(CPU_ARM64))
+    expectValidation(() => validateStagedBinDir(dir, "darwin-arm64"), "forbidden-binary")
+  })
+
   it("requires ffmpeg.exe for win32-x64", () => {
     const dir = path.join(root, "win32-x64-no-ffmpeg")
     fs.mkdirSync(path.join(dir, "tree-sitter"), { recursive: true })
-    fs.writeFileSync(path.join(dir, "kilo.exe"), pe(0x8664))
     fs.writeFileSync(path.join(dir, "kilo-serve.exe"), pe(0x8664))
     fs.writeFileSync(path.join(dir, "tree-sitter", "tree-sitter.wasm"), "wasm")
     fs.writeFileSync(path.join(dir, "kilo-sandbox-mutation-worker.js"), "worker")
@@ -641,7 +644,6 @@ const VSIX_COMMON = (kilo: Buffer): ZipSourceEntry[] => [
   { name: "[Content_Types].xml", content: Buffer.from("<types/>") },
   { name: "extension/package.json", content: Buffer.from('{"name":"kilo-code"}') },
   { name: "extension/dist/extension.js", content: Buffer.from("module.exports = {}") },
-  { name: "extension/bin/kilo", content: kilo },
   { name: "extension/bin/kilo-serve", content: kilo },
   { name: "extension/bin/tree-sitter/tree-sitter.wasm", content: Buffer.from("wasm") },
   { name: "extension/bin/kilo-sandbox-mutation-worker.js", content: Buffer.from("worker") },
@@ -749,14 +751,13 @@ describe("ZIP archive inspection", () => {
 })
 
 describe("validateVsixBuffer", () => {
-  it("accepts a valid archive with a native arm64 binary", () => {
+  it("accepts a valid archive with a native arm64 serve binary (serve-only)", () => {
     validateVsixBuffer(makeZip(VSIX_COMMON(machoThin(CPU_ARM64))), "darwin-arm64")
   })
 
-  it("accepts a valid win32-arm64 archive without ffmpeg", () => {
+  it("accepts a valid win32-arm64 archive without ffmpeg (serve-only)", () => {
     const cfg = targetConfig("win32-arm64")
     const entries = VSIX_COMMON(pe(0xaa64)).filter((e) => e.name !== "extension/bin/ffmpeg")
-    entries.find((e) => e.name === "extension/bin/kilo")!.name = `extension/bin/${cfg.binary}`
     entries.find((e) => e.name === "extension/bin/kilo-serve")!.name = `extension/bin/${serveBinaryFor(cfg)}`
     validateVsixBuffer(makeZip(entries), "win32-arm64")
   })
@@ -812,9 +813,10 @@ describe("validateVsixBuffer", () => {
     expectValidation(() => validateVsixBuffer(makeZip(entries), "darwin-arm64"), "zip")
   })
 
-  it("requires the documented VSIX entries", () => {
+  it("requires the documented serve-only VSIX entries", () => {
     const want = requiredVsixEntries("darwin-arm64")
-    expect(want).toContain("extension/bin/kilo")
+    expect(want).not.toContain("extension/bin/kilo")
+    expect(want).not.toContain("extension/bin/kilo.exe")
     expect(want).toContain("extension/bin/kilo-serve")
     expect(want).toContain("extension/bin/tree-sitter/tree-sitter.wasm")
     expect(want).toContain("extension/bin/kilo-sandbox-mutation-worker.js")
@@ -829,6 +831,23 @@ describe("validateVsixBuffer", () => {
   it("rejects an archive missing the serve binary", () => {
     const entries = VSIX_COMMON(machoThin(CPU_ARM64)).filter((e) => e.name !== "extension/bin/kilo-serve")
     expectValidation(() => validateVsixBuffer(makeZip(entries), "darwin-arm64"), "missing-entry")
+  })
+
+  it("rejects an archive containing the forbidden full CLI binary", () => {
+    const entries = [...VSIX_COMMON(machoThin(CPU_ARM64)), { name: "extension/bin/kilo", content: machoThin(CPU_ARM64) }]
+    expectValidation(() => validateVsixBuffer(makeZip(entries), "darwin-arm64"), "forbidden-binary")
+  })
+
+  it("rejects an archive containing the forbidden full CLI on windows", () => {
+    const cfg = targetConfig("win32-x64")
+    const base = VSIX_COMMON(pe(0x8664)).filter((e) => e.name !== "extension/bin/ffmpeg")
+    // Rename serve to win name and keep base ffmpeg handling
+    const serve = base.find((e) => e.name === "extension/bin/kilo-serve")!
+    serve.name = `extension/bin/${serveBinaryFor(cfg)}`
+    // Ensure win ffmpeg present
+    base.push({ name: "extension/bin/ffmpeg.exe", content: Buffer.from("ffmpeg") })
+    const withFull = [...base, { name: "extension/bin/kilo.exe", content: pe(0x8664) }]
+    expectValidation(() => validateVsixBuffer(makeZip(withFull), "win32-x64"), "forbidden-binary")
   })
 
   it("rejects an archive containing the .cli-version marker", () => {

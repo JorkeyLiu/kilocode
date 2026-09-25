@@ -1,5 +1,5 @@
 name: "Kilo GitHub Action"
-description: "Run Kilo AI agent in GitHub Actions workflows"
+description: "Retired: the standalone Kilo CLI and this GitHub Action are no longer supported. Use the Kilo VS Code extension instead."
 branding:
   icon: "code"
   color: "gray-dark"
@@ -49,41 +49,8 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Get Kilo version
-      id: version
+    - name: Retired action
       shell: bash
       run: |
-        VERSION=$(curl -sf https://api.github.com/repos/Kilo-Org/kilocode/releases/latest | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
-        echo "version=${VERSION:-latest}" >> $GITHUB_OUTPUT
-
-    - name: Cache Kilo
-      id: cache
-      uses: actions/cache@v4
-      with:
-        path: ~/.kilo/bin
-        key: kilo-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}
-
-    - name: Install Kilo
-      if: steps.cache.outputs.cache-hit != 'true'
-      shell: bash
-      run: curl -fsSL https://kilo.ai/cli/install | bash
-
-    - name: Add Kilo to PATH
-      shell: bash
-      run: echo "$HOME/.kilo/bin" >> $GITHUB_PATH
-
-    - name: Run Kilo
-      shell: bash
-      id: run_kilo
-      run: kilo github run
-      env:
-        MODEL: ${{ inputs.model }}
-        AGENT: ${{ inputs.agent }}
-        SHARE: ${{ inputs.share }}
-        PROMPT: ${{ inputs.prompt }}
-        USE_GITHUB_TOKEN: ${{ inputs.use_github_token }}
-        MENTIONS: ${{ inputs.mentions }}
-        VARIANT: ${{ inputs.variant }}
-        OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
-        KILO_API_KEY: ${{ inputs.kilo_api_key }}
-        KILO_ORG_ID: ${{ inputs.kilo_org_id }}
+        echo "::error::The standalone Kilo CLI and this GitHub Action are retired and no longer supported. Use the Kilo VS Code extension instead: https://github.com/Kilo-Org/kilocode"
+        exit 1

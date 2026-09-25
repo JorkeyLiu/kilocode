@@ -35,7 +35,7 @@ Key features include:
 
 ## Shared Settings
 
-Settings apply across extension surfaces, including editor-tab chat and Agent Manager. The standalone CLI uses the same `~/.config/kilo/kilo.jsonc` (global) and `./kilo.jsonc` (project) files when used directly.
+Settings apply across extension surfaces, including editor-tab chat and Agent Manager. The extension's bundled runtime uses the same `~/.config/kilo/kilo.jsonc` (global) and `./kilo.jsonc` (project) files internally.
 
 ## Proxy and Certificate Troubleshooting
 

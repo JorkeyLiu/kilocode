@@ -23,7 +23,6 @@
   <a href="https://kilo.ai">Website</a> ·
   <a href="https://kilo.ai/install">Install</a> ·
   <a href="https://kilo.ai/landing/vs-code">IDE</a> ·
-  <a href="https://kilo.ai/cli">CLI</a> ·
   <a href="https://kilo.ai/docs">Docs</a> ·
   <a href="https://kilo.ai/leaderboard">Models</a> ·
   <a href="https://kilo.ai/gateway">Gateway</a> ·
@@ -32,7 +31,7 @@
 </p>
 
 <p align="center">
-  500+ models. One open source agent in <a href="https://kilo.ai/install">VS Code</a>, <a href="https://kilo.ai/cli">CLI</a>, <a href="https://kilo.ai/slack">Slack</a>, and <a href="https://kilo.ai/cloud">Cloud</a>.
+  500+ models. One open source agent in <a href="https://kilo.ai/install">VS Code</a>.
 </p>
 
 > 🚀 **Coming from Roo Code?** Switch to Kilo and check out our [migration guide](https://kilo.ai/articles/roo-to-kilo-migration-guide)!

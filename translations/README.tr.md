@@ -6,11 +6,10 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">VS Code veya CLI'de AI ile geliştirme yapmak için açık kaynak kodlama ajanı.</p>
+<p align="center">VS Code'de AI ile geliştirme yapmak için açık kaynak kodlama ajanı.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
-  <a href="https://www.npmjs.com/package/@kilocode/cli"><img alt="npm" src="https://raster.shields.io/npm/v/@kilocode/cli?style=flat" height="20" /></a>
   <a href="https://x.com/kilocode"><img src="https://raster.shields.io/badge/kilocode-000000?style=flat&logo=x&logoColor=white" alt="X (Twitter)" height="20"></a>
   <a href="https://blog.kilo.ai"><img src="https://raster.shields.io/badge/Blog-555?style=flat&logo=substack&logoColor=white" alt="Blog" height="20"></a>
   <a href="https://kilo.ai/discord"><img src="https://raster.shields.io/badge/Join%20Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" height="20"></a>
@@ -21,7 +20,7 @@
 
 ---
 
-Kilo Code, çalıştığınız her yerde size eşlik eden bir AI kodlama ajanıdır: [VS Code](https://kilo.ai/landing/vs-code) ve [CLI](https://kilo.ai/cli). Açık kaynaktır ve açık fiyatlandırma sunar. 500'den fazla model arasından seçim yapabilir, görev sırasında model değiştirebilir ve hiçbir ek ücret olmadan model sağlayıcısının fiyatını ödersiniz. Başlamak için API anahtarı gerekmez.
+Kilo Code, çalıştığınız her yerde size eşlik eden bir AI kodlama ajanıdır: [VS Code](https://kilo.ai/landing/vs-code). Açık kaynaktır ve açık fiyatlandırma sunar. 500'den fazla model arasından seçim yapabilir, görev sırasında model değiştirebilir ve hiçbir ek ücret olmadan model sağlayıcısının fiyatını ödersiniz. Başlamak için API anahtarı gerekmez.
 
 ### Kurulum
 
@@ -33,70 +32,6 @@ Kilo'yu nerede çalıştırmak istediğinizi seçin.
 <br>
 
 [Kilo Code uzantısını](vscode:extension/kilocode.kilo-code) doğrudan kurun veya [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code) üzerinden edinin. Bir hesap oluşturduğunuzda GPT-5.5, Claude Opus 4.7, Claude Sonnet 4.6 ve Gemini 3.1 Pro Preview dahil 500'den fazla modele sağlayıcı fiyatıyla erişebilirsiniz.
-
-</details>
-
-<details open>
-<summary><strong>CLI</strong></summary>
-
-<br>
-
-```bash
-# npm
-npm install -g @kilocode/cli
-
-# curl
-curl -fsSL https://kilo.ai/cli/install | bash
-
-# pnpm
-pnpm add -g @kilocode/cli
-
-# bun
-bun add -g @kilocode/cli
-
-# Homebrew (macOS / Linux)
-brew install Kilo-Org/tap/kilo
-
-# Arch Linux (AUR)
-paru -S kilo-bin
-```
-
-Ardından başlamak için herhangi bir proje dizininde `kilo` çalıştırın.
-
-</details>
-
-<details>
-<summary><strong>Cloud Agent</strong></summary>
-
-<br>
-
-Kilo'yu yerel makine gerekmeden web üzerinden [app.kilo.ai/cloud](https://app.kilo.ai/cloud) adresinde çalıştırın.
-
-</details>
-
-<details>
-<summary><strong>Kod İncelemeleri</strong></summary>
-
-<br>
-
-Pull request'leriniz için otomatik AI kod incelemelerini [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews) adresinde ayarlayın.
-
-</details>
-
-<details>
-<summary>CLI'yi GitHub Releases üzerinden kurun (ikili dosyalar)</summary>
-
-En son ikili dosyayı [Releases sayfasından](https://github.com/Kilo-Org/kilocode/releases) indirin.
-
-| Platform | Asset |
-|---|---|
-| Windows (çoğu PC) | `kilo-windows-x64.zip` |
-| macOS (Apple Silicon) | `kilo-darwin-arm64.zip` |
-| macOS (Intel) | `kilo-darwin-x64.zip` |
-| Linux x64 | `kilo-linux-x64.tar.gz` |
-| Linux ARM | `kilo-linux-arm64.tar.gz` |
-
-Notlar: `x64-baseline`, AVX olmayan eski CPU'lar için uyumluluk derlemesidir. `musl`, Alpine veya glibc olmayan minimal Docker imajları için statik bağlı derlemedir. `kilo-vscode-*.vsix` CLI değil VS Code uzantı paketidir. `Source code` arşivleri kaynaktan derlemek içindir.
 
 </details>
 
@@ -121,15 +56,6 @@ Kilo, göreve göre aralarında geçiş yapabileceğiniz özelleşmiş agents il
 - Ajanın yapabileceklerini genişleten MCP sunucularını bulmak ve bağlamak için **MCP configuration**.
 - Gecikme, maliyet ve akıl yürütmeyi işe uygun seçmek için görev sırasında geçiş destekli **500'den fazla model**.
 
-### Otonom Mod (CI/CD)
-
-CI/CD pipeline'ları için prompts olmadan tamamen otonom çalıştırmak üzere `kilo run` komutunu `--auto` ile çalıştırın:
-
-```bash
-kilo run --auto "run tests and fix any failures"
-```
-
-`--auto` tüm izin istemlerini devre dışı bırakır ve ajanın herhangi bir işlemi onay olmadan yürütmesine izin verir. Yalnızca güvenilir ortamlarda kullanın.
 
 ### Dokümantasyon
 
@@ -137,7 +63,7 @@ Yapılandırma ve diğer her şey için [dokümantasyona](https://kilo.ai/docs) 
 
 ### Katkıda bulunma
 
-Geliştiricilerden, yazarlardan ve herkesten katkı bekliyoruz. Ortam kurulumu, kodlama standartları ve pull request açma hakkında bilgi için [Contributing Guide](/CONTRIBUTING.md) ile başlayın. VS Code uzantısı ve CLI yayın süreci için [RELEASING.md](../RELEASING.md) dosyasına bakın.
+Geliştiricilerden, yazarlardan ve herkesten katkı bekliyoruz. Ortam kurulumu, kodlama standartları ve pull request açma hakkında bilgi için [Contributing Guide](/CONTRIBUTING.md) ile başlayın. VS Code uzantısı yayın süreci için [RELEASING.md](../RELEASING.md) dosyasına bakın.
 
 Katılmadan önce lütfen [Code of Conduct](/CODE_OF_CONDUCT.md) belgemizi okuyun.
 

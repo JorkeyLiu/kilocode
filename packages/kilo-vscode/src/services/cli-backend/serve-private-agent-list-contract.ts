@@ -246,6 +246,7 @@ function checkRequirements(raw: unknown): AgentListRequirements {
   return out
 }
 
+// eslint-disable-next-line complexity -- exhaustive Agent.Info field validation mirrors existing parity contracts; keep single closed helper with narrow disable
 export function validateAgentListEntry(raw: unknown): AgentListEntry {
   if (!record(raw)) throw new Error("agent entry must be object")
   for (const k of Object.keys(raw)) if (!AGENT_ENTRY_FIELDS.has(k)) throw new Error(`unexpected agent field ${k}`)

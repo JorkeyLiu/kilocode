@@ -133,7 +133,6 @@ export const KILO_TIPS: Tip[] = [
   "Use {highlight}--format json{/highlight} for machine-readable output in scripts",
   "Run {highlight}kilo serve{/highlight} for headless API access to Kilo",
   "Use {highlight}kilo run --attach{/highlight} to connect to a running server",
-  "Run {highlight}kilo upgrade{/highlight} to update to the latest version",
   "Run {highlight}kilo auth list{/highlight} to see all configured providers",
   "Run {highlight}kilo agent create{/highlight} for guided agent creation",
   "Run {highlight}kilo github install{/highlight} to set up the GitHub workflow",
@@ -165,7 +164,6 @@ export const KILO_TIPS: Tip[] = [
     shortcuts.commandList()
       ? `Toggle username display in chat via the command palette (${shortcutText(shortcuts.commandList())})`
       : "Toggle username display in chat via the command palette",
-  "Run {highlight}docker run -it --rm ghcr.io/kilo-org/kilocode{/highlight} for containerized use",
   "Use {highlight}/connect{/highlight} with Kilo Gateway for curated, tested models",
   "Commit your project's {highlight}AGENTS.md{/highlight} file to Git for team sharing",
   "Use {highlight}/review{/highlight} to review uncommitted changes, commits, branches, or PRs",

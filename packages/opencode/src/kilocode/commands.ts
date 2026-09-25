@@ -1,4 +1,4 @@
-// All CommandModules in one place so help.ts and generate-cli-docs.ts can
+// All CommandModules in one place so help.ts can
 // introspect them without importing index.ts (which has startup side effects).
 // When upstream adds a new command to index.ts, add it here too.
 import { AcpCommand } from "../cli/cmd/acp"
@@ -10,7 +10,6 @@ import { GenerateCommand } from "../cli/cmd/generate"
 import { DebugCommand } from "../cli/cmd/debug"
 import { ProvidersCommand } from "../cli/cmd/providers" // kilocode_change — upstream renamed auth → providers
 import { AgentCommand } from "../cli/cmd/agent"
-import { UpgradeCommand } from "../cli/cmd/upgrade"
 import { UninstallCommand } from "../cli/cmd/uninstall"
 import { ServeCommand } from "../cli/cmd/serve"
 import { WebCommand } from "../cli/cmd/web"
@@ -33,7 +32,7 @@ import { HelpCommand } from "./help-command"
 import { InstallationBuildKind } from "@opencode-ai/core/installation/version"
 
 // Synthetic entry for the yargs built-in .completion() command so that
-// generateHelp --all and cli-reference.md include it automatically.
+// generateHelp --all includes it automatically.
 const CompletionCommand = {
   command: "completion",
   describe: "generate shell completion script",
@@ -56,7 +55,6 @@ export const commands = [
   DebugCommand,
   ProvidersCommand, // kilocode_change — upstream renamed AuthCommand → ProvidersCommand
   AgentCommand,
-  UpgradeCommand,
   UninstallCommand,
   ServeCommand,
   WebCommand,

@@ -5,7 +5,6 @@ import { GenerateCommand } from "./cli/cmd/generate"
 import * as Log from "@opencode-ai/core/util/log"
 import { ProvidersCommand } from "./cli/cmd/providers"
 import { AgentCommand } from "./cli/cmd/agent"
-import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
@@ -54,6 +53,9 @@ installFatalHandlers()
 // kilocode_change end
 
 const args = hideBin(process.argv)
+
+// kilocode_change - track hidden cutover for bootstrap/shutdown bypass (precise positional, not args.includes)
+let isInternalCutover = false
 
 if (await KiloCli.runner()) process.exit() // kilocode_change - run persistent process guardians before CLI bootstrap
 
@@ -125,10 +127,18 @@ let cli = yargs(args) // kilocode_change
       run_id: processMetadata.runID,
     })
 
-    // kilocode_change - P0 instrumentation: outer bootstrap span for cold start; p0.end → serve_cli_entry covers yargs dispatch + handler setup (P0 off no-op)
-    const bootstrapTimer = P0Perf.span("cli_bootstrap")
-    await KiloCli.bootstrap() // kilocode_change - env tagging, telemetry init, legacy auth migration
-    bootstrapTimer.end()
+    // kilocode_change - hidden cutover must bypass global bootstrap which would hold the canonical DB lease
+    // before status/cutover's own lease/marker lifecycle. Match precisely via parsed positional, not args.includes.
+    isInternalCutover = (opts as any)?._?.[0] === "__internal-storage-cutover"
+    if (isInternalCutover) {
+      // Preserve logs/metrics; skip KiloCli.bootstrap (telemetry/auth/AppRuntime DB) for this hidden command.
+      P0Perf.mark("cli_bootstrap_skip_internal_cutover", { meta: { op: String((opts as any)?._?.[1] ?? "") } })
+    } else {
+      // kilocode_change - P0 instrumentation: outer bootstrap span for cold start; p0.end → serve_cli_entry covers yargs dispatch + handler setup (P0 off no-op)
+      const bootstrapTimer = P0Perf.span("cli_bootstrap")
+      await KiloCli.bootstrap() // kilocode_change - env tagging, telemetry init, legacy auth migration
+      bootstrapTimer.end()
+    }
   })
   .usage("")
   .completion("completion", "generate shell completion script")
@@ -141,7 +151,6 @@ let cli = yargs(args) // kilocode_change
   .command(DebugCommand)
   .command(ProvidersCommand)
   .command(AgentCommand)
-  .command(UpgradeCommand)
   .command(UninstallCommand)
   .command(ServeCommand)
   .command(WebCommand)
@@ -228,7 +237,12 @@ try {
   process.exitCode = 1
 } finally {
   parseTimer.end() // kilocode_change - P0 instrumentation
-  await KiloCli.shutdown() // kilocode_change - telemetry/session-export shutdown + instance disposal
+  if (isInternalCutover) {
+    // kilocode_change - hidden cutover owns its own lease/marker lifecycle; skip heavy AppRuntime shutdown that would acquire DB lease
+    P0Perf.mark("cli_shutdown_skip_internal_cutover")
+  } else {
+    await KiloCli.shutdown() // kilocode_change - telemetry/session-export shutdown + instance disposal
+  }
 
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless

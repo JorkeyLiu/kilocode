@@ -380,7 +380,19 @@ module.exports = [
   // ============================================
   {
     source: "/docs/cli",
-    destination: "/docs/code-with-ai/platforms/cli",
+    destination: "/docs/code-with-ai/platforms/vscode",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/code-with-ai/platforms/cli",
+    destination: "/docs/code-with-ai/platforms/vscode",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/code-with-ai/platforms/cli-reference",
+    destination: "/docs/code-with-ai/platforms/vscode",
     basePath: false,
     permanent: true,
   },
@@ -861,7 +873,13 @@ module.exports = [
   },
   {
     source: "/docs/features/mcp/using-mcp-in-cli",
-    destination: "/docs/automate/mcp/using-in-cli",
+    destination: "/docs/automate/mcp/using-in-kilo-code",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/automate/mcp/using-in-cli",
+    destination: "/docs/automate/mcp/using-in-kilo-code",
     basePath: false,
     permanent: true,
   },

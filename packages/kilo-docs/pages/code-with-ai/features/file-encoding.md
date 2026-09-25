@@ -48,4 +48,4 @@ If Kilo displays a file as garbled text, or writes it back in a different encodi
   ```
 
 - **The model and provider** you were using when the issue occurred, for example `claude-sonnet-4.5` via Kilo Gateway.
-- **The exact Kilo version** you are running. For the CLI, run `kilo --version`. For the VS Code extension, open the Extensions view and check the version next to "Kilo Code".
+- **The exact Kilo version** you are running. For the VS Code extension, open the Extensions view and check the version next to "Kilo Code".

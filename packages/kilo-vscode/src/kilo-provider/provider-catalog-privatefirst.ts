@@ -13,7 +13,7 @@ import type {
 } from "../services/cli-backend/serve-private-provider-catalog-contract"
 
 export type { ProviderCatalogData }
-export type ProviderCatalogSdkData = { all: unknown[]; default: Record<string, string>; connected: string[]; failed: string[] }
+type ProviderCatalogSdkData = { all: unknown[]; default: Record<string, string>; connected: string[]; failed: string[] }
 
 /**
  * Private-first `provider/catalog` read-only observation (the same redacted
