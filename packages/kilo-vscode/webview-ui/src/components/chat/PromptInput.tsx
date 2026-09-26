@@ -1218,7 +1218,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <ModeSwitcher sessionID={sid} />
           <ModelSelector sessionID={sid} />
           <ThinkingSelector sessionID={sid} />
-          <PermissionLevelChip />
           <Show when={session.hasModelOverride(sid())}>
             <Tooltip value={language.t("prompt.action.resetModel")} placement="top">
               <Button
@@ -1246,6 +1245,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               onToggle={toggleSandbox}
             />
           </Show>
+          <PermissionLevelChip />
           <Tooltip value={language.t("prompt.action.enhance")} placement="top">
             <Button
               variant="ghost"

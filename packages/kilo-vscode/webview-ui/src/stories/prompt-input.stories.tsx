@@ -244,7 +244,7 @@ export const FixedSubagent200: Story = {
 }
 
 // ---------------------------------------------------------------------------
-// Stories — permission level chip (read-only, opens settings)
+// Stories — permission shield entry (icon-only, opens settings)
 // ---------------------------------------------------------------------------
 
 export const PermissionAutonomous420: Story = {
