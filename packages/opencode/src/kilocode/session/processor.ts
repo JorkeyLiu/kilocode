@@ -7,11 +7,11 @@ import { MessageV2 } from "@/session/message-v2"
 import { reviewCommandName } from "@/kilocode/review/command"
 import * as Log from "@opencode-ai/core/util/log"
 import { Cause, Effect, Exit } from "effect"
-import { Flag } from "@opencode-ai/core/flag/flag"
 import { EffectBridge } from "@/effect/bridge"
 import type { LLMEvent, Usage } from "@opencode-ai/llm"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
 import { SessionRetry } from "@/session/retry"
+import { KiloRetryBudget } from "@/kilocode/session/retry-budget"
 
 export type ReviewTelemetry = {
   mode: "review"
@@ -197,6 +197,11 @@ export namespace KiloSessionProcessor {
    * Returns the Kilo-specific retry policy options (limit + offline handler).
    * Designed to be spread into SessionRetry.policy() opts.
    *
+   * The limit is always finite: `KILO_SESSION_RETRY_LIMIT` when configured,
+   * otherwise the shared owner default. Production never retries unbounded.
+   * A configured limit is never relaxed here; `used` only tightens it for
+   * the remaining attempts of the owning budget.
+   *
    * The `abort` signal is used by the offline handler to cancel the network
    * reconnection wait when the session is interrupted.
    */
@@ -205,10 +210,12 @@ export namespace KiloSessionProcessor {
     abort: AbortSignal
     set: (sessionID: SessionID, status: SessionStatus.Info) => Effect.Effect<void>
     used?: number
+    budget?: KiloRetryBudget.Budget
   }) {
-    const limit = Flag.KILO_SESSION_RETRY_LIMIT
+    const limit = Math.max(0, KiloRetryBudget.resolveLimit() - (input.used ?? 0))
     return {
-      limit: limit === undefined ? undefined : Math.max(0, limit - (input.used ?? 0)),
+      limit,
+      ...(input.budget ? { budget: input.budget } : {}),
       offline: (info: { error: unknown; message: string }) =>
         handleOffline({
           error: info.error,
@@ -273,6 +280,14 @@ export namespace KiloSessionProcessor {
     replayable: () => boolean
     discard: () => Effect.Effect<void>
     set: (info: { attempt: number; message: string; next: number }) => Effect.Effect<void>
+    /**
+     * Owning generation budget shared with provider and broker retries.
+     * Each recovery run after the initial attempt charges it first; an
+     * exhausted owner fails closed with IncompleteResponseError and starts
+     * no new attempt. Partial output never reaches this loop (replayable
+     * guard), so no charged run replays observed output.
+     */
+    budget?: KiloRetryBudget.Budget
   }) {
     return Effect.gen(function* () {
       for (const index of Array.from({ length: INCOMPLETE_RESPONSE_RETRIES + 1 }, (_, index) => index)) {
@@ -284,8 +299,16 @@ export namespace KiloSessionProcessor {
 
         yield* input.discard()
         if (index === INCOMPLETE_RESPONSE_RETRIES) return yield* Effect.fail(new IncompleteResponseError())
+        // Compute wait plus failure occurrence first (single existing delay
+        // call), then atomically CAS charge + incomplete layer + next-at
+        // intent; only CAS success reaches set/sleep/next dispatch.
         const wait = SessionRetry.delay(index + 1)
-        yield* input.set({ attempt: index + 1, message: INCOMPLETE_RESPONSE_MESSAGE, next: Date.now() + wait })
+        const occurrenceTime = Date.now()
+        const nextAt = occurrenceTime + wait
+        if (input.budget && !(yield* KiloRetryBudget.chargeShared(input.budget, "incomplete", undefined, { occurrenceTime, nextAt }))) {
+          return yield* Effect.fail(new IncompleteResponseError())
+        }
+        yield* input.set({ attempt: index + 1, message: INCOMPLETE_RESPONSE_MESSAGE, next: nextAt })
         yield* Effect.sleep(`${wait} millis`)
       }
     })

@@ -90,6 +90,9 @@ import { SessionTools } from "./tools"
 import { AgentCapability } from "@/agent/capability" // kilocode_change
 import { LLMEvent } from "@opencode-ai/llm"
 import { withGenerationAdmission } from "@/kilocode/session/generation-admission" // kilocode_change
+import { KiloRetryBudget } from "@/kilocode/session/retry-budget" // kilocode_change
+import { SessionGeneration } from "@opencode-ai/core/session/generation" // kilocode_change - durable generation owner/member
+import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - strict vs memory-only durable kind
 import {
   CONTINUE_FROM_KEY,
   hasUnsafeTool,
@@ -2100,7 +2103,17 @@ export const layer = Layer.effect(
           // handle.process has fully drained (tokens + inline tool calls) by the
           // time we get here, so nothing is cut off; the adopted prompts appear
           // in the next LLM input and the loop continues in the same run.
-          KiloSessionPromptQueue.adopt(sessionID)
+          // Epoch membership: adopt appends to queue targets.extras under the
+          // same Runner generation; state.epochMembership() exposes
+          // {generationID, sessionID, messageIDs} read-only. Durable 1:N join
+          // uses the returned FIFO IDs in this same step (no torn snapshot):
+          // only accepted prompt/in-flight rows become members; cancelled and
+          // synthetic retarget rows are never adopted and fail validation.
+          const adopted = KiloSessionPromptQueue.adopt(sessionID)
+          if (adopted.length > 0) {
+            const gen = yield* state.activeGeneration(sessionID)
+            if (gen) yield* SessionGeneration.add(db, sessionID, gen, adopted).pipe(Effect.orDie)
+          }
           // kilocode_change end
           // kilocode_change start - guard against providers that end the stream
           // without a terminal stop_reason (e.g. an Anthropic-style message_delta
@@ -2137,21 +2150,126 @@ export const layer = Layer.effect(
       yield* KiloSessionPrompt.recoverDanglingAssistant({ sessionID: input.sessionID, status, sessions })
       yield* KiloSessionPrompt.recoverProviderFinishError({ sessionID: input.sessionID, status, sessions })
       const onInterrupt = lastAssistant(input.sessionID).pipe(Effect.orDie)
+      const resolveDurable = (generationID: string, base: string | undefined) =>
+        Effect.gen(function* () {
+          const memory: KiloRetryBudget.Binding = {
+            db: db as never,
+            sessionID: input.sessionID as never,
+            genID: generationID,
+            kind: "memory",
+          }
+          const strict: KiloRetryBudget.Binding = {
+            db: db as never,
+            sessionID: input.sessionID as never,
+            genID: generationID,
+            kind: "strict",
+          }
+          if (!base) return memory
+          const ownerExit = yield* Effect.exit(SessionGeneration.getOwner(db, generationID))
+          if (ownerExit._tag === "Failure") return strict
+          if (ownerExit.value) return strict
+          const opId = SessionOperation.promptId(base)
+          const rowExit = yield* Effect.exit(SessionOperation.get(db, opId))
+          if (rowExit._tag === "Failure") return strict
+          if (rowExit.value) return strict
+          return memory
+        })
       return yield* state.ensureRunning(input.sessionID, onInterrupt, {
-        prelude: (generationID: string) => KiloSession.publishTurnOpen({ sessionID: input.sessionID, generationID }),
+        prelude: (generationID: string) =>
+          Effect.gen(function* () {
+            // Durable generation owner prelude: the queue slot installed its
+            // base before Runner prelude, so insert owner + base membership
+            // here with the accepted generation before TurnOpen. Only an
+            // accepted prompt/in-flight row becomes a member; the dev/TUI
+            // non-accepted path has no prompt row and stays ownerless (no
+            // bogus member). `begin` returning created or non-empty means a
+            // real owner row exists and the body must stay strict; empty means
+            // no owner. DB failure dies here and aborts the generation
+            // before any network. Prompt and command share this path via
+            // promptUnguarded. A terminal/cancelled member row never forges
+            // an owner; a truly accepted prompt whose prelude sees terminal
+            // simply admits no retry because the strict charge fails closed.
+            const base = KiloSessionPromptQueue.active(input.sessionID)
+            yield* elog.info("turn.open", { sessionID: input.sessionID, generationID, base }).pipe(Effect.ignore)
+            if (base) {
+              const limit = KiloRetryBudget.resolveLimit()
+              yield* SessionGeneration.begin(db, input.sessionID, generationID, base, limit).pipe(Effect.orDie)
+            }
+            yield* KiloSession.publishTurnOpen({ sessionID: input.sessionID, generationID })
+          }),
         body: (generationID: string) =>
-          withGenerationAdmission(config, runLoop(input).pipe(Effect.orDie)).pipe(
-            Effect.onExit(
-              Effect.fnUntraced(function* (exit) {
-                yield* KiloSession.publishTurnClose({
-                  sessionID: input.sessionID,
-                  parentID: session.parentID,
-                  reason: KiloSessionPrompt.resolveCloseReason({ sessionID: input.sessionID, closeReasons, exit }),
-                  generationID,
-                })
-              }),
-            ),
-          ),
+          Effect.gen(function* () {
+            // kilocode_change - each generation owns one finite retry budget
+            // shared by its provider, incomplete-response, and broker retries.
+            // The fresh owner shadows any parent budget, so a child task
+            // generation never consumes its parent's budget implicitly. The
+            // durable binding carries the known gen plus its explicit kind so
+            // every actual retry atomically CAS-charges consumed + last layer +
+            // last scheduled occurrence intent before the next dispatch (wait
+            // plus occurrence computed first from the existing error/retry-after
+            // policy; only CAS success reaches set/sleep/dispatch); the kind is
+            // recomputed here from the same
+            // predicate (owner row, else accepted prompt row) and never
+            // downgrades strict to memory, so a row that disappears after the
+            // prelude still fails closed with no network. Legacy ownerless
+            // (no accepted prompt row) stays memory-only without fabricating
+            // a row. 1:N adopted prompts share this same gen owner. Only the
+            // last layer plus the last scheduled occurrence are persisted with
+            // the consumed counter (no ledger/scheduler/replay/cleanup proof);
+            // close/crash clear the pending next-at and retain last-layer
+            // provenance; the legacy panel recovery_next_at stays null.
+            const base = KiloSessionPromptQueue.active(input.sessionID)
+            const binding = yield* resolveDurable(generationID, base as unknown as string | undefined)
+            return yield* withGenerationAdmission(config, runLoop(input).pipe(Effect.orDie)).pipe(
+              Effect.provideService(KiloRetryBudget.Owner, KiloRetryBudget.make()),
+              Effect.provideService(KiloRetryBudget.Durable, binding),
+              Effect.onExit(
+                Effect.fnUntraced(function* (exit) {
+                  const reason = KiloSessionPrompt.resolveCloseReason({ sessionID: input.sessionID, closeReasons, exit })
+                  const ownerReason =
+                    reason === "completed" ? ("completed" as const) : reason === "interrupted" ? ("interrupted" as const) : ("error" as const)
+                  // Durable owner close is fail-closed-visible, never exit-changing:
+                  // onExit finalizer success never overrides the body Exit, so a
+                  // close defect must not turn a successful generation into a
+                  // request failure. Log close defects explicitly with one bounded
+                  // inline retry (idempotent CAS, no fork leak); applied:false is
+                  // a raced no-op (concurrent crash sweep won), not an error. If
+                  // both attempts fail the row stays open and the boot sweep will
+                  // crash-converge it — the error logs make that visible instead
+                  // of silently turning success into a later crash.
+                  const attempt = SessionGeneration.close(db, input.sessionID, generationID, ownerReason)
+                  const first = yield* Effect.exit(attempt)
+                  if (Exit.isFailure(first)) {
+                    yield* elog
+                      .error("turn.close.failed", {
+                        sessionID: input.sessionID,
+                        generationID,
+                        ownerReason,
+                        cause: Cause.pretty(first.cause),
+                      })
+                      .pipe(Effect.ignore)
+                    const second = yield* Effect.exit(attempt)
+                    if (Exit.isFailure(second)) {
+                      yield* elog
+                        .error("turn.close.retry.failed", {
+                          sessionID: input.sessionID,
+                          generationID,
+                          ownerReason,
+                          cause: Cause.pretty(second.cause),
+                        })
+                        .pipe(Effect.ignore)
+                    }
+                  }
+                  yield* KiloSession.publishTurnClose({
+                    sessionID: input.sessionID,
+                    parentID: session.parentID,
+                    reason,
+                    generationID,
+                  })
+                }),
+              ),
+            )
+          }),
       })
       // kilocode_change end
     })

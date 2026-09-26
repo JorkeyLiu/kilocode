@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
+import { realpathSync } from "node:fs"
+import { isAbsolute, normalize, resolve } from "node:path"
 import type { SessionID } from "@/session/schema"
 
 interface Grant {
@@ -33,12 +35,24 @@ function shapeValid(token: string): boolean {
   return /^si-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)
 }
 
+function normalizeDirectory(dir: string): string {
+  if (typeof dir !== "string" || !isAbsolute(dir)) throw new Error("context.directory must be absolute path")
+  if (dir.includes("\0")) throw new Error("context.directory must not contain null bytes")
+  const canon = normalize(resolve(dir))
+  try {
+    return realpathSync(canon)
+  } catch (e: unknown) {
+    if ((e as { code?: string })?.code === "ENOENT") return canon
+    throw e
+  }
+}
+
 export function issue(input: { sessionID: SessionID; directory: string; count: number }) {
   cleanup()
   const token = `si-${randomUUID()}`
   grants.set(token, {
     sessionID: input.sessionID,
-    directory: input.directory,
+    directory: normalizeDirectory(input.directory),
     expires: Date.now() + ttl,
     remaining: Math.max(1, input.count),
   })

@@ -131,6 +131,29 @@ export namespace KiloSessionPromptQueue {
   }
 
   /**
+   * Read-only epoch membership snapshot for the running slot.
+   * Returns the queue active base plus every extra appended by adopt() or
+   * retarget() since the slot started, in insertion order. Pending,
+   * per-message cancelled (dropped), and pre-accept targets are never
+   * included: only the installed base/extras that scope() treats as owned.
+   * The returned array is a copy; mutating it never affects queue state.
+   * No storage here: the targets map remains the single record, owned by the
+   * queue slot lifecycle and deleted on slot release; callers combine this
+   * with the Runner generation for the durable write point.
+   * Volatile vs durable boundary: this snapshot is execution membership and
+   * may contain IDs whose prompt row is already terminal or synthetic
+   * retargets with no prompt row at all. The durable join
+   * (SessionGeneration begin/add) persists only accepted prompt/in-flight
+   * rows and skips terminal/synthetic IDs in the same step; the skip is
+   * intentional and never changes queue scope() behavior.
+   */
+  export function snapshot(sessionID: SessionID): { base: MessageID; extras: readonly MessageID[] } | undefined {
+    const current = targets.get(sessionID)
+    if (!current) return undefined
+    return { base: current.base, extras: [...current.extras] }
+  }
+
+  /**
    * Production per-ID ownership probe for prompt idempotency reattach.
    * True when messageID is the running target, folded into the running
    * extras, waiting to start, or adopted — never session-global counts.
@@ -172,19 +195,19 @@ export namespace KiloSessionPromptQueue {
    * registry, so it stops counting as a follow-up and is no longer individually
    * cancellable via cancelOne; its slot runs its cancelled effect (the caller's
    * settled result) instead of independent generation work when it reaches the
-   * front of the queue. The production call site discards the outcome; test
-   * observability of which targets were folded in, in FIFO order, goes through
-   * _adoptedIDs.
+   * front of the queue. Returns the adopted target IDs in FIFO order so the
+   * caller can durably join them to the owning generation in the same step
+   * without a torn snapshot read; empty when nothing was waiting.
    */
-  export function adopt(sessionID: SessionID): void {
+  export function adopt(sessionID: SessionID): MessageID[] {
     const target = targets.get(sessionID)
-    if (!target) return
+    if (!target) return []
     const a = activeSince.get(sessionID) ?? 0
     const waiting = [...pending.entries()]
       .filter(([id, item]) => item.session === sessionID && item.seq > a && !dropped.has(id))
       .sort((x, y) => x[1].seq - y[1].seq)
       .map(([id]) => id)
-    if (waiting.length === 0) return
+    if (waiting.length === 0) return []
     const extras = new Set(target.extras)
     for (const id of waiting) {
       extras.add(id)
@@ -192,6 +215,7 @@ export namespace KiloSessionPromptQueue {
       pending.delete(id)
     }
     targets.set(sessionID, { base: target.base, extras })
+    return waiting
   }
 
   export function scope(sessionID: SessionID, messages: MessageV2.WithParts[]) {

@@ -63,6 +63,26 @@ describe("parseCutoverOutput", () => {
     expect(() => parseCutoverOutput("")).toThrow(/empty/)
     expect(() => parseCutoverOutput("not json\n")).toThrow(/missing ok archiveID/)
   })
+
+  it("marks production fresh first-boot (empty archivePath) as fresh without an archive", () => {
+    const fresh = JSON.stringify({
+      ok: true,
+      op: "cutover",
+      archiveID: "20260821T211526Z-12345678-1234-1234-1234-123456789abc",
+      archivePath: "",
+      fresh: true,
+    })
+    const parsed = parseCutoverOutput(fresh)
+    expect(parsed.fresh).toBe(true)
+    expect(parsed.archivePath).toBe("")
+    const legacy = JSON.stringify({
+      ok: true,
+      op: "cutover",
+      archiveID: "20260821T211526Z-12345678-1234-1234-1234-123456789abc",
+      archivePath: "/tmp/kilo-archive/p4.2/20260821T211526Z-12345678-1234-1234-1234-123456789abc",
+    })
+    expect(parseCutoverOutput(legacy).fresh).toBe(false)
+  })
 })
 
 describe("validateGateEvidence", () => {
@@ -185,6 +205,51 @@ describe("collectArchiveState / archiveMutationError", () => {
       const before = collectArchiveState(dataRoot)
       writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify(before))
       expect(() => assertArchiveStable(scratch, dataRoot)).toThrow(/archive count before is 0/)
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  it("allows fresh 0→0 stability with markers still guarded", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "e2e-canonical-test-"))
+    try {
+      const dataRoot = join(scratch, "xdg-data", "kilo")
+      mkdirSync(dataRoot, { recursive: true })
+      const before = collectArchiveState(dataRoot)
+      expect(before.archiveCount).toBe(0)
+      const after = collectArchiveState(dataRoot)
+      // Legacy default stays strict.
+      expect(archiveMutationError(before, after)).toContain("archive count before is 0")
+      // Fresh branch: 0→0 stable, markers still fail closed.
+      expect(archiveMutationError(before, after, { allowEmpty: true })).toBeUndefined()
+      const { parent, base, p4 } = deriveArchiveFor(dataRoot)
+      mkdirSync(p4, { recursive: true })
+      const id = "20260821T211526Z-12345678-1234-1234-1234-123456789abc"
+      const archive = join(p4, id)
+      mkdirSync(archive, { recursive: true })
+      writeFileSync(join(archive, "manifest.json"), JSON.stringify({ version: 1 }))
+      const afterGain = collectArchiveState(dataRoot)
+      expect(archiveMutationError(before, afterGain, { allowEmpty: true })).toContain("count changed")
+      rmSync(archive, { recursive: true, force: true })
+      writeFileSync(join(parent, `.cutover-${base}.marker.json`), "{}")
+      const afterMarker = collectArchiveState(dataRoot)
+      expect(archiveMutationError(before, afterMarker, { allowEmpty: true })).toContain("cutover marker")
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  it("assertArchiveStable passes fresh 0→0 and still fails legacy 0", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "e2e-canonical-test-"))
+    try {
+      const dataRoot = join(scratch, "xdg-data", "kilo")
+      mkdirSync(dataRoot, { recursive: true })
+      const before = collectArchiveState(dataRoot)
+      writeFileSync(
+        join(scratch, "canonical-archive-before.json"),
+        JSON.stringify({ ...before, fresh: true }),
+      )
+      expect(() => assertArchiveStable(scratch, dataRoot)).not.toThrow()
     } finally {
       rmSync(scratch, { recursive: true, force: true })
     }

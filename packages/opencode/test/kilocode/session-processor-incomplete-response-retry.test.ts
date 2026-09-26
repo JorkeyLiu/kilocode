@@ -485,14 +485,13 @@ describe("session processor incomplete response retry", () => {
     ),
   )
 
-  it.effect("keeps provider retries independent after an empty response", () =>
+  it.effect("shares the provider retry budget with an empty-response recovery", () =>
     provideTmpdirProject(
       (dir) =>
         Effect.gen(function* () {
           process.env.KILO_SESSION_RETRY_LIMIT = "2"
           const ctx = yield* setup(dir)
           yield* ctx.test.reply(...empty())
-          yield* ctx.test.push(Stream.fail(retryable429()))
           yield* ctx.test.push(Stream.fail(retryable429()))
           yield* ctx.test.reply(...success())
           const delay = spyOn(SessionRetry, "delay").mockReturnValue(0)
@@ -504,7 +503,8 @@ describe("session processor incomplete response retry", () => {
             delete process.env.KILO_SESSION_RETRY_LIMIT
           }
 
-          expect(yield* ctx.test.calls).toBe(4)
+          // 1 empty-response recovery + 1 provider retry = budget 2, then success.
+          expect(yield* ctx.test.calls).toBe(3)
           expect(ctx.handle.message.finish).toBe("stop")
         }),
       { git: true },
@@ -561,7 +561,9 @@ describe("session processor incomplete response retry", () => {
             delete process.env.KILO_SESSION_RETRY_LIMIT
           }
 
-          expect(yield* ctx.test.calls).toBe(4)
+          // 1 provider retry + 1 empty-response recovery exhaust budget 2, so
+          // the second 429 fails closed with no further attempt (3 calls).
+          expect(yield* ctx.test.calls).toBe(3)
           expect(MessageV2.APIError.isInstance(ctx.handle.message.error)).toBe(true)
         }),
       { git: true },

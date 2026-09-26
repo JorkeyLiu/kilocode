@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Session } from "@/session/session"
 import { SessionRunState } from "@/session/run-state"
 import { SessionID } from "@/session/schema"
@@ -134,7 +134,7 @@ function failed(req: AbortRequest, code: string): AbortFailed {
 // returns before any cancellation signal.
 export const abortSession = Effect.fn("SessionAbort.abort")(function* (raw: unknown) {
   const req = validateAbortRequest(raw)
-  const dir = canonicalDirectory(req.context.directory)
+  const dir = authoritativeDirectory(req.context.directory)
   const sid = SessionID.make(req.context.sessionId)
   const sessions = yield* Session.Service
   const state = yield* SessionRunState.Service
@@ -148,13 +148,13 @@ export const abortSession = Effect.fn("SessionAbort.abort")(function* (raw: unkn
     Effect.catchDefect((defect: unknown) => Effect.die(defect)),
   )
   if (found.tag !== "ok") return failed(req, found.code)
-  let stored: string
+  let samePhysical: boolean
   try {
-    stored = canonicalDirectory(found.value.directory)
+    samePhysical = samePhysicalDirectory(found.value.directory, dir)
   } catch {
     return failed(req, "scope_mismatch")
   }
-  if (stored !== dir) return failed(req, "scope_mismatch")
+  if (!samePhysical) return failed(req, "scope_mismatch")
   const tree = yield* KiloSessionPrompt.cancelTree({
     sessionID: sid,
     sessions,

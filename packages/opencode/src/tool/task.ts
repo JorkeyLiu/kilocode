@@ -19,6 +19,7 @@ import { KiloSessionProcessor } from "../kilocode/session/processor" // kilocode
 import { KiloSession } from "../kilocode/session" // kilocode_change
 import { errorMessage } from "@/util/error" // kilocode_change
 import { KiloTaskRetry } from "../kilocode/tool/task-retry" // kilocode_change
+import { KiloRetryBudget } from "../kilocode/session/retry-budget" // kilocode_change
 import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -286,11 +287,17 @@ export const TaskTool = Tool.define(
         // Transient provider failures first get a bounded same-session retry when the child has no
         // committed or ambiguous tool side effects; see KiloTaskRetry.
         if (result.info.role === "assistant" && result.info.error) {
+          const parentBudget = yield* KiloRetryBudget.Owner
+          const parentDurable = yield* KiloRetryBudget.Durable
           const retried = yield* KiloTaskRetry.recover({
             error: result.info.error,
             sessions,
             sessionID: nextSession.id,
             attempt: () => ops.prompt(input()),
+            // kilocode_change - child re-invocations charge the parent
+            // generation's owning budget/row and never the child row
+            ...(parentBudget ? { budget: parentBudget } : {}),
+            ...(parentDurable ? { durable: parentDurable } : {}),
           })
           const final = retried ?? result
           if (final.info.role === "assistant" && final.info.error) {

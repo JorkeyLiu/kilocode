@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -421,8 +421,11 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const row = yield* db.select({ directory: SessionTable.directory }).from(SessionTable).where(eq(SessionTable.id, sessionId)).get().pipe(Effect.orDie)
         if (!row) return { ok: false as const, reason: "missing" as const }
-        const stored = canonicalDirectory((row as unknown as { directory: string }).directory)
-        if (stored !== canonDir) return { ok: false as const, reason: "mismatch" as const }
+        try {
+          if (!samePhysicalDirectory((row as unknown as { directory: string }).directory, canonDir)) return { ok: false as const, reason: "mismatch" as const }
+        } catch {
+          return { ok: false as const, reason: "mismatch" as const }
+        }
         return { ok: true as const }
       })
 
@@ -462,7 +465,7 @@ export const layer = Layer.effect(
           failure: { code: "validation.failed", message: msg, retryable: false },
         } satisfies CheckpointFailed
       }
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const run = (drainRelease: Effect.Effect<void>) =>
@@ -882,7 +885,7 @@ export const layer = Layer.effect(
           failure: { code: "validation.failed", message: msg, retryable: false },
         } satisfies CheckpointFailed
       }
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const existing = yield* SessionOperation.getSessionRevertByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)
@@ -921,7 +924,7 @@ export const layer = Layer.effect(
           failure: { code: "validation.failed", message: msg, retryable: false },
         } satisfies CheckpointFailed
       }
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const run = (drainRelease: Effect.Effect<void>) =>
@@ -1265,7 +1268,7 @@ export const layer = Layer.effect(
           failure: { code: "validation.failed", message: msg, retryable: false },
         } satisfies CheckpointFailed
       }
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const existing = yield* SessionOperation.getSessionUnrevertByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)

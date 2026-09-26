@@ -2,11 +2,12 @@ import { isAbsolute } from "path"
 import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import { and, desc, eq, isNull, lt, or } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { SessionID } from "@/session/schema"
 import { decodeGlobalListCursor, encodeGlobalListCursor } from "@/session/global-cursor"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { ErrorCode } from "./json-rpc"
 import type { ObservationListResult } from "./observation"
 
@@ -26,7 +27,7 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
       if (!isAbsolute(rawDir)) throw invalidParams("directory must be non-empty absolute path")
       const directory = (() => {
         try {
-          return canonicalDirectory(rawDir)
+          return authoritativeDirectory(rawDir)
         } catch (e) {
           throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
         }
@@ -37,8 +38,37 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
       if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 500) {
         throw invalidParams("limit must be integer 1..500")
       }
+      // Legacy lexical-row convergence: distinct stored spellings that resolve
+      // to the same physical directory as the request are included; truly
+      // different physical directories never match. Bounded to distinct
+      // directory values (workspace count), never a global widen.
+      const candidates = await (async (): Promise<string[]> => {
+        const seen = new Set<string>([directory])
+        try {
+          const distinct = (await Effect.runPromise(
+            db
+              .selectDistinct({ directory: SessionTable.directory })
+              .from(SessionTable)
+              .all()
+              .pipe(Effect.orDie),
+          )) as Array<{ directory: string }>
+          for (const row of distinct) {
+            const stored = (row as { directory: string }).directory
+            if (typeof stored !== "string" || seen.has(stored)) continue
+            try {
+              if (FSUtil.resolve(canonicalDirectory(stored)) === directory) seen.add(stored)
+            } catch {
+              continue
+            }
+          }
+        } catch {
+          // Distinct scan is best-effort convergence; exact authoritative
+          // match below still holds when the scan is unavailable.
+        }
+        return [...seen]
+      })()
       const conditions: SQL[] = []
-      conditions.push(eq(SessionTable.directory, directory))
+      conditions.push(candidates.length === 1 ? eq(SessionTable.directory, candidates[0]!) : inArray(SessionTable.directory, candidates))
       if (!archived) conditions.push(isNull(SessionTable.time_archived))
       if (input.cursor !== undefined) {
         const decoded: { updated: number; id: string } = (() => {
@@ -70,7 +100,7 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
         id: row.id,
         title: row.title,
         parentID: (row.parent_id as string | null) ?? null,
-        directory: row.directory,
+        directory,
         projectID: row.project_id as unknown as string,
         createdAt: row.time_created,
         updatedAt: row.time_updated,

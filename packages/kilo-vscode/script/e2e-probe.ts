@@ -99,7 +99,14 @@
  *                           assertRealRollbackPhase against the run-owned
  *                           scripted provider) proves Revert-to-here restores
  *                           the exact original bytes and Redo All restores the
- *                           edited bytes through the retained chat UI.
+  *                           edited bytes through the retained chat UI.
+  *   - real-generation      => only the minimal generation-owner proof: ONE
+  *                           completed text turn against the run-owned loopback
+  *                           scripted provider with the minimal seed (closed
+  *                           canonical project config + dependency guard — no
+  *                           MCP, no user tool, no skill, no permission rules),
+  *                           then the terminal owner/member + succeeded prompt
+  *                           operation proof read-only through the Bun gate.
   *   - cloud-claw-removal   => only the P3.3 runtime-absence scenario: the
   *                           extension host proves the loaded manifest, the
   *                           RUNTIME command table, and the built dist/ bundle
@@ -136,7 +143,9 @@
  *     KILO_E2E_SCENARIO=real-session      node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=real-completed    node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
- *     KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
+  *     KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
+  *     KILO_E2E_SCENARIO=real-lifecycle    node script/e2e-probe-launch.mjs
+  *     KILO_E2E_SCENARIO=real-generation   node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=p3-4-removal node script/e2e-probe-launch.mjs
@@ -147,7 +156,9 @@
  *   `bun run test:e2e:real-session`,
  *   `bun run test:e2e:real-completed`,
  *   `bun run test:e2e:real-overflow`,
- *   `bun run test:e2e:real-restart`,
+  *   `bun run test:e2e:real-restart`,
+  *   `bun run test:e2e:real-lifecycle`,
+  *   `bun run test:e2e:real-generation`,
  *   `bun run test:e2e:worktree-removal`,
  *   `bun run test:e2e:cloud-claw-removal`,
  *   `bun run test:e2e:p3-4-removal`.)
@@ -161,7 +172,9 @@
  * real-completed-ready / rc-snap-N-request / rc-snap-N.json /
  * real-completed-reopen-request / real-completed-reopen-ready /
  * real-completed-mcp-disconnect-request / real-completed-mcp-disconnect-done,
- * real-overflow-ready / of-snap-N-request / of-snap-N.json,
+  *   real-overflow-ready / of-snap-N-request / of-snap-N.json,
+  *   lc-ready / lc-snap-N-request / lc-snap-N.json,
+  *   rg-ready / rg-snap-N-request / rg-snap-N.json,
  * rr-ready / rr-conn-request / rr-conn.json / rr-kill-request / rr-kill.json /
  * rr-reconnect-request / rr-reconnect.json / rr-snap-N-request / rr-snap-N.json /
  * rr-reload-request / rr-reload-executed / rr-reloaded /
@@ -294,6 +307,7 @@ import { assertObservationProducerForkLifecycle } from "./e2e-probe-observation-
 import { assertObservationProducerRevertLifecycle } from "./e2e-probe-observation-producer-revert"
 import { assertObservationProducerSandboxLifecycle } from "./e2e-probe-observation-producer-sandbox"
 import { assertPromptPrivateFirstLifecycle } from "./e2e-probe-prompt-private"
+import { assertRealCompletedGenerations, assertRealSnapGenerations } from "./e2e-generation-assert"
 import { assertCommandPrivateFirstLifecycle } from "./e2e-probe-command-private"
 import { assertOperationProjectionLifecycle } from "./e2e-probe-operation-projection"
 import {
@@ -309,6 +323,7 @@ import {
   e2eTimeoutForScenario,
 } from "./e2e-observation-producer-registry"
 import { runGcLifecycleBoundaries } from "./e2e-probe-lifecycle"
+import { assertRealGenerationLifecycle, prepareRealGeneration } from "./e2e-probe-generation"
 import { repoRootFrom } from "./p0-bench/repo-root"
 import {
   REAL_ROLLBACK_PROMPT,
@@ -353,7 +368,8 @@ const timeoutMs = Number(process.env.KILO_E2E_TIMEOUT ?? e2eTimeoutForScenario(p
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
 // Code lifecycle; a focused value runs exactly that scenario. Unknown values
 // fail fast BEFORE VS Code launches (see main()). topic-navigation,
-// real-session, and real-completed are focused-only by design (not part of
+// real-session, real-completed, real-overflow, real-restart, real-lifecycle,
+// and real-generation are focused-only by design (not part of
 // `all`): topic closes/reopens the Agent Manager panel mid-run (which would
 // dispose the tab strip the other `all` scenarios coordinate on), and the
 // real scenarios create REAL backend sessions through the production webview
@@ -370,6 +386,7 @@ const SCENARIO_VALUES = [
   "real-overflow",
   "real-restart",
   "real-lifecycle",
+  "real-generation",
   "sidebar-removal",
   "worktree-removal",
   "cloud-claw-removal",
@@ -397,6 +414,7 @@ export function parseScenarios(value: string): Set<string> {
     value === "real-overflow" ||
     value === "real-restart" ||
     value === "real-lifecycle" ||
+    value === "real-generation" ||
     value === "sidebar-removal" ||
     value === "worktree-removal" ||
     value === "cloud-claw-removal" ||
@@ -433,6 +451,7 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has("real-restart") ||
     parseScenarios(value).has("real-session") ||
     parseScenarios(value).has("real-lifecycle") ||
+    parseScenarios(value).has("real-generation") ||
     parseScenarios(value).has("r9-observation") ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_SCENARIO) ||
     parseScenarios(value).has(OBSERVATION_PRODUCER_UPDATE_SCENARIO) ||
@@ -451,10 +470,16 @@ export function isLoopbackProviderBaseURL(value: string | undefined): boolean {
   return !!value && /^https?:\/\/(127\.0\.0\.1|localhost):\d+\/v1$/.test(value)
 }
 
-// Pure URL selection for single-process launch: real-session->hang, real-lifecycle->scripted model, else undefined.
-export function selectProviderBaseURL(s: Set<string>, hangPort?: number, lifecyclePort?: number): string | undefined {
+// Pure URL selection for single-process launch: real-session->hang, real-lifecycle/real-generation->scripted model, else undefined.
+export function selectProviderBaseURL(
+  s: Set<string>,
+  hangPort?: number,
+  lifecyclePort?: number,
+  generationPort?: number,
+): string | undefined {
   if (s.has("real-session") && hangPort !== undefined) return `http://127.0.0.1:${hangPort}/v1`
   if (s.has("real-lifecycle") && lifecyclePort !== undefined) return `http://127.0.0.1:${lifecyclePort}/v1`
+  if (s.has("real-generation") && generationPort !== undefined) return `http://127.0.0.1:${generationPort}/v1`
   return undefined
 }
 
@@ -2419,6 +2444,12 @@ async function assertRealOverflowLifecycle(
 }
 
 // ---------------------------------------------------------------------------
+// real-generation scenario — minimal true generation-owner proof (narrow).
+// Lives in script/e2e-probe-generation.ts so this file stays under its
+// max-lines cap (same split as e2e-probe-lifecycle.ts / e2e-probe-worktree.ts).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // P3.2 worktree-removal scenario — runtime absence + root-local + bounded H-12
 // ---------------------------------------------------------------------------
 
@@ -2563,6 +2594,7 @@ async function runScenario(
   overflowModel?: ScriptedModelHandle,
   wtModel?: ScriptedModelHandle,
   lifecycleModel?: ScriptedModelHandle,
+  generationModel?: ScriptedModelHandle,
 ): Promise<void> {
   if (scenarios.has("tab-close")) {
     await assertTabCloseSuccessor(browser, plan, scratch)
@@ -2595,6 +2627,9 @@ async function runScenario(
   if (scenarios.has("real-completed")) {
     if (!completed) throw new Error("probe: real-completed preparation missing")
     await assertRealCompletedLifecycle(browser, plan, scratch, workspace, completed.mcpServerFile, completed.handle)
+    // Real Runner generations (loopback scripted SSE only): terminal
+    // owner/member proof read-only through the Bun gate child.
+    assertRealCompletedGenerations(root, scratch, canonicalDbPath(scratch))
     console.log("[probe] real-completed lifecycle assertion passed")
   }
   if (scenarios.has("real-overflow")) {
@@ -2641,7 +2676,7 @@ async function runScenario(
     console.log("[probe] observation-producer-sandbox lifecycle assertion passed")
   }
   if (scenarios.has(PROMPT_PRIVATE_FIRST_SCENARIO)) {
-    await assertPromptPrivateFirstLifecycle(browser, plan, scratch)
+    await assertPromptPrivateFirstLifecycle(browser, plan, scratch, root)
     console.log("[probe] prompt-private-first lifecycle assertion passed")
   }
   if (scenarios.has(COMMAND_PRIVATE_FIRST_SCENARIO)) {
@@ -2655,7 +2690,15 @@ async function runScenario(
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
     await runGcLifecycleBoundaries(browser, plan, scratch, workspace, lifecycleModel)
+    // Real Runner generations (loopback scripted SSE only): terminal
+    // owner/member proof read-only through the Bun gate child.
+    assertRealSnapGenerations(root, scratch, canonicalDbPath(scratch), "lc-snap", "real-generation-owners-lc.json")
     console.log("[probe] real-lifecycle lifecycle assertion passed")
+  }
+  if (scenarios.has("real-generation")) {
+    if (!generationModel) throw new Error("probe: real-generation preparation missing")
+    await assertRealGenerationLifecycle(browser, plan, scratch, generationModel, root)
+    console.log("[probe] real-generation lifecycle assertion passed")
   }
 }
 
@@ -2743,6 +2786,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("real-overflow")) return "real-overflow-ready"
   if (scenarios.has("real-restart")) return "rr-ready"
   if (scenarios.has("real-lifecycle")) return "lc-ready"
+  if (scenarios.has("real-generation")) return "rg-ready"
   if (scenarios.has("worktree-removal")) return "worktree-removal-ready"
   if (scenarios.has("cloud-claw-removal")) return "cloud-claw-removal-ready"
   if (scenarios.has("p3-4-removal")) return "p3-4-removal-ready"
@@ -3029,6 +3073,7 @@ async function main() {
   let overflowModel: Awaited<ReturnType<typeof prepareRealOverflow>>
   let restartModel: Awaited<ReturnType<typeof prepareRealRestart>>
   let lifecycleModel: Awaited<ReturnType<typeof prepareRealLifecycle>>
+  let generationModel: Awaited<ReturnType<typeof prepareRealGeneration>>
   let wtModel: Awaited<ReturnType<typeof prepareWorktreeRemoval>>
   try {
     // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
@@ -3056,6 +3101,7 @@ async function main() {
     // Code launches so the lazily-spawned CLI backend loads them at startup.
     wtModel = await prepareWorktreeRemoval(workspace, scenarios.has("worktree-removal"))
     lifecycleModel = await prepareRealLifecycle(workspace, scenarios.has("real-lifecycle"))
+    generationModel = await prepareRealGeneration(workspace, scenarios.has("real-generation"))
     // canonical post-cutover wiring (P4.2 H-10/H-11 for real-restart + real-session):
     // allocate a run-owned isolated temp root at scratch/xdg-data/kilo, execute
     // the existing hidden `__internal-storage-cutover cutover --data-root` against
@@ -3116,7 +3162,7 @@ async function main() {
         console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
-      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port)
+      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port, generationModel?.port)
       vscodeRun = launchVSCode({
         executable,
         runnerOut,
@@ -3157,6 +3203,7 @@ async function main() {
           overflowModel,
           wtModel,
           lifecycleModel,
+          generationModel,
         )
         // Real-session post-boundary canonical archive stability: same fresh
         // canonical data root must show no archive mutation after the panel
@@ -3187,7 +3234,7 @@ async function main() {
   }
 
   // Release the run-owned scripted/hang listeners before process settle + scratch deletion.
-  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel })
+  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel })
 
   // VS Code exits only after the runner sees the `done` marker (or times out).
   // Await it before touching the scratch dir so the unique user-data/extensions
@@ -3261,8 +3308,9 @@ async function closeHandles(opts: {
   restartModel: { close: () => Promise<void> } | undefined
   lifecycleModel: { close: () => Promise<void> } | undefined
   wtModel: { close: () => Promise<void> } | undefined
+  generationModel: { close: () => Promise<void> } | undefined
 }) {
-  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel } = opts
+  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel } = opts
   if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
   if (completed)
     await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
@@ -3274,6 +3322,8 @@ async function closeHandles(opts: {
     await lifecycleModel.close().catch((err) => console.error("[probe] lifecycle scripted model close failed:", err))
   if (wtModel)
     await wtModel.close().catch((err) => console.error("[probe] worktree-removal scripted model close failed:", err))
+  if (generationModel)
+    await generationModel.close().catch((err) => console.error("[probe] generation scripted model close failed:", err))
 }
 
 async function verifyCleanup(userData: string, cdpPort: number, scratch: string) {

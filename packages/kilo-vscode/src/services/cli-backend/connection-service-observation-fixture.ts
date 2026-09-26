@@ -112,21 +112,21 @@ function writeFixtureDiag(scratch: string | undefined, name: string, payload: un
 function resolveDirectory(inputDir: string | undefined, deps: Deps): string {
   const rawDir = inputDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? deps.getCurrentDirectory() ?? deps.getRootDirectory()
   if (!rawDir) throw new Error("fixture sessionCreate: no directory")
-  // Use server's canonicalDirectory semantics (normalize+resolve, no realpath) so
-  // fixture creates and backendSnapshot directory filters align on Darwin where
-  // /var -> /private/var symlink would otherwise diverge between fixture realpath
-  // and snapshot's host path. This keeps FD3/FD4 private dispatch canonical.
-  const { resolve, normalize } = require("node:path") as typeof import("node:path")
+  // Match production getRoot (realpath): backend HTTP reads resolve symlinks
+  // (Filesystem.resolve) and private scope checks compare equal spellings, so
+  // the fixture must send the realpath spelling. A symlinked cwd (e.g.
+  // /var -> /private/var on Darwin) would otherwise store rows under one
+  // spelling while every read filters by the other and snapshots list empty.
   try {
-    const normalized = normalize(resolve(rawDir))
-    return normalized
-  } catch (err) {
-    console.warn("[Kilo New] fixture resolveDirectory normalize failed, using raw directory:", String(err).slice(0, 200), { dir: rawDir })
-    let dir = rawDir
+    return fs.realpathSync(rawDir)
+  } catch {
+    const { resolve, normalize } = require("node:path") as typeof import("node:path")
     try {
-      dir = fs.realpathSync(rawDir)
-    } catch {}
-    return dir
+      return normalize(resolve(rawDir))
+    } catch (err) {
+      console.warn("[Kilo New] fixture resolveDirectory normalize failed, using raw directory:", String(err).slice(0, 200), { dir: rawDir })
+      return rawDir
+    }
   }
 }
 

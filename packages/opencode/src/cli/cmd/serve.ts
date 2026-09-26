@@ -1,11 +1,91 @@
 import { Effect } from "effect"
-import { effectCmd } from "../effect-cmd"
+import { CliError, effectCmd } from "../effect-cmd"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { Database } from "@opencode-ai/core/database/database" // kilocode_change - crash convergence sweep
+import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - crash convergence sweep
+import { SessionGeneration } from "@opencode-ai/core/session/generation" // kilocode_change - generation owner sweep
 import { InstanceRuntime } from "../../project/instance-runtime" // kilocode_change
 import { startParentWatchdog } from "../../kilocode/parent-watchdog" // kilocode_change
 import { createShutdownCoordinator, startSignalShutdown } from "../../kilocode/shutdown-coordinator" // kilocode_change
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
+
+// kilocode_change start - crash convergence pre-bind gate (fail-closed, testable)
+// Runs BEFORE Server.listen bind on the canonical Database.Service (same
+// memoMap lease+marker gate as the listener). A single invalid in-flight row
+// never fabricates a terminal; the gate refuses listener startup with a safe
+// opId/count message (no detail/stack/secret). Scans prompt + provider
+// in-flight rows under the one gate: prompt rows converge with revision +
+// `changed` + `generation`, provider rows with exactly one revision +
+// `changed` (never `generation`, never recovery fields). Extracted so tests
+// can inject listener creation and prove no bind until the sweep completes.
+export const runCrashConvergenceGate = (
+  db: Database.Interface["db"],
+): Effect.Effect<SessionOperation.ConvergeOrphanedSummary, CliError> =>
+  SessionOperation.convergeOrphanedInFlight(db).pipe(
+    Effect.mapError((f: unknown) => {
+      const rec = f as Partial<SessionOperation.ConvergeOrphanedFailure> | undefined
+      const opIds = Array.isArray(rec?.opIds) ? (rec?.opIds as string[]) : []
+      const count = typeof rec?.count === "number" ? (rec?.count as number) : opIds.length
+      const conv = Array.isArray(rec?.converged) ? (rec?.converged as string[]).length : 0
+      const raced = Array.isArray(rec?.raced) ? (rec?.raced as string[]).length : 0
+      const list = opIds.length > 0 ? ` (opIds: ${opIds.slice(0, 10).join(", ")}${opIds.length > 10 ? "…" : ""})` : ""
+      return new CliError({
+        message: `[kilo serve] operation crash convergence failed: ${count} invalid in-flight operations require manual recovery${list}; valid ${conv} converged, ${raced} raced. Refusing listener startup to avoid silent replay.`,
+        exitCode: 1,
+      })
+    }),
+    Effect.catchDefect(
+      () =>
+        Effect.fail(
+          new CliError({
+            message:
+              "[kilo serve] operation crash convergence failed with internal error; refusing listener startup to avoid silent replay.",
+            exitCode: 1,
+          }),
+        ) as Effect.Effect<never, CliError>,
+    ),
+  )
+
+export const gateThenListen = <T>(
+  db: Database.Interface["db"],
+  listen: () => Promise<T>,
+): Effect.Effect<{ sweep: SessionOperation.ConvergeOrphanedSummary; generation: SessionGeneration.ConvergeSummary; server: T }, CliError> =>
+  Effect.gen(function* () {
+    const sweep = yield* runCrashConvergenceGate(db)
+    const generation = yield* runGenerationConvergenceGate(db)
+    const server = yield* Effect.promise(() => listen())
+    return { sweep, generation, server }
+  })
+
+export const runGenerationConvergenceGate = (
+  db: Database.Interface["db"],
+): Effect.Effect<SessionGeneration.ConvergeSummary, CliError> =>
+  SessionGeneration.convergeOrphaned(db).pipe(
+    Effect.mapError((f: unknown) => {
+      const rec = f as Partial<SessionGeneration.ConvergeFailure> | undefined
+      const opIds = Array.isArray(rec?.opIds) ? (rec?.opIds as string[]) : []
+      const count = typeof rec?.count === "number" ? (rec?.count as number) : opIds.length
+      const conv = Array.isArray(rec?.converged) ? (rec?.converged as string[]).length : 0
+      const raced = Array.isArray(rec?.raced) ? (rec?.raced as string[]).length : 0
+      const list = opIds.length > 0 ? ` (genIds: ${opIds.slice(0, 10).join(", ")}${opIds.length > 10 ? "…" : ""})` : ""
+      return new CliError({
+        message: `[kilo serve] generation crash convergence failed: ${count} invalid generation owners require manual recovery${list}; valid ${conv} converged, ${raced} raced. Refusing listener startup to avoid silent replay.`,
+        exitCode: 1,
+      })
+    }),
+    Effect.catchDefect(
+      () =>
+        Effect.fail(
+          new CliError({
+            message:
+              "[kilo serve] generation crash convergence failed with internal error; refusing listener startup to avoid silent replay.",
+            exitCode: 1,
+          }),
+        ) as Effect.Effect<never, CliError>,
+    ),
+  )
+// kilocode_change end
 
 export const ServeCommand = effectCmd({
   command: "serve",
@@ -28,11 +108,34 @@ export const ServeCommand = effectCmd({
     const netTimer = P0Perf.span("resolve_network_options") // kilocode_change - P0 instrumentation
     const opts = yield* resolveNetworkOptions(args)
     netTimer.end()
-    const server = yield* Effect.promise(() => Server.listen(opts))
+    // kilocode_change start - crash convergence pre-bind gate: a dead runtime
+    // leaves accepted prompt + provider in-flight rows with no live owner. The fresh boot
+    // owns no volatile generation or provider state by construction, so converge the
+    // durable rows once via the same CAS terminalization (prompt: abandoned with
+    // revision + changed + generation; provider: abandoned with exactly one
+    // revision + changed, never generation, never recovery) BEFORE Server.listen bind on the canonical
+    // Database.Service (same memoMap lease+marker gate as the listener).
+    // Fail-closed: invalid rows refuse listener startup; never post-bind
+    // re-sweep (a post-bind sweep could misjudge a newly accepted prompt as
+    // orphan).
+    const { db } = yield* Database.Service
+    const { sweep, generation, server } = yield* gateThenListen(db, () => Server.listen(opts))
+    if (sweep.converged.length > 0) {
+      console.log(
+        `[kilo serve] converged ${sweep.converged.length} orphaned operations (${sweep.raced.length} raced)`,
+      )
+    }
+    if (generation.converged.length > 0) {
+      console.log(
+        `[kilo serve] converged ${generation.converged.length} orphaned generations (${generation.raced.length} raced)`,
+      )
+    }
+    // kilocode_change end
 
     // kilocode_change start - port-first: publish the bound port immediately
     // so server-manager parseServerPort captures it without waiting for the
-    // fd carrier. Carrier init/ready below never blocks this line.
+    // fd carrier. Carrier init/ready below never blocks this line. The sweep
+    // above already completed pre-bind, so no post-bind orphan misjudgment.
     const urls = server.urls
 
     console.log(`kilo server listening on ${urls.bind}`)

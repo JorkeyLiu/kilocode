@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { isIsolatedDataRoot, validateGateEvidence } from "../../script/e2e-canonical"
+import { assertEventPre, readEventPre, runEventTransportPhase } from "./prompt-private-event-transport"
 
 const CMD_PROD_STATUS = "kilo-code.new.e2eFixture.privateObservationStatus" as const
 const CMD_CANONICAL_STATE = "kilo-code.new.e2eFixture.canonicalState" as const
@@ -10,6 +11,7 @@ const CMD_SESSION_CREATE = "kilo-code.new.e2eFixture.sessionCreate" as const
 const CMD_SNAPSHOT = "kilo-code.new.e2eFixture.backendSnapshot" as const
 const CMD_PROMPT_PRIVATE = "kilo-code.new.e2eFixture.sessionPromptPrivate" as const
 const CMD_PROMPT_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.sessionPromptPrivateReplay" as const
+const CMD_SSE_TIMELINE_START = "kilo-code.new.e2eFixture.sseTimelineStart" as const
 const PROMPT_PRIVATE_BUDGET = 900_000
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -301,6 +303,11 @@ export async function servicePromptPrivateFirstBoundary(
       writeFileSync(join(scratch, "prompt-private-error.json"), JSON.stringify({ error: errMsg, diag: diagPayload }, null, 2))
       throw new Error(errMsg)
     }
+    const eventPre = readEventPre(peerReadySnapshot)
+    assertEventPre(eventPre)
+    diag.eventPre = eventPre
+    writeFileSync(join(scratch, "prompt-private-event-pre.json"), JSON.stringify({ pre: eventPre, peerReadySnapshot }, null, 2))
+    await vscodeApi.commands.executeCommand(CMD_SSE_TIMELINE_START)
     dirForCreate = (() => {
       const ws = vscodeApi.workspace.workspaceFolders?.[0]?.uri.fsPath
       if (ws) return ws
@@ -390,6 +397,12 @@ export async function servicePromptPrivateFirstBoundary(
     }
     const beforeUserCount = obs.userCount
     const hasMarker = obs.hasMarker
+    // noReply:true premise: no Runner generation exists for this op, so the
+    // extension host asserts nothing about owner/member here. The harness
+    // proves ABSENCE read-only through the Bun gate child
+    // (script/e2e-generation-gate.ts) — no observation/generation RPC.
+    const generationOpId = `prompt:${messageId}`
+    diag.generationOpId = generationOpId
     const replayRes = (await vscodeApi.commands.executeCommand(CMD_PROMPT_PRIVATE_REPLAY, { sessionId, messageId })) as {
       opId: string
       requestId: string
@@ -424,7 +437,15 @@ export async function servicePromptPrivateFirstBoundary(
       writeFileSync(join(scratch, "prompt-private-diag.json"), JSON.stringify(payload, null, 2))
       throw new Error(`replay must not duplicate user message before=${beforeUserCount} after=${repObs.afterUserCount} hasMarker=${repObs.afterHasMarker}`)
     }
-    const statusAfter = (await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)) as Record<string, unknown>
+    const phase = await runEventTransportPhase(vscodeApi, scratch, sessionId)
+    const timeline = phase.timeline
+    const llmRequestCount = phase.llmRequestCount
+    const closeRes = phase.closeRes
+    const statusAfter = phase.statusAfter
+    diag.timeline = timeline
+    diag.llmRequestCount = llmRequestCount
+    diag.privateEventClose = closeRes
+    diag.authorityExists = phase.authorityExists
     const evidence = {
       scenario: "prompt-private-first",
       collectedAt: new Date().toISOString(),
@@ -435,7 +456,24 @@ export async function servicePromptPrivateFirstBoundary(
       prompt: { opId: finalRes.opId, requestId: finalRes.requestId, directory: finalRes.directory, messageId, privateSucceeded: promptSucceeded, accepted: !!finalRes.result.accepted, sessionId, attempts: attempts.length },
       replay: { sameMessage: replaySame, succeeded: replaySucceeded, opId: replayRes.opId, requestId: replayRes.requestId, accepted: !!replayRes.result.accepted, canonicalOpId: replayRes.opId === `prompt:${messageId}` },
       observation: { userCount: beforeUserCount, hasMarker, sessionExists: obs.sessionExists, durableSessionConfirmed: !!sessionExistsAfterCreate },
+      generation: { opId: generationOpId },
       replayObservation: { userCountAfterReplay: repObs.afterUserCount, hasMarker: repObs.afterHasMarker, noDuplicate: repObs.noDuplicate },
+      eventTransport: {
+        preLive: eventPre.source,
+        preSseActive: eventPre.sseActive,
+        preEventCapable: eventPre.eventCapable,
+        preEventLive: eventPre.eventLive,
+        preConnected: eventPre.connectionState === "connected",
+        timelineCount: timeline.count,
+        timelineHasSessionEntry: timeline.hasSessionEntry,
+        timelineKinds: timeline.kinds,
+        postLive: closeRes.after.source,
+        postSseActive: closeRes.after.sseActive,
+        postConnected: closeRes.after.connectionState === "connected",
+        postPrivateAvailable: phase.postPrivateAvailable,
+        authoritySessionExists: phase.authorityExists,
+        llmRequestCount,
+      },
       gate,
       peerReadySnapshot,
       peerHistoryLen: peerHistory.length,

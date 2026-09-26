@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -114,7 +114,7 @@ function isNonEmptyString(v: unknown): boolean {
 function isSafeInt(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
 }
-export { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+export { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 function validateTitle(raw: unknown): string | undefined {
   if (raw === null || raw === undefined) return undefined
   if (typeof raw !== "string") throw new Error("payload.title must be string or null")
@@ -397,7 +397,7 @@ export const layer = Layer.effect(
         } satisfies SessionCreateFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const title = req.payload.title ? validateTitle(req.payload.title) : undefined
       const parentID = req.payload.parentID ? (req.payload.parentID as string) : undefined
@@ -414,7 +414,14 @@ export const layer = Layer.effect(
               const revision = makeRevision(undefined, curCfg)
               return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
             }
-            const coreMismatch = existing.opId !== req.opId || existing.meta.directory !== canonDir || (existing.meta.parentSessionId ?? null) !== (req.context.parentSessionId ?? null) || (existing.meta.configVersion ?? null) !== (req.context.configVersion ?? null) || (existing.meta.title ?? null) !== (title ?? null) || (existing.meta.parentID ?? null) !== (parentID ?? null)
+            const dirMismatch = (() => {
+              try {
+                return !samePhysicalDirectory(existing.meta.directory, canonDir)
+              } catch {
+                return existing.meta.directory !== canonDir
+              }
+            })()
+            const coreMismatch = existing.opId !== req.opId || dirMismatch || (existing.meta.parentSessionId ?? null) !== (req.context.parentSessionId ?? null) || (existing.meta.configVersion ?? null) !== (req.context.configVersion ?? null) || (existing.meta.title ?? null) !== (title ?? null) || (existing.meta.parentID ?? null) !== (parentID ?? null)
             if (coreMismatch) {
               const curCfg = yield* readCfgOmit(canonDir)
               const revision = makeRevision(undefined, curCfg)
@@ -463,7 +470,11 @@ export const layer = Layer.effect(
               return buildFailed(req, "validation.failed", "Invalid sandbox inheritance token", false, false, revision)
             }
             tokenSourceID = peek.sessionID as string
-            tokenSourceDir = peek.directory
+            try {
+              tokenSourceDir = authoritativeDirectory(peek.directory)
+            } catch {
+              tokenSourceDir = peek.directory
+            }
             try {
               SandboxInheritance.reserve(req.opId, tokenPlain)
               hasReservation = true
@@ -527,7 +538,14 @@ export const layer = Layer.effect(
                       const curCfg = yield* readCfgOmit(canonDir)
                       return { result: buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(undefined, curCfg)) } as unknown as TxOut
                     }
-                    const coreMismatch = already.opId !== req.opId || already.meta.directory !== canonDir || (already.meta.parentSessionId ?? null) !== (req.context.parentSessionId ?? null) || (already.meta.configVersion ?? null) !== (req.context.configVersion ?? null) || (already.meta.title ?? null) !== (title ?? null) || (already.meta.parentID ?? null) !== (parentID ?? null)
+                    const dirMismatchTx = (() => {
+                      try {
+                        return !samePhysicalDirectory(already.meta.directory, canonDir)
+                      } catch {
+                        return already.meta.directory !== canonDir
+                      }
+                    })()
+                    const coreMismatch = already.opId !== req.opId || dirMismatchTx || (already.meta.parentSessionId ?? null) !== (req.context.parentSessionId ?? null) || (already.meta.configVersion ?? null) !== (req.context.configVersion ?? null) || (already.meta.title ?? null) !== (title ?? null) || (already.meta.parentID ?? null) !== (parentID ?? null)
                     if (coreMismatch) {
                       const curCfg = yield* readCfgOmit(canonDir)
                       return { result: buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, makeRevision(undefined, curCfg)) } as unknown as TxOut
@@ -655,10 +673,18 @@ export const layer = Layer.effect(
                 try { KiloSession.register({ id: side.newId as unknown as SessionID, parentID: side.parentID as unknown as SessionID | undefined, platform: side.platform ?? undefined }) } catch (e) { log.warn("sessionCreate post-commit register failed", { error: e instanceof Error ? e.message : String(e), newId: side.newId }) }
               })
               const inheritSources: Array<{ id: string; dir: string }> = []
-              if (side.parentID && side.parentDir) inheritSources.push({ id: side.parentID, dir: side.parentDir })
+              const normalizeInheritDir = (raw: string): string => {
+                try {
+                  return authoritativeDirectory(raw)
+                } catch {
+                  return raw
+                }
+              }
+              if (side.parentID && side.parentDir) inheritSources.push({ id: side.parentID, dir: normalizeInheritDir(side.parentDir) })
               if (side.sandboxSourceID && side.sandboxSourceDir) {
-                const dup = inheritSources.some((s) => s.id === side.sandboxSourceID && (() => { try { return canonicalDirectory(s.dir) === canonicalDirectory(side.sandboxSourceDir!) } catch { return s.dir === side.sandboxSourceDir } })())
-                if (!dup) inheritSources.push({ id: side.sandboxSourceID, dir: side.sandboxSourceDir })
+                const normalizedSandboxDir = normalizeInheritDir(side.sandboxSourceDir)
+                const dup = inheritSources.some((s) => s.id === side.sandboxSourceID && (() => { try { return samePhysicalDirectory(s.dir, normalizedSandboxDir) } catch { return s.dir === normalizedSandboxDir } })())
+                if (!dup) inheritSources.push({ id: side.sandboxSourceID, dir: normalizedSandboxDir })
               }
               for (const src of inheritSources) {
                 const fallback = yield* SandboxPolicy.peek(src.dir, src.id as unknown as SessionID).pipe(Effect.catch(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)), Effect.catchDefect(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)))
@@ -732,7 +758,7 @@ export const layer = Layer.effect(
         } satisfies SessionCreateFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const title = req.payload.title ? validateTitle(req.payload.title) : undefined
       const parentID = req.payload.parentID ? (req.payload.parentID as string) : undefined
@@ -750,7 +776,14 @@ export const layer = Layer.effect(
                 const revision = makeRevision(undefined, curCfg)
                 return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
               }
-              const coreMismatch = existing.opId !== req.opId || existing.meta.directory !== canonDir || (existing.meta.parentSessionId ?? null) !== (req.context.parentSessionId ?? null) || (existing.meta.configVersion ?? null) !== (req.context.configVersion ?? null) || (existing.meta.title ?? null) !== (title ?? null) || (existing.meta.parentID ?? null) !== (parentID ?? null)
+              const dirMismatchPriv = (() => {
+                try {
+                  return !samePhysicalDirectory(existing.meta.directory, canonDir)
+                } catch {
+                  return existing.meta.directory !== canonDir
+                }
+              })()
+              const coreMismatch = existing.opId !== req.opId || dirMismatchPriv || (existing.meta.parentSessionId ?? null) !== (req.context.parentSessionId ?? null) || (existing.meta.configVersion ?? null) !== (req.context.configVersion ?? null) || (existing.meta.title ?? null) !== (title ?? null) || (existing.meta.parentID ?? null) !== (parentID ?? null)
               if (coreMismatch) {
                 const curCfg = yield* readCfgOmit(canonDir)
                 const revision = makeRevision(undefined, curCfg)

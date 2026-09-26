@@ -4,7 +4,7 @@
  * extension). Written into the scratch workspace BEFORE VS Code launches so
  * the lazily-spawned CLI backend loads every fixture at instance init:
  *
- *   - .kilo/kilo.json        — custom provider e2e-local/e2e-model pointing at
+ *   - .kilo/kilo.jsonc       — custom provider e2e-local/e2e-model pointing at
  *                              the run-owned scripted model server, two custom
  *                              agents, the default model, the H-6 permission
  *                              rule (read ask.txt -> ask, question -> allow),
@@ -28,11 +28,18 @@
  *   - rollback.txt             — the H-12 tracked rollback file (committed by
  *                              initWorkspaceGit; the write tool edits it and
  *                              Revert-to-here/Redo All restore the exact bytes).
+ *
+ * Load-path note: the project config is written as `.kilo/kilo.jsonc`
+ * (CONFIG_FILENAME) because that is the file the served backend actually
+ * reads (KILO_CONFIG_FILES). The hermetic global canonical root
+ * (<scratch>/xdg-config/kilo agent assets) is seeded separately by
+ * prepareCanonicalRun for every real-* scenario pre-launch.
  */
 
 import { spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { CONFIG_FILENAME } from "../src/config/paths"
 import { SCRIPTED } from "./e2e-scripted-model"
 
 export interface CompletedSeedPaths {
@@ -53,7 +60,7 @@ export interface CompletedSeedPaths {
  * small context/compaction config must NOT be shared with real-completed
  * (whose model serves the H-2..H-7 scripted turns), so this seed writes only:
  *
- *   - .kilo/kilo.json — the custom provider e2e-local/e2e-model pointing at the
+ *   - .kilo/kilo.jsonc — the custom provider e2e-local/e2e-model pointing at the
  *     run-owned scripted model server, with a deliberately SMALL
  *     `limit.context`/`limit.output` and a low `compaction.threshold_percent`
  *     (the internal context-overflow safeguard trigger levers; empirically the
@@ -72,7 +79,9 @@ export interface CompletedSeedPaths {
  * is pure text turns against the scripted provider.
  */
 export function writeRealOverflowSeed(workspace: string, port: number): string {
-  const configFile = join(workspace, ".kilo", "kilo.json")
+  // Canonical load path: the backend reads only KILO_CONFIG_FILES
+  // (["kilo.jsonc"]) — a legacy kilo.json sibling would never load.
+  const configFile = join(workspace, ".kilo", CONFIG_FILENAME)
   mkdirSync(dirname(configFile), { recursive: true })
   writeFileSync(
     configFile,
@@ -183,7 +192,9 @@ export function writeRealCompletedSeed(
   // ABSOLUTE script path so the harness can record and prove the child's exact
   // process handle (ps by absolute path — never a pattern kill).
   const mcpServerFile = join(workspace, "mcp-fixture", "server.js")
-  const configFile = join(workspace, ".kilo", "kilo.json")
+  // Canonical load path: the backend reads only KILO_CONFIG_FILES
+  // (["kilo.jsonc"]) — a legacy kilo.json sibling would never load.
+  const configFile = join(workspace, ".kilo", CONFIG_FILENAME)
   mkdirSync(dirname(configFile), { recursive: true })
   writeFileSync(
     configFile,
@@ -352,7 +363,7 @@ export function writeRealCompletedSeed(
  * the H-12 checkpoint rollback against a REAL served backend, with NO managed
  * worktree surface:
  *
- *   - .kilo/kilo.json — the custom provider e2e-local/e2e-model pointing at the
+ *   - .kilo/kilo.jsonc — the custom provider e2e-local/e2e-model pointing at the
  *     run-owned scripted model server (variants low/medium/high for the real
  *     ThinkingSelector), one custom primary agent (the harness picks it like
  *     the proven real-completed Phase 0), the default/small/subagent model
@@ -369,7 +380,9 @@ export function writeRealCompletedSeed(
  * (no-worktree) mode the retained Agent Manager runs in.
  */
 export function writeWorktreeRemovalSeed(workspace: string, port: number): string {
-  const configFile = join(workspace, ".kilo", "kilo.json")
+  // Canonical load path: the backend reads only KILO_CONFIG_FILES
+  // (["kilo.jsonc"]) — a legacy kilo.json sibling would never load.
+  const configFile = join(workspace, ".kilo", CONFIG_FILENAME)
   mkdirSync(dirname(configFile), { recursive: true })
   writeFileSync(
     configFile,

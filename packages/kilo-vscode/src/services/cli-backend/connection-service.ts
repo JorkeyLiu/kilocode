@@ -1,8 +1,10 @@
+/* eslint-disable max-lines */
 import * as vscode from "vscode"
 import { normalize, resolve } from "path"
 import { ServerManager } from "./server-manager"
 import { createKiloClient, type KiloClient } from "@kilocode/sdk/v2/client"
 import { SdkSSEAdapter, type SSEPayload } from "./sdk-sse-adapter"
+import { normalizePrivateEventEnvelope } from "./serve-private-event"
 import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
@@ -10,6 +12,7 @@ import { isP0PerfEnabled, p0Span, p0Stage } from "../../perf/perf-instrument"
 import { createP0StartupObserver, fireHttpReadinessProbe } from "../../perf/p0-startup"
 import {
   ServePrivatePeer,
+  PRIVATE_EVENT_REVERSE_CAPABILITY,
   type ServePrivateCancelQueuedRequest,
   type ServePrivateCancelQueuedResult,
   type ServePrivateSessionUpdateRequest,
@@ -225,6 +228,13 @@ export class KiloConnectionService {
   private privateEpoch: number | null = null
   private privatePid: number | undefined
   private privateObservationChangedHandler: ((method: string, params: unknown) => void) | null = null
+  /**
+   * Single live realtime event source. Exactly one of `private` (fd
+   * `event/notify`) or `sse` (`/global/event`) delivers to `handleSseEvent`
+   * at a time; the other is torn down or ignored. Private-capable backends
+   * never wait for SSE first.
+   */
+  private liveEventSource: "private" | "sse" | null = null
   /**
    * One-shot late observers (status parity seed race): listeners run once
    * when the current backend's private negotiation completes. Cleared on
@@ -861,6 +871,8 @@ export class KiloConnectionService {
       } catch {}
       // Invalidate any pending connect continuations before resource installation
       this.sseClient?.dispose()
+      this.sseClient = null
+      this.liveEventSource = null
       this.disposePrivatePeer()
       this.serverManager.dispose()
       this.eventListeners.clear()
@@ -917,6 +929,7 @@ export class KiloConnectionService {
 
   private resetConnection(): void {
     this.stopCheckin()
+    this.liveEventSource = null
     this.disposePrivatePeer()
     this.privateAvailableListeners.clear()
     this.clearAllDeferredGetObservers()
@@ -964,6 +977,172 @@ export class KiloConnectionService {
     })
   }
 
+  /**
+   * Private `event/notify` entry point. Validates the envelope and reuses the
+   * existing SSE dispatch (`handleSseEvent`) so `onEvent`/`onEventFiltered`
+   * consumers see identical `(event, directory, transaction)` routing.
+   * Only the live `private` source delivers; SSE-live or stale peers are
+   * ignored. Invalid frames are dropped; lost frames are never authoritative.
+   */
+  handlePrivateEvent(raw: unknown): void {
+    if (this.liveEventSource !== "private") return
+    let envelope: { directory?: string; transaction?: string; payload: SSEPayload } | null = null
+    try {
+      const parsed = normalizePrivateEventEnvelope(raw)
+      if (!parsed) return
+      envelope = {
+        ...(parsed.directory ? { directory: parsed.directory } : {}),
+        ...(parsed.transaction ? { transaction: parsed.transaction } : {}),
+        payload: parsed.payload as unknown as SSEPayload,
+      }
+    } catch {
+      return
+    }
+    if (!envelope) return
+    try {
+      this.handleSseEvent(envelope.payload, envelope.directory, envelope.transaction)
+    } catch {}
+  }
+
+  /** Current live realtime source (`private`, `sse`, or null before connect). */
+  getLiveEventSource(): "private" | "sse" | null {
+    return this.liveEventSource
+  }
+
+  /** True when the current peer negotiated the private event stream marker. */
+  isPrivateEventCapable(): boolean {
+    try {
+      return !!this.privatePeer?.hasPrivateEventCapability() && !!this.privatePeer?.isAvailable()
+    } catch {
+      return false
+    }
+  }
+
+  private emitSyntheticConnected(): void {
+    try {
+      this.handleSseEvent(
+        { id: crypto.randomUUID(), type: "server.connected", properties: {} } as unknown as SSEPayload,
+        "global",
+      )
+    } catch {}
+  }
+
+  private markPrivateEventLive(): void {
+    if (this.liveEventSource === "private") return
+    // Single live source: tear down any SSE delivery before private goes live.
+    const sse = this.sseClient
+    this.sseClient = null
+    try {
+      sse?.disconnect()
+    } catch {}
+    try {
+      sse?.dispose()
+    } catch {}
+    this.liveEventSource = "private"
+    this.setState("connected")
+    this.emitSyntheticConnected()
+    this.flushViewed()
+  }
+
+  private async fallbackToSseAfterPrivateLoss(epoch: number, reason: string): Promise<void> {
+    if (this.isDisposed) return
+    if (this.privateEpoch !== epoch) return
+    if (this.liveEventSource !== "private") return
+    if (this.sseClient) return
+    const client = this.client
+    const gen = this.connectGeneration
+    console.warn("[Kilo New] ConnectionService: private event lost, falling back to SSE:", reason)
+    // Transitional state: no source delivers until SSE goes live. Downstream
+    // `onStateChange("connected")` + `flushViewed` consumers refresh from
+    // readable authorities only after the new live source is established.
+    this.liveEventSource = null
+    this.setState("connecting")
+    if (!client) return
+    try {
+      await this.startSseLive(client, gen)
+    } catch (err) {
+      if (this.connectGeneration !== gen || this.isDisposed) return
+      this.setState("error", err instanceof Error ? err : new Error(String(err)))
+    }
+  }
+
+  private async startSseLive(client: KiloClient, generation: number): Promise<void> {
+    if (this.isDisposed || this.connectGeneration !== generation) throw new Error("connect superseded before sse")
+    const sse = new SdkSSEAdapter(client)
+    if (this.isDisposed || this.connectGeneration !== generation) {
+      try {
+        sse.dispose()
+      } catch {}
+      throw new Error("connect superseded before sse install")
+    }
+    // Single live source: a late private event must not deliver while SSE is live.
+    this.liveEventSource = "sse"
+    this.sseClient = sse
+    let resolveConnected: (() => void) | null = null
+    let rejectConnected: ((error: Error) => void) | null = null
+    const connectedPromise = new Promise<void>((resolve, reject) => {
+      resolveConnected = resolve
+      rejectConnected = reject
+    })
+    let didConnect = false
+    sse.onEvent((event, directory, transaction) => {
+      if (this.sseClient !== sse || this.liveEventSource !== "sse") return
+      this.handleSseEvent(event, directory, transaction)
+    })
+    sse.onError((error) => {
+      if (this.sseClient !== sse || this.liveEventSource !== "sse") return
+      this.setState("error", error)
+    })
+    sse.onStateChange((sseState) => {
+      if (this.sseClient !== sse || this.liveEventSource !== "sse") {
+        if (!didConnect && sseState === "disconnected") {
+          rejectConnected?.(new Error(`SSE connection ended in state: ${sseState}`))
+          resolveConnected = null
+          rejectConnected = null
+        }
+        return
+      }
+      this.setState(sseState)
+      if (sseState === "connected") {
+        didConnect = true
+        resolveConnected?.()
+        resolveConnected = null
+        rejectConnected = null
+        this.flushViewed()
+        return
+      }
+      if (!didConnect && sseState === "disconnected") {
+        rejectConnected?.(new Error(`SSE connection ended in state: ${sseState}`))
+        resolveConnected = null
+        rejectConnected = null
+      }
+    })
+    sse.connect()
+    try {
+      await connectedPromise
+    } catch (err) {
+      if (this.sseClient === sse) {
+        this.sseClient = null
+        if (this.liveEventSource === "sse") this.liveEventSource = null
+      }
+      try {
+        sse.dispose()
+      } catch {}
+      throw err
+    }
+    if (this.isDisposed || this.connectGeneration !== generation || this.sseClient !== sse) {
+      try {
+        sse.dispose()
+      } catch {}
+      if (this.sseClient === sse) {
+        this.sseClient = null
+        if (this.liveEventSource === "sse") this.liveEventSource = null
+      }
+      throw new Error("connect superseded after sse connected")
+    }
+  }
+
+  // eslint-disable-next-line complexity
   private async doConnect(workspaceDir: string, generation: number): Promise<void> {
     if (this.isDisposed || this.connectGeneration !== generation) throw new Error("connect superseded before start")
     // Never expose a stale SDK client while its replacement server is starting.
@@ -994,90 +1173,47 @@ export class KiloConnectionService {
         Authorization: authHeader,
       },
     })
-    const sse = new SdkSSEAdapter(client)
     if (this.isDisposed || this.connectGeneration !== generation) {
-      try {
-        sse.dispose()
-      } catch {}
       throw new Error("connect superseded before client install")
     }
     this.client = client
-    this.sseClient = sse
 
     // Diagnostic-only P0 HTTP readiness: parallel REST probe fired after the
-    // dynamic port/client exists but BEFORE the SSE connect/wait below, so
-    // http.ready can be ordered against first SSE. Fire-and-forget: never
-    // awaited, never gates connect(), failures silent. Flag-off issues nothing.
+    // dynamic port/client exists but BEFORE the event-source connect below.
+    // Fire-and-forget: never awaited, never gates connect(), failures silent.
     this.observeHttpReadiness(client, workspaceDir)
 
-    // Wait until SSE yields its first server event before resolving connect().
-    // Initial stream failures are handled by the adapter reconnect loop.
-    let resolveConnected: (() => void) | null = null
-    let rejectConnected: ((error: Error) => void) | null = null
-    const connectedPromise = new Promise<void>((resolve, reject) => {
-      resolveConnected = resolve
-      rejectConnected = reject
-    })
-
-    let didConnect = false
-
-    // Wire SSE events → broadcast to all registered listeners
-    sse.onEvent((event, directory, transaction) => {
-      if (this.sseClient !== sse) return
-      this.handleSseEvent(event, directory, transaction)
-    })
-
-    sse.onError((error) => {
-      if (this.sseClient !== sse) return
-      this.setState("error", error)
-    })
-
-    // Wire SSE state → broadcast to all registered state listeners
-    sse.onStateChange((sseState) => {
-      if (this.sseClient !== sse) {
-        if (!didConnect && sseState === "disconnected") {
-          rejectConnected?.(new Error(`SSE connection ended in state: ${sseState}`))
-          resolveConnected = null
-          rejectConnected = null
-        }
-        return
-      }
-
-      this.setState(sseState)
-
-      if (sseState === "connected") {
-        didConnect = true
-        resolveConnected?.()
-        resolveConnected = null
-        rejectConnected = null
-        this.flushViewed()
-        return
-      }
-
-      if (!didConnect && sseState === "disconnected") {
-        rejectConnected?.(new Error(`SSE connection ended in state: ${sseState}`))
-        resolveConnected = null
-        rejectConnected = null
-      }
-    })
-
-    sse.connect()
-
-    await connectedPromise
+    // Private-first event source: negotiate the fd peer before touching
+    // `/global/event`. A capable peer becomes the single live source and SSE
+    // is never started (`client.global.event` untouched). Missing transport,
+    // failed negotiation, or a missing `event/notify` marker falls back to
+    // the existing SSE path with exactly one live source.
+    this.setState("connecting")
+    try {
+      await this.initPrivatePeer(server, generation)
+    } catch (err) {
+      console.warn("[Kilo] PrivatePeer init failed:", String(err))
+    }
     if (this.isDisposed || this.connectGeneration !== generation) {
-      try {
-        sse.dispose()
-      } catch {}
-      if (this.sseClient === sse) this.sseClient = null
       if (this.client === client) this.client = null
       this.info = null
       this.config = null
-      throw new Error("connect superseded before private peer init")
+      throw new Error("connect superseded before event source ready")
+    }
+    if (this.isPrivateEventCapable()) {
+      this.markPrivateEventLive()
+      if (this.isDisposed || this.connectGeneration !== generation) return
+      this.startCheckin()
+      return
     }
 
-    void this.initPrivatePeer(server, generation).catch((err) =>
-      console.warn("[Kilo] PrivatePeer init failed:", String(err)),
-    )
+    await this.startSseLive(client, generation)
+    if (this.isDisposed || this.connectGeneration !== generation) {
+      if (this.client === client) this.client = null
+      this.info = null
+      this.config = null
+      throw new Error("connect superseded after sse connected")
+    }
 
     if (this.isDisposed || this.connectGeneration !== generation) return
     this.startCheckin()
@@ -1097,6 +1233,7 @@ export class KiloConnectionService {
   }
 
   private disposePrivatePeer(): void {
+    if (this.liveEventSource === "private") this.liveEventSource = null
     if (!this.privatePeer) {
       this.privateAvailable = false
       this.privateEpoch = null
@@ -1397,17 +1534,31 @@ export class KiloConnectionService {
       // Single owner: reuse activation-owned CanonicalConfigService SecretStorage via its resolver.
       return { resolveSecret: (ref: string) => svc.resolveSecret(ref) }
     })()
-    return new ServePrivatePeer({
+    const epoch = server.epoch
+    const peerRef: { current: ServePrivatePeer | null } = { current: null }
+    const peer = new ServePrivatePeer({
       reader: server.privateReader!,
       writer: server.privateWriter!,
       pid: server.pid,
-      epoch: server.epoch,
+      epoch,
       process: server.process,
       initializeTimeoutMs: 5000,
-      reverseCapabilities: ["observation/changed"],
+      reverseCapabilities: ["observation/changed", PRIVATE_EVENT_REVERSE_CAPABILITY],
       ...(this.privateObservationChangedHandler ? { onObservationChanged: this.privateObservationChangedHandler } : {}),
+      onPrivateEvent: (envelope: unknown) => {
+        const current = peerRef.current
+        if (!current || this.privatePeer !== current || this.privateEpoch !== epoch) return
+        this.handlePrivateEvent(envelope)
+      },
+      onPeerClosed: () => {
+        const current = peerRef.current
+        if (!current || this.privatePeer !== current || this.privateEpoch !== epoch) return
+        void this.fallbackToSseAfterPrivateLoss(epoch, "peer-closed")
+      },
       ...(deps ? { providerHttpExecuteDeps: deps } : {}),
     })
+    peerRef.current = peer
+    return peer
   }
 
   private handleSupersededInit(peer: ServePrivatePeer, genAtStart: number): boolean {
@@ -3483,7 +3634,10 @@ export class KiloConnectionService {
       protocol: { name: string; major: number; minor?: number } | null
       capabilities: string[]
       hasSessionUpdate: boolean
+      eventCapable: boolean
+      eventLive: boolean
     }
+    live: { source: "private" | "sse" | null; connectionState: ConnectionState; sseActive: boolean }
   } {
     if (!isE2EFixtureEnabled()) throw new Error("fixture privatePeerStatus requires KILO_E2E_FIXTURE")
     const info = this.serverManager.getServerInfoForFixture()
@@ -3520,6 +3674,7 @@ export class KiloConnectionService {
       // peer exists but not available — keep its state
     }
     const hasSessionUpdate = capabilities.includes("session/update")
+    const event = this.fixturePrivateEventLiveFields(peer)
     return {
       backend: { pid, port, epoch },
       private: {
@@ -3530,7 +3685,70 @@ export class KiloConnectionService {
         protocol,
         capabilities,
         hasSessionUpdate,
+        eventCapable: event.capable,
+        eventLive: event.live,
       },
+      live: { source: event.source, connectionState: event.connectionState, sseActive: event.sseActive },
+    }
+  }
+
+  private fixturePrivateEventLiveFields(peer: ServePrivatePeer | null): {
+    capable: boolean
+    live: boolean
+    source: "private" | "sse" | null
+    connectionState: ConnectionState
+    sseActive: boolean
+  } {
+    let capable = false
+    try {
+      capable = !!peer?.hasPrivateEventCapability()
+    } catch {
+      capable = false
+    }
+    let live = false
+    try {
+      live = this.isPrivateEventCapable()
+    } catch {
+      live = false
+    }
+    return { capable, live, source: this.liveEventSource, connectionState: this.state, sseActive: !!this.sseClient }
+  }
+
+  /**
+   * Fixture-only FD close for the private event-transport E2E proof.
+   * Closes the underlying FD peer transport through the real `onClosed`
+   * path (no production semantics change), then waits bounded for the
+   * single-source SSE fallback to converge (`liveEventSource==='sse'` +
+   * `connected`). Throws when the fixture env is absent or convergence
+   * times out. No model traffic is issued.
+   */
+  public async fixturePrivateEventClosePeer(): Promise<{
+    epoch: number | null
+    close: { closed: boolean; state: string }
+    before: { source: "private" | "sse" | null; connectionState: ConnectionState; sseActive: boolean }
+    after: { source: "private" | "sse" | null; connectionState: ConnectionState; sseActive: boolean }
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture privateEventClosePeer requires KILO_E2E_FIXTURE")
+    const peer = this.privatePeer
+    if (!peer) throw new Error("fixture privateEventClosePeer: no private peer")
+    const epoch = this.privateEpoch
+    const before = { source: this.liveEventSource, connectionState: this.state, sseActive: !!this.sseClient }
+    if (before.source !== "private") throw new Error(`fixture privateEventClosePeer: live source must be private, got ${String(before.source)}`)
+    const close = peer.fixtureCloseUnderlyingTransportForEvent()
+    const deadline = Date.now() + 30_000
+    for (;;) {
+      const source = this.liveEventSource
+      const connectionState = this.state
+      const sseActive = !!this.sseClient
+      if (source === "sse" && connectionState === "connected" && sseActive) {
+        return { epoch, close, before, after: { source, connectionState, sseActive } }
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `fixture privateEventClosePeer: SSE fallback did not converge (source=${String(source)} state=${String(connectionState)} sseActive=${String(sseActive)})`,
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
   }
 

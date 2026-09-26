@@ -23,7 +23,7 @@
  * existing `LLMError` taxonomy with retry-after/rate-limit semantics.
  */
 
-import { Cause, Effect, Exit, Fiber, Layer, Random, Scope, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, Layer, Random, Scope, Stream } from "effect"
 import * as Option from "effect/Option"
 import { HttpBody, HttpClientRequest, HttpClientResponse, UrlParams } from "effect/unstable/http"
 import { RequestExecutor } from "@opencode-ai/llm/route"
@@ -45,6 +45,7 @@ import {
 } from "@opencode-ai/llm"
 import * as Broker from "@/kilocode/server/provider-http-execute-broker"
 import { ProviderHttpExecuteWire, isForbiddenHeaderName } from "@opencode-ai/core/kilocode/provider-http-execute"
+import { KiloRetryBudget } from "@/kilocode/session/retry-budget"
 
 export type Context = {
   readonly providerId: string
@@ -830,6 +831,12 @@ export const make = (ctx: Context, broker: Broker.Broker, opts?: Options | numbe
       // LLMError and HTTP >=400 status failures. Never retry after a 2xx
       // response is exposed — success bytes may have been consumed. Each
       // failed attempt closes its own Scope/call before delay/next attempt.
+      // Inner attempts charge the owning generation budget first: an
+      // exhausted owner fails closed with the last error and starts no new
+      // broker call, so inner retries stay visible to and consume the owning
+      // operation's budget and never loop outside it. Without an ambient
+      // owner (non-session callers, tests) only the static bound applies.
+      const owner = yield* KiloRetryBudget.Owner
       let attempt = 0
       while (true) {
         const exit = yield* Effect.exit(singleAttempt(request, bodyText, headers))
@@ -840,9 +847,16 @@ export const make = (ctx: Context, broker: Broker.Broker, opts?: Options | numbe
         if (Option.isNone(errOpt) || !(errOpt.value instanceof LLMError)) return yield* Effect.failCause(cause)
         const err = errOpt.value as LLMError
         if (!err.retryable || attempt >= MAX_RETRIES) return yield* Effect.fail(err)
-        const delay = yield* retryDelay(err, attempt)
-        if (delay > 0) {
-          const sleepExit = yield* Effect.exit(Effect.sleep(delay))
+        // Single retryDelay call (retry-after priority unchanged) before the
+        // atomic CAS: compute the next-at occurrence intent, charge it with the
+        // broker layer in one CAS, and only then sleep/next broker call. A
+        // failed CAS fails closed with this error and starts no new call.
+        const wait = yield* retryDelay(err, attempt)
+        const occurrenceTime = yield* Clock.currentTimeMillis
+        const nextAt = occurrenceTime + wait
+        if (owner && !(yield* KiloRetryBudget.chargeShared(owner, "broker", undefined, { occurrenceTime, nextAt }))) return yield* Effect.fail(err)
+        if (wait > 0) {
+          const sleepExit = yield* Effect.exit(Effect.sleep(wait))
           if (Exit.isFailure(sleepExit)) return yield* Effect.failCause((sleepExit as Exit.Failure<unknown, LLMError>).cause)
         } else {
           yield* Effect.yieldNow

@@ -1,6 +1,7 @@
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Duration, Effect } from "effect"
 import { SessionRetry } from "@/session/retry"
+import { KiloRetryBudget } from "@/kilocode/session/retry-budget"
 import type { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { isRecord } from "@/util/record"
@@ -55,6 +56,13 @@ export namespace KiloTaskRetry {
    * `max` (default 2) times with the existing bounded exponential backoff from
    * SessionRetry.delay. Returns the last attempted result, or undefined when no
    * retry was performed. `wait` exists for tests only.
+   *
+   * `budget` is the parent generation's owning budget: each child re-invocation
+   * charges it first, so nested retries cannot loop outside the owning budget.
+   * An exhausted parent fails closed with the last result and starts no new
+   * child attempt. The child generation itself always runs under its own fresh
+   * budget; the parent budget is only charged for the re-invocation decision.
+   * `max` is never raised by remaining budget — a configured limit is not relaxed.
    */
   export const recover = Effect.fn("KiloTaskRetry.recover")(function* <E, R>(opts: {
     error: NonNullable<SessionV1.Assistant["error"]>
@@ -63,13 +71,27 @@ export namespace KiloTaskRetry {
     attempt: () => Effect.Effect<SessionV1.WithParts, E, R>
     max?: number
     wait?: (attempt: number) => Duration.Duration
+    budget?: KiloRetryBudget.Budget
+    durable?: KiloRetryBudget.Binding | undefined
   }) {
     let error = opts.error
     let last: SessionV1.WithParts | undefined
+    // Parent binding is captured explicitly at entry: the child attempt below
+    // runs under its own fresh generation owner, but parent re-invocations
+    // must charge the parent row and never the child row.
+    const parent = opts.durable ?? (yield* KiloRetryBudget.Durable)
     for (let index = 1; index <= (opts.max ?? MAX); index++) {
       if (!SessionRetry.retryable(error)) return last
       if (yield* blocked(opts.sessions, opts.sessionID)) return last
-      yield* Effect.sleep(opts.wait?.(index) ?? Duration.millis(SessionRetry.delay(index)))
+      // Single wait computation (opts.wait override or existing delay) plus
+      // failure occurrence first; the parent row CAS persists charge + task
+      // layer + next-at intent atomically, and only CAS success reaches
+      // sleep/child attempt. Attribution stays parent (explicit parent binding).
+      const wait = opts.wait?.(index) ?? Duration.millis(SessionRetry.delay(index))
+      const occurrenceTime = Date.now()
+      const nextAt = occurrenceTime + Duration.toMillis(wait)
+      if (opts.budget && !(yield* KiloRetryBudget.chargeShared(opts.budget, "task", parent, { occurrenceTime, nextAt }))) return last
+      yield* Effect.sleep(wait)
       last = yield* opts.attempt()
       if (last.info.role !== "assistant" || !last.info.error) return last
       error = last.info.error

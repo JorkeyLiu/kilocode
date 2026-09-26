@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionOperationTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { desc, eq } from "drizzle-orm"
-import { canonicalDirectory } from "./canonical-directory"
+import { authoritativeDirectory, samePhysicalDirectory } from "./canonical-directory"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { ErrorCode } from "./json-rpc"
 import type { ObservationOperationsResult } from "./observation"
@@ -28,7 +28,7 @@ function parseDirectory(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
   if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
   try {
-    return canonicalDirectory(raw)
+    return authoritativeDirectory(raw)
   } catch (e) {
     throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
   }
@@ -62,14 +62,14 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
           .pipe(Effect.orDie),
       )) as unknown as typeof SessionTable.$inferSelect | undefined
       if (!row) return { v: "1.0", status: "not_found" }
-      const storedDir = (() => {
+      const samePhysical = (() => {
         try {
-          return canonicalDirectory(row.directory)
+          return samePhysicalDirectory(row.directory, directory)
         } catch {
           throw internalError("invalid stored directory shape")
         }
       })()
-      if (storedDir !== directory) return { v: "1.0", status: "scope_mismatch" }
+      if (!samePhysical) return { v: "1.0", status: "scope_mismatch" }
       const rows = (await Effect.runPromise(
         (db as unknown as { select: () => { from: (t: unknown) => { where: (c: unknown) => { orderBy: (...a: unknown[]) => { limit: (n: number) => { all: () => Effect.Effect<unknown[], never, never> } } } } } })
           .select()

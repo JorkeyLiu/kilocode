@@ -284,4 +284,88 @@ describe("private-peer-registry", () => {
       closeAll(linked.a, linked.b)
     }
   })
+
+  test("invalidate disposes the exact holder, fires close, and frees replacement", async () => {
+    const carrierToExt = new PassThrough()
+    const extToCarrier = new PassThrough()
+    let closedFired = false
+    const halfOpen = new JsonRpcPeer({
+      reader: extToCarrier,
+      writer: carrierToExt,
+      onClosed: () => {
+        closedFired = true
+      },
+    })
+    const second = pair()
+    try {
+      halfOpen.markInitialized()
+      await run(
+        Effect.gen(function* () {
+          const svc = yield* PrivatePeerService
+          const lease = yield* svc.install(halfOpen)
+          yield* lease.negotiate(["event/notify"])
+          expect(yield* svc.supports("event/notify")).toBeTrue()
+          // Exact-identity invalidation: disposes the holder itself.
+          expect(yield* svc.invalidate()).toBeTrue()
+          expect(halfOpen.getState()).toBe("closed")
+          expect(closedFired).toBeTrue()
+          // Discoverability cleared: the extension close signal has fired and
+          // the registry no longer claims a peer (SSE fallback trigger).
+          expect(Option.isNone(yield* svc.current)).toBeTrue()
+          expect(yield* svc.supports("event/notify")).toBeFalse()
+          const failed = yield* svc.notify("event/notify", {}).pipe(Effect.flip)
+          expect(failed).toBeInstanceOf(Unavailable)
+          // Idempotent: nothing left to invalidate.
+          expect(yield* svc.invalidate()).toBeFalse()
+          // Replacement is allowed immediately: no ledger blocks reinstall.
+          second.a.markInitialized()
+          const next = yield* svc.install(second.a)
+          yield* next.negotiate(["event/notify"])
+          expect(yield* svc.supports("event/notify")).toBeTrue()
+          yield* next.release
+        }),
+      )
+    } finally {
+      closeAll(second.a, second.b, halfOpen)
+    }
+  })
+
+  test("invalidate with no peer is a no-op", async () => {
+    await run(
+      Effect.gen(function* () {
+        const svc = yield* PrivatePeerService
+        expect(yield* svc.invalidate()).toBeFalse()
+        expect(Option.isNone(yield* svc.current)).toBeTrue()
+      }),
+    )
+  })
+
+  test("notify reports unavailable when the writer throws (half-open write fault)", async () => {
+    const reader = new PassThrough()
+    const writer = {
+      write: (): boolean => {
+        throw new Error("EPIPE half-open")
+      },
+      on: (): void => {},
+    } as unknown as NodeJS.WritableStream
+    const faulty = new JsonRpcPeer({ reader, writer })
+    try {
+      faulty.markInitialized()
+      await run(
+        Effect.gen(function* () {
+          const svc = yield* PrivatePeerService
+          const lease = yield* svc.install(faulty)
+          yield* lease.negotiate(["event/notify"])
+          // The sync write throw closes the peer and surfaces Unavailable
+          // (never a silent success), so the forwarder can count real faults.
+          const failed = yield* svc.notify("event/notify", {}).pipe(Effect.flip)
+          expect(failed).toBeInstanceOf(Unavailable)
+          expect(faulty.getState()).toBe("closed")
+          void lease
+        }),
+      )
+    } finally {
+      closeAll(faulty)
+    }
+  })
 })

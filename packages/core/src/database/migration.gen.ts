@@ -51,5 +51,7 @@ export const migrations = (
     import("./migration/20260912000000_add_revert_operation"),
     import("./migration/20260913000000_add_create_sandbox_inheritance"),
     import("./migration/20260922000000_add_generation_recovery"),
+    import("./migration/20260925000000_add_generation_owner"),
+    import("./migration/20260925000001_add_generation_retry_intent"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

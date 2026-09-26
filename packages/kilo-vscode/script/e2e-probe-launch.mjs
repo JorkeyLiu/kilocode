@@ -12,19 +12,21 @@
  *   KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=variant-memory    node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=topic-navigation  node script/e2e-probe-launch.mjs
- *   KILO_E2E_SCENARIO=real-session      node script/e2e-probe-launch.mjs
- *   KILO_E2E_SCENARIO=real-completed    node script/e2e-probe-launch.mjs
- *   KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
- *   KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
+  *   KILO_E2E_SCENARIO=real-session      node script/e2e-probe-launch.mjs
+  *   KILO_E2E_SCENARIO=real-completed    node script/e2e-probe-launch.mjs
+  *   KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
+  *   KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
+  *   KILO_E2E_SCENARIO=real-lifecycle    node script/e2e-probe-launch.mjs
+  *   KILO_E2E_SCENARIO=real-generation   node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=sidebar-removal   node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=p3-4-removal      node script/e2e-probe-launch.mjs
  *
- * KILO_E2E_SCENARIO (all | tab-close | child-task-order | variant-memory |
- * topic-navigation | real-session | real-completed | real-overflow |
- * real-restart | sidebar-removal | worktree-removal | cloud-claw-removal |
- * p3-4-removal, default all) is
+  * KILO_E2E_SCENARIO (all | tab-close | child-task-order | variant-memory |
+  * topic-navigation | real-session | real-completed | real-overflow |
+  * real-restart | real-lifecycle | real-generation | sidebar-removal | worktree-removal | cloud-claw-removal |
+  * p3-4-removal, default all) is
  * forwarded to the probe and the extension-host runner via the environment;
  * the probe validates it before VS Code launches.
  *

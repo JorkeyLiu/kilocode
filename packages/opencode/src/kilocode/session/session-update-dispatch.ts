@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -85,7 +85,7 @@ function isNonEmptyString(v: unknown): boolean {
 function isSafeInt(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
 }
-export { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+export { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 function validateTitle(raw: unknown): string {
   if (typeof raw !== "string") throw new Error("payload.title must be non-empty string")
   const value = raw.trim()
@@ -331,7 +331,7 @@ export const layer = Layer.effect(
         } satisfies SessionUpdateFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const title = validateTitle(req.payload.title)
@@ -362,8 +362,14 @@ export const layer = Layer.effect(
           const revision = makeRevision(undefined, cfgVer)
           return buildFailed(req, "session.not_found", `session not found ${sessionId}`, false, false, revision)
         }
-        const canonicalStored = canonicalDirectory(sessionRow.directory)
-        if (canonicalStored !== canonDir) {
+        const matchesStored = (() => {
+          try {
+            return samePhysicalDirectory(sessionRow.directory, canonDir)
+          } catch {
+            return false
+          }
+        })()
+        if (!matchesStored) {
           const revEither = yield* readSessionRev(sessionId)
           if (isLeft(revEither))
             return buildFailed(
@@ -408,7 +414,13 @@ export const layer = Layer.effect(
           const revision = makeRevision(curRev, curCfg)
           return buildFailed(req, "internal", "project not found for session", false, false, revision)
         }
-        const projectWorktree = canonicalDirectory(projectRow.worktree)
+        const projectWorktree = (() => {
+          try {
+            return authoritativeDirectory(projectRow.worktree)
+          } catch {
+            return canonicalDirectory(projectRow.worktree)
+          }
+        })()
 
         // Idempotency/opId replay and conflict lookup MUST happen before any freshness-authority reads.
         // Freshness checks (sessionRevision/configVersion) apply only when no committed replay/conflict exists.
@@ -1003,7 +1015,7 @@ export const layer = Layer.effect(
         } satisfies SessionUpdateFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const title = validateTitle(req.payload.title)
@@ -1034,8 +1046,14 @@ export const layer = Layer.effect(
           const revision = makeRevision(undefined, cfgVer)
           return buildFailed(req, "session.not_found", `session not found ${sessionId}`, false, false, revision)
         }
-        const canonicalStored = canonicalDirectory(sessionRow.directory)
-        if (canonicalStored !== canonDir) {
+        const matchesStored = (() => {
+          try {
+            return samePhysicalDirectory(sessionRow.directory, canonDir)
+          } catch {
+            return false
+          }
+        })()
+        if (!matchesStored) {
           const revEither = yield* readSessionRev(sessionId)
           if (isLeft(revEither))
             return buildFailed(

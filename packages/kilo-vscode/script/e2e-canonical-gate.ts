@@ -9,8 +9,14 @@
  * stdout; errors go to stderr with non-zero exit.
  *
  * Modes:
- *   --init --dbPath <path>                         create minimal SQLite file if absent
  *   --dbPath <path> --dataRoot <path>              read canonical gate evidence as JSON
+ *
+ * Fresh DBs must NEVER be pre-created by this helper: a 0-byte non-WAL stub
+ * makes production `checkpointAndVerify` fail closed with
+ * `wal_checkpoint log=-1 not zero after TRUNCATE`. Production fresh
+ * first-boot expects NO db file and bootstraps canonical in place via the
+ * hidden `__internal-storage-cutover cutover` command. The legacy `--init`
+ * flag is therefore rejected fail-closed to prevent stub regression.
  */
 
 import { Database } from "bun:sqlite"
@@ -43,12 +49,7 @@ for (let i = 0; i < args.length; i++) {
 if (!dbPath) fail("--dbPath is required")
 
 if (init) {
-  if (!existsSync(dbPath)) {
-    const db = new Database(dbPath, { create: true })
-    db.close()
-  }
-  console.log(JSON.stringify({ ok: true, dbPath }))
-  process.exit(0)
+  fail("--init is retired: do not pre-create a 0-byte SQLite stub (non-WAL, wal_checkpoint log=-1). Leave kilo.db absent and run the hidden __internal-storage-cutover cutover for production-consistent fresh bootstrap")
 }
 
 if (!dataRoot) fail("--dataRoot is required for gate read")

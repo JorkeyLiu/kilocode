@@ -2,6 +2,7 @@
 import { isAbsolute, normalize, resolve } from "path"
 import { JsonRpcPeer } from "../../private-worker/peer"
 import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "../../private-worker/observation"
+import { PRIVATE_EVENT_NOTIFY_METHOD, normalizePrivateEventEnvelope } from "./serve-private-event"
 import type { ChildProcess } from "child_process"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 import type { E2ERevertSeedRequest, E2ERevertSeedResult } from "./serve-private-e2e-revert-seed"
@@ -2667,6 +2668,7 @@ export function validateDeleteResult(raw: unknown, req: ServePrivateDeleteReques
 }
 
 export const OBSERVATION_CHANGED_REVERSE_CAPABILITY = OBSERVATION_NOTIFICATION
+export const PRIVATE_EVENT_REVERSE_CAPABILITY = PRIVATE_EVENT_NOTIFY_METHOD
 
 export interface ServePrivatePeerOptions {
   reader: NodeJS.ReadableStream | null
@@ -2694,6 +2696,13 @@ export interface ServePrivatePeerOptions {
    * When absent, notifications are ignored (fail-closed); when present, strictly validated before forwarding.
    */
   onObservationChanged?: (method: string, params: unknown) => void
+  /**
+   * Private `event/notify` envelope forwarder. Validated before forwarding;
+   * independent from `observation/changed` and never mixed into its payload.
+   */
+  onPrivateEvent?: (envelope: unknown) => void
+  /** Peer-close hook for the single-live event-source lifecycle (no polling). */
+  onPeerClosed?: () => void
 }
 
 /** Legacy request `capabilities` list: server-method expectations, ignored by the CLI. */
@@ -2833,16 +2842,39 @@ export class ServePrivatePeer {
   private healthPeer: JsonRpcPeer | null = null
   private healthEpoch: number | null = null
   private observationChangedHandler: ((method: string, params: unknown) => void) | null = null
+  private privateEventHandler: ((envelope: unknown) => void) | null = null
+  private peerClosedHandler: (() => void) | null = null
+  private eventSupported = false
   private observationChangedRecord: Array<{ ordinal: number; method: string; params: unknown; receivedAt: number }> = []
   private observationChangedNextOrdinal = 0
   private observationChangedStartOrdinal = 0
 
   constructor(private readonly opts: ServePrivatePeerOptions) {
     if (opts.onObservationChanged) this.observationChangedHandler = opts.onObservationChanged
+    if (opts.onPrivateEvent) this.privateEventHandler = opts.onPrivateEvent
+    if (opts.onPeerClosed) this.peerClosedHandler = opts.onPeerClosed
   }
 
   setObservationChangedHandler(handler: ((method: string, params: unknown) => void) | null): void {
     this.observationChangedHandler = handler
+  }
+
+  setPrivateEventHandler(handler: ((envelope: unknown) => void) | null): void {
+    this.privateEventHandler = handler
+  }
+
+  setPeerClosedHandler(handler: (() => void) | null): void {
+    this.peerClosedHandler = handler
+  }
+
+  /** True when the negotiated server advertised the private event stream marker. */
+  supportsPrivateEvent(): boolean {
+    return this.eventSupported && this.isAvailable()
+  }
+
+  /** Raw event-stream marker regardless of liveness (tests/diagnostics). */
+  hasPrivateEventCapability(): boolean {
+    return this.eventSupported
   }
 
   /** Fixture-gated bounded recorder for fd3/fd4 observation/changed — only after strict validation, JSON-safe, 50 entries */
@@ -2968,12 +3000,20 @@ export class ServePrivatePeer {
             throw err
           }
         : undefined
-    const onObservationChanged = (method: string, params: unknown): void => {
-      if (method !== OBSERVATION_CHANGED_REVERSE_CAPABILITY) return
-      if (!isValidObservationChangedNotification(params)) return
-      this.recordObservationChanged(method, params)
+    const onNotification = (method: string, params: unknown): void => {
+      if (method === OBSERVATION_CHANGED_REVERSE_CAPABILITY) {
+        if (!isValidObservationChangedNotification(params)) return
+        this.recordObservationChanged(method, params)
+        try {
+          this.observationChangedHandler?.(method, params)
+        } catch {}
+        return
+      }
+      if (method !== PRIVATE_EVENT_REVERSE_CAPABILITY) return
+      // Independent from observation/changed: strict envelope validation only.
+      if (normalizePrivateEventEnvelope(params) === null) return
       try {
-        this.observationChangedHandler?.(method, params)
+        this.privateEventHandler?.(params)
       } catch {}
     }
     const peerAtStart = new JsonRpcPeer({
@@ -2986,8 +3026,11 @@ export class ServePrivatePeer {
         if (this.initEpoch !== epochAtStart) return
         if (this.opts.epoch !== epochAtStart) return
         this.available = false
+        try {
+          this.peerClosedHandler?.()
+        } catch {}
       },
-      onNotification: onObservationChanged,
+      onNotification,
       ...(onRequest ? { onRequest } : {}),
     })
     this.peer = peerAtStart
@@ -2997,6 +3040,7 @@ export class ServePrivatePeer {
       const base = normalizeReverseCapabilities(this.opts.reverseCapabilities)
       // Strictly bounded producer slice: always advertise observation/changed reverse capability when not explicitly present
       if (!base.includes(OBSERVATION_CHANGED_REVERSE_CAPABILITY)) base.push(OBSERVATION_CHANGED_REVERSE_CAPABILITY)
+      if (!base.includes(PRIVATE_EVENT_REVERSE_CAPABILITY)) base.push(PRIVATE_EVENT_REVERSE_CAPABILITY)
       const hasOfferedHttp = base.includes("provider/httpExecute")
       if (hasOfferedHttp && !canHttp) {
         throw new TypeError("provider/httpExecute reverse capability requires execution dependencies")
@@ -3091,6 +3135,7 @@ export class ServePrivatePeer {
       let hasCommandList = false
       let hasFindFiles = false
       let hasHealth = false
+      let hasEventNotify = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -3108,6 +3153,7 @@ export class ServePrivatePeer {
         hasCommandList = caps.includes("command/list")
         hasFindFiles = caps.includes("find/files")
         hasHealth = caps.includes("transport/health")
+        hasEventNotify = caps.includes(PRIVATE_EVENT_REVERSE_CAPABILITY)
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -3196,6 +3242,7 @@ export class ServePrivatePeer {
         if ((c as Record<string, unknown>)["command/list"]) hasCommandList = true
         if ((c as Record<string, unknown>)["find/files"]) hasFindFiles = true
         if ((c as Record<string, unknown>)["transport/health"]) hasHealth = true
+        if ((c as Record<string, unknown>)[PRIVATE_EVENT_REVERSE_CAPABILITY]) hasEventNotify = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -3255,6 +3302,9 @@ export class ServePrivatePeer {
       this.capabilities = caps as Record<string, unknown>
       this.initRaw = res
       this.available = true
+      // Event-stream marker is additive and never gates request availability:
+      // old servers stay request-capable and fall back to SSE for events.
+      this.eventSupported = hasEventNotify
       return true
     } catch (err) {
       if (timer) clearTimeout(timer)
@@ -6956,6 +7006,7 @@ export class ServePrivatePeer {
     if (this.disposed) return
     this.disposed = true
     this.available = false
+    this.eventSupported = false
     this.quarantined = false
     this.healthInFlight = null
     this.healthPeer = null
@@ -7180,6 +7231,25 @@ export class ServePrivatePeer {
     } catch {
       return "unknown"
     }
+  }
+
+  /**
+   * Fixture-only FD close for the private event-transport E2E proof.
+   * Disposes the underlying JsonRpcPeer WITHOUT touching the outer
+   * disposed/initSeq guards, so the real `onClosed` path fires
+   * (`available=false` + `peerClosedHandler` → connection SSE fallback).
+   * Never used by production; throws when the fixture env is absent.
+   */
+  fixtureCloseUnderlyingTransportForEvent(): { closed: boolean; state: string } {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture closeUnderlyingTransport requires KILO_E2E_FIXTURE")
+    const inner = this.peer
+    if (!inner || inner.getState() !== "open") return { closed: false, state: this.getPeerStateForFixture() }
+    try {
+      inner.dispose()
+    } catch (err) {
+      console.warn("[Fixture] closeUnderlyingTransport dispose failed:", String(err).slice(0, 200))
+    }
+    return { closed: true, state: this.getPeerStateForFixture() }
   }
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {

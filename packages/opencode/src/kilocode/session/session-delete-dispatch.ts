@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { Cause, Context, Effect, Exit, Layer, Option, Schema } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -290,7 +290,7 @@ export const layer = Layer.effect(
         } satisfies SessionDeleteFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
 
@@ -389,8 +389,14 @@ export const layer = Layer.effect(
           const revision = makeRevision(undefined, cfgVer)
           return buildFailed(req, "session.not_found", `session not found ${sessionId}`, false, false, revision)
         }
-        const canonicalStored = canonicalDirectory(sessionRow.directory)
-        if (canonicalStored !== canonDir) {
+        const matchesStored = (() => {
+          try {
+            return samePhysicalDirectory(sessionRow.directory, canonDir)
+          } catch {
+            return false
+          }
+        })()
+        if (!matchesStored) {
           const revEither = yield* readSessionRev(sessionId)
           if (isLeft(revEither))
             return buildFailed(
@@ -765,7 +771,7 @@ export const layer = Layer.effect(
         } satisfies SessionDeleteFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
 

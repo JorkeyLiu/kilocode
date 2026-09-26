@@ -795,6 +795,9 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privatePeerStatus", async () => {
         return connectionService.fixturePrivatePeerStatus()
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateEventClosePeer", async () => {
+        return connectionService.fixturePrivateEventClosePeer()
+      }),
       vscode.commands.registerCommand(
         "kilo-code.new.e2eFixture.sessionUpdate",
         async (opts?: { sessionId?: string; title?: string; directory?: string }) => {

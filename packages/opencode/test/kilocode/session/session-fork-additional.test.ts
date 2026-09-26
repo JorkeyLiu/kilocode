@@ -29,37 +29,24 @@ afterEach(async () => {
 })
 
 describe("sessionFork additional coverage", () => {
-  it.live("cross-directory fork sets correct target project and path", () =>
+  it.live("cross-directory fork fails scope_mismatch without mutation", () =>
     Effect.gen(function* () {
       const dirA = yield* tmpdirScoped({ git: true })
       const dirB = yield* tmpdirScoped({ git: true })
       // Ensure global AppRuntime instances are disposed before scoped tmpdir finalizers run (LIFO: dispose before dir cleanup)
       yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
       const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "srcA" }) })))) as unknown as Effect.Effect<any, any, any>)
-      // Get source project for later comparison
-      const sourceRow = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const db = (yield* Database.Service).db; return yield* db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(source.id))).get().pipe(Effect.orDie) })))) as unknown as Effect.Effect<any, any, any>)
       const token = "cross-proj-" + Math.random().toString(36).slice(2, 8)
       const opId = SessionOperation.forkId(source.id, token)
       const req = { v: 1 as const, requestId: "req-cross-proj", opId, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${token}`, context: { directory: dirB, sessionId: source.id, parentSessionId: null }, payload: {} }
       const res = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirB)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(req) })))) as unknown as Effect.Effect<any, any, any>)
-      expect(res.status).toBe("succeeded")
-      expect(res.data.directory).toBe(dirB)
-      // project_id should be target's project, not source's
-      const forkedRow = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirB)(Effect.gen(function* () { const db = (yield* Database.Service).db; return yield* db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(res.data.id))).get().pipe(Effect.orDie) })))) as unknown as Effect.Effect<any, any, any>)
-      expect(forkedRow.directory).toBe(dirB)
-      // path should be sessionPath(targetWorktree, dirB) not null
-      // For git worktree, relative path from worktree to dirB should be computed
-      // dirB is a separate git repo, so worktree is dirB itself, path should be "" or null? But it should not be null if we fixed
-      // In non-git case, path would be relative; but for git, worktree is dirB, so path is "" (empty)
-      // Ensure path is not null when target is different git worktree? Actually for isolated git repos, path may be ""
-      // The key assertion is project_id differs from source when dirs are different projects
-      // Since dirA and dirB are separate git repos, they have different project ids
-      expect(forkedRow.project_id).not.toBe(sourceRow.project_id)
-      // Additionally, path should be defined via canonical target resolution (empty string for same worktree)
-      // For separate worktree, path should be "" (since directory equals worktree)
-      expect(forkedRow.path === "" || forkedRow.path === null || typeof forkedRow.path === "string").toBe(true)
-      // Ensure not incorrectly set to source project_id
-      expect(res.data.projectID).not.toBe(sourceRow.project_id)
+      expect(res.status).toBe("failed")
+      expect(res.failure.code).toBe("scope_mismatch")
+      expect(res.accepted).toBe(false)
+      expect(JSON.stringify(res)).not.toContain(dirA)
+      // No child row created in either directory scope.
+      const children = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const db = (yield* Database.Service).db; return yield* db.select().from(SessionTable).where(eq(SessionTable.parent_id, source.id)).all().pipe(Effect.orDie) })))) as unknown as Effect.Effect<any, any, any>)
+      expect((children as any[]).length).toBe(0)
     }),
   )
 

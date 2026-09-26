@@ -20,6 +20,8 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { KILO_API_BASE } from "@kilocode/kilo-gateway"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Instance } from "@/kilocode/instance"
 import { Vcs } from "@/project/vcs"
 import simpleGit from "simple-git"
@@ -210,8 +212,36 @@ export namespace KiloSessions {
   let enabling: Promise<void> | undefined
   let remoteSeq = 0
   const attached = new Set<string>()
-  const statusSyncs = new Map<string, { running: boolean; dirty: boolean }>()
+  // Per-directory status debounce ownership: outer key is the resolved owner
+  // directory (FSUtil.resolve realpath), inner key is sessionID. A global
+  // sessionID-keyed map would let two directories share one entry.
+  const statusSyncs = new Map<string, Map<string, { running: boolean; dirty: boolean }>>()
+  const tasks = new Map<string, Set<Promise<unknown>>>()
+  const dead = new Set<string>()
   const STATUS_TIMEOUT_MS = 3_000
+
+  function ownerOf(dir: string): string {
+    return FSUtil.resolve(dir)
+  }
+
+  function syncsFor(owner: string): Map<string, { running: boolean; dirty: boolean }> {
+    const found = statusSyncs.get(owner)
+    if (found) return found
+    const next = new Map<string, { running: boolean; dirty: boolean }>()
+    statusSyncs.set(owner, next)
+    return next
+  }
+
+  function track(owner: string, task: Promise<unknown>): Promise<unknown> {
+    const found = tasks.get(owner)
+    if (found) {
+      found.add(task)
+    } else {
+      tasks.set(owner, new Set([task]))
+    }
+    void task.finally(() => tasks.get(owner)?.delete(task))
+    return task
+  }
 
   async function deriveStatus(sessionID: string): Promise<"idle" | "busy" | "question" | "permission" | "retry"> {
     const { AppRuntime } = await import("@/effect/app-runtime")
@@ -270,7 +300,9 @@ export namespace KiloSessions {
           })
           watch(Session.Event.Updated, async (evt) => {
             const sessionID = evt.properties.sessionID
-            const session = await Effect.runPromise(sessions.get(sessionID).pipe(Effect.orElseSucceed(() => null)))
+            const session = await Effect.runPromise(
+              sessions.get(sessionID).pipe(Effect.provideService(InstanceRef, ctx), Effect.orElseSucceed(() => null)),
+            )
             if (!session) return
             await ingest.sync(sessionID, [
               { type: "kilo_meta", data: await meta(sessionID) },
@@ -298,36 +330,52 @@ export namespace KiloSessions {
             ingest.sync(evt.properties.sessionID, [{ type: "session_close", data: { reason: evt.properties.reason } }]),
           )
 
+          const owner = ownerOf(ctx.directory)
           const sync = (evt: { properties: { sessionID: string } }) => {
+            if (dead.has(owner)) return
             const sessionID = evt.properties.sessionID
-            const current = statusSyncs.get(sessionID)
+            const owned = syncsFor(owner)
+            const current = owned.get(sessionID)
             if (current?.running) {
               current.dirty = true
               return
             }
 
             const entry = current ?? { running: false, dirty: false }
-            statusSyncs.set(sessionID, entry)
+            owned.set(sessionID, entry)
 
             const fail = (error: unknown) => {
               const dirty = entry.dirty
-              statusSyncs.delete(sessionID)
+              syncsFor(owner).delete(sessionID)
               log.error("status sync failed", { sessionID, error: String(error) })
               if (dirty) sync(evt)
             }
 
             const loop = async () => {
-              entry.running = true
-              entry.dirty = false
-              await deriveAndSyncStatus(sessionID)
-              if (entry.dirty) {
-                void loop().catch(fail)
+              if (dead.has(owner)) {
+                syncsFor(owner).delete(sessionID)
                 return
               }
-              statusSyncs.delete(sessionID)
+              entry.running = true
+              entry.dirty = false
+              // Re-enter the exact owner instance (same object, same resolved
+              // realpath as ownerOf(ctx.directory)): GlobalBus/debounce run
+              // outside ALS, and AppRuntime.runPromise bridges ALS via attach().
+              // Instance.restore binds that exact ctx; a store reload with
+              // ctx.directory would resolve to the same owner.
+              await Instance.restore(ctx, () => deriveAndSyncStatus(sessionID))
+              if (dead.has(owner)) {
+                syncsFor(owner).delete(sessionID)
+                return
+              }
+              if (entry.dirty) {
+                void track(owner, loop()).catch(fail)
+                return
+              }
+              syncsFor(owner).delete(sessionID)
             }
 
-            void loop().catch(fail)
+            void track(owner, loop()).catch(fail)
           }
           watch(SessionStatus.Event.Status, sync)
           watch(Question.Event.Asked, sync)
@@ -343,14 +391,29 @@ export namespace KiloSessions {
           yield* Effect.acquireRelease(
             Effect.sync(() => {
               const handler = (event: { directory?: string; payload?: { type?: string; properties?: unknown } }) => {
-                if (event.directory !== ctx.directory) return
+                // Keep the per-directory filter, but compare resolved realpaths
+                // so symlink aliases (e.g. /var vs /private/var) that resolve to
+                // the same owner are accepted, while distinct real directories
+                // are rejected.
+                if (!event.directory) return
+                let incoming: string
+                try {
+                  incoming = ownerOf(event.directory)
+                } catch {
+                  return
+                }
+                if (incoming !== owner) return
                 const type = event.payload?.type
                 if (type === undefined) return
                 const fn = handlers.get(type)
                 if (!fn) return
-                Promise.resolve(fn({ properties: event.payload!.properties })).catch((cause) =>
-                  log.error("subscriber failed", { type, cause }),
-                )
+                // Bind the exact owner instance for every instance-scoped
+                // service used downstream (AppRuntime bridges ALS via attach).
+                // Instance.restore binds that exact ctx; it is the same owner
+                // a store provide with ctx.directory would load (same
+                // FSUtil.resolve realpath).
+                const task = Promise.resolve(Instance.restore(ctx, () => fn({ properties: event.payload!.properties })))
+                void track(owner, task).catch((cause) => log.error("subscriber failed", { type, cause }))
               }
               GlobalBus.on("event", handler)
               return handler
@@ -365,9 +428,22 @@ export namespace KiloSessions {
             )
           }
           yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              statusSyncs.clear()
-              disableRemote()
+            Effect.gen(function* () {
+              dead.add(owner)
+              statusSyncs.delete(owner)
+              const pending = [...(tasks.get(owner) ?? [])]
+              tasks.delete(owner)
+              if (pending.length > 0) {
+                // Bounded async cleanup: never block dispose forever on orphan
+                // debounce/sync work, but give in-flight owner tasks a chance.
+                yield* Effect.promise(() => Promise.allSettled(pending)).pipe(
+                  Effect.timeout(STATUS_TIMEOUT_MS),
+                  Effect.ignore,
+                )
+              }
+              yield* Effect.sync(() => {
+                disableRemote()
+              })
             }),
           )
         }),

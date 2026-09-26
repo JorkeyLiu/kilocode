@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
@@ -291,7 +291,7 @@ export const layer = Layer.effect(
       } satisfies CancelQueuedFailed
     }
 
-    const canonDir = canonicalDirectory(req.context.directory)
+    const canonDir = authoritativeDirectory(req.context.directory)
     const sessionId = SessionID.make(req.context.sessionId)
     const messageId = MessageID.make(req.payload.messageId)
     const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
@@ -342,8 +342,14 @@ export const layer = Layer.effect(
         const revision = makeRevision(undefined, cfgVer)
         return buildFailed(req, "session.not_found", `session not found ${sessionId}`, false, false, revision)
       }
-      const canonicalStored = canonicalDirectory(sessionRow.directory)
-      if (canonicalStored !== canonDir) {
+      const matchesStored = (() => {
+        try {
+          return samePhysicalDirectory(sessionRow.directory, canonDir)
+        } catch {
+          return false
+        }
+      })()
+      if (!matchesStored) {
         const curRev = yield* getSessionRevSafe(sessionId)
         const cfgVer = yield* getConfigVerSafe(canonDir)
         const revision = makeRevision(curRev, cfgVer)

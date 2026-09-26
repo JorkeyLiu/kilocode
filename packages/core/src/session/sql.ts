@@ -201,6 +201,55 @@ export const SessionDeleteTombstoneTable = sqliteTable(
   ],
 )
 
+export const SessionGenerationOwnerTable = sqliteTable(
+  "session_generation_owner",
+  {
+    gen_id: text().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    occurrence_time: integer().notNull(),
+    close_time: integer(),
+    close_reason: text().$type<"completed" | "interrupted" | "error" | "crash">(),
+    retry_limit: integer().notNull(),
+    retry_consumed: integer().notNull().default(0),
+    retry_layer: text().$type<"provider" | "incomplete" | "broker" | "task" | "restart">(),
+    retry_next_at: integer(),
+  },
+  (table) => [
+    index("session_generation_owner_session_idx").on(table.session_id),
+    check(
+      "session_generation_owner_close_reason_check",
+      sql`${table.close_reason} IS NULL OR ${table.close_reason} IN ('completed','interrupted','error','crash')`,
+    ),
+    check(
+      "session_generation_owner_retry_layer_check",
+      sql`${table.retry_layer} IS NULL OR ${table.retry_layer} IN ('provider','incomplete','broker','task','restart')`,
+    ),
+  ],
+)
+
+export const SessionGenerationMemberTable = sqliteTable(
+  "session_generation_member",
+  {
+    gen_id: text()
+      .notNull()
+      .references(() => SessionGenerationOwnerTable.gen_id, { onDelete: "cascade" }),
+    prompt_op_id: text().notNull(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    added_time: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.gen_id, table.prompt_op_id] }),
+    index("session_generation_member_session_idx").on(table.session_id),
+    index("session_generation_member_gen_idx").on(table.gen_id),
+    index("session_generation_member_op_idx").on(table.prompt_op_id),
+  ],
+)
 export const SessionOperationTable = sqliteTable(
   "session_operation",
   {

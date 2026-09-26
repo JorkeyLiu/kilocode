@@ -4,6 +4,7 @@ import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
 import { isKiloError } from "@/kilocode/kilo-errors" // kilocode_change
 import { SessionNetwork } from "./network" // kilocode_change
+import { KiloRetryBudget } from "@/kilocode/session/retry-budget" // kilocode_change
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
 
@@ -132,6 +133,13 @@ export function policy(opts: {
   // kilocode_change start
   limit?: number
   offline?: (input: { error: unknown; message: string }) => Effect.Effect<"retry" | "blocked" | "aborted">
+  /**
+   * Owning generation budget. Every scheduled retry charges it before any
+   * delay/status so an exhausted owner fails closed with no new attempt.
+   * The static `limit` still bounds this schedule; the budget additionally
+   * couples it with incomplete-response and broker retries.
+   */
+  budget?: KiloRetryBudget.Budget
   // kilocode_change end
 }) {
   return Schedule.fromStepWithMetadata(
@@ -146,6 +154,13 @@ export function policy(opts: {
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
+        // kilocode_change start — durable-aware exhausted gate before any side
+        // effect or network. Exhausted fails closed: no offline ask, no
+        // status update, no delay, no new attempt.
+        if (opts.budget && (yield* KiloRetryBudget.exhaustedShared(opts.budget))) {
+          return yield* Cause.done(meta.attempt)
+        }
+        // kilocode_change end
         // kilocode_change start — handle network disconnect via offline handler
         if (opts.offline && SessionNetwork.disconnected(meta.input)) {
           const result = yield* opts.offline({
@@ -162,13 +177,22 @@ export function policy(opts: {
         }
         // kilocode_change end
 
+        // kilocode_change start — the retry is admitted: compute wait plus the
+        // failure occurrence time first (existing retry-after priority
+        // unchanged, single delay call), then durable CAS charges charge +
+        // layer + next-at intent atomically before any scheduling side effect.
+        // DB failure/exhaustion fails closed here with no set/sleep/dispatch.
         const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
-        const now = yield* Clock.currentTimeMillis
+        const occurrenceTime = yield* Clock.currentTimeMillis
+        const nextAt = occurrenceTime + wait
+        if (opts.budget && !(yield* KiloRetryBudget.chargeShared(opts.budget, "provider", undefined, { occurrenceTime, nextAt }))) {
+          return yield* Cause.done(meta.attempt)
+        }
         yield* opts.set({
           attempt: meta.attempt,
           message: retry.message,
           action: retry.action,
-          next: now + wait,
+          next: nextAt,
         })
         return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
       })

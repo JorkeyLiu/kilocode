@@ -68,6 +68,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { SessionID } from "@/session/schema"
 import { NotFoundError } from "@/storage/storage"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import {
   acquireDrainControl,
   InstanceUnavailableDuringConfigRebuildError,
@@ -2256,6 +2257,20 @@ const AGENT_REQUIREMENTS_FENCE_MESSAGE =
 const AGENT_REQUIREMENTS_INTERNAL_MESSAGE = "internal error"
 const AGENT_REQUIREMENTS_VALIDATION_MESSAGE = "invalid agent-requirements request"
 const AGENT_REQUIREMENTS_SCOPE_MESSAGE = "directory mismatch"
+
+// Single-op directory equivalence for `agent/requirements` only (same fixed
+// pattern as `config/ui-defaults`): `FSUtil.resolve` (realpath with ENOENT
+// fallback, no side effects) applied after `canonicalDirectory` validation,
+// matching the `FSUtil.resolve` cache keys `InstanceStore`/
+// `acquireDrainControl` use. Two spellings of the same physical directory
+// (macOS `/var` ↔ `/private/var`, or any test-owned symlink) compare equal;
+// truly different physical directories still compare unequal and fail closed
+// with `scope_mismatch` (`retryable === false`). No other op, no global
+// `canonicalDirectory`, and no fallback contract changes.
+export function equivalentAgentRequirementsDirectory(raw: string): string {
+  const canon = canonicalDirectory(raw)
+  return FSUtil.resolve(canon)
+}
 const PERMISSION_LIST_FENCE_MESSAGE =
   "Instance is unavailable during config rebuild; no active runtime for this request"
 const PERMISSION_LIST_INTERNAL_MESSAGE = "internal error"
@@ -5261,7 +5276,7 @@ export function createFdCarrier(
             const safe = safeAgentRequirementsIdentities(req)
             let dir: string
             try {
-              dir = canonicalDirectory(req.context.directory)
+              dir = equivalentAgentRequirementsDirectory(req.context.directory)
             } catch {
               return agentRequirementsFailed(safe, "validation.failed", AGENT_REQUIREMENTS_VALIDATION_MESSAGE, false)
             }
@@ -5289,7 +5304,7 @@ export function createFdCarrier(
             const inner = Effect.gen(function* () {
               let stored: string
               try {
-                stored = canonicalDirectory(acquired.value.ctx.directory)
+                stored = equivalentAgentRequirementsDirectory(acquired.value.ctx.directory)
               } catch {
                 return agentRequirementsFailed(safe, "internal", AGENT_REQUIREMENTS_INTERNAL_MESSAGE, false)
               }

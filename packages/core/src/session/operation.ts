@@ -1,13 +1,50 @@
 export * as SessionOperation from "./operation"
 
 import { asc, eq, and, sql } from "drizzle-orm"
-import { Effect } from "effect"
+import { Data, Effect } from "effect"
 import { createHash } from "node:crypto"
+import { isAbsolute, normalize, resolve } from "node:path"
 import { Database } from "../database/database"
 import { SessionTable, SessionOperationTable, SessionDeleteTombstoneTable } from "./sql"
 import type { SessionSchema } from "./schema"
 import * as Changefeed from "../retention/changefeed"
 import { SessionRevision } from "./revision"
+import { FSUtil } from "../fs-util"
+
+// Same-physical directory helpers for operation idempotency scope.
+// New rows store the authoritative realpath spelling; legacy rows may carry
+// the lexical (`/var/...`) spelling of the same physical directory.
+// Comparisons resolve both sides (lexical normalize then realpath with
+// ENOENT fallback); truly different physical directories stay distinct.
+function lexicalDir(dir: string): string {
+  if (typeof dir !== "string" || !isAbsolute(dir)) throw new Error("directory must be absolute path")
+  if (dir.includes("\0")) throw new Error("directory must not contain null bytes")
+  return normalize(resolve(dir))
+}
+
+function samePhysicalDir(a: string, b: string): boolean {
+  if (a === b) return true
+  try {
+    return FSUtil.resolve(lexicalDir(a)) === FSUtil.resolve(lexicalDir(b))
+  } catch {
+    return false
+  }
+}
+
+function matchesRequestDir(stored: string | null, requested: string): boolean {
+  if (typeof stored !== "string") return false
+  if (stored === requested) return true
+  return samePhysicalDir(stored, requested)
+}
+
+function isDirConflict(prev: string, next: string): boolean {
+  if (prev === next) return false
+  try {
+    return !samePhysicalDir(prev, next)
+  } catch {
+    return true
+  }
+}
 
 // ---------------------------------------------------------------------------
 // R12-compatible record shape (persist tier = full redacted record)
@@ -162,6 +199,84 @@ export function toPanelRecord(record: FailureRecord): Partial<FailureRecord> {
 
 export function toDiagnosticRecord(record: FailureRecord): Partial<FailureRecord> {
   return select(normalizeRecord(record), "diagnose")
+}
+
+// ---------------------------------------------------------------------------
+// Normal generation terminal — sole cohesive wrapper for accepted prompt/
+// command generation outcome (direction 79-94).
+//
+// Both session/prompt and session/command share `prompt:<messageId>` identity
+// and `prompt.*` codes; crash convergence uses the same fixed safe record.
+// Every accepted→succeeded/failed/abandoned terminal record must be built here
+// so durable scrub/cap (normalizeRecord) cannot diverge between call sites.
+// Classification never schedules recovery: this wrapper carries no budget/
+// timer/retry fields; recovery stays `{budget:0,nextAt:null,provenance:
+// "terminal"}` via recoveryForTerminal at write time. Success/in-flight carry
+// no failure semantics beyond the shared shape; panel/diagnostic stripping
+// stays in toPanelRecord/toDiagnosticRecord.
+// ---------------------------------------------------------------------------
+export type GenerationTerminalOutcome = "succeeded" | "failed" | "abandoned"
+
+export function generationTerminal(input: {
+  opId: string
+  outcome: GenerationTerminalOutcome
+  code: string
+  message: string
+  detail?: string
+  time?: number
+}): FailureRecord {
+  if (typeof input.opId !== "string" || input.opId.length === 0) throw new TypeError("opId must be non-empty string")
+  const parsed = parseOpId(input.opId)
+  if (parsed.kind !== "prompt") throw new TypeError(`generation terminal opId kind must be prompt, got ${parsed.kind}`)
+  if (input.outcome !== "succeeded" && input.outcome !== "failed" && input.outcome !== "abandoned")
+    throw new TypeError("outcome must be succeeded, failed, or abandoned")
+  if (typeof input.code !== "string" || input.code.length === 0) throw new TypeError("code must be non-empty string")
+  if (typeof input.message !== "string") throw new TypeError("message must be string")
+  if (input.detail !== undefined && typeof input.detail !== "string") throw new TypeError("detail must be string")
+  const time = input.time ?? Date.now()
+  if (typeof time !== "number" || !Number.isFinite(time)) throw new TypeError("time must be finite number")
+  return normalizeRecord({
+    opId: input.opId,
+    opKind: "prompt",
+    outcome: input.outcome,
+    code: input.code,
+    message: input.message,
+    time,
+    ...(input.detail !== undefined ? { detail: input.detail } : {}),
+  })
+}
+
+export const PROVIDER_CRASH_CONVERGE_CODE = "provider.abandoned"
+export const PROVIDER_CRASH_CONVERGE_MESSAGE = "Provider attempt abandoned after runtime restart"
+
+// ---------------------------------------------------------------------------
+// Provider crash terminal — fixed safe record for an orphaned provider
+// `in-flight` row after private-runtime process death.
+//
+// The fresh boot owns no volatile provider state by construction, so the
+// converged durable row releases the last ownership at receipt (boot) time;
+// the superseded accept (occurrence) time is not retained and no occurrence
+// crash timestamp is fabricated. Fixed `provider.abandoned` code/message
+// only (no caller-supplied code/message/detail/stack/cancel); never routes
+// through prompt-only `generationTerminal`. `putTx` accounting for a
+// provider terminal emits exactly one revision + one `changed` feed row —
+// never a `generation` entry — and `recoveryForTerminal` yields no recovery
+// columns for provider, so no recovery fields are held. No retry, no replay.
+// ---------------------------------------------------------------------------
+export function providerTerminal(input: { opId: string; time?: number }): FailureRecord {
+  if (typeof input.opId !== "string" || input.opId.length === 0) throw new TypeError("opId must be non-empty string")
+  const parsed = parseOpId(input.opId)
+  if (parsed.kind !== "provider") throw new TypeError(`provider terminal opId kind must be provider, got ${parsed.kind}`)
+  const time = input.time ?? Date.now()
+  if (typeof time !== "number" || !Number.isFinite(time)) throw new TypeError("time must be finite number")
+  return normalizeRecord({
+    opId: input.opId,
+    opKind: "provider",
+    outcome: "abandoned",
+    code: PROVIDER_CRASH_CONVERGE_CODE,
+    message: PROVIDER_CRASH_CONVERGE_MESSAGE,
+    time,
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -654,7 +769,7 @@ export function isCancelQueuedConflict(
   },
 ): boolean {
   if (prev.opId !== next.opId) return true
-  if (prev.meta.directory !== next.directory) return true
+  if (isDirConflict(prev.meta.directory, next.directory)) return true
   if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
@@ -1240,6 +1355,396 @@ export function tryTransitionPromptTerminalTx(
   })
 }
 
+export type TryTransitionProviderTerminalResult =
+  | { applied: true; record: FailureRecord; entry: Changefeed.Entry; generationEntry?: undefined }
+  | { applied: false; record: FailureRecord | undefined; entry?: undefined }
+
+// ---------------------------------------------------------------------------
+// Provider-specific terminal CAS — `in-flight` → `abandoned` only.
+//
+// Fail-closed adapter: only the fixed crash record shape is accepted
+// (`opKind` provider, `abandoned`, `provider.abandoned` code/message, no
+// cancel/detail/stack). Anything else dies without a write. Delegates to the
+// original `putTx`, so a provider terminal emits exactly one revision + one
+// `changed` feed row, never a `generation` entry, and holds no recovery
+// fields (`recoveryForTerminal` is prompt-only). A live terminal win races
+// safely: the loser observes `applied: false` and emits nothing.
+// ---------------------------------------------------------------------------
+function assertProviderCrashRecord(record: FailureRecord) {
+  if (record.opKind !== "provider") throw new TypeError(`provider terminal opKind must be provider, got ${record.opKind}`)
+  if (record.outcome !== "abandoned") throw new TypeError(`provider terminal outcome must be abandoned, got ${record.outcome}`)
+  if (record.code !== PROVIDER_CRASH_CONVERGE_CODE) throw new TypeError(`provider terminal code must be ${PROVIDER_CRASH_CONVERGE_CODE}`)
+  if (record.message !== PROVIDER_CRASH_CONVERGE_MESSAGE) throw new TypeError(`provider terminal message mismatch`)
+  if (record.cancel !== undefined) throw new TypeError(`provider terminal must not carry cancel`)
+  if (record.detail !== undefined) throw new TypeError(`provider terminal must not carry detail`)
+  if (record.stack !== undefined) throw new TypeError(`provider terminal must not carry stack`)
+  assertOpIdMatchesKind(record.opId, "provider")
+}
+
+export function tryTransitionProviderTerminalTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<TryTransitionProviderTerminalResult, unknown, never> {
+  return Effect.gen(function* () {
+    try {
+      validateRecord(record)
+      assertProviderCrashRecord(record)
+    } catch (e) {
+      yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
+    if (!existingRow) {
+      yield* Effect.die(new Error(`provider terminal requires existing in-flight row for ${record.opId}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    let existing: FailureRecord
+    try {
+      existing = rowToValidatedRecord(existingRow as typeof SessionOperationTable.$inferSelect)
+    } catch (e) {
+      yield* Effect.die(new TypeError(`invalid persisted operation row ${record.opId}: ${e instanceof Error ? e.message : String(e)}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    if ((existingRow as typeof SessionOperationTable.$inferSelect).session_id !== sessionID) {
+      yield* Effect.die(new Error(`cross-identity opId ${record.opId} already owned by session ${(existingRow as typeof SessionOperationTable.$inferSelect).session_id}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    if (existing.opKind !== "provider" || existing.outcome !== "in-flight") return { applied: false as const, record: existing, entry: undefined }
+    const { record: applied, entry, generationEntry } = yield* putTx(tx as DbOrTx, sessionID, record)
+    if (generationEntry) yield* Effect.die(new Error(`provider terminal must never emit generation entry for ${record.opId}`))
+    return { applied: true as const, record: applied, entry }
+  })
+}
+
+export function tryTransitionProviderTerminal(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<TryTransitionProviderTerminalResult, unknown, never> {
+  return db
+    .transaction((tx) => tryTransitionProviderTerminalTx(tx as DbOrTx, sessionID, record), { behavior: "immediate" })
+    .pipe(Effect.orDie) as Effect.Effect<TryTransitionProviderTerminalResult, unknown, never>
+}
+
+// ---------------------------------------------------------------------------
+// Crash convergence — pre-bind fail-closed sweep for orphaned prompt +
+// provider in-flight rows
+//
+// A dead private runtime process (worker crash = the private `kilo-serve`
+// process itself, not an independent provider scheduler/worker) leaves
+// accepted `prompt:<messageId>` and `provider:<assistant>:<attempt>` rows in
+// `in-flight` with no live owner (fibers, Runner epochs, and dispatch
+// inflight maps die with the process). The fresh boot owns no volatile
+// provider or generation state by construction, so converging each durable
+// row releases the last ownership: each orphaned prompt row CASes once via
+// `tryTransitionPromptTerminal` to terminal `abandoned` through the same
+// `normalizeRecord` scrub/cap boundary and the same revision + `changed` +
+// `generation` changefeed accounting as live terminalization, while each
+// orphaned provider row CASes once via the provider-only
+// `tryTransitionProviderTerminal` to terminal `abandoned`
+// (`provider.abandoned`, fixed receipt-time message) with exactly one
+// revision + one `changed` feed row — never a `generation` entry, never
+// recovery fields. No new ledger, no scheduler, no retry, no replay: a
+// converged row replays as terminal through the existing dispatch replay
+// path and never restarts generation or triggers a provider retry. A
+// concurrent live terminal win races safely — the loser observes
+// `applied: false` and emits nothing (reported as `raced`, which is
+// success, not failure).
+//
+// Fail-closed: a single invalid in-flight row (rowToValidatedRecord failure,
+// missing session, DB error) never fabricates a terminal. Valid rows still
+// CAS idempotently in row order, then the sweep fails with a typed
+// `ConvergeOrphanedFailure` carrying only safe opIds + counts (no
+// detail/stack/secret). The caller must refuse listener startup on that
+// failure. `skipped` is retained for compatibility and is always `[]` on
+// success; non-empty poison is never returned as success. Only
+// `op_kind=prompt|provider` rows are swept; other kinds stay untouched.
+// Cross-process concurrency is serialized by the canonical DB exclusive
+// lease (second process fails lease acquisition before the sweep).
+// Terminal `time` is the runtime-owned convergence (receipt) time; the
+// superseded accept (occurrence) time is not retained and no occurrence
+// crash timestamp is fabricated, matching live terminalization which also
+// stamps `Date.now()`.
+// Disposition detail (occurrence/receipt pair, cleanup proof) and any retry
+// budget remain out of scope: converged rows carry no disposition record
+// and no scheduler follows the sweep.
+//
+// Callers must run this BEFORE `Server.listen` bind on the canonical
+// `Database.Service` (same memoMap lease+marker gate as the listener), and
+// must never open the listener when the sweep fails.
+// ---------------------------------------------------------------------------
+export const CRASH_CONVERGE_CODE = "prompt.abandoned"
+export const CRASH_CONVERGE_MESSAGE = "prompt abandoned due to runtime restart"
+
+export interface ConvergeOrphanedSummary {
+  converged: string[]
+  raced: string[]
+  skipped: string[]
+}
+
+export class ConvergeOrphanedFailure extends Data.TaggedError("SessionOperation.ConvergeOrphanedFailure")<{
+  opIds: string[]
+  count: number
+  converged: string[]
+  raced: string[]
+}> {}
+
+interface ConvergeVerdict {
+  tag: "converged" | "raced"
+  opId: string
+}
+
+function safeOpId(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0) return "unknown"
+  const flat = raw.replace(/[\r\n\t]+/g, " ")
+  return flat.length > 200 ? flat.slice(0, 200) : flat
+}
+
+function convergeOrphanedRow(
+  db: Database.Interface["db"],
+  row: typeof SessionOperationTable.$inferSelect,
+  now: number,
+): Effect.Effect<ConvergeVerdict, { opId: string }> {
+  const rawOpId = safeOpId((row as { op_id?: unknown }).op_id)
+  const fail = { opId: rawOpId }
+  return Effect.gen(function* () {
+    let rec: FailureRecord
+    try {
+      rec = rowToValidatedRecord(row)
+    } catch {
+      return yield* Effect.fail(fail)
+    }
+    if (rec.opKind !== "prompt" || rec.outcome !== "in-flight") return yield* Effect.fail(fail)
+    const sid = row.session_id as unknown as SessionSchema.ID
+    const session = yield* db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sid))
+      .get()
+      .pipe(
+        Effect.mapError(() => fail),
+        Effect.catchDefect(() => Effect.fail(fail)),
+      )
+    if (!session) return yield* Effect.fail(fail)
+    const opId = rec.opId
+    const terminal = generationTerminal({
+      opId,
+      outcome: "abandoned",
+      code: CRASH_CONVERGE_CODE,
+      message: CRASH_CONVERGE_MESSAGE,
+      time: now,
+    })
+    const res = yield* tryTransitionPromptTerminal(db, sid, terminal).pipe(
+      Effect.mapError(() => fail),
+      Effect.catchDefect(() => Effect.fail(fail)),
+    )
+    if (res.applied) return { tag: "converged" as const, opId }
+    return { tag: "raced" as const, opId }
+  })
+}
+
+export function convergeOrphanedPromptInFlight(
+  db: Database.Interface["db"],
+): Effect.Effect<ConvergeOrphanedSummary, ConvergeOrphanedFailure> {
+  return Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.op_kind, "prompt"), eq(SessionOperationTable.outcome, "in-flight")))
+      .orderBy(asc(SessionOperationTable.op_id))
+      .all()
+      .pipe(
+        Effect.mapError(
+          () => new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] }),
+        ),
+        Effect.catchDefect(
+          () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
+        ),
+      )
+    const now = Date.now()
+    const converged: string[] = []
+    const raced: string[] = []
+    const bad: string[] = []
+    for (const raw of rows) {
+      const row = raw as typeof SessionOperationTable.$inferSelect
+      const out = yield* convergeOrphanedRow(db, row, now).pipe(
+        Effect.map((v) => ({ ok: true as const, v })),
+        Effect.catch((f: { opId: string }) => Effect.succeed({ ok: false as const, opId: f.opId })),
+        Effect.catchDefect((d: unknown) =>
+          Effect.succeed({ ok: false as const, opId: safeOpId((row as { op_id?: unknown }).op_id ?? d) }),
+        ),
+      )
+      if (out.ok) {
+        if (out.v.tag === "converged") converged.push(out.v.opId)
+        else raced.push(out.v.opId)
+      } else {
+        bad.push(out.opId)
+      }
+    }
+    if (bad.length > 0) {
+      return yield* Effect.fail(
+        new ConvergeOrphanedFailure({ opIds: [...bad], count: bad.length, converged: [...converged], raced: [...raced] }),
+      )
+    }
+    return { converged, raced, skipped: [] }
+  })
+}
+
+function convergeOrphanedProviderRow(
+  db: Database.Interface["db"],
+  row: typeof SessionOperationTable.$inferSelect,
+  now: number,
+): Effect.Effect<ConvergeVerdict, { opId: string }> {
+  const rawOpId = safeOpId((row as { op_id?: unknown }).op_id)
+  const fail = { opId: rawOpId }
+  return Effect.gen(function* () {
+    let rec: FailureRecord
+    try {
+      rec = rowToValidatedRecord(row)
+    } catch {
+      return yield* Effect.fail(fail)
+    }
+    if (rec.opKind !== "provider" || rec.outcome !== "in-flight") return yield* Effect.fail(fail)
+    const sid = row.session_id as unknown as SessionSchema.ID
+    const session = yield* db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sid))
+      .get()
+      .pipe(
+        Effect.mapError(() => fail),
+        Effect.catchDefect(() => Effect.fail(fail)),
+      )
+    if (!session) return yield* Effect.fail(fail)
+    const opId = rec.opId
+    let terminal: FailureRecord
+    try {
+      terminal = providerTerminal({ opId, time: now })
+    } catch {
+      return yield* Effect.fail(fail)
+    }
+    const res = yield* tryTransitionProviderTerminal(db, sid, terminal).pipe(
+      Effect.mapError(() => fail),
+      Effect.catchDefect(() => Effect.fail(fail)),
+    )
+    if (res.applied) return { tag: "converged" as const, opId }
+    return { tag: "raced" as const, opId }
+  })
+}
+
+function runConvergeLoop(
+  db: Database.Interface["db"],
+  rows: (typeof SessionOperationTable.$inferSelect)[],
+  now: number,
+  converge: (db: Database.Interface["db"], row: typeof SessionOperationTable.$inferSelect, now: number) => Effect.Effect<ConvergeVerdict, { opId: string }>,
+): Effect.Effect<ConvergeOrphanedSummary, ConvergeOrphanedFailure> {
+  return Effect.gen(function* () {
+    const converged: string[] = []
+    const raced: string[] = []
+    const bad: string[] = []
+    const ordered = [...rows].sort((a, b) => (a.op_id < b.op_id ? -1 : a.op_id > b.op_id ? 1 : 0))
+    for (const row of ordered) {
+      const out = yield* converge(db, row, now).pipe(
+        Effect.map((v) => ({ ok: true as const, v })),
+        Effect.catch((f: { opId: string }) => Effect.succeed({ ok: false as const, opId: f.opId })),
+        Effect.catchDefect((d: unknown) =>
+          Effect.succeed({ ok: false as const, opId: safeOpId((row as { op_id?: unknown }).op_id ?? d) }),
+        ),
+      )
+      if (out.ok) {
+        if (out.v.tag === "converged") converged.push(out.v.opId)
+        else raced.push(out.v.opId)
+      } else {
+        bad.push(out.opId)
+      }
+    }
+    if (bad.length > 0) {
+      return yield* Effect.fail(
+        new ConvergeOrphanedFailure({ opIds: [...bad], count: bad.length, converged: [...converged], raced: [...raced] }),
+      )
+    }
+    return { converged, raced, skipped: [] }
+  })
+}
+
+export function convergeOrphanedProviderInFlight(
+  db: Database.Interface["db"],
+): Effect.Effect<ConvergeOrphanedSummary, ConvergeOrphanedFailure> {
+  return Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.op_kind, "provider"), eq(SessionOperationTable.outcome, "in-flight")))
+      .orderBy(asc(SessionOperationTable.op_id))
+      .all()
+      .pipe(
+        Effect.mapError(
+          () => new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] }),
+        ),
+        Effect.catchDefect(
+          () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
+        ),
+      )
+    return yield* runConvergeLoop(db, rows as (typeof SessionOperationTable.$inferSelect)[], Date.now(), convergeOrphanedProviderRow)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Combined pre-bind sweep — prompt + provider in-flight rows under one gate.
+//
+// Scans both kinds on the same canonical DB (same lease+marker gate as the
+// listener) in `op_id` order: prompt rows converge with revision + `changed`
+// + `generation` and terminal recovery columns; provider rows converge with
+// exactly one revision + one `changed` row, never `generation`, never
+// recovery fields. Rerun after convergence is a no-op (0 new feeds).
+// ---------------------------------------------------------------------------
+export function convergeOrphanedInFlight(
+  db: Database.Interface["db"],
+): Effect.Effect<ConvergeOrphanedSummary, ConvergeOrphanedFailure> {
+  return Effect.gen(function* () {
+    const promptRows = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.op_kind, "prompt"), eq(SessionOperationTable.outcome, "in-flight")))
+      .orderBy(asc(SessionOperationTable.op_id))
+      .all()
+      .pipe(
+        Effect.mapError(
+          () => new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] }),
+        ),
+        Effect.catchDefect(
+          () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
+        ),
+      )
+    const providerRows = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.op_kind, "provider"), eq(SessionOperationTable.outcome, "in-flight")))
+      .orderBy(asc(SessionOperationTable.op_id))
+      .all()
+      .pipe(
+        Effect.mapError(
+          () => new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] }),
+        ),
+        Effect.catchDefect(
+          () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
+        ),
+      )
+    const now = Date.now()
+    const rows = [...(promptRows as (typeof SessionOperationTable.$inferSelect)[]), ...(providerRows as (typeof SessionOperationTable.$inferSelect)[])]
+    const converge = (
+      inner: Database.Interface["db"],
+      row: typeof SessionOperationTable.$inferSelect,
+      at: number,
+    ): Effect.Effect<ConvergeVerdict, { opId: string }> => {
+      if ((row as { op_kind?: unknown }).op_kind === "provider") return convergeOrphanedProviderRow(inner, row, at)
+      return convergeOrphanedRow(inner, row, at)
+    }
+    return yield* runConvergeLoop(db, rows, now, converge)
+  })
+}
+
 // ---------------------------------------------------------------------------
 // CancelQueued durable helpers (P4.4-G3-B0)
 // ---------------------------------------------------------------------------
@@ -1462,7 +1967,7 @@ export function isSessionUpdateConflict(
   },
 ): boolean {
   if (prev.opId !== next.opId) return true
-  if (prev.meta.directory !== next.directory) return true
+  if (isDirConflict(prev.meta.directory, next.directory)) return true
   if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
@@ -1644,7 +2149,7 @@ export function isSessionForkConflict(
   },
 ): boolean {
   if (prev.opId !== next.opId) return true
-  if (prev.meta.directory !== next.directory) return true
+  if (isDirConflict(prev.meta.directory, next.directory)) return true
   if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
@@ -1777,7 +2282,7 @@ export function getSessionCreateByIdempotencyHash(
   return Effect.gen(function* () {
     if (typeof hash !== "string" || hash.length === 0) yield* Effect.die(new TypeError("hash must be non-empty string"))
     const rows = yield* db.select().from(SessionOperationTable).where(and(eq(SessionOperationTable.idempotency_hash, hash), eq(SessionOperationTable.op_kind, "create" as const))).all().pipe(Effect.orDie)
-    const row = rows.find((r) => (r as unknown as { directory: string | null }).directory === directory)
+    const row = rows.find((r) => matchesRequestDir((r as unknown as { directory: string | null }).directory, directory))
     if (!row) return undefined
     return rowToSessionCreateRecord(row as typeof SessionOperationTable.$inferSelect)
   }).pipe(Effect.orDie) as Effect.Effect<SessionCreateRecord | undefined>
@@ -1790,7 +2295,7 @@ export function getSessionCreateByIdempotencyHashTx(
 ): Effect.Effect<SessionCreateRecord | undefined> {
   return Effect.gen(function* () {
     const rows = yield* tx.select().from(SessionOperationTable).where(and(eq(SessionOperationTable.idempotency_hash, hash), eq(SessionOperationTable.op_kind, "create" as const))).all().pipe(Effect.orDie)
-    const row = rows.find((r) => (r as unknown as { directory: string | null }).directory === directory)
+    const row = rows.find((r) => matchesRequestDir((r as unknown as { directory: string | null }).directory, directory))
     if (!row) return undefined
     return rowToSessionCreateRecord(row as typeof SessionOperationTable.$inferSelect)
   }).pipe(Effect.orDie) as Effect.Effect<SessionCreateRecord | undefined>
@@ -1811,14 +2316,18 @@ export function isSessionCreateConflict(
   },
 ): boolean {
   if (prev.opId !== next.opId) return true
-  if (prev.meta.directory !== next.directory) return true
+  if (isDirConflict(prev.meta.directory, next.directory)) return true
   if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.title ?? null) !== (next.title ?? null)) return true
   if ((prev.meta.parentID ?? null) !== (next.parentID ?? null)) return true
   if ((prev.meta.sandboxTokenHash ?? null) !== (next.sandboxTokenHash ?? null)) return true
   if ((prev.meta.sandboxSourceSessionId ?? null) !== (next.sandboxSourceSessionId ?? null)) return true
-  if ((prev.meta.sandboxSourceDirectory ?? null) !== (next.sandboxSourceDirectory ?? null)) return true
+  const prevSrcDir = prev.meta.sandboxSourceDirectory ?? null
+  const nextSrcDir = next.sandboxSourceDirectory ?? null
+  if (prevSrcDir === null || nextSrcDir === null) {
+    if (prevSrcDir !== nextSrcDir) return true
+  } else if (isDirConflict(prevSrcDir, nextSrcDir)) return true
   return false
 }
 
@@ -1945,7 +2454,7 @@ export function isSessionDeleteConflict(
   next: { opId: string; directory: string; parentSessionId?: string | null; configVersion?: number | null; sessionRevision?: number | null },
 ): boolean {
   if (prev.opId !== next.opId) return true
-  if (prev.meta.directory !== next.directory) return true
+  if (isDirConflict(prev.meta.directory, next.directory)) return true
   if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
@@ -2068,7 +2577,7 @@ export function isSessionCheckpointConflict(
   next: { opId: string; directory: string; parentSessionId?: string | null; configVersion?: number | null; sessionRevision?: number | null; messageId?: string | null; partId?: string | null },
 ): boolean {
   if (prev.opId !== next.opId) return true
-  if (prev.meta.directory !== next.directory) return true
+  if (isDirConflict(prev.meta.directory, next.directory)) return true
   if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
   if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
   if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true

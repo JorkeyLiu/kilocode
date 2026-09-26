@@ -18,7 +18,7 @@ import {
   type SessionPromptRequest,
   type SessionPromptResult,
 } from "@/kilocode/session/session-prompt-dispatch" // kilocode_change - prompt_async progressive owner
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
+import { canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
 import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - P4.4-G3 double directory contract
 import { WorkspaceRouteContext } from "../middleware/workspace-routing" // kilocode_change - P4.4-G3-B4 effective directory
 import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - LOCK-201 canonical opId
@@ -291,9 +291,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           }
           if (context?.directory && effectiveDir) {
             try {
-              const canonRoute = canonicalDirectory(effectiveDir)
-              const canonBody = canonicalDirectory(context.directory as string)
-              if (canonRoute !== canonBody) return yield* Effect.fail(new HttpApiError.BadRequest({}))
+              if (!samePhysicalDirectory(effectiveDir, context.directory as string)) return yield* Effect.fail(new HttpApiError.BadRequest({}))
             } catch {
               return yield* Effect.fail(new HttpApiError.BadRequest({}))
             }
@@ -409,9 +407,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           } else effectiveDir = process.cwd()
           if (effectiveDir) {
             try {
-              const canonRoute = canonicalDirectory(effectiveDir)
-              const canonBody = canonicalDirectory(c.directory as string)
-              if (canonRoute !== canonBody) return yield* new HttpApiError.BadRequest({})
+              if (!samePhysicalDirectory(effectiveDir, c.directory as string)) return yield* new HttpApiError.BadRequest({})
             } catch { return yield* new HttpApiError.BadRequest({}) }
           }
         }
@@ -621,9 +617,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           const routeDirectory = forkTargetDirectory(httpReq.method, url, httpReq.headers as Record<string, string | undefined>)
           if (routeDirectory !== undefined) {
             try {
-              const canonRoute = canonicalDirectory(routeDirectory)
-              const canonBody = canonicalDirectory(c.directory as string)
-              if (canonRoute !== canonBody) return yield* new HttpApiError.BadRequest({})
+              if (!samePhysicalDirectory(routeDirectory, c.directory as string)) return yield* new HttpApiError.BadRequest({})
             } catch {
               return yield* new HttpApiError.BadRequest({})
             }

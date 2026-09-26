@@ -296,7 +296,36 @@ export namespace KiloSession {
       const conditions: SQL[] = []
 
       if (input.projectID) conditions.push(eq(SessionTable.project_id, ProjectV2.ID.make(input.projectID)))
-      if (input.directory) conditions.push(eq(SessionTable.directory, Filesystem.resolve(input.directory)))
+      if (input.directory) {
+        const auth = Filesystem.resolve(input.directory)
+        // Legacy lexical-row convergence without global widening: include only
+        // distinct stored spellings resolving to the same physical directory.
+        const candidates = yield* Effect.gen(function* () {
+          const seen = new Set<string>([auth])
+          const distinct = yield* db
+            .selectDistinct({ directory: SessionTable.directory })
+            .from(SessionTable)
+            .all()
+            .pipe(
+              Effect.orDie,
+              Effect.catch(() => Effect.succeed([] as Array<{ directory: string }>)),
+              Effect.catchDefect(() => Effect.succeed([] as Array<{ directory: string }>)),
+            )
+          for (const row of distinct as Array<{ directory: string }>) {
+            const stored = row.directory
+            if (typeof stored !== "string" || seen.has(stored)) continue
+            try {
+              if (Filesystem.resolve(stored) === auth) seen.add(stored)
+            } catch {
+              continue
+            }
+          }
+          return [...seen]
+        })
+        conditions.push(
+          candidates.length === 1 ? eq(SessionTable.directory, candidates[0]!) : inArray(SessionTable.directory, candidates),
+        )
+      }
       if (input.roots) conditions.push(isNull(SessionTable.parent_id))
       if (input.start) conditions.push(gte(SessionTable.time_updated, input.start))
       if (input.cursor !== undefined) {

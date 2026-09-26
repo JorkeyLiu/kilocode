@@ -1687,6 +1687,35 @@ export async function requestRsSeedCredential(scratch: string, timeoutMs = 60_00
   return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
 }
 
+/**
+ * Real-generation canonical-state probe: `rg-cstate-request` → `rg-cstate.json`.
+ * Narrow clone of the rs- probe with distinct markers so the generation-owner
+ * claim aggregates without colliding with real-session/real-lifecycle files.
+ */
+export async function requestRgCanonicalState(scratch: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const file = join(scratch, "rg-cstate.json")
+  writeFileSync(join(scratch, "rg-cstate-request"), "ok")
+  await waitForFile(file, timeoutMs, "rg-cstate.json (canonical state probe)")
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+}
+
+/**
+ * Real-generation credential round trip: `rg-credseed-request` → `rg-credential.json`.
+ * Never exposes the secret value.
+ */
+export async function requestRgSeedCredential(scratch: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const marker = join(scratch, "rg-credseed-request")
+  const file = join(scratch, "rg-credential.json")
+  try {
+    rmSync(file, { force: true } as never)
+  } catch (err) {
+    void err
+  }
+  writeFileSync(marker, "ok")
+  await waitForFile(file, timeoutMs, "rg-credential.json (credential seeding probe)")
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+}
+
 /** Poll until the given file's bytes exactly equal `expected`. */
 export async function waitForFileBytes(
   file: string,

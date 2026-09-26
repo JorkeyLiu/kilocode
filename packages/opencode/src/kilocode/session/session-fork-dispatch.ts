@@ -3,7 +3,7 @@ import path from "node:path"
 import { isAbsolute } from "path"
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import { Global } from "@opencode-ai/core/global"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { canonicalDirectory, authoritativeDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import {
   cloneMessageDataForFork,
   clonePartDataForFork,
@@ -132,7 +132,7 @@ function isNonEmptyString(v: unknown): boolean {
 function isSafeInt(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
 }
-export { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+export { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 
 export function validateRequest(raw: unknown): SessionForkRequest {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("params must be object")
@@ -412,7 +412,7 @@ export const layer = Layer.effect(
         } satisfies SessionForkFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
       const messageId = req.payload.messageId ? MessageID.make(req.payload.messageId as string) : undefined
@@ -439,7 +439,6 @@ export const layer = Layer.effect(
           const revision = makeRevision(undefined, cfgVer)
           return buildFailed(req, "session.not_found", `source session not found ${sessionId}`, false, false, revision)
         }
-
         // Idempotency / opId replay lookup MUST happen before freshness reads
         const existing = yield* SessionOperation.getSessionForkByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)
         if (existing) {
@@ -506,6 +505,56 @@ export const layer = Layer.effect(
             req,
             "conflict",
             "opId already exists with different idempotencyKey",
+            false,
+            false,
+            revision,
+          )
+        }
+
+        // Directory scope: source must live in the requested physical directory.
+        // After idempotency replay (same-key replay/conflict returns without new
+        // effects) and before any freshness read or filesystem effect, so a
+        // cross-directory fork never copies transcript, diff, or sandbox state.
+        // Same-physical symlink spellings pass; truly different directories fail
+        // closed as terminal scope_mismatch with no source path in the message.
+        const matchesStored = (() => {
+          try {
+            return samePhysicalDirectory(
+              (sourceRow as unknown as { directory: string }).directory,
+              canonDir,
+            )
+          } catch {
+            return false
+          }
+        })()
+        if (!matchesStored) {
+          const revEither = yield* readSessionRev(sessionId)
+          if (isLeft(revEither))
+            return buildFailed(
+              req,
+              "internal",
+              "revision read failed",
+              false,
+              false,
+              makeRevision(undefined, undefined),
+            )
+          const cfgEither = yield* readConfigVer(canonDir)
+          if (isLeft(cfgEither))
+            return buildFailed(
+              req,
+              "internal",
+              "config version read failed",
+              false,
+              false,
+              makeRevision(rightValue(revEither) as number | undefined, undefined),
+            )
+          const curRev = rightValue(revEither) as number | undefined
+          const cfgVer = rightValue(cfgEither) as number | undefined
+          const revision = makeRevision(curRev, cfgVer)
+          return buildFailed(
+            req,
+            "scope_mismatch",
+            `directory mismatch for session ${sessionId}`,
             false,
             false,
             revision,
@@ -896,7 +945,14 @@ export const layer = Layer.effect(
 
           // Perform required filesystem side effects with ownership tracking.
           // All failures here fail closed and clean only owned artifacts.
-          const srcDir = (sourceRow as unknown as { directory: string }).directory
+          const srcDir = (() => {
+            const raw = (sourceRow as unknown as { directory: string }).directory
+            try {
+              return authoritativeDirectory(raw)
+            } catch {
+              return raw
+            }
+          })()
           // Peek source sandbox (reads isolated store, not cached state)
           const fallback = yield* SandboxPolicy.peek(srcDir, sessionId)
           // Diff carry with exclusive claim and owned flags
@@ -1532,6 +1588,27 @@ export const layer = Layer.effect(
                       makeRevision(authRev, effectiveInside),
                     ),
                   } as unknown as TxOut
+                const matchesTx = (() => {
+                  try {
+                    return samePhysicalDirectory(
+                      (src as unknown as { directory: string }).directory,
+                      canonDir,
+                    )
+                  } catch {
+                    return false
+                  }
+                })()
+                if (!matchesTx)
+                  return {
+                    result: buildFailed(
+                      req,
+                      "scope_mismatch",
+                      `directory mismatch for session ${sessionId}`,
+                      false,
+                      false,
+                      makeRevision(authRev, effectiveInside),
+                    ),
+                  } as unknown as TxOut
 
                 // Determine model at fork point (same as Session.fork)
                 const msgRows = yield* tx
@@ -2012,7 +2089,7 @@ export const layer = Layer.effect(
         } satisfies SessionForkFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sessionId = SessionID.make(req.context.sessionId)
       const hash = SessionOperation.hashIdempotencyKey(req.idempotencyKey)
 
@@ -2040,6 +2117,32 @@ export const layer = Layer.effect(
         }
         const existing = yield* SessionOperation.getSessionForkByIdempotencyHash(db, sessionId, hash).pipe(Effect.orDie)
         const existingOpId = yield* SessionOperation.get(db, req.opId).pipe(Effect.orDie)
+        // Directory scope after idempotency replay: same-key replay/conflict
+        // returns without new effects; fresh private reads require the source
+        // to live in the requested physical directory (symlink aliases pass).
+        const matchesPrivate = (() => {
+          try {
+            return samePhysicalDirectory(
+              (sourceRow as unknown as { directory: string }).directory,
+              canonDir,
+            )
+          } catch {
+            return false
+          }
+        })()
+        if (!matchesPrivate && !existing && !existingOpId) {
+          const curRev = yield* readRevOmit(sessionId)
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = makeRevision(curRev, curCfg)
+          return buildFailed(
+            req,
+            "scope_mismatch",
+            `directory mismatch for session ${sessionId}`,
+            false,
+            false,
+            revision,
+          )
+        }
         if (existing) {
           const conflict = SessionOperation.isSessionForkConflict(existing, {
             opId: req.opId,

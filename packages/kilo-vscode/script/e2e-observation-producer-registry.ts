@@ -30,6 +30,7 @@ const SCENARIO_TIMEOUTS: Record<string, number> = {
   "real-overflow": 1_200_000,
   "real-restart": 6_000_000,
   "real-lifecycle": 1_200_000,
+  "real-generation": 1_200_000,
   "worktree-removal": 6_000_000,
   "r9-observation": 1_200_000,
   [OBSERVATION_PRODUCER_SCENARIO]: OBSERVATION_PRODUCER_TIMEOUT_MS,

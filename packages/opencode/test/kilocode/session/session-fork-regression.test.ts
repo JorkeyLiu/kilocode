@@ -72,7 +72,7 @@ describe("sessionFork regression", () => {
     }),
   )
 
-  it.live("cross-directory identity fork sets target directory and preserves project", () =>
+  it.live("cross-directory fork fails scope_mismatch without mutation", () =>
     Effect.gen(function* () {
       const tmp1 = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
       const tmp2 = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
@@ -84,11 +84,12 @@ describe("sessionFork regression", () => {
       const req = { v: 1 as const, requestId: "req-cross", opId, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${token}`, context: { directory: dirB, sessionId: source.id, parentSessionId: null }, payload: {} }
       // provide instance for dirB as target
       const res = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirB)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(req) })))) as unknown as Effect.Effect<any, any, any>)
-      expect(res.status).toBe("succeeded")
-      expect(res.data.directory).toBe(dirB)
-      // project_id should be preserved from source's project (but target dirB is different project, so check that it equals source's project_id? In our implementation we copy source project_id)
-      const forked = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirB)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.get(SessionID.make(res.data.id)) })))) as unknown as Effect.Effect<any, any, any>)
-      expect(forked.directory).toBe(dirB)
+      expect(res.status).toBe("failed")
+      expect(res.failure.code).toBe("scope_mismatch")
+      expect(res.accepted).toBe(false)
+      expect(JSON.stringify(res)).not.toContain(dirA)
+      const list = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.list({}) })))) as unknown as Effect.Effect<any, any, any>)
+      expect((list as any[]).filter((s) => s.parentID === source.id).length).toBe(0)
     }),
   )
 

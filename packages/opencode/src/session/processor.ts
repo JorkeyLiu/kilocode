@@ -37,6 +37,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { toolFileSourceFromUri, Usage, type LLMEvent } from "@opencode-ai/llm"
+import { KiloRetryBudget } from "@/kilocode/session/retry-budget" // kilocode_change
 import { ToolOutput } from "@opencode-ai/core/tool-output"
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 import { SessionOperation } from "@opencode-ai/core/session/operation"
@@ -1234,6 +1235,14 @@ export const layer = Layer.effect(
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
+          // kilocode_change start - resolve the owning generation budget.
+          // Inside a Runner generation this is the ambient owner shared by
+          // every step; outside one (tests, title, compaction) it is an
+          // ephemeral per-step owner. Either way the budget is finite, so
+          // production never retries unbounded, and provider, incomplete,
+          // and broker retries charge the same owner.
+          const owner = (yield* KiloRetryBudget.Owner) ?? KiloRetryBudget.make()
+          // kilocode_change end
           // kilocode_change start - publish retry state consistently for provider and empty-response retries
           const retries = { provider: 0 }
           const setRetry = (info: {
@@ -1426,6 +1435,7 @@ export const layer = Layer.effect(
                     abort: ac.signal,
                     set: status.set,
                     used: retries.provider,
+                    budget: owner, // kilocode_change - share the owning budget
                   }),
                   set: (info) => {
                     if (info.attempt > 0) retries.provider += 1
@@ -1461,6 +1471,7 @@ export const layer = Layer.effect(
           const recover = () => {
             const baseline = new Set<string>()
             return KiloSessionProcessor.recover({
+              budget: owner, // kilocode_change - share the owning budget
               run: Effect.fn("SessionProcessor.incompleteAttempt")(function* () {
                 baseline.clear()
                 for (const part of yield* MessageV2.parts(ctx.assistantMessage.id).pipe(

@@ -132,7 +132,7 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason: "B3 fork regression: transcript checkpoint, cross-directory, stale, SDK payload, private validation",
   },
   "kilocode/session/session-fork-additional.test.ts": {
-    count: 17,
+    count: 16,
     reason: "B3 fork additional: cross-directory identity, event, raw unknown-field, SDK generation, private exact",
   },
   "kilocode/session/session-fork-http-mapping.test.ts": {
@@ -313,6 +313,21 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 5,
     reason:
       "e2e revert seed integration test via AppRuntime and InstanceStore (real session/message/part checkpoint seeded via e2eRevertSeed handler under KILO_E2E_FIXTURE and consumed by production SessionRevertDispatch with revision chaining; local layer cannot prove instance-directory binding)",
+  },
+  "kilocode/session/session-create-authoritative-directory.test.ts": {
+    count: 16,
+    reason:
+      "B4 durable create authoritative-directory integration test via AppRuntime and InstanceRef (symlink alias write stores realpath, list/get/messages via both spellings)",
+  },
+  "kilocode/session/session-fork-scope.test.ts": {
+    count: 16,
+    reason:
+      "B3 fork directory-scope integration test via AppRuntime and InstanceRef (cross-directory scope_mismatch with no child/message/sandbox mutation, no path leak)",
+  },
+  "kilocode/kilo-sessions.test.ts": {
+    count: 5,
+    reason:
+      "KiloSessions InstanceRef/ALS regression via the canonical runtime (real Storage shares plus SessionStatus publish/derive in the exact owner instance; local layer cannot prove detached debounce context)",
   },
   "kilocode/server/fd-carrier-session-viewed.test.ts": {
     count: 2,

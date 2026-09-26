@@ -2,9 +2,10 @@ import { InstanceState } from "@/effect/instance-state"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
+import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
 import { Effect, Latch, Layer, Scope, Context, SynchronizedRef } from "effect"
 import { BusyError } from "./schema"
-import { SessionID } from "./schema"
+import { MessageID, SessionID } from "./schema"
 import { SessionStatus } from "./status"
 import * as Ownership from "@/retention/ownership"
 
@@ -15,8 +16,15 @@ export type RunCancelResult = {
   readonly interruptRequested: boolean
 }
 
+export type EpochMembership = {
+  readonly generationID: string
+  readonly sessionID: SessionID
+  readonly messageIDs: readonly MessageID[]
+}
+
 export interface Interface {
   readonly activeGeneration: (sessionID: SessionID) => Effect.Effect<string | undefined>
+  readonly epochMembership: (sessionID: SessionID) => Effect.Effect<EpochMembership | undefined>
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, BusyError>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<RunCancelResult>
   readonly ensureRunning: (
@@ -86,6 +94,32 @@ export const layer = Layer.effect(
         return data.runners.get(sessionID)?.generationID
       })
 
+    // Production epoch membership signal (no schema change, no persistence).
+    // Derived read-only view combining the Runner-owned generation with the
+    // queue-owned base/extras installed for the running slot. No process-global
+    // ownerless map: generation lives in this InstanceState-owned runners map
+    // (cleared on directory scope dispose), base/extras live in the queue slot
+    // lifecycle (deleted on slot release). Abort retains members because both
+    // queue.cancel (signalled) and Runner Stopping preserve their state until
+    // convergence; after Idle drain plus queue release this returns undefined.
+    // Pending, dropped (cancelOne), and pre-accept targets are never members:
+    // snapshot() exposes only installed base/extras. Volatile execution
+    // membership may still include terminal/synthetic IDs; durable
+    // SessionGeneration membership persists only accepted prompt/in-flight
+    // rows and skips the rest without changing queue scope. Future
+    // generation-owner persistence reads this at the prelude durable point
+    // and after every adopt/retarget before a crash; this unit only provides
+    // the signal.
+    const epochMembership: Interface["epochMembership"] = (sessionID) =>
+      Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        const generationID = data.runners.get(sessionID)?.generationID
+        if (!generationID) return undefined
+        const snap = KiloSessionPromptQueue.snapshot(sessionID)
+        if (!snap) return undefined
+        return { generationID, sessionID, messageIDs: [snap.base, ...snap.extras] } as EpochMembership
+      })
+
     const assertNotBusy: Interface["assertNotBusy"] = (sessionID) =>
       Effect.gen(function* () {
         const data = yield* InstanceState.get(state)
@@ -126,7 +160,7 @@ export const layer = Layer.effect(
         )
       })
 
-    return Service.of({ activeGeneration, assertNotBusy, cancel, ensureRunning, startShell })
+    return Service.of({ activeGeneration, epochMembership, assertNotBusy, cancel, ensureRunning, startShell })
   }),
 )
 

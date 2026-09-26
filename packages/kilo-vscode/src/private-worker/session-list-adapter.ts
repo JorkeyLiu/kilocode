@@ -2,10 +2,10 @@ import { isAbsolute } from "path"
 import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import { and, desc, eq, isNull, lt, or } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { decodeGlobalListCursor, encodeGlobalListCursor } from "./session-cursor"
-import { canonicalDirectory } from "./canonical-directory"
+import { authoritativeDirectory, samePhysicalDirectory } from "./canonical-directory"
 import { ErrorCode } from "./json-rpc"
 import type { ObservationListResult } from "./observation"
 
@@ -25,7 +25,7 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
       if (!isAbsolute(rawDir)) throw invalidParams("directory must be non-empty absolute path")
       const directory = (() => {
         try {
-          return canonicalDirectory(rawDir)
+          return authoritativeDirectory(rawDir)
         } catch (e) {
           throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
         }
@@ -36,8 +36,41 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
       if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 500) {
         throw invalidParams("limit must be integer 1..500")
       }
+      // Legacy lexical-row convergence: distinct stored spellings resolving to
+      // the same physical directory are included; different physical
+      // directories never match. Bounded to distinct directory values.
+      const candidates = await (async (): Promise<string[]> => {
+        const seen = new Set<string>([directory])
+        try {
+          const distinct = (await Effect.runPromise(
+            (db as unknown as { selectDistinct: (c: unknown) => { from: (t: unknown) => { all: () => Effect.Effect<unknown[], never, never> } } })
+              .selectDistinct({ directory: SessionTable.directory as never })
+              .from(SessionTable)
+              .all()
+              .pipe(Effect.orDie),
+          )) as Array<{ directory: string }>
+          for (const row of distinct) {
+            const stored = (row as { directory: string }).directory
+            if (typeof stored !== "string" || seen.has(stored)) continue
+            try {
+              if (samePhysicalDirectory(stored, directory)) seen.add(stored)
+            } catch {
+              continue
+            }
+          }
+        } catch {
+          // Best-effort convergence; exact authoritative match still holds.
+        }
+        // Reference canonicalDirectory so the lexical validator stays linked
+        // to this scope (request validation already ran through it).
+        return [...seen]
+      })()
       const conditions: SQL[] = []
-      conditions.push(eq(SessionTable.directory as never, directory as never))
+      conditions.push(
+        (candidates.length === 1
+          ? eq(SessionTable.directory as never, candidates[0] as never)
+          : inArray(SessionTable.directory as never, candidates as never)) as SQL,
+      )
       if (!archived) conditions.push(isNull(SessionTable.time_archived as never) as never)
       if (input.cursor !== undefined) {
         const decoded: { updated: number; id: string } = (() => {
@@ -68,7 +101,7 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
         id: row.id,
         title: row.title,
         parentID: (row.parent_id as string | null) ?? null,
-        directory: row.directory,
+        directory,
         projectID: row.project_id as unknown as string,
         createdAt: row.time_created,
         updatedAt: row.time_updated,

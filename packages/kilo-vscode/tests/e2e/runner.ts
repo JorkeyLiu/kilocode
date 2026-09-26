@@ -798,6 +798,7 @@ interface ScenarioFlags {
   runRealOverflow: boolean
   runRealRestart: boolean
   runRealLifecycle: boolean
+  runRealGeneration: boolean
   runSidebarRemoval: boolean
   runWorktreeRemoval: boolean
   runCloudClawRemoval: boolean
@@ -846,6 +847,11 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // re-runs this runner in a fresh Extension Host (see serviceRealRestartBoundary).
     runRealRestart: scenario === "real-restart",
     runRealLifecycle: scenario === "real-lifecycle",
+    // real-generation is focused-only: one completed text turn against the
+    // run-owned loopback scripted provider with the minimal seed (no MCP, no
+    // user tool, no skill, no permission rules) — the narrow generation-owner
+    // proof that avoids real-completed's multi-fixture acceptance surface.
+    runRealGeneration: scenario === "real-generation",
     // P3.1 sidebar-removal is focused-only: it asserts manifest absence and
     // Agent Manager readiness (no synthetic fixtures, no CDP DOM driving — all
     // assertions run extension-host-side).
@@ -958,6 +964,7 @@ export async function run(): Promise<void> {
     "real-overflow",
     "real-restart",
     "real-lifecycle",
+    "real-generation",
     "sidebar-removal",
     "worktree-removal",
     "cloud-claw-removal",
@@ -976,7 +983,7 @@ export async function run(): Promise<void> {
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first | operation-projection (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | real-generation | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first | operation-projection (default: all)",
     )
   }
   const {
@@ -989,6 +996,7 @@ export async function run(): Promise<void> {
     runRealOverflow,
     runRealRestart,
     runRealLifecycle,
+    runRealGeneration,
     runSidebarRemoval,
     runWorktreeRemoval,
     runCloudClawRemoval,
@@ -1319,6 +1327,14 @@ export async function run(): Promise<void> {
 
   if (runRealLifecycle) {
     await serviceRealLifecycleBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- Real-generation narrow owner proof (focused only) ---
+  // One completed text turn against the run-owned loopback scripted provider.
+  // Services the snapshot truth markers plus the rg- credential/canonical
+  // probes; no panel close/reopen, no title/replay, no MCP disconnect.
+  if (runRealGeneration) {
+    await serviceRealGenerationBoundary(vscode, scratch, fixtureId)
   }
 
   await waitForHarness(scratch, join(scratch, "done"), 120_000, "harness done marker")
@@ -3827,6 +3843,101 @@ async function serviceRealLifecycleBoundary(
     await sleep(200)
   }
   await writeLlmRequestsEvidence(vscodeApi, scratch, "real-lifecycle")
+}
+
+const RG_SERVICE_BUDGET = 900_000
+
+/**
+ * Extension-host service loop for the real-generation narrow scenario: one
+ * completed text turn against the run-owned loopback scripted provider.
+ *
+ *   1. stores the project credential through the production storeSecret path
+ *      and writes `rg-credential.json` (real SecretStorage, no bypass — never
+ *      contains the secret value),
+ *   2. settles the real session list and writes `rg-ready`,
+ *   3. backend truth: on each `rg-snap-N-request` marker, executes the
+ *      env-gated backendSnapshot fixture command and writes `rg-snap-N.json`,
+ *   4. canonical-state probe: on `rg-cstate-request` writes `rg-cstate.json`,
+ *   5. credential round trip: on `rg-credseed-request` rewrites
+ *      `rg-credential.json`.
+ *
+ * No panel close/reopen, no title/replay/private-peer markers, no MCP
+ * disconnect — the panel stays open for the whole scenario. Stops when the
+ * harness writes the `done` marker.
+ */
+async function serviceRealGenerationBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  await resetLlmRequests(vscodeApi)
+  // Cold-start race guard (same precedent as the observation-producer
+  // boundaries): the fenced credential write needs the private transport, but
+  // the runner seeds immediately after panel readiness while the peer may
+  // still be negotiating. Bounded wait for availability first — still fails
+  // closed via failCredential when the peer never comes up, so a genuine
+  // transport conflict stays visible instead of being masked.
+  {
+    const start = Date.now()
+    let attempts = 0
+    let available = false
+    const deadline = start + 30_000
+    while (Date.now() < deadline) {
+      attempts += 1
+      try {
+        const stat = (await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)) as {
+          private: { available: boolean; state: string }
+        }
+        if (stat?.private?.available) {
+          available = true
+          break
+        }
+      } catch {}
+      await sleep(500)
+    }
+    writeFileSync(
+      join(scratch, "rg-peer-wait.json"),
+      JSON.stringify({ attempts, available, elapsedMs: Date.now() - start }, null, 2),
+    )
+    if (!available) failCredential(scratch, "rg-credential.json")
+  }
+  try {
+    const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+    writeFileSync(join(scratch, "rg-credential.json"), JSON.stringify(seeded, null, 2))
+  } catch {
+    failCredential(scratch, "rg-credential.json")
+  }
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "rg-ready"), fixtureId)
+  let snap = 1
+  const deadline = Date.now() + RG_SERVICE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    const cstate = join(scratch, "rg-cstate-request")
+    if (existsSync(cstate)) {
+      rmSync(cstate)
+      const state = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+      writeFileSync(join(scratch, "rg-cstate.json"), JSON.stringify(state, null, 2))
+    }
+    const credSeed = join(scratch, "rg-credseed-request")
+    if (existsSync(credSeed)) {
+      rmSync(credSeed)
+      try {
+        const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+        writeFileSync(join(scratch, "rg-credential.json"), JSON.stringify(seeded, null, 2))
+      } catch {
+        failCredential(scratch, "rg-credential.json")
+      }
+    }
+    const snapReq = join(scratch, `rg-snap-${snap}-request`)
+    if (existsSync(snapReq)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `rg-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-generation")
 }
 
 const CMD_PROD_STATUS = "kilo-code.new.e2eFixture.privateObservationStatus"

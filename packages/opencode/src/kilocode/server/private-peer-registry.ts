@@ -8,8 +8,11 @@
  * lease. Each successful install owns exactly one exact release; release
  * is idempotent and clears only the current same peer. The fd carrier owns
  * the `JsonRpcPeer`/reader/writer lifecycle; this service owns only
- * discoverability and exact identity. It never calls `peer.dispose` and
- * never closes streams. No epoch, no generation method: replacement is
+ * discoverability and exact identity, with one narrow exception:
+ * `invalidate` disposes the exact current holder so a consecutively
+ * failing reverse-notify peer actually closes (extension `onClosed` fires
+ * and falls back to SSE) instead of staying half-open and dropping frames.
+ * No epoch, no generation method: replacement is
  * allowed only after the old identity released or closed.
  *
  * Capability model: the reverse capability set (wire
@@ -93,6 +96,16 @@ export interface PrivatePeer {
   ) => Effect.Effect<Call, Unavailable | Unsupported>
   readonly supports: (capability: string) => Effect.Effect<boolean>
   readonly notify: (method: string, params?: unknown) => Effect.Effect<void, Unavailable | Unsupported>
+  /**
+   * Owner-specific half-open invalidation: disposes the exact current
+   * holder (if any) and clears discoverability, so the extension peer
+   * observes close/EOF (`onClosed` → SSE fallback). Idempotent, never
+   * fails, never touches a replacement peer: only the holder observed at
+   * call time is disposed. The sole production caller is the private event
+   * forwarder after bounded consecutive real write faults; never kills the
+   * process and keeps no ledger.
+   */
+  readonly invalidate: () => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, PrivatePeer>()("@kilocode/PrivatePeer") {}
@@ -309,7 +322,11 @@ export const layer = Layer.effect(
           return Effect.fail(new Unsupported({ capability: method }))
         if (!caps.has(method)) return Effect.fail(new Unsupported({ capability: method }))
         try {
-          owner.notify(method, params)
+          const sent = owner.notify(method, params)
+          if (!sent) {
+            sweep()
+            return Effect.fail(new Unavailable())
+          }
         } catch {
           sweep()
           return Effect.fail(new Unavailable())
@@ -331,7 +348,23 @@ export const layer = Layer.effect(
         return notifyImpl(owner, method, params)
       })
 
-    return Service.of({ install, release, negotiate, current, request, requestWithEvents, supports, notify })
+    const invalidate = (): Effect.Effect<boolean> =>
+      Effect.sync(() => {
+        const owner = held
+        if (!owner) return false
+        try {
+          owner.dispose()
+        } catch {}
+        if (held === owner) {
+          held = null
+          caps = null
+          capsList = []
+          negotiated = false
+        }
+        return true
+      })
+
+    return Service.of({ install, release, negotiate, current, request, requestWithEvents, supports, notify, invalidate })
   }),
 )
 

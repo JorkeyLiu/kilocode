@@ -175,12 +175,12 @@ export class JsonRpcPeer {
     return sent && this.state === "open"
   }
 
-  notify(method: string, params?: unknown): void {
-    if (this.state !== "open") return
+  notify(method: string, params?: unknown): boolean {
+    if (this.state !== "open") return false
     const payload: Record<string, unknown> = { jsonrpc: JSONRPC_VERSION, method }
     if (params !== undefined) payload.params = params
     const frame = encodeFrame(payload)
-    this.write(frame, null, null)
+    return this.write(frame, null, null)
   }
 
   dispose(): void {

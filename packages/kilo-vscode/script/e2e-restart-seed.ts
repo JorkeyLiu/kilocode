@@ -132,6 +132,44 @@ export function writeRealRestartSeed(
   }
 }
 
+export interface RealGenerationSeedPaths {
+  configFile: string
+  /** Project-scope canonical config the extension's CanonicalConfigService reads. */
+  canonicalFile: string
+}
+
+/**
+ * Run-owned MINIMAL workspace seed for the real-generation E2E scenario
+ * (harness process only — never bundled into the extension). Narrow by design:
+ * one completed text turn against the run-owned loopback scripted provider,
+ * with NO MCP server, NO user tool, NO skill, NO permission rules, NO rollback
+ * file, and NO external network. Written BEFORE VS Code launches:
+ *
+ *   - .kilo/kilo.jsonc — the SAME closed canonical project-scope shape the
+ *     extension's CanonicalConfigService validator accepts (model/provider
+ *     with name/endpoint/protocol/credential/models only). The backend's
+ *     e2e-local npm/options/baseURL and small_model/subagent_model pins ride
+ *     the narrowly validated CLI-side E2E seam (KILO_E2E_PROVIDER_BASE_URL),
+ *     exactly like the proven real-restart/real-lifecycle seeds — no new
+ *     config privilege, no plaintext apiKey/options/npm in the project file.
+ *   - .kilo/node_modules + .kilo/package-lock.json — the no-op dependency
+ *     guard (same rationale as writeRealRestartSeed).
+ *
+ * The scripted model's default-reply branch answers the single prompt with
+ * fixed text (no tool call), so the turn completes and the canonical SQLite
+ * carries exactly one terminal generation owner + member rows for the prompt
+ * op — the only facts the harness asserts through the read-only gate.
+ */
+export function writeRealGenerationSeed(workspace: string, port: number, scratch: string): RealGenerationSeedPaths {
+  if (!scratch || !isAbsolute(scratch)) throw new Error("writeRealGenerationSeed requires absolute scratch path")
+  const canonicalFile = join(workspace, ".kilo", CONFIG_FILENAME)
+  mkdirSync(dirname(canonicalFile), { recursive: true })
+  writeFileSync(canonicalFile, JSON.stringify(realProjectSeed(port), null, 2))
+  const kiloDir = join(workspace, ".kilo")
+  writeDependencyGuard(kiloDir, "kilo-e2e-workspace")
+  return { configFile: canonicalFile, canonicalFile }
+}
+
 /**
  * The no-op dependency guard consumed by core Npm.install: an existing
  * node_modules dir makes the reify step skip (packages/core/src/npm.ts), so

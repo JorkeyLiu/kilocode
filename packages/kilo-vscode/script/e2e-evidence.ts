@@ -136,6 +136,7 @@ const DOM_EVIDENCE: Record<string, string[]> = {
   "real-completed": ["real-completed-dom-evidence"],
   "real-overflow": ["real-overflow-dom-evidence"],
   "real-restart": ["rr-dom-evidence"],
+  "real-generation": ["real-generation-dom-evidence"],
   "worktree-removal": ["worktree-removal-dom-evidence"],
   "r9-observation": ["r9-dom-evidence", "r9-observation-runtime-evidence"],
 }
@@ -147,6 +148,7 @@ const SNAP_PREFIXES: Record<string, string[]> = {
   "real-overflow": ["of-snap-"],
   "real-restart": ["rr-snap-", "rr-c-snap-"],
   "real-lifecycle": ["lc-snap-"],
+  "real-generation": ["rg-snap-"],
   "worktree-removal": ["p32-snap-"],
   "r9-observation": ["r9-snap-"],
 }
@@ -158,6 +160,7 @@ const READY_MARKERS: Record<string, string[]> = {
   "real-overflow": ["real-overflow-ready"],
   "real-restart": ["rr-ready"],
   "real-lifecycle": ["lc-ready"],
+  "real-generation": ["rg-ready"],
   "worktree-removal": ["worktree-removal-ready"],
   "r9-observation": ["r9-ready"],
 }
@@ -258,6 +261,7 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     "real-overflow",
     "real-restart",
     "real-lifecycle",
+    "real-generation",
     "worktree-removal",
   ])
 
@@ -271,7 +275,15 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
         { rel: `llm-requests-${scenario}.json`, base: "scratch" },
         { rel: `llm-matrix-${scenario}-final.json`, base: "scratch" },
         {
-          rel: scenario === "real-restart" || scenario === "real-lifecycle" ? ".kilo/kilo.jsonc" : ".kilo/kilo.json",
+          rel:
+            scenario === "real-restart" ||
+            scenario === "real-lifecycle" ||
+            scenario === "real-generation" ||
+            scenario === "real-completed" ||
+            scenario === "real-overflow" ||
+            scenario === "worktree-removal"
+              ? ".kilo/kilo.jsonc"
+              : ".kilo/kilo.json",
           base: "workspace",
         },
       )
@@ -402,6 +414,17 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
       { rel: "e2e-custom-called.txt", base: "workspace" },
       { rel: "lc-dom-evidence", base: "scratch" },
     )
+  }
+  if (scenarios.has("real-generation")) {
+    required.push(
+      { rel: "canonical-gate.json", base: "scratch" },
+      { rel: "canonical-archive-before.json", base: "scratch" },
+      { rel: "canonical-archive-after.json", base: "scratch" },
+      { rel: "rg-cstate.json", base: "scratch" },
+      { rel: "rg-credential.json", base: "scratch" },
+      { rel: "real-generation-owners.json", base: "scratch" },
+    )
+    optional.push({ rel: "rg-peer-wait.json", base: "scratch" })
   }
   if (scenarios.has("real-session")) {
     required.push(

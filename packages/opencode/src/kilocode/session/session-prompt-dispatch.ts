@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { Cause, Context, Effect, Layer, Option, Schema, Scope } from "effect"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { MessageTable } from "@opencode-ai/core/session/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
@@ -92,7 +92,7 @@ function isNonEmptyString(v: unknown): boolean {
 function isSafeInt(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
 }
-export { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+export { authoritativeDirectory, canonicalDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 
 function validatePart(p: unknown): void {
   if (p === null || typeof p !== "object" || Array.isArray(p)) throw new Error("payload.parts entry must be object")
@@ -262,15 +262,18 @@ export const layer = Layer.effect(
     const terminalizePrompt = (opId: string, sid: SessionID, outcome: SessionOperation.Outcome, code: string, message: string, detail?: string) =>
       terminalMutex.withLock(opId)(
         Effect.gen(function* () {
-          const rec: SessionOperation.FailureRecord = {
-            opId,
-            opKind: "prompt",
-            outcome,
-            code,
-            message,
-            time: Date.now(),
-            ...(detail ? { detail } : {}),
-          }
+          const rec =
+            outcome === "succeeded" || outcome === "failed" || outcome === "abandoned"
+              ? SessionOperation.generationTerminal({ opId, outcome, code, message, ...(detail !== undefined ? { detail } : {}) })
+              : ({
+                  opId,
+                  opKind: "prompt",
+                  outcome,
+                  code,
+                  message,
+                  time: Date.now(),
+                  ...(detail ? { detail } : {}),
+                } satisfies SessionOperation.FailureRecord)
           const res = yield* SessionOperation.tryTransitionPromptTerminal(db, sid, rec).pipe(
             Effect.map((v) => v as { applied: boolean; entry?: { seq: number; session_id: string; revision: number; kind: string; time: number }; generationEntry?: { seq: number; session_id: string; revision: number; kind: string; time: number } }),
             Effect.catch(() => Effect.succeed({ applied: false } as { applied: boolean })),
@@ -366,7 +369,7 @@ export const layer = Layer.effect(
         } satisfies SessionPromptFailed
       }
 
-      const canonDir = canonicalDirectory(req.context.directory)
+      const canonDir = authoritativeDirectory(req.context.directory)
       const sid = SessionID.make(req.context.sessionId)
       const mid = MessageID.make(req.payload.messageId)
 
@@ -386,8 +389,7 @@ export const layer = Layer.effect(
         return buildFailed(req, "internal", "internal error", false, false, revision)
       }
       try {
-        const stored = canonicalDirectory(found.value.directory)
-        if (stored !== canonDir) {
+        if (!samePhysicalDirectory(found.value.directory, canonDir)) {
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
           return buildFailed(req, "scope_mismatch", "directory mismatch", false, false, revision)
@@ -567,6 +569,16 @@ export const layer = Layer.effect(
               const err = Cause.squash(cause)
               const raw = err instanceof Error ? err.message : String(err)
               const detail = Cause.pretty(cause)
+              // Same normalize boundary as the durable write: scrub/cap once here for
+              // the diagnostic event so session.error never carries raw secrets;
+              // terminalizePrompt re-normalizes idempotently before persistence.
+              const scrubbed = SessionOperation.generationTerminal({
+                opId: req.opId,
+                outcome: "failed",
+                code: "prompt.failed",
+                message: raw,
+                detail,
+              })
               yield* terminalizePrompt(req.opId, sid, "failed", "prompt.failed", raw, detail)
               yield* Effect.logError("prompt_async private failed").pipe(Effect.annotateLogs({ sessionID: sid as unknown as string, cause }))
               yield* events
@@ -574,7 +586,7 @@ export const layer = Layer.effect(
                   sessionID: sid,
                   error: AgentRequirementError.isInstance(err)
                     ? (err as unknown as { toObject: () => unknown }).toObject()
-                    : new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+                    : new NamedError.Unknown({ message: scrubbed.detail ?? scrubbed.message }).toObject(),
                 } as never)
                 .pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
             }

@@ -14,7 +14,7 @@
  */
 
 import { isAbsolute } from "path"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { decodeGlobalListCursor } from "@/session/global-cursor"
 import {
   assertFoundMessagePage,
@@ -305,7 +305,7 @@ function parseDirectory(raw: unknown): string {
     throw invalidParams("directory must be non-empty absolute path")
   if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
   try {
-    return canonicalDirectory(raw)
+    return authoritativeDirectory(raw)
   } catch (e) {
     throw invalidParams(
       (e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path",

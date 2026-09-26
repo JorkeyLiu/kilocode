@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionOperationTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { desc, eq } from "drizzle-orm"
-import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { authoritativeDirectory, samePhysicalDirectory } from "@/kilocode/session/canonical-directory"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { ErrorCode } from "./json-rpc"
 import type { ObservationOperationsResult } from "./observation"
@@ -28,7 +28,7 @@ function parseDirectory(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
   if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
   try {
-    return canonicalDirectory(raw)
+    return authoritativeDirectory(raw)
   } catch (e) {
     throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
   }
@@ -55,14 +55,14 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
       })()
       const row = await Effect.runPromise(db.select().from(SessionTable).where(eq(SessionTable.id, sessionId as never)).get().pipe(Effect.orDie))
       if (!row) return { v: "1.0", status: "not_found" }
-      const storedDir = (() => {
+      const samePhysical = (() => {
         try {
-          return canonicalDirectory(row.directory)
+          return samePhysicalDirectory(row.directory, directory)
         } catch {
           throw internalError("invalid stored directory shape")
         }
       })()
-      if (storedDir !== directory) return { v: "1.0", status: "scope_mismatch" }
+      if (!samePhysical) return { v: "1.0", status: "scope_mismatch" }
       const rows = await Effect.runPromise(
         db.select().from(SessionOperationTable).where(eq(SessionOperationTable.session_id, sessionId as never)).orderBy(desc(SessionOperationTable.time), desc(SessionOperationTable.op_id)).limit(limit).all().pipe(Effect.orDie),
       )

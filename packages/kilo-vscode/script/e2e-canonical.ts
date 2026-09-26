@@ -60,8 +60,10 @@ export function isIsolatedDataRoot(scratch: string, dataRoot: string): boolean {
 /**
  * Parse the hidden cutover CLI stdout (single JSON line per op).
  * Returns the archive identity on success or throws with actionable context.
+ * Production fresh first-boot returns `{ fresh: true, archivePath: "" }`
+ * (no archive by design); legacy cutover returns a non-empty archivePath.
  */
-export function parseCutoverOutput(stdout: string): { archiveID: string; archivePath: string } {
+export function parseCutoverOutput(stdout: string): { archiveID: string; archivePath: string; fresh: boolean } {
   const text = stdout.trim()
   if (!text) throw new Error("cutover output empty")
   // The CLI may have extra lines; find the JSON line containing "ok":true
@@ -81,7 +83,8 @@ export function parseCutoverOutput(stdout: string): { archiveID: string; archive
       const archiveID = String(obj.archiveID)
       const archivePath = typeof obj.archivePath === "string" ? String(obj.archivePath) : ""
       if (!isValidArchiveID(archiveID)) throw new Error(`invalid archiveID in cutover output: ${archiveID}`)
-      return { archiveID, archivePath }
+      const fresh = obj.fresh === true || archivePath === ""
+      return { archiveID, archivePath, fresh }
     }
   }
   throw new Error(`cutover output missing ok archiveID: ${text.slice(0, 500)}`)
@@ -179,17 +182,27 @@ export function collectArchiveState(dataRoot: string): {
 
 /**
  * Validate that no archive mutation happened between before and after.
- * Returns undefined when stable, else an actionable reason.
- * Fails explicitly when the pre-run state had zero archives — the harness
- * requires a fresh canonical DB and at least one archive before the first
- * canonical-era session.
+ * Legacy runs require at least one archive before the first canonical-era
+ * session (fail-closed when before is empty). Fresh first-boot runs have no
+ * archive by production design (`fresh: true, archivePath: ""`), so callers
+ * pass `{ allowEmpty: true }` for the fresh branch and 0→0 is stable
+ * (markers still checked). 0→N still fails even when empty is allowed.
  */
 export function archiveMutationError(
   before: ReturnType<typeof collectArchiveState>,
   after: ReturnType<typeof collectArchiveState>,
+  opts?: { allowEmpty?: boolean },
 ): string | undefined {
-  if (before.archiveCount === 0)
-    return `archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`
+  if (before.archiveCount === 0) {
+    if (opts?.allowEmpty && after.archiveCount === 0) {
+      // Fresh stable: no archives on either side — fall through to the
+      // marker guardrails below (cutover/rollback must stay absent).
+    } else if (opts?.allowEmpty) {
+      return `archive count changed before=0 after=${after.archiveCount} (fresh run must not gain archives)`
+    } else {
+      return `archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`
+    }
+  }
   if (before.archiveCount !== after.archiveCount) {
     return `archive count changed before=${before.archiveCount} after=${after.archiveCount}`
   }
@@ -220,11 +233,13 @@ export function assertIsolatedOrThrow(scratch: string, dataRoot: string): void {
 }
 
 /** The real-* scenario names that consume the hermetic global root seed. */
-const REAL_SCENARIOS = ["real-session", "real-completed", "real-overflow", "real-restart", "real-lifecycle"]
+const REAL_SCENARIOS = ["real-session", "real-completed", "real-overflow", "real-restart", "real-lifecycle", "real-generation"]
 
 /** True when the scenario set requires the fresh canonical DB + hidden cutover + archive stability. */
 export function needsCanonicalStorage(scenarios: Set<string>): boolean {
-  return scenarios.has("real-restart") || scenarios.has("real-session") || scenarios.has("real-lifecycle")
+  return (
+    scenarios.has("real-restart") || scenarios.has("real-session") || scenarios.has("real-lifecycle") || scenarios.has("real-generation")
+  )
 }
 
 /**
@@ -294,7 +309,7 @@ function parseGateJson(stdout: string, helper: string): Record<string, unknown> 
 }
 
 /**
- * Scratch-scoped environment for parent-side spawns (Bun gate helper init/read
+ * Scratch-scoped environment for parent-side spawns (Bun gate helper read
  * and the hidden-cutover CLI): XDG_* and HOME all point inside the run-owned
  * scratch so core import-time side effects cannot touch real HOME.
  */
@@ -323,7 +338,7 @@ function scratchEnv(scratch: string): NodeJS.ProcessEnv {
 export async function ensureFreshCanonicalRoot(opts: {
   scratch: string
   repoRoot: string
-}): Promise<{ dataRoot: string; dbPath: string; archiveID: string; archivePath: string }> {
+}): Promise<{ dataRoot: string; dbPath: string; archiveID: string; archivePath: string; fresh: boolean }> {
   const { scratch, repoRoot } = opts
   const dataRoot = canonicalDataRoot(scratch)
   const dbPath = canonicalDbPath(scratch)
@@ -332,17 +347,12 @@ export async function ensureFreshCanonicalRoot(opts: {
   mkdirSync(join(dataRoot, "storage", "session_diff"), { recursive: true })
   mkdirSync(join(dataRoot, "storage", "session_diff_base"), { recursive: true })
   mkdirSync(join(dataRoot, "storage", "session_share"), { recursive: true })
-  if (!existsSync(dbPath)) {
-    const helper = resolveGateHelper(repoRoot)
-    const spawned = spawnSync("bun", ["run", helper, "--init", "--dbPath", dbPath], {
-      encoding: "utf8",
-      env: scratchEnv(scratch),
-    })
-    if (spawned.status !== 0) {
-      const combined = `${spawned.stdout ?? ""}\n${spawned.stderr ?? ""}`
-      throw new Error(`gate helper init failed (status ${spawned.status}): ${combined.slice(0, 4000)}`)
-    }
-  }
+  // Deterministic harness fix: never pre-create a 0-byte SQLite stub. A stub
+  // is a non-WAL file, so production `checkpointAndVerify` fails closed with
+  // `wal_checkpoint log=-1 not zero after TRUNCATE`. Production fresh
+  // first-boot expects NO db file and bootstraps canonical in place
+  // (`fresh: true, archivePath: ""`); legacy (existing db file) archives via
+  // `runCutover`. Let the hidden CLI own that branch decision.
   const cliEntry = join(repoRoot, "packages/opencode/src/index.ts")
   if (!existsSync(cliEntry)) throw new Error(`cli entry missing at ${cliEntry}`)
   const spawned = spawnSync(
@@ -363,13 +373,17 @@ export async function ensureFreshCanonicalRoot(opts: {
   }
   let archiveID = ""
   let archivePath = ""
+  let fresh = false
+  let alreadyActive = false
   if (spawned.status === 0) {
     const parsed = parseCutoverOutput(spawned.stdout ?? "")
     archiveID = parsed.archiveID
     archivePath = parsed.archivePath
+    fresh = parsed.fresh
   } else {
     // When already active we still need to read the existing identity for evidence.
     // Read gate below to extract it.
+    alreadyActive = true
   }
   // Collect gate evidence read-only via the Bun helper (Node never loads bun:sqlite).
   const gate = await readGateEvidence(dbPath, dataRoot, repoRoot, scratch)
@@ -379,14 +393,24 @@ export async function ensureFreshCanonicalRoot(opts: {
     throw new Error(`canonical gate validation failed: ${validation} — ${JSON.stringify(gate).slice(0, 2000)}`)
   writeFileSync(join(scratch, "canonical-gate.json"), JSON.stringify(gate, null, 2))
   const before = collectArchiveState(dataRoot)
-  if (before.archiveCount === 0) {
+  // Fresh first-boot has no archive by production design — only the legacy
+  // (non-fresh) cutover must leave at least one archive. Marker/lease
+  // guardrails stay identical for both branches. Already-active reruns carry
+  // no fresh flag from the CLI; 0 archives there means the original init was
+  // fresh, >=1 means legacy — the inference only relaxes the empty-before
+  // gate, never the marker checks.
+  const isFreshInit = fresh || (alreadyActive && before.archiveCount === 0)
+  const beforeWithFresh = { ...before, fresh: isFreshInit } as ReturnType<
+    typeof collectArchiveState
+  > & { fresh: boolean }
+  if (!isFreshInit && before.archiveCount === 0) {
     throw new Error(
       `canonical archive count is 0 after cutover — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (dataRoot=${dataRoot})`,
     )
   }
-  writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify(before, null, 2))
-  console.log(`[probe] canonical gate ready: archiveID=${archiveID} dataRoot=${dataRoot}`)
-  return { dataRoot, dbPath, archiveID, archivePath }
+  writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify(beforeWithFresh, null, 2))
+  console.log(`[probe] canonical gate ready: archiveID=${archiveID} dataRoot=${dataRoot} fresh=${isFreshInit}`)
+  return { dataRoot, dbPath, archiveID, archivePath, fresh: isFreshInit }
 }
 
 /**
@@ -442,15 +466,20 @@ export function assertArchiveStable(scratch: string, dataRoot: string): ReturnTy
   const beforePath = join(scratch, "canonical-archive-before.json")
   if (!existsSync(beforePath))
     throw new Error("canonical-archive-before.json missing — ensureFreshCanonicalRoot was not called")
-  const before = JSON.parse(readFileSync(beforePath, "utf8")) as ReturnType<typeof collectArchiveState>
-  if (before.archiveCount === 0)
+  const before = JSON.parse(readFileSync(beforePath, "utf8")) as ReturnType<typeof collectArchiveState> & {
+    fresh?: boolean
+  }
+  const allowEmpty = before.fresh === true
+  if (before.archiveCount === 0 && !allowEmpty)
     throw new Error(
       `archive stability check failed: archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`,
     )
   const after = collectArchiveState(dataRoot)
   writeFileSync(join(scratch, "canonical-archive-after.json"), JSON.stringify(after, null, 2))
-  const err = archiveMutationError(before, after)
+  const err = archiveMutationError(before, after, allowEmpty ? { allowEmpty: true } : undefined)
   if (err) throw new Error(`archive stability check failed: ${err}`)
-  console.log(`[probe] PASS canonical archive stable: ${before.archiveCount} archive(s) unchanged, no marker mutation`)
+  console.log(
+    `[probe] PASS canonical archive stable: ${before.archiveCount} archive(s) unchanged, no marker mutation${allowEmpty ? " (fresh, 0 archives)" : ""}`,
+  )
   return after
 }

@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { and, desc, eq, inArray, lt, or } from "drizzle-orm"
-import { canonicalDirectory } from "./canonical-directory"
+import { authoritativeDirectory, samePhysicalDirectory } from "./canonical-directory"
 import {
   decodeMessageCursor,
   encodeMessageCursor,
@@ -35,7 +35,7 @@ function parseDirectory(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
   if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
   try {
-    return canonicalDirectory(raw)
+    return authoritativeDirectory(raw)
   } catch (e) {
     throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
   }
@@ -98,14 +98,14 @@ export function createSessionMessagesDeps(db: Database.Interface["db"]): {
         (db.select().from(SessionTable as never).where(eq(SessionTable.id as never, sessionId as never) as never).get() as unknown as Effect.Effect<typeof SessionTable.$inferSelect | undefined, never, never>).pipe(Effect.orDie),
       )
       if (!row) return { v: "1.0", status: "not_found" }
-      const storedDir = (() => {
+      const samePhysical = (() => {
         try {
-          return canonicalDirectory((row as unknown as { directory: string }).directory)
+          return samePhysicalDirectory((row as unknown as { directory: string }).directory, directory)
         } catch {
           throw internalError("invalid stored directory shape")
         }
       })()
-      if (storedDir !== directory) return { v: "1.0", status: "scope_mismatch" }
+      if (!samePhysical) return { v: "1.0", status: "scope_mismatch" }
       const base = eq(MessageTable.session_id as never, sessionId as never)
       const where = cur
         ? and(

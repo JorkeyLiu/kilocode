@@ -289,7 +289,12 @@ export default [
     // parse/readyMarker/canonical check + runScenario branch plus revert/unrevert pair comments.
     // Raised 3310 → 3330 for prompt-private-first: import + registry ref + parse/readyMarker/canonical check + runScenario branch.
     // Raised 3330 → 3350 for command-private-first: import + registry ref + parse/readyMarker/canonical check + runScenario branch.
-    rules: { complexity: ["error", 27], "max-lines": ["error", 3350] },
+    // Raised 3350 → 3400 for real-generation: generation-module import +
+    // scenario value/parse/readyMarker/canonical/provider-URL registration +
+    // runScenario branch + main/close wiring + header docs. The scenario logic
+    // itself lives in script/e2e-probe-generation.ts (same split as
+    // e2e-probe-lifecycle.ts); only the required registration points remain inline.
+    rules: { complexity: ["error", 27], "max-lines": ["error", 3400] },
   },
   {
     files: ["script/e2e-evidence.ts"],

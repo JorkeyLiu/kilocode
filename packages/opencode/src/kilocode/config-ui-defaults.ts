@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { Config } from "@/config/config"
 import { classifyPermissionPreset } from "@opencode-ai/core/kilocode/permission-presets"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import {
   acquireDrainControl,
@@ -376,6 +377,19 @@ export const fetchUiDefaultsData = (): Effect.Effect<UiDefaultsData, never, Conf
 // never reaches the service. Read-only, safely repeatable: an ambiguous
 // transport outcome may safely repeat via the same-directory SDK
 // `client.config.get` fallback projected locally; the op never retries.
+//
+// Directory equivalence uses the same `FSUtil.resolve` (realpath with ENOENT
+// fallback, no side effects) that `InstanceStore` uses for its cache keys, so
+// two spellings of the same physical directory (macOS `/var` ↔
+// `/private/var`, or any test-owned symlink) compare equal. Truly different
+// physical directories still compare unequal and fail closed with
+// `scope_mismatch`. Validation (`canonicalDirectory`) still rejects relative
+// paths and null bytes before resolution.
+function equivalentDirectory(raw: string): string {
+  const canon = canonicalDirectory(raw)
+  return FSUtil.resolve(canon)
+}
+
 export const configUiDefaultsPrivate = Effect.fn("ConfigUiDefaultsPrivate.read")(function* (raw: unknown) {
   let req: ConfigUiDefaultsRequest
   try {
@@ -386,7 +400,7 @@ export const configUiDefaultsPrivate = Effect.fn("ConfigUiDefaultsPrivate.read")
   const safe = safeConfigUiDefaultsIds(req)
   let dir: string
   try {
-    dir = canonicalDirectory(req.context.directory)
+    dir = equivalentDirectory(req.context.directory)
   } catch {
     return failed(safe, "validation.failed", VALIDATION_MESSAGE, false)
   }
@@ -411,7 +425,7 @@ export const configUiDefaultsPrivate = Effect.fn("ConfigUiDefaultsPrivate.read")
   const inner = Effect.gen(function* () {
     let stored: string
     try {
-      stored = canonicalDirectory(acquired.value.ctx.directory)
+      stored = equivalentDirectory(acquired.value.ctx.directory)
     } catch {
       return failed(safe, "internal", INTERNAL_MESSAGE, false)
     }
