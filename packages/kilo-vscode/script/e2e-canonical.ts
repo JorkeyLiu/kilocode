@@ -233,7 +233,7 @@ export function assertIsolatedOrThrow(scratch: string, dataRoot: string): void {
 }
 
 /** The real-* scenario names that consume the hermetic global root seed. */
-const REAL_SCENARIOS = ["real-session", "real-completed", "real-overflow", "real-restart", "real-lifecycle", "real-generation"]
+const REAL_SCENARIOS = ["real-session", "real-completed", "real-overflow", "real-restart", "real-lifecycle", "real-generation", "operation-crash"]
 
 /** True when the scenario set requires the fresh canonical DB + hidden cutover + archive stability. */
 export function needsCanonicalStorage(scenarios: Set<string>): boolean {

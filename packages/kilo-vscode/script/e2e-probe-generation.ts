@@ -161,10 +161,33 @@ function checkOperations(proofs: TerminalProof[]): void {
     if (p.operation.outcome !== "succeeded") {
       throw new Error(`REAL BUG: prompt operation outcome must be succeeded, got ${p.operation.outcome}`)
     }
+    if (!p.receipt) throw new Error(`REAL BUG: session_operation_receipt missing for run-owned prompt ${p.members[0]!.promptOpID}`)
+    if (p.receipt.outcome !== p.operation.outcome || p.receipt.time !== p.operation.time) {
+      throw new Error(`REAL BUG: prompt receipt outcome/time must match operation row for ${p.members[0]!.promptOpID}`)
+    }
+    if (p.receipt.replay !== "forbidden") throw new Error(`REAL BUG: prompt receipt replay must be forbidden for ${p.members[0]!.promptOpID}`)
+    if (p.receipt.genID !== p.gid) throw new Error(`REAL BUG: prompt receipt gen must equal owner ${p.gid} via member`)
+    if (p.owner.reason === "completed" && (p.receipt.used !== p.owner.used || p.receipt.limit !== p.owner.limit)) {
+      throw new Error(`REAL BUG: prompt receipt owner_used/owner_limit must match generation owner at terminal for ${p.gid}`)
+    }
+    const byOp = new Map(p.providerReceipts.map((r) => [r.opId, r]))
+    for (const o of p.providers.filter((x) => x.genID === p.gid && x.outcome === "succeeded")) {
+      const pr = byOp.get(o.opId)
+      if (!pr) throw new Error(`REAL BUG: session_operation_receipt missing for linked succeeded provider ${String(o.opId)}`)
+      if (pr.outcome !== o.outcome || pr.time !== o.time) {
+        throw new Error(`REAL BUG: provider receipt outcome/time must match operation row for ${String(o.opId)}`)
+      }
+      if (pr.replay !== "forbidden" || pr.genID !== p.gid) {
+        throw new Error(`REAL BUG: provider receipt gen/replay mismatch for ${String(o.opId)}`)
+      }
+    }
   }
   if (!proofs.some((p) => p.owner.reason === "completed")) {
     throw new Error("REAL BUG: no completed owner among real-generation proofs")
   }
+  console.log(
+    `[probe] operation receipts: ${proofs.map((p) => `${p.gid} prompt=${p.receipt ? 1 : 0} providerReceipts=${p.providerReceipts.length}`).join(", ")}`,
+  )
 }
 
 async function writeEvidence(opts: {
@@ -203,6 +226,22 @@ async function writeEvidence(opts: {
           operation: p.operation
             ? { opId: p.operation.opId, outcome: p.operation.outcome, code: p.operation.code }
             : null,
+          providers: p.providers.length,
+          linked: p.providers.filter((o) => o.genID === p.gid).length,
+          providerOps: p.providers.map((o) => ({ opId: o.opId, outcome: o.outcome, genID: o.genID })),
+          receipt: p.receipt
+            ? {
+                opId: p.receipt.opId,
+                outcome: p.receipt.outcome,
+                time: p.receipt.time,
+                genID: p.receipt.genID,
+                used: p.receipt.used,
+                limit: p.receipt.limit,
+                replay: p.receipt.replay,
+              }
+            : null,
+          providerReceipts: p.providerReceipts.length,
+          providerReceiptOps: p.providerReceipts.map((r) => ({ opId: r.opId, outcome: r.outcome, genID: r.genID })),
         })),
         finalTabs: await realTabStates(frame),
       },

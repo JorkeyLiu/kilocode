@@ -19,6 +19,8 @@
     "prompt-private-first-boundary.ts",
     "command-private-first-boundary.ts",
     "operation-projection-boundary.ts",
+    "operation-crash-boundary.ts",
+    "../../script/e2e-probe-operation-crash.ts",
     "../../script/e2e-probe.ts",
     "../../script/e2e-probe-r9.ts",
     "../../script/e2e-probe-observation-producer.ts",

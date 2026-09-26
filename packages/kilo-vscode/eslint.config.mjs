@@ -294,7 +294,11 @@ export default [
     // runScenario branch + main/close wiring + header docs. The scenario logic
     // itself lives in script/e2e-probe-generation.ts (same split as
     // e2e-probe-lifecycle.ts); only the required registration points remain inline.
-    rules: { complexity: ["error", 27], "max-lines": ["error", 3400] },
+    // Raised 3400 → 3430 for operation-crash: crash-module import + registry
+    // ref + parse/readyMarker/canonical/provider-URL registration + runScenario
+    // branch + main/close wiring. The lifecycle lives in
+    // script/e2e-probe-operation-crash.ts; only registration stays inline.
+    rules: { complexity: ["error", 27], "max-lines": ["error", 3430] },
   },
   {
     files: ["script/e2e-evidence.ts"],

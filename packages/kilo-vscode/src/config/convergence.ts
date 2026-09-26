@@ -22,13 +22,19 @@
  * scan/materialization. The hint always requests fail-safe cold convergence
  * (no hot/noop, no baseline, also cold for every asset descriptor); hint
  * failure leaves local state intact with a pending diagnostic and never
- * rewrites disk. The hint has at most one retry after a transport/timeout failure; no delivery guarantee — a parsed response (cold or any pending:
+ * rewrites disk. The adapter-level hint has at most one retry after a
+ * transport/timeout failure — a parsed response (cold or any pending:
  * failed/malformed/noop/hot/unknown/scope/id mismatch) never retries, and
  * transport/timeout status is bounded to one retried attempt with a fresh
  * internally four-key-bound observe token over the identical descriptor
- * batch. Own-write hash hits send no observe (they already
- * acquire/resolve); non-`.md`, invalid/unmaterializable, and nested-subdir
- * events keep fail-soft semantics with diagnostics and no error descriptor.
+ * batch. Eventual delivery lives one layer up: the scope-bucketed
+ * accumulator (`external-observe.ts`) parks unconverged batches
+ * descriptor-only (no bytes copy, no new queue, no timer) and redelivers
+ * them once per explicit reconcile signal (transport-recovery notification
+ * or the next canonical config read) or per fresh watcher event. Own-write
+ * hash hits send no observe (they already acquire/resolve) and never park;
+ * non-`.md`, invalid/unmaterializable, and nested-subdir events keep
+ * fail-soft semantics with diagnostics and no error descriptor.
  */
 
 export type ConvergenceDescriptor =

@@ -1799,7 +1799,9 @@ export class CanonicalConfigService implements Disposable {
   getScopeConfig(scope: "global" | "project"): Record<string, unknown> {
     if (scope === "project" && !this.hasProject) return {}
     const filePath = scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!
-    return scopeConfigView(readFile(filePath))
+    const doc = scopeConfigView(readFile(filePath))
+    this.pokeExternalObserve()
+    return doc
   }
 
   /**
@@ -2067,9 +2069,26 @@ export class CanonicalConfigService implements Disposable {
 
     this.ownWriteHashes.clear()
     this.writeLocks.clear()
+    this.observeCoalescer.dispose()
 
     this.onChangeEmitter.dispose()
     this.onErrorEmitter.dispose()
+  }
+
+  /** Redeliver parked external hints once (bounded descriptor-only, no fence/saves/bytes/replay). */
+  reconcileExternalObserve(): void {
+    if (this.disposed) return
+    try {
+      this.observeCoalescer.reconcile()
+    } catch (err) {
+      this.fireWatcherError(`External observe reconcile failed: ${String(err)}`)
+    }
+  }
+
+  /** Next-read poke: redrive parked hints; settled state stays silent (no loop). */
+  private pokeExternalObserve(): void {
+    if (this.disposed || !this.observeCoalescer.hasPending()) return
+    this.reconcileExternalObserve()
   }
 
   // ── Internal ───────────────────────────────────────────────────────

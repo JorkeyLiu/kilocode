@@ -857,6 +857,27 @@ export class ServerManager {
   }
 
   /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): hard-crash ONLY the exact
+   * current server process group via detached SIGKILL (`process.kill(-pid,
+   * SIGKILL)`), WITHOUT touching `this.instance` — the child's own exit event
+   * still clears the instance and fires the production onExit reset, so the
+   * replacement comes up through the unmodified production lifecycle. No
+   * global name kill, no production dispose change (dispose keeps SIGTERM).
+   * Returns the killed PID + port. No production effect when absent.
+   */
+  public killServerHardForFixture(): { pid: number; port: number } | null {
+    if (!isE2EFixtureEnabled()) return null
+    const instance = this.instance
+    if (!instance?.process.pid) return null
+    console.log(
+      "[Kilo New] ServerManager: fixture hard kill — SIGKILL to exact owned process group, PID:",
+      instance.process.pid,
+    )
+    ServerManager.killProcess(instance.process, "SIGKILL")
+    return { pid: instance.process.pid, port: instance.port }
+  }
+
+  /**
    * E2E fixture bridge (KILO_E2E_FIXTURE only): aggregate generation-request
    * records from the run-owned store — every `service=llm` line observed
    * across ALL server instances and extension-host launches of this run

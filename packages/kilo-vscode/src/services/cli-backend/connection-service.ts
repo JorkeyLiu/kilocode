@@ -1661,15 +1661,20 @@ export class KiloConnectionService {
   }
 
   private notifyPrivateAvailable(): void {
-    if (this.privateAvailableListeners.size === 0) return
-    const listeners = [...this.privateAvailableListeners]
-    for (const listener of listeners) {
-      try {
-        listener()
-      } catch (err) {
-        console.warn("[Kilo] PrivatePeer availability listener failed:", String(err))
+    if (this.privateAvailableListeners.size > 0) {
+      const listeners = [...this.privateAvailableListeners]
+      for (const listener of listeners) {
+        try {
+          listener()
+        } catch (err) {
+          console.warn("[Kilo] PrivatePeer availability listener failed:", String(err))
+        }
       }
     }
+    // FD-ready single point (negotiation success + quarantine recovery):
+    // redeliver parked external observe hints. No new listener owner;
+    // reconcile() is idempotent/safe-idle and never throws (internal catch/log).
+    void this.canonicalConfigService?.reconcileExternalObserve()
   }
 
   private async initPrivatePeer(server: import("./server-manager").ServerInstance, generation?: number): Promise<void> {
@@ -3469,6 +3474,20 @@ export class KiloConnectionService {
     const res = this.serverManager.killServerForFixture()
     if (!res) return null
     // authoritative epoch is the ServerManager epoch before kill (proves identity)
+    return { pid: res.pid, port: res.port, epoch: info.epoch }
+  }
+
+  /**
+   * Fixture-only hard crash: exact detached owned backend SIGKILL (no global
+   * name kill, production dispose unchanged). Exit event still clears the
+   * instance; reconnect comes up through the production lifecycle.
+   */
+  public fixtureKillServerHard(): { pid: number; port: number; epoch: number | null } | null {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture killServerHard requires KILO_E2E_FIXTURE")
+    const info = this.serverManager.getServerInfoForFixture()
+    if (!info) return null
+    const res = this.serverManager.killServerHardForFixture()
+    if (!res) return null
     return { pid: res.pid, port: res.port, epoch: info.epoch }
   }
 

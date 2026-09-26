@@ -789,6 +789,9 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.killServer", async () => {
         return connectionService.fixtureKillServer()
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.killServerHard", async () => {
+        return connectionService.fixtureKillServerHard()
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.reconnectServer", async () => {
         return connectionService.fixtureReconnectServer()
       }),

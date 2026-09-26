@@ -41,6 +41,33 @@ export interface GateOperation {
   time: number
 }
 
+export interface GateProviderOp {
+  opId: string
+  sessionID: string
+  kind: string
+  outcome: string
+  code: string
+  message: string
+  time: number
+  genID: string | null
+}
+
+export interface GateReceipt {
+  opId: string
+  sessionID: string
+  outcome: string
+  time: number
+  genID: string | null
+  genUnknown: string | null
+  used: number | null
+  limit: number | null
+  layer: string | null
+  retryOccurrence: number | null
+  nextAt: number | null
+  closeReason: string | null
+  replay: string
+}
+
 export interface GateFacts {
   dbPath: string
   sessionId: string
@@ -49,6 +76,12 @@ export interface GateFacts {
   members: GateMember[]
   owners: GateOwner[]
   operation: GateOperation | null
+  providers: GateProviderOp[]
+  hasProviderGenColumn: boolean
+  hasReceiptTable: boolean
+  receiptColumns: string[]
+  receipt: GateReceipt | null
+  providerReceipts: GateReceipt[]
 }
 
 const CLOSE = new Set(["completed", "interrupted", "error", "crash"])
@@ -132,6 +165,193 @@ export interface TerminalProof {
   owner: GateOwner
   members: GateMember[]
   operation: GateOperation | null
+  providers: GateProviderOp[]
+  receipt: GateReceipt | null
+  providerReceipts: GateReceipt[]
+}
+
+/**
+ * Read-only provider→generation link check for ONE completed generation.
+ *
+ * Scope is this generation only: every provider row already carrying this
+ * gen_id must be well-formed, and no null-link provider attempt may sit
+ * inside the owner window [occurrence, closedAt]. Anything else is exempt:
+ * other sessions are never selected (gate filters by session), other
+ * generations' links stay valid, and null-link rows outside the window are
+ * unrelated/legacy and never fail the gate.
+ *
+ * Returns `{ done: true }` when the link is proven, `{ done: false }` when
+ * the gate observed zero provider rows at all (absent — the caller reports
+ * the fact instead of fabricating an assertion), or `{ done: false, error }`
+ * for a real link violation (the poll loop keeps waiting until the deadline,
+ * then throws the last error).
+ */
+function providerLinkState(facts: GateFacts, owner: GateOwner): { done: boolean; error?: string } {
+  if (!facts.hasProviderGenColumn) return { done: false, error: `provider gen link column missing in ${facts.dbPath}` }
+  const ops = facts.providers ?? []
+  if (ops.length === 0) return { done: false }
+  const gid = owner.genID
+  const linked = ops.filter((o) => o.genID === gid)
+  if (linked.length === 0) {
+    return { done: false, error: `REAL BUG: no provider op linked to gen ${gid} among ${ops.length} provider row(s)` }
+  }
+  const bad = linked.find((o) => o.sessionID !== facts.sessionId || o.kind !== "provider")
+  if (bad) return { done: false, error: `REAL BUG: linked provider row identity mismatch ${String(bad.opId)}` }
+  const known = new Set(["in-flight", "succeeded", "failed", "ambiguous", "superseded", "abandoned"])
+  const unknown = linked.find((o) => !known.has(o.outcome))
+  if (unknown) {
+    return { done: false, error: `REAL BUG: linked provider row invalid outcome ${String(unknown.opId)}=${String(unknown.outcome)}` }
+  }
+  const occ = owner.occurrence
+  const closed = owner.closedAt
+  if (typeof occ === "number" && typeof closed === "number") {
+    const leaked = ops.filter(
+      (o) => o.genID === null && typeof o.time === "number" && o.time >= occ && o.time <= closed,
+    )
+    if (leaked.length > 0) {
+      return {
+        done: false,
+        error: `REAL BUG: ${leaked.length} provider attempt(s) without gen link in generation window ${gid}: ${leaked.map((o) => String(o.opId)).join(",")}`,
+      }
+    }
+  }
+  const flight = linked.filter((o) => o.outcome === "in-flight")
+  if (flight.length > 0) {
+    return { done: false, error: `REAL BUG: ${flight.length} linked provider row(s) still in-flight for closed gen ${gid}` }
+  }
+  if (!linked.some((o) => o.outcome !== "in-flight")) {
+    return { done: false, error: `REAL BUG: no terminal provider op linked to closed gen ${gid}` }
+  }
+  if (owner.reason === "completed" && !linked.some((o) => o.outcome === "succeeded")) {
+    return { done: false, error: `REAL BUG: completed gen ${gid} has no linked succeeded provider op` }
+  }
+  return { done: true }
+}
+
+const RECEIPT_EXPECTED_COLS = [
+  "op_id",
+  "session_id",
+  "outcome",
+  "time",
+  "gen_id",
+  "gen_unknown",
+  "owner_used",
+  "owner_limit",
+  "owner_layer",
+  "owner_retry_occurrence",
+  "owner_next_at",
+  "owner_close_reason",
+  "replay",
+]
+const RECEIPT_SECRET_FORBIDDEN = [
+  "detail",
+  "stack",
+  "result_snapshot",
+  "sandbox_token_hash",
+  "sandbox_source_session_id",
+  "sandbox_source_directory",
+  "close_time",
+  "occurrence_time",
+]
+
+function checkReceiptColumns(cols: string[]): string | undefined {
+  for (const c of RECEIPT_EXPECTED_COLS) {
+    if (!cols.includes(c)) return `REAL BUG: receipt table missing column ${c}`
+  }
+  const leaked = RECEIPT_SECRET_FORBIDDEN.filter((c) => cols.includes(c))
+  if (leaked.length > 0) return `REAL BUG: receipt table leaks secret columns ${leaked.join(",")}`
+  return undefined
+}
+
+function checkOwnerSnapshotMatch(r: GateReceipt, owner: GateOwner): string | undefined {
+  if (r.used === null || r.limit === null) return "REAL BUG: linked receipt owner_used/owner_limit must be set"
+  if (!Number.isInteger(r.used) || !Number.isInteger(r.limit) || r.used < 0 || r.limit < 0 || r.used > r.limit) {
+    return "REAL BUG: linked receipt owner_used/owner_limit invalid"
+  }
+  if (owner.reason === "completed" && (r.used !== owner.used || r.limit !== owner.limit)) {
+    return `REAL BUG: receipt owner_used/owner_limit ${String(r.used)}/${String(r.limit)} != generation owner ${String(owner.used)}/${String(owner.limit)} at terminal`
+  }
+  return undefined
+}
+
+/**
+ * Read-only session_operation_receipt check for ONE run-owned generation.
+ *
+ * Scope is this generation only: the run-owned prompt op (succeeded, via
+ * member) must carry a receipt whose terminal outcome/time matches the
+ * operation row, replay is forbidden, gen equals the owner, and owner
+ * used/limit matches the generation owner at terminal in the completed
+ * happy path; every linked succeeded provider attempt (provider gen link ==
+ * owner) must carry the same class of receipt. Unrelated rows — other
+ * generations' receipts, null-link legacy rows, explicit gen_unknown rows
+ * for other ops — are never required. A missing receipt table is an
+ * explicit failure, never a pass.
+ */
+function checkPromptReceipt(facts: GateFacts, owner: GateOwner): string | undefined {
+  const op = facts.operation
+  const gid = owner.genID
+  const r = facts.receipt
+  if (!r) return `REAL BUG: session_operation_receipt missing for run-owned prompt ${facts.opId}`
+  if (r.opId !== facts.opId) return "REAL BUG: prompt receipt opId mismatch"
+  if (r.sessionID !== facts.sessionId) return "REAL BUG: prompt receipt session mismatch"
+  if (!op) return `REAL BUG: prompt operation row missing for receipt match ${facts.opId}`
+  if (r.outcome !== op.outcome) {
+    return `REAL BUG: prompt receipt outcome ${String(r.outcome)} != operation ${String(op.outcome)}`
+  }
+  if (r.time !== op.time) {
+    return `REAL BUG: prompt receipt time ${String(r.time)} != operation ${String(op.time)}`
+  }
+  if (r.replay !== "forbidden") return `REAL BUG: prompt receipt replay must be forbidden, got ${String(r.replay)}`
+  if (r.genID !== gid || r.genUnknown !== null) {
+    return `REAL BUG: prompt receipt gen must equal owner ${gid} via member (no gen_unknown)`
+  }
+  return checkOwnerSnapshotMatch(r, owner)
+}
+
+function checkProviderReceipt(o: GateProviderOp, pr: GateReceipt | undefined, facts: GateFacts, gid: string, owner: GateOwner): string | undefined {
+  if (!pr) return `REAL BUG: session_operation_receipt missing for linked succeeded provider ${String(o.opId)}`
+  if (pr.sessionID !== facts.sessionId) return `REAL BUG: provider receipt session mismatch ${String(o.opId)}`
+  if (pr.outcome !== o.outcome) {
+    return `REAL BUG: provider receipt outcome ${String(pr.outcome)} != operation ${String(o.outcome)} for ${String(o.opId)}`
+  }
+  if (pr.time !== o.time) {
+    return `REAL BUG: provider receipt time ${String(pr.time)} != operation ${String(o.time)} for ${String(o.opId)}`
+  }
+  if (pr.replay !== "forbidden") {
+    return `REAL BUG: provider receipt replay must be forbidden for ${String(o.opId)}`
+  }
+  if (pr.genID !== gid || pr.genUnknown !== null) {
+    return `REAL BUG: provider receipt gen must equal owner ${gid} for ${String(o.opId)}`
+  }
+  const perr = checkOwnerSnapshotMatch(pr, owner)
+  if (perr) return `${perr} (provider ${String(o.opId)})`
+  return undefined
+}
+
+function checkProviderReceipts(facts: GateFacts, owner: GateOwner): string | undefined {
+  const gid = owner.genID
+  const byOp = new Map((facts.providerReceipts ?? []).map((x) => [x.opId, x]))
+  const linked = (facts.providers ?? []).filter((o) => o.genID === gid)
+  const succeeded = linked.filter((o) => o.outcome === "succeeded")
+  if (owner.reason === "completed" && linked.length > 0 && succeeded.length === 0) {
+    return `REAL BUG: completed gen ${gid} has no linked succeeded provider op for receipt proof`
+  }
+  for (const o of succeeded) {
+    const err = checkProviderReceipt(o, byOp.get(o.opId), facts, gid, owner)
+    if (err) return err
+  }
+  return undefined
+}
+
+function receiptLinkState(facts: GateFacts, owner: GateOwner): { done: boolean; error?: string } {
+  if (!facts.hasReceiptTable) return { done: false, error: `REAL BUG: session_operation_receipt table missing in ${facts.dbPath}` }
+  const colErr = checkReceiptColumns(facts.receiptColumns ?? [])
+  if (colErr) return { done: false, error: colErr }
+  const promptErr = checkPromptReceipt(facts, owner)
+  if (promptErr) return { done: false, error: promptErr }
+  const providerErr = checkProviderReceipts(facts, owner)
+  if (providerErr) return { done: false, error: providerErr }
+  return { done: true }
 }
 
 /**
@@ -139,6 +359,37 @@ export interface TerminalProof {
  * so canonical SQLite must carry exactly one owner + >=1 members for the op
  * with a terminal close. Polls bounded for the terminal close to land.
  */
+function terminalOwner(facts: GateFacts): GateOwner | undefined {
+  if (!facts.session.exists) throw new Error(`session ${facts.sessionId} missing in canonical DB`)
+  if (facts.members.length === 0 || facts.owners.length !== 1) return undefined
+  const owner = facts.owners[0]!
+  const gid = owner.genID
+  if (facts.members.map((m) => checkMember(m, gid, facts.opId, facts.sessionId)).find(Boolean)) return undefined
+  if (checkOwner(owner, facts.sessionId)) return undefined
+  if (owner.reason === null || owner.closedAt === null || owner.nextAt !== null) return undefined
+  const op = facts.operation
+  if (op && op.opId !== facts.opId) throw new Error("operation opId mismatch")
+  return owner
+}
+
+function absentProviderProof(facts: GateFacts, owner: GateOwner): TerminalProof | undefined {
+  if ((facts.providers ?? []).length > 0) return undefined
+  const rec = receiptLinkState(facts, owner)
+  if (!rec.done) return undefined
+  console.log(
+    `[probe] provider gen link: no provider op rows in session ${facts.sessionId} for completed gen ${owner.genID} (fixture produced none, no link assertion)`,
+  )
+  return {
+    gid: owner.genID,
+    owner,
+    members: facts.members,
+    operation: facts.operation,
+    providers: [],
+    receipt: facts.receipt,
+    providerReceipts: facts.providerReceipts ?? [],
+  }
+}
+
 export function assertTerminalGeneration(
   root: string,
   scratch: string,
@@ -149,19 +400,26 @@ export function assertTerminalGeneration(
 ): TerminalProof {
   const deadline = Date.now() + timeoutMs
   let last: GateFacts | null = null
+  let pending: string | undefined
   for (;;) {
     last = runGenerationGate(root, scratch, dbPath, sessionId, opId)
-    if (!last.session.exists) throw new Error(`session ${sessionId} missing in canonical DB`)
-    if (last.members.length > 0 && last.owners.length === 1) {
-      const owner = last.owners[0]!
-      const gid = owner.genID
-      const memberErr = last.members.map((m) => checkMember(m, gid, opId, sessionId)).find(Boolean)
-      const ownerErr = checkOwner(owner, sessionId)
-      if (!memberErr && !ownerErr && owner.reason !== null && owner.closedAt !== null && owner.nextAt === null) {
-        const op = last.operation
-        if (op && op.opId !== opId) throw new Error("operation opId mismatch")
-        return { gid, owner, members: last.members, operation: op }
+    const owner = terminalOwner(last)
+    if (owner) {
+      const link = providerLinkState(last, owner)
+      const rec = receiptLinkState(last, owner)
+      if (link.done && rec.done) {
+        return {
+          gid: owner.genID,
+          owner,
+          members: last.members,
+          operation: last.operation,
+          providers: last.providers ?? [],
+          receipt: last.receipt,
+          providerReceipts: last.providerReceipts ?? [],
+        }
       }
+      pending = link.error ?? rec.error
+      if (link.done && rec.error) pending = rec.error
     }
     if (Date.now() > deadline) break
     const end = Date.now() + 1000
@@ -169,6 +427,14 @@ export function assertTerminalGeneration(
       // bounded sleep without timers
     }
   }
+  if (last) {
+    const owner = terminalOwner(last)
+    if (owner) {
+      const absent = absentProviderProof(last, owner)
+      if (absent) return absent
+    }
+  }
+  if (pending) throw new Error(`${pending}: ${JSON.stringify(last).slice(0, 800)}`)
   throw new Error(`REAL BUG: no terminal owner/member for completed ${opId}: ${JSON.stringify(last).slice(0, 800)}`)
 }
 
@@ -218,9 +484,42 @@ export function assertRealSnapGenerations(
     closedAt: p.owner.closedAt,
     nextAt: p.owner.nextAt,
     operation: p.operation ? { opId: p.operation.opId, outcome: p.operation.outcome, code: p.operation.code } : null,
+    providers: p.providers.length,
+    linked: p.providers.filter((o) => o.genID === p.gid).length,
+    providerOps: p.providers.map((o) => ({ opId: o.opId, outcome: o.outcome, genID: o.genID })),
+    receipt: p.receipt
+      ? {
+          opId: p.receipt.opId,
+          outcome: p.receipt.outcome,
+          time: p.receipt.time,
+          genID: p.receipt.genID,
+          used: p.receipt.used,
+          limit: p.receipt.limit,
+          replay: p.receipt.replay,
+        }
+      : null,
+    providerReceipts: p.providerReceipts.length,
+    providerReceiptOps: p.providerReceipts.map((r) => ({ opId: r.opId, outcome: r.outcome, genID: r.genID })),
   }))
   writeFileSync(join(scratch, evidence), JSON.stringify({ dbPath, prefix, proofs: rows }, null, 2))
   console.log(`[probe] PASS real generations terminal (${prefix}): ${rows.map((e) => `${e.opId}->${e.gid} ${e.reason} ${e.used}/${e.limit}`).join(", ")}`)
+  const checked = proofs.filter((p) => p.providers.length > 0)
+  if (checked.length === 0) {
+    console.log(`[probe] provider gen link: no provider op rows observed for ${prefix} (fixture produced none, no link assertion)`)
+  } else {
+    console.log(
+      `[probe] PASS provider gen link (${prefix}): ${checked.map((p) => `${p.gid} linked ${p.providers.filter((o) => o.genID === p.gid).length}/${p.providers.length}`).join(", ")}`,
+    )
+  }
+  const receiptCounts = proofs.map((p) => ({
+    gid: p.gid,
+    promptReceipt: p.receipt ? 1 : 0,
+    providerReceipts: p.providerReceipts.length,
+    linkedSucceeded: p.providers.filter((o) => o.genID === p.gid && o.outcome === "succeeded").length,
+  }))
+  console.log(
+    `[probe] PASS operation receipts (${prefix}): ${receiptCounts.map((r) => `${r.gid} prompt=${r.promptReceipt} providerReceipts=${r.providerReceipts} linkedSucceeded=${r.linkedSucceeded}`).join(", ")}`,
+  )
   return proofs
 }
 

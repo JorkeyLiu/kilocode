@@ -14,6 +14,13 @@
  *   --scratch <dir> --dbPath <path> --sessionId <ses> --opId <prompt:msg>
  *     read one prompt op's generation facts as JSON.
  *
+ * Besides the prompt owner/member + prompt operation receipt, the gate also
+ * returns every `provider` operation row for the session (op_id, outcome,
+ * time, nullable gen_id link). Harness-side assertions scope the link check
+ * to this generation only (gen_id equality + in-window leak check); unrelated
+ * sessions, other generations' links, and out-of-window legacy null rows are
+ * never required to link.
+ *
  * Isolation: dbPath must equal <scratch>/xdg-data/kilo/kilo.db exactly
  * (resolved). Anything else fails closed so a run can never observe the
  * user's real HOME/XDG data.
@@ -100,6 +107,62 @@ try {
   const orow = raw.query(
     "SELECT op_id, session_id, op_kind, outcome, code, message, time FROM session_operation WHERE op_id=?",
   ).get(opId) as Record<string, unknown> | undefined
+  const cols = raw.query("SELECT name FROM pragma_table_info('session_operation')").all() as Array<
+    Record<string, unknown>
+  >
+  const linked = cols.some((c) => c.name === "gen_id")
+  const prows = (
+    linked
+      ? raw.query(
+          "SELECT op_id, session_id, op_kind, outcome, code, message, time, gen_id FROM session_operation WHERE session_id=? AND op_kind='provider' ORDER BY time, op_id",
+        ).all(sessionId)
+      : raw.query(
+          "SELECT op_id, session_id, op_kind, outcome, code, message, time FROM session_operation WHERE session_id=? AND op_kind='provider' ORDER BY time, op_id",
+        ).all(sessionId)
+  ) as Array<Record<string, unknown>>
+  const providers = prows.map((r) => ({
+    opId: r.op_id,
+    sessionID: r.session_id,
+    kind: r.op_kind,
+    outcome: r.outcome,
+    code: r.code,
+    message: r.message,
+    time: r.time,
+    genID: typeof r.gen_id === "string" ? (r.gen_id as string) : null,
+  }))
+  const hasReceipt = has("session_operation_receipt")
+  const mapReceipt = (r: Record<string, unknown>) => ({
+    opId: r.op_id,
+    sessionID: r.session_id,
+    outcome: r.outcome,
+    time: r.time,
+    genID: typeof r.gen_id === "string" ? (r.gen_id as string) : null,
+    genUnknown: typeof r.gen_unknown === "string" ? (r.gen_unknown as string) : null,
+    used: typeof r.owner_used === "number" ? (r.owner_used as number) : null,
+    limit: typeof r.owner_limit === "number" ? (r.owner_limit as number) : null,
+    layer: typeof r.owner_layer === "string" ? (r.owner_layer as string) : null,
+    retryOccurrence: typeof r.owner_retry_occurrence === "number" ? (r.owner_retry_occurrence as number) : null,
+    nextAt: typeof r.owner_next_at === "number" ? (r.owner_next_at as number) : null,
+    closeReason: typeof r.owner_close_reason === "string" ? (r.owner_close_reason as string) : null,
+    replay: r.replay,
+  })
+  let receiptColumns: Array<string> = []
+  let receipt: ReturnType<typeof mapReceipt> | null = null
+  let providerReceipts: Array<ReturnType<typeof mapReceipt>> = []
+  if (hasReceipt) {
+    const rcols = raw.query("SELECT name FROM pragma_table_info('session_operation_receipt')").all() as Array<
+      Record<string, unknown>
+    >
+    receiptColumns = rcols.map((c) => String(c.name))
+    const rrow = raw.query(
+      "SELECT op_id, session_id, outcome, time, gen_id, gen_unknown, owner_used, owner_limit, owner_layer, owner_retry_occurrence, owner_next_at, owner_close_reason, replay FROM session_operation_receipt WHERE op_id=?",
+    ).get(opId) as Record<string, unknown> | undefined
+    if (rrow) receipt = mapReceipt(rrow)
+    const prrows = raw.query(
+      "SELECT op_id, session_id, outcome, time, gen_id, gen_unknown, owner_used, owner_limit, owner_layer, owner_retry_occurrence, owner_next_at, owner_close_reason, replay FROM session_operation_receipt WHERE session_id=?",
+    ).all(sessionId) as Array<Record<string, unknown>>
+    providerReceipts = prrows.map(mapReceipt)
+  }
   const out = {
     dbPath,
     sessionId,
@@ -118,6 +181,12 @@ try {
           time: orow.time,
         }
       : null,
+    providers,
+    hasProviderGenColumn: linked,
+    hasReceiptTable: hasReceipt,
+    receiptColumns,
+    receipt,
+    providerReceipts,
   }
   console.log(JSON.stringify(out))
 } finally {

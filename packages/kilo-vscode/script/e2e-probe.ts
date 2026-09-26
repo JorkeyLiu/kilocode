@@ -310,6 +310,7 @@ import { assertPromptPrivateFirstLifecycle } from "./e2e-probe-prompt-private"
 import { assertRealCompletedGenerations, assertRealSnapGenerations } from "./e2e-generation-assert"
 import { assertCommandPrivateFirstLifecycle } from "./e2e-probe-command-private"
 import { assertOperationProjectionLifecycle } from "./e2e-probe-operation-projection"
+import { assertOperationCrashLifecycle, prepareOperationCrash } from "./e2e-probe-operation-crash"
 import {
   COMMAND_PRIVATE_FIRST_SCENARIO,
   OBSERVATION_PRODUCER_DELETE_SCENARIO,
@@ -318,6 +319,7 @@ import {
   OBSERVATION_PRODUCER_SANDBOX_SCENARIO,
   OBSERVATION_PRODUCER_SCENARIO,
   OBSERVATION_PRODUCER_UPDATE_SCENARIO,
+  OPERATION_CRASH_SCENARIO,
   OPERATION_PROJECTION_SCENARIO,
   PROMPT_PRIVATE_FIRST_SCENARIO,
   e2eTimeoutForScenario,
@@ -401,6 +403,7 @@ const SCENARIO_VALUES = [
   PROMPT_PRIVATE_FIRST_SCENARIO,
   COMMAND_PRIVATE_FIRST_SCENARIO,
   OPERATION_PROJECTION_SCENARIO,
+  OPERATION_CRASH_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -428,7 +431,8 @@ export function parseScenarios(value: string): Set<string> {
     value === OBSERVATION_PRODUCER_SANDBOX_SCENARIO ||
     value === PROMPT_PRIVATE_FIRST_SCENARIO ||
     value === COMMAND_PRIVATE_FIRST_SCENARIO ||
-    value === OPERATION_PROJECTION_SCENARIO
+    value === OPERATION_PROJECTION_SCENARIO ||
+    value === OPERATION_CRASH_SCENARIO
   ) {
     return new Set([value])
   }
@@ -461,7 +465,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has(OBSERVATION_PRODUCER_SANDBOX_SCENARIO) ||
     parseScenarios(value).has(PROMPT_PRIVATE_FIRST_SCENARIO) ||
     parseScenarios(value).has(COMMAND_PRIVATE_FIRST_SCENARIO) ||
-    parseScenarios(value).has(OPERATION_PROJECTION_SCENARIO)
+    parseScenarios(value).has(OPERATION_PROJECTION_SCENARIO) ||
+    parseScenarios(value).has(OPERATION_CRASH_SCENARIO)
   )
 }
 
@@ -470,16 +475,18 @@ export function isLoopbackProviderBaseURL(value: string | undefined): boolean {
   return !!value && /^https?:\/\/(127\.0\.0\.1|localhost):\d+\/v1$/.test(value)
 }
 
-// Pure URL selection for single-process launch: real-session->hang, real-lifecycle/real-generation->scripted model, else undefined.
+// Pure URL selection for single-process launch: real-session/operation-crash->hang, real-lifecycle/real-generation->scripted model, else undefined.
 export function selectProviderBaseURL(
   s: Set<string>,
   hangPort?: number,
   lifecyclePort?: number,
   generationPort?: number,
+  crashPort?: number,
 ): string | undefined {
   if (s.has("real-session") && hangPort !== undefined) return `http://127.0.0.1:${hangPort}/v1`
   if (s.has("real-lifecycle") && lifecyclePort !== undefined) return `http://127.0.0.1:${lifecyclePort}/v1`
   if (s.has("real-generation") && generationPort !== undefined) return `http://127.0.0.1:${generationPort}/v1`
+  if (s.has(OPERATION_CRASH_SCENARIO) && crashPort !== undefined) return `http://127.0.0.1:${crashPort}/v1`
   return undefined
 }
 
@@ -2595,6 +2602,7 @@ async function runScenario(
   wtModel?: ScriptedModelHandle,
   lifecycleModel?: ScriptedModelHandle,
   generationModel?: ScriptedModelHandle,
+  crashHang?: import("./e2e-probe-operation-crash").CrashHang,
 ): Promise<void> {
   if (scenarios.has("tab-close")) {
     await assertTabCloseSuccessor(browser, plan, scratch)
@@ -2686,6 +2694,11 @@ async function runScenario(
   if (scenarios.has(OPERATION_PROJECTION_SCENARIO)) {
     await assertOperationProjectionLifecycle(browser, plan, scratch)
     console.log("[probe] operation-projection lifecycle assertion passed")
+  }
+  if (scenarios.has(OPERATION_CRASH_SCENARIO)) {
+    if (!crashHang) throw new Error("probe: operation-crash preparation missing")
+    await assertOperationCrashLifecycle(browser, plan, scratch, workspace, crashHang, root)
+    console.log("[probe] operation-crash lifecycle assertion passed")
   }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
@@ -2800,6 +2813,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has(PROMPT_PRIVATE_FIRST_SCENARIO)) return "prompt-private-ready"
   if (scenarios.has(COMMAND_PRIVATE_FIRST_SCENARIO)) return "command-private-ready"
   if (scenarios.has(OPERATION_PROJECTION_SCENARIO)) return "operation-projection-ready"
+  if (scenarios.has(OPERATION_CRASH_SCENARIO)) return "operation-crash-ready"
   return "ready"
 }
 
@@ -3075,6 +3089,7 @@ async function main() {
   let lifecycleModel: Awaited<ReturnType<typeof prepareRealLifecycle>>
   let generationModel: Awaited<ReturnType<typeof prepareRealGeneration>>
   let wtModel: Awaited<ReturnType<typeof prepareWorktreeRemoval>>
+  let crashHang: Awaited<ReturnType<typeof prepareOperationCrash>>
   try {
     // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
     evidenceDir = evidenceDirFor(scratch)
@@ -3102,6 +3117,7 @@ async function main() {
     wtModel = await prepareWorktreeRemoval(workspace, scenarios.has("worktree-removal"))
     lifecycleModel = await prepareRealLifecycle(workspace, scenarios.has("real-lifecycle"))
     generationModel = await prepareRealGeneration(workspace, scenarios.has("real-generation"))
+    crashHang = await prepareOperationCrash(workspace, scenarios.has(OPERATION_CRASH_SCENARIO))
     // canonical post-cutover wiring (P4.2 H-10/H-11 for real-restart + real-session):
     // allocate a run-owned isolated temp root at scratch/xdg-data/kilo, execute
     // the existing hidden `__internal-storage-cutover cutover --data-root` against
@@ -3162,7 +3178,7 @@ async function main() {
         console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
-      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port, generationModel?.port)
+      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port, generationModel?.port, crashHang?.port)
       vscodeRun = launchVSCode({
         executable,
         runnerOut,
@@ -3204,6 +3220,7 @@ async function main() {
           wtModel,
           lifecycleModel,
           generationModel,
+          crashHang,
         )
         // Real-session post-boundary canonical archive stability: same fresh
         // canonical data root must show no archive mutation after the panel
@@ -3234,7 +3251,7 @@ async function main() {
   }
 
   // Release the run-owned scripted/hang listeners before process settle + scratch deletion.
-  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel })
+  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel, crashHang })
 
   // VS Code exits only after the runner sees the `done` marker (or times out).
   // Await it before touching the scratch dir so the unique user-data/extensions
@@ -3309,8 +3326,9 @@ async function closeHandles(opts: {
   lifecycleModel: { close: () => Promise<void> } | undefined
   wtModel: { close: () => Promise<void> } | undefined
   generationModel: { close: () => Promise<void> } | undefined
+  crashHang?: { close: () => Promise<void> } | undefined
 }) {
-  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel } = opts
+  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel, crashHang } = opts
   if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
   if (completed)
     await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
@@ -3324,6 +3342,7 @@ async function closeHandles(opts: {
     await wtModel.close().catch((err) => console.error("[probe] worktree-removal scripted model close failed:", err))
   if (generationModel)
     await generationModel.close().catch((err) => console.error("[probe] generation scripted model close failed:", err))
+  if (crashHang) await crashHang.close().catch((err) => console.error("[probe] crash hang close failed:", err))
 }
 
 async function verifyCleanup(userData: string, cdpPort: number, scratch: string) {
