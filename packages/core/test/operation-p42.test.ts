@@ -326,6 +326,12 @@ describe("P4.2 persistence/projection redaction boundary", () => {
         time: 1000,
       }
       // Both scrub to same redacted value, should be idempotent after first put
+      const before = yield* db
+        .select()
+        .from(SessionChangefeedTable)
+        .where(eq(SessionChangefeedTable.session_id, s.id))
+        .all()
+        .pipe(Effect.orDie)
       const first = yield* SessionOperation.put(db, s.id, recA)
       expect(first.message).toBe("apiKey=[redacted]")
       const rev1 = yield* db
@@ -340,9 +346,17 @@ describe("P4.2 persistence/projection redaction boundary", () => {
         .where(eq(SessionChangefeedTable.session_id, s.id))
         .all()
         .pipe(Effect.orDie)
-      expect(feed1.length).toBe(1)
-      const seq1 = feed1[0]!.seq
-      const revSeq1 = feed1[0]!.revision
+      // Prompt terminal persists changed + generation rows in the same revision.
+      expect(feed1.length).toBe(before.length + 2)
+      const fresh = feed1.filter((r) => r.seq > before.reduce((m, x) => (x.seq > m ? x.seq : m), 0))
+      expect(fresh.length).toBe(2)
+      const ordered = [...fresh].sort((a, b) => a.seq - b.seq)
+      expect(ordered[0]!.kind).toBe("changed")
+      expect(ordered[1]!.kind).toBe("generation")
+      expect(ordered[0]!.revision).toBe(rev1!.rev)
+      expect(ordered[1]!.revision).toBe(rev1!.rev)
+      const seq1 = ordered[1]!.seq
+      const revSeq1 = ordered[1]!.revision
       expect(revSeq1).toBe(rev1!.rev)
       const second = yield* SessionOperation.put(db, s.id, recB)
       expect(second).toEqual(first)
@@ -360,8 +374,9 @@ describe("P4.2 persistence/projection redaction boundary", () => {
         .all()
         .pipe(Effect.orDie)
       expect(feed2.length).toBe(feed1.length)
-      expect(feed2[0]!.seq).toBe(seq1)
-      expect(feed2[0]!.revision).toBe(revSeq1)
+      const last2 = feed2.reduce((a, b) => (a.seq > b.seq ? a : b))
+      expect(last2.seq).toBe(seq1)
+      expect(last2.revision).toBe(revSeq1)
       // different scrubbed message should be conflict (terminal already)
       const recC: SessionOperation.FailureRecord = {
         opId,

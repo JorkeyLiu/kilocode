@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Context, Effect, Layer } from "effect"
+import { sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -88,9 +89,9 @@ describe("generation retry charge CAS", () => {
           yield* SessionGeneration.begin(db, sid, gen, "msg_charge_01", 2).pipe(Effect.orDie)
           const before = ((yield* feedCount(db)) as unknown[]).length
           const c1 = yield* SessionGeneration.charge(db, sid, gen).pipe(Effect.orDie)
-          expect(c1).toEqual({ charged: true, used: 1, limit: 2, missing: false, closed: false, exhausted: false, layer: null, nextAt: null })
+          expect(c1).toEqual({ charged: true, used: 1, limit: 2, missing: false, closed: false, exhausted: false, layer: null, occurrenceTime: null, nextAt: null })
           const c2 = yield* SessionGeneration.charge(db, sid, gen).pipe(Effect.orDie)
-          expect(c2).toEqual({ charged: true, used: 2, limit: 2, missing: false, closed: false, exhausted: false, layer: null, nextAt: null })
+          expect(c2).toEqual({ charged: true, used: 2, limit: 2, missing: false, closed: false, exhausted: false, layer: null, occurrenceTime: null, nextAt: null })
           const c3 = yield* SessionGeneration.charge(db, sid, gen).pipe(Effect.orDie)
           expect(c3.charged).toBe(false)
           expect(c3.exhausted).toBe(true)
@@ -207,7 +208,10 @@ describe("generation retry charge CAS", () => {
           expect(closed?.reason).toBe("crash")
           expect(closed?.occurrence).toBe(ids.occurrence)
           expect(Number.isFinite(closed?.closedAt)).toBe(true)
-          expect(closed?.closedAt).not.toBe(ids.occurrence)
+          // Receipt semantics: close_time is the sweep receipt, never forged
+          // from occurrence. Same-millisecond close is legal, so assert
+          // ordering (>=) instead of inequality.
+          expect((closed?.closedAt as number) >= (ids.occurrence as number)).toBe(true)
           expect(((yield* feedCount(db)) as unknown[]).length).toBe(before)
         }),
       )
@@ -231,27 +235,31 @@ describe("generation retry charge CAS", () => {
           const occurrenceTime = Date.now()
           const nextAt = occurrenceTime + 1500
           const c1 = yield* SessionGeneration.charge(db, sid, gen, { layer: "provider", occurrenceTime, nextAt }).pipe(Effect.orDie)
-          expect(c1).toEqual({ charged: true, used: 1, limit: 1, missing: false, closed: false, exhausted: false, layer: "provider", nextAt })
+          expect(c1).toEqual({ charged: true, used: 1, limit: 1, missing: false, closed: false, exhausted: false, layer: "provider", occurrenceTime, nextAt })
           const owner = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
           expect(owner?.used).toBe(1)
           expect(owner?.layer).toBe("provider")
+          expect(owner?.retryOccurrence).toBe(occurrenceTime)
           expect(owner?.nextAt).toBe(nextAt)
           const intent = yield* SessionGeneration.getRetryIntent(db, gen).pipe(Effect.orDie)
-          expect(intent).toEqual({ genID: gen, sessionID: sid, scope: sid, layer: "provider", nextAt, used: 1, limit: 1, replay: false })
+          expect(intent).toEqual({ genID: gen, sessionID: sid, scope: sid, layer: "provider", occurrenceTime, nextAt, used: 1, limit: 1, replay: false })
           // Exhausted retry with a different layer must fail closed without overwriting the persisted intent.
           const c2 = yield* SessionGeneration.charge(db, sid, gen, { layer: "broker", occurrenceTime: nextAt, nextAt: nextAt + 500 }).pipe(Effect.orDie)
           expect(c2.charged).toBe(false)
           expect(c2.exhausted).toBe(true)
           expect(c2.layer).toBe("provider")
+          expect(c2.occurrenceTime).toBe(occurrenceTime)
           expect(c2.nextAt).toBe(nextAt)
           const kept = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
           expect(kept?.layer).toBe("provider")
+          expect(kept?.retryOccurrence).toBe(occurrenceTime)
           expect(kept?.nextAt).toBe(nextAt)
           // Invalid schedule dies without writing (fail-closed at the budget layer).
           const bad = yield* SessionGeneration.charge(db, sid, gen, { layer: "provider", occurrenceTime: nextAt, nextAt: nextAt - 1 } as never).pipe(Effect.exit)
           expect(bad._tag).toBe("Failure")
           const kept2 = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
           expect(kept2?.layer).toBe("provider")
+          expect(kept2?.retryOccurrence).toBe(occurrenceTime)
           expect(kept2?.nextAt).toBe(nextAt)
           expect(((yield* feedCount(db)) as unknown[]).length).toBe(before)
         }),
@@ -285,11 +293,15 @@ describe("generation retry charge CAS", () => {
           const owner = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
           expect(owner?.used).toBe(2)
           expect(owner?.layer).not.toBeNull()
+          expect(owner?.retryOccurrence).toBe(base)
           expect(owner?.nextAt).not.toBeNull()
           const winnerNextAts = new Set(wins.map((w) => w.nextAt))
           expect(winnerNextAts.has(owner?.nextAt ?? -1)).toBe(true)
+          const winnerOccurrences = new Set(wins.map((w) => w.occurrenceTime))
+          expect(winnerOccurrences.has(owner?.retryOccurrence ?? -1)).toBe(true)
           const intent = yield* SessionGeneration.getRetryIntent(db, gen).pipe(Effect.orDie)
           expect(intent?.layer as unknown as string).toBe(owner?.layer as unknown as string)
+          expect(intent?.occurrenceTime as unknown as number).toBe(owner?.retryOccurrence as unknown as number)
           expect(intent?.nextAt as unknown as number).toBe(owner?.nextAt as unknown as number)
           expect(intent?.replay).toBe(false)
           expect(intent?.scope).toBe(sid as unknown as string)
@@ -317,16 +329,19 @@ describe("generation retry charge CAS", () => {
           const nextAt = occurrenceTime + 800
           yield* SessionGeneration.charge(db, sid, gen, { layer: "incomplete", occurrenceTime, nextAt }).pipe(Effect.orDie)
           expect((yield* SessionGeneration.getRetryIntent(db, gen).pipe(Effect.orDie))?.nextAt).toBe(nextAt)
+          expect((yield* SessionGeneration.getRetryIntent(db, gen).pipe(Effect.orDie))?.occurrenceTime).toBe(occurrenceTime)
           yield* SessionGeneration.close(db, sid, gen, "completed").pipe(Effect.orDie)
           const closed = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
           expect(closed?.reason).toBe("completed")
           expect(closed?.used).toBe(1)
           expect(closed?.layer).toBe("incomplete")
+          expect(closed?.retryOccurrence).toBe(occurrenceTime)
           expect(closed?.nextAt).toBeNull()
           expect(yield* SessionGeneration.getRetryIntent(db, gen)).toBeUndefined()
           const after = yield* SessionGeneration.charge(db, sid, gen, { layer: "broker", occurrenceTime: nextAt, nextAt: nextAt + 100 }).pipe(Effect.orDie)
           expect(after.charged).toBe(false)
           expect(after.closed).toBe(true)
+          expect(after.occurrenceTime).toBe(occurrenceTime)
           expect(after.nextAt).toBeNull()
           // Missing rows carry no intent and fabricate nothing.
           expect(yield* SessionGeneration.getRetryIntent(db, "gen_missing_intent").pipe(Effect.orDie)).toBeUndefined()
@@ -351,7 +366,7 @@ describe("generation retry charge CAS", () => {
           const occurrenceTime = Date.now()
           const nextAt = occurrenceTime + 900
           yield* SessionGeneration.charge(db, sid, gen, { layer: "broker", occurrenceTime, nextAt }).pipe(Effect.orDie)
-          return { gen, nextAt }
+          return { gen, occurrenceTime, nextAt }
         }),
       )
       await withStack(file, ({ db }) =>
@@ -362,8 +377,120 @@ describe("generation retry charge CAS", () => {
           expect(closed?.reason).toBe("crash")
           expect(closed?.used).toBe(1)
           expect(closed?.layer).toBe("broker")
+          expect(closed?.retryOccurrence).toBe(ids.occurrenceTime)
           expect(closed?.nextAt).toBeNull()
+          // Receipt semantics: close_time is the sweep receipt, never the
+          // failure occurrence. Same-millisecond close is legal, so assert
+          // ordering (>=) instead of inequality.
+          expect((closed?.closedAt as number) >= ids.occurrenceTime).toBe(true)
           expect(yield* SessionGeneration.getRetryIntent(db, ids.gen)).toBeUndefined()
+        }),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("sequential charges overwrite the last occurrence (each charge is one budget unit)", async () => {
+    const { dir, file } = await freshFile()
+    try {
+      await withStack(file, ({ db, svc }) =>
+        Effect.gen(function* () {
+          yield* setupProject(db)
+          const s = yield* svc.create({ location: { directory: AbsolutePath.make("/project") } }).pipe(Effect.orDie)
+          const sid = s.id as never
+          yield* SessionOperation.ensurePromptInFlight(db, sid, SessionOperation.promptId("msg_charge_last"))
+          const gen = `gen_charge_last_${Date.now()}`
+          yield* SessionGeneration.begin(db, sid, gen, "msg_charge_last", 3).pipe(Effect.orDie)
+          // Persisted layer/occurrenceTime/nextAt always reflect the last
+          // charged failure occurrence: no idempotency key, no scheduler.
+          const first = Date.now()
+          const firstNext = first + 500
+          const c1 = yield* SessionGeneration.charge(db, sid, gen, { layer: "provider", occurrenceTime: first, nextAt: firstNext }).pipe(Effect.orDie)
+          expect(c1.charged).toBe(true)
+          expect(c1.used).toBe(1)
+          const second = firstNext + 500
+          const secondNext = second + 500
+          const c2 = yield* SessionGeneration.charge(db, sid, gen, { layer: "broker", occurrenceTime: second, nextAt: secondNext }).pipe(Effect.orDie)
+          expect(c2.charged).toBe(true)
+          expect(c2.used).toBe(2)
+          expect(c2.layer).toBe("broker")
+          expect(c2.occurrenceTime).toBe(second)
+          expect(c2.nextAt).toBe(secondNext)
+          const owner = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
+          expect(owner?.used).toBe(2)
+          expect(owner?.layer).toBe("broker")
+          expect(owner?.retryOccurrence).toBe(second)
+          expect(owner?.nextAt).toBe(secondNext)
+          const intent = yield* SessionGeneration.getRetryIntent(db, gen).pipe(Effect.orDie)
+          expect(intent?.layer).toBe("broker")
+          expect(intent?.occurrenceTime).toBe(second)
+          expect(intent?.nextAt).toBe(secondNext)
+        }),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("non-safe-integer schedule dies without writing", async () => {
+    const { dir, file } = await freshFile()
+    try {
+      await withStack(file, ({ db, svc }) =>
+        Effect.gen(function* () {
+          yield* setupProject(db)
+          const s = yield* svc.create({ location: { directory: AbsolutePath.make("/project") } }).pipe(Effect.orDie)
+          const sid = s.id as never
+          yield* SessionOperation.ensurePromptInFlight(db, sid, SessionOperation.promptId("msg_charge_schedule_guard"))
+          const gen = `gen_charge_schedule_guard_${Date.now()}`
+          yield* SessionGeneration.begin(db, sid, gen, "msg_charge_schedule_guard", 2).pipe(Effect.orDie)
+          const base = Date.now()
+          const cases = [
+            { layer: "provider", occurrenceTime: -1, nextAt: base },
+            { layer: "provider", occurrenceTime: 1.5, nextAt: base },
+            { layer: "provider", occurrenceTime: Number.MAX_SAFE_INTEGER + 1, nextAt: Number.MAX_SAFE_INTEGER + 2 },
+            { layer: "provider", occurrenceTime: base, nextAt: -1 },
+            { layer: "provider", occurrenceTime: base, nextAt: base + 0.5 },
+            { layer: "provider", occurrenceTime: Number.NaN, nextAt: base },
+            { layer: "provider", occurrenceTime: base, nextAt: Number.POSITIVE_INFINITY },
+          ] as never[]
+          for (const schedule of cases) {
+            const res = yield* SessionGeneration.charge(db, sid, gen, schedule).pipe(Effect.exit)
+            expect(res._tag).toBe("Failure")
+          }
+          const owner = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
+          expect(owner?.used).toBe(0)
+          expect(owner?.layer).toBeNull()
+          expect(owner?.retryOccurrence).toBeNull()
+          expect(owner?.nextAt).toBeNull()
+          expect(yield* SessionGeneration.getRetryIntent(db, gen)).toBeUndefined()
+        }),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("closed orphan occurrence without layer dies", async () => {
+    const { dir, file } = await freshFile()
+    try {
+      await withStack(file, ({ db, svc }) =>
+        Effect.gen(function* () {
+          yield* setupProject(db)
+          const s = yield* svc.create({ location: { directory: AbsolutePath.make("/project") } }).pipe(Effect.orDie)
+          const sid = s.id as never
+          yield* SessionOperation.ensurePromptInFlight(db, sid, SessionOperation.promptId("msg_charge_orphan"))
+          const gen = `gen_charge_orphan_${Date.now()}`
+          yield* SessionGeneration.begin(db, sid, gen, "msg_charge_orphan", 2).pipe(Effect.orDie)
+          const at = Date.now()
+          yield* SessionGeneration.charge(db, sid, gen, { layer: "provider", occurrenceTime: at, nextAt: at + 100 }).pipe(Effect.orDie)
+          yield* SessionGeneration.close(db, sid, gen, "completed").pipe(Effect.orDie)
+          // Corrupt the retained provenance: occurrence without its layer.
+          yield* (db as any).run(sql`UPDATE "session_generation_owner" SET "retry_layer" = NULL WHERE "gen_id" = ${gen}`).pipe(Effect.orDie)
+          const read = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.exit)
+          expect(read._tag).toBe("Failure")
+          const charged = yield* SessionGeneration.charge(db, sid, gen, { layer: "broker", occurrenceTime: at + 200, nextAt: at + 300 }).pipe(Effect.exit)
+          expect(charged._tag).toBe("Failure")
         }),
       )
     } finally {

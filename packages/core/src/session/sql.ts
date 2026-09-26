@@ -215,6 +215,7 @@ export const SessionGenerationOwnerTable = sqliteTable(
     retry_limit: integer().notNull(),
     retry_consumed: integer().notNull().default(0),
     retry_layer: text().$type<"provider" | "incomplete" | "broker" | "task" | "restart">(),
+    retry_occurrence_time: integer(),
     retry_next_at: integer(),
   },
   (table) => [
@@ -247,7 +248,53 @@ export const SessionGenerationMemberTable = sqliteTable(
     primaryKey({ columns: [table.gen_id, table.prompt_op_id] }),
     index("session_generation_member_session_idx").on(table.session_id),
     index("session_generation_member_gen_idx").on(table.gen_id),
-    index("session_generation_member_op_idx").on(table.prompt_op_id),
+    uniqueIndex("session_generation_member_op_idx").on(table.prompt_op_id),
+  ],
+)
+export const SessionOperationReceiptTable = sqliteTable(
+  "session_operation_receipt",
+  {
+    op_id: text()
+      .primaryKey()
+      .references(() => SessionOperationTable.op_id, { onDelete: "cascade" }),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    outcome: text().$type<"succeeded" | "failed" | "ambiguous" | "superseded" | "abandoned">().notNull(),
+    time: integer().notNull(),
+    gen_id: text(),
+    gen_unknown: text().$type<"non_gen_kind" | "no_member" | "legacy_null">(),
+    owner_used: integer(),
+    owner_limit: integer(),
+    owner_layer: text().$type<"provider" | "incomplete" | "broker" | "task" | "restart">(),
+    owner_retry_occurrence: integer(),
+    owner_next_at: integer(),
+    owner_close_reason: text().$type<"completed" | "interrupted" | "error" | "crash">(),
+    replay: text().notNull().default("forbidden"),
+  },
+  (table) => [
+    index("session_operation_receipt_session_idx").on(table.session_id),
+    check(
+      "session_operation_receipt_outcome_check",
+      sql`${table.outcome} IN ('succeeded','failed','ambiguous','superseded','abandoned')`,
+    ),
+    check(
+      "session_operation_receipt_gen_check",
+      sql`(${table.gen_id} IS NOT NULL AND ${table.gen_unknown} IS NULL) OR (${table.gen_id} IS NULL AND ${table.gen_unknown} IS NOT NULL)`,
+    ),
+    check(
+      "session_operation_receipt_replay_check",
+      sql`${table.replay} = 'forbidden'`,
+    ),
+    check(
+      "session_operation_receipt_layer_check",
+      sql`${table.owner_layer} IS NULL OR ${table.owner_layer} IN ('provider','incomplete','broker','task','restart')`,
+    ),
+    check(
+      "session_operation_receipt_close_reason_check",
+      sql`${table.owner_close_reason} IS NULL OR ${table.owner_close_reason} IN ('completed','interrupted','error','crash')`,
+    ),
   ],
 )
 export const SessionOperationTable = sqliteTable(
@@ -283,6 +330,7 @@ export const SessionOperationTable = sqliteTable(
     recovery_budget: integer(),
     recovery_next_at: integer(),
     recovery_provenance: text().$type<"terminal">(),
+    gen_id: text(),
   },
   (table) => [
     index("session_operation_session_idx").on(table.session_id),
@@ -292,6 +340,7 @@ export const SessionOperationTable = sqliteTable(
       .on(table.session_id, table.idempotency_hash)
       .where(sql`${table.idempotency_hash} IS NOT NULL`),
     index("session_operation_message_id_idx").on(table.message_id).where(sql`${table.message_id} IS NOT NULL`),
+    index("session_operation_gen_id_idx").on(table.gen_id).where(sql`${table.gen_id} IS NOT NULL`),
     check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate','fork','create','delete','revert','unrevert')`),
     check(
       "session_operation_outcome_check",

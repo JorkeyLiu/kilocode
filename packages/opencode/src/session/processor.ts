@@ -1292,6 +1292,24 @@ export const layer = Layer.effect(
               const opId = SessionOperation.providerId(ctx.assistantMessage.id, attemptIdx)
               const dbInner = database.db
               const sid = SessionSchema.ID.make(ctx.sessionID)
+              // Capture the ambient durable binding here in request context.
+              // `admissionWork` runs later via `Admission.consume()` inside
+              // the transport (different Effect context), so it must close
+              // over these captured values instead of reading `Durable`
+              // itself; otherwise a strict owner would look absent and the
+              // link would be silently dropped (or a mismatch missed).
+              const durable = yield* KiloRetryBudget.Durable
+              const sidStr = ctx.sessionID as unknown as string
+              const strict =
+                durable !== undefined &&
+                durable.kind === "strict" &&
+                typeof durable.genID === "string" &&
+                (durable.sessionID as unknown as string) === sidStr
+              const strictMismatch = durable !== undefined && durable.kind === "strict" && !strict
+              const strictGen = strict ? (durable as { genID: string }).genID : null
+              if (strict && (typeof strictGen !== "string" || strictGen.length === 0 || strictGen.includes(":")))
+                yield* Effect.die(new TypeError(`provider gen invalid for ${opId}`))
+              if (strictMismatch) yield* Effect.die(new Error(`provider gen session mismatch for ${opId}`))
               let admitted = false
               let finalized = false
               const finalize = (
@@ -1324,14 +1342,26 @@ export const layer = Layer.effect(
                 return false
               }
               const admissionWork = Effect.gen(function* () {
-                yield* SessionOperation.put(dbInner, sid, {
+                // Minimal durable fact link: provider op -> generationID.
+                // `strict`/`strictGen` are captured above in request context;
+                // this work runs in transport context via `Admission.consume`
+                // and must not read `Durable` itself. Strict illegitimacy or
+                // a missing owner row dies here via `putProviderInFlight`
+                // before any network (fail-closed); memory/absent uses the
+                // plain path and never fabricates a link.
+                const rec = {
                   opId,
-                  opKind: "provider",
-                  outcome: "in-flight",
+                  opKind: "provider" as const,
+                  outcome: "in-flight" as const,
                   code: "provider.inflight",
                   message: "provider request started",
                   time: Date.now(),
-                })
+                }
+                if (strict) {
+                  yield* SessionOperation.putProviderInFlight(dbInner, sid, rec, strictGen)
+                } else {
+                  yield* SessionOperation.put(dbInner, sid, rec)
+                }
                 admitted = true
                 ctx.providerStarted = true
               })
@@ -1376,6 +1406,13 @@ export const layer = Layer.effect(
                             squashed = cause
                           }
                           if (isPreflightError(squashed)) {
+                            if (admitted) {
+                              yield* finalize(
+                                "abandoned",
+                                "provider.abandoned",
+                                errorMessage(squashed) || "provider request abandoned for compaction",
+                              )
+                            }
                             return
                           }
                           const raw = errorMessage(squashed) || "provider request failed"

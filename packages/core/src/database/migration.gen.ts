@@ -53,5 +53,9 @@ export const migrations = (
     import("./migration/20260922000000_add_generation_recovery"),
     import("./migration/20260925000000_add_generation_owner"),
     import("./migration/20260925000001_add_generation_retry_intent"),
+    import("./migration/20260926000000_add_provider_gen_link"),
+    import("./migration/20260926000001_add_generation_retry_occurrence"),
+    import("./migration/20260926000002_add_operation_receipt"),
+    import("./migration/20260926000003_add_generation_member_unique"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

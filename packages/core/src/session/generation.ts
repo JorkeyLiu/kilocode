@@ -25,6 +25,8 @@ export interface Owner {
   used: number
   /** Last charged retry layer (provenance only, not a scheduler). Retained after close. */
   layer: RetryLayer | null
+  /** Failure occurrence time for the last charged retry (ms). Null when never charged or for legacy rows charged before this column existed; retained after close. Never fabricated from operation time or boot receipt. */
+  retryOccurrence: number | null
   /** Last scheduled occurrence intent (next-at ms). Null when no intent is pending or after terminal close/crash. */
   nextAt: number | null
 }
@@ -53,6 +55,32 @@ function promptOp(messageID: string): string {
   return `prompt:${messageID}`
 }
 
+function assertNoCrossGenMember(
+  existing: typeof SessionGenerationMemberTable.$inferSelect | undefined,
+  op: string,
+  genID: string,
+): void {
+  if (!existing) return
+  if (existing.gen_id === genID) return
+  throw new Error(`prompt ${op} already owned by generation ${existing.gen_id}, cannot join ${genID}`)
+}
+
+function lookupMemberByOp(
+  tx: DbOrTx,
+  op: string,
+): Effect.Effect<typeof SessionGenerationMemberTable.$inferSelect | undefined, unknown, never> {
+  return Effect.gen(function* () {
+    const row = yield* tx
+      .select()
+      .from(SessionGenerationMemberTable)
+      .where(eq(SessionGenerationMemberTable.prompt_op_id, op))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    return row as typeof SessionGenerationMemberTable.$inferSelect
+  })
+}
+
 function rowToOwner(row: typeof SessionGenerationOwnerTable.$inferSelect): Owner {
   return {
     genID: row.gen_id,
@@ -63,6 +91,7 @@ function rowToOwner(row: typeof SessionGenerationOwnerTable.$inferSelect): Owner
     limit: row.retry_limit,
     used: row.retry_consumed,
     layer: (row.retry_layer as RetryLayer | null | undefined) ?? null,
+    retryOccurrence: (row.retry_occurrence_time as number | null | undefined) ?? null,
     nextAt: (row.retry_next_at as number | null | undefined) ?? null,
   }
 }
@@ -83,16 +112,33 @@ function validateOwnerRow(row: typeof SessionGenerationOwnerTable.$inferSelect):
   if (row.retry_consumed > row.retry_limit) throw new TypeError("retry_consumed exceeds limit")
   const layer = (row.retry_layer as RetryLayer | null | undefined) ?? null
   if (layer !== null && !layerSet.has(layer as string)) throw new TypeError(`retry_layer invalid ${row.retry_layer}`)
+  const retryOccurrence = (row.retry_occurrence_time as number | null | undefined) ?? null
+  // Row validation stays finite-based for legacy nullable compat: historical
+  // non-safe-integer values are not retro-rejected here. The strict
+  // safe-integer >= 0 gate lives only in assertSchedule for new writes; rows
+  // die here only when structurally damaged (orphan occurrence, split intent,
+  // closed pending intent).
+  if (retryOccurrence !== null && (typeof retryOccurrence !== "number" || !Number.isFinite(retryOccurrence)))
+    throw new TypeError("retry_occurrence_time must be finite number or null")
   const nextAt = (row.retry_next_at as number | null | undefined) ?? null
   if (nextAt !== null && (typeof nextAt !== "number" || !Number.isFinite(nextAt)))
     throw new TypeError("retry_next_at must be finite number or null")
   const closed = row.close_reason !== null && row.close_reason !== undefined
   if (closed) {
-    // Terminal rows never carry a pending intent; the last layer is retained as provenance only.
+    // Terminal rows never carry a pending intent; the last layer and the last
+    // failure occurrence are retained as provenance only. A closed orphan
+    // occurrence without its layer is never valid and dies here.
     if (nextAt !== null) throw new TypeError("retry_next_at must be null once closed")
+    if (retryOccurrence !== null && layer === null)
+      throw new TypeError("retry_occurrence_time requires retry_layer once closed")
   } else {
-    // Open rows carry either no intent yet (both null) or one atomic intent (both set).
+    // Open rows carry either no intent yet (all null) or one atomic intent.
+    // Legacy rows charged before retry_occurrence_time existed keep
+    // (layer, nextAt) with a null occurrence; new charges persist all three
+    // together, so an occurrence without its layer/nextAt is never valid.
     if ((layer === null) !== (nextAt === null)) throw new TypeError("retry_layer and retry_next_at must be set together")
+    if (retryOccurrence !== null && (layer === null || nextAt === null))
+      throw new TypeError("retry_occurrence_time requires retry_layer and retry_next_at")
   }
   return rowToOwner(row)
 }
@@ -145,6 +191,19 @@ function beginTx(
         .pipe(Effect.orDie)
       if (!promptRow || !isAcceptedPromptRow(promptRow as typeof SessionOperationTable.$inferSelect, sid))
         return { created: false as const, empty: false as const }
+      // Ownership invariant: one prompt operation belongs to at most one
+      // generation lifetime. Same-gen re-begin is idempotent above; an
+      // accepted prompt already linked elsewhere fails closed here, even
+      // when the prior owner is closed. Terminal/synthetic/missing rows
+      // already returned above and never reach this guard.
+      const clash = yield* lookupMemberByOp(tx, op)
+      if (clash) {
+        try {
+          assertNoCrossGenMember(clash, op, genID)
+        } catch (e) {
+          yield* Effect.die(e instanceof Error ? e : new Error(String(e)))
+        }
+      }
       const now = Date.now()
       yield* tx
         .insert(SessionGenerationMemberTable)
@@ -162,6 +221,19 @@ function beginTx(
     if (!promptRow || !isAcceptedPromptRow(promptRow as typeof SessionOperationTable.$inferSelect, sid)) {
       return { created: false as const, empty: true as const }
     }
+    // Brand-new owner path: check cross-generation membership before any
+    // owner/member mutation so a duplicate dies with no orphan owner row;
+    // the enclosing immediate transaction rolls back as one unit. A UNIQUE
+    // violation on the member insert below is the concurrent-race backstop
+    // for the same invariant.
+    const clash = yield* lookupMemberByOp(tx, op)
+    if (clash) {
+      try {
+        assertNoCrossGenMember(clash, op, genID)
+      } catch (e) {
+        yield* Effect.die(e instanceof Error ? e : new Error(String(e)))
+      }
+    }
     const now = Date.now()
     yield* tx
       .insert(SessionGenerationOwnerTable)
@@ -174,6 +246,7 @@ function beginTx(
         retry_limit: limit,
         retry_consumed: 0,
         retry_layer: null,
+        retry_occurrence_time: null,
         retry_next_at: null,
       })
       .run()
@@ -230,6 +303,36 @@ function addTx(
     const added: string[] = []
     const skipped: string[] = []
     const now = Date.now()
+    // Pre-flight ownership check before any member mutation: an accepted
+    // prompt already linked to another generation fails the whole add
+    // closed, so the enclosing immediate transaction rolls back with no
+    // partial inserts. Same-gen members and non-accepted (terminal/
+    // synthetic/missing) rows stay skip-only and never trigger this guard.
+    for (const id of ids) {
+      const op = promptOp(id)
+      const promptRow = yield* tx
+        .select()
+        .from(SessionOperationTable)
+        .where(eq(SessionOperationTable.op_id, op))
+        .get()
+        .pipe(Effect.orDie)
+      if (!promptRow || !isAcceptedPromptRow(promptRow as typeof SessionOperationTable.$inferSelect, sid)) continue
+      const same = yield* tx
+        .select()
+        .from(SessionGenerationMemberTable)
+        .where(and(eq(SessionGenerationMemberTable.gen_id, genID), eq(SessionGenerationMemberTable.prompt_op_id, op)))
+        .get()
+        .pipe(Effect.orDie)
+      if (same) continue
+      const clash = yield* lookupMemberByOp(tx, op)
+      if (clash) {
+        try {
+          assertNoCrossGenMember(clash, op, genID)
+        } catch (e) {
+          yield* Effect.die(e instanceof Error ? e : new Error(String(e)))
+        }
+      }
+    }
     for (const id of ids) {
       const op = promptOp(id)
       const promptRow = yield* tx
@@ -303,7 +406,8 @@ function closeTx(
     // Any terminal close never overwrites an already-written final state; the
     // loser observes 0 updated rows and returns applied:false with no feed.
     // Terminal close clears any pending next-at intent while retaining the
-    // last layer as provenance (non-scheduler, no replay).
+    // last layer and the last failure occurrence as provenance
+    // (non-scheduler, no replay; close_time is receipt, never occurrence).
     const updated = yield* tx
       .update(SessionGenerationOwnerTable)
       .set({ close_reason: reason, close_time: now, retry_next_at: null })
@@ -343,16 +447,22 @@ export interface ChargeResult {
   closed: boolean
   exhausted: boolean
   layer: RetryLayer | null
+  /** Failure occurrence time for the last charged retry (ms). Null when never charged or for legacy rows; retained after close. */
+  occurrenceTime: number | null
   nextAt: number | null
 }
 
 /**
  * Atomic schedule intent for one actual retry (never the free initial
- * attempt). Callers compute `wait` from the existing error/retry-after policy
- * plus the failure occurrence time (`occurrenceTime`) first, then pass
- * `nextAt = occurrenceTime + wait` here so a single DB CAS persists the
- * charge, the layer attribution, and the next-at occurrence intent together.
- * A failed CAS persists nothing: no deducted-without-scheduled state exists.
+ * attempt). Each charge consumes one budget unit; the persisted
+ * layer/occurrenceTime/nextAt always reflect the last charged failure
+ * occurrence, so a later charge overwrites the earlier intent (last-writer
+ * wins, no idempotency key, no scheduler). Callers compute `wait` from the
+ * existing error/retry-after policy plus the failure occurrence time
+ * (`occurrenceTime`) first, then pass `nextAt = occurrenceTime + wait` here
+ * so a single DB CAS persists the charge, the layer attribution, and the
+ * next-at occurrence intent together. A failed CAS persists nothing: no
+ * deducted-without-scheduled state exists.
  */
 export interface ChargeSchedule {
   layer: RetryLayer
@@ -363,10 +473,10 @@ export interface ChargeSchedule {
 function assertSchedule(schedule: ChargeSchedule): void {
   if (!schedule || typeof schedule !== "object") throw new TypeError("schedule must be object")
   if (!layerSet.has(schedule.layer as string)) throw new TypeError(`schedule layer invalid ${schedule.layer}`)
-  if (typeof schedule.occurrenceTime !== "number" || !Number.isFinite(schedule.occurrenceTime))
-    throw new TypeError("schedule occurrenceTime must be finite number")
-  if (typeof schedule.nextAt !== "number" || !Number.isFinite(schedule.nextAt))
-    throw new TypeError("schedule nextAt must be finite number")
+  if (typeof schedule.occurrenceTime !== "number" || !Number.isSafeInteger(schedule.occurrenceTime) || schedule.occurrenceTime < 0)
+    throw new TypeError("schedule occurrenceTime must be safe integer >= 0")
+  if (typeof schedule.nextAt !== "number" || !Number.isSafeInteger(schedule.nextAt) || schedule.nextAt < 0)
+    throw new TypeError("schedule nextAt must be safe integer >= 0")
   if (schedule.nextAt < schedule.occurrenceTime) throw new TypeError("schedule nextAt must not precede occurrenceTime")
 }
 
@@ -390,15 +500,15 @@ function classifyNoCharge(
   row: typeof SessionGenerationOwnerTable.$inferSelect | undefined,
   sid: string,
 ): ChargeResult {
-  if (!row) return { charged: false, used: 0, limit: 0, missing: true, closed: false, exhausted: false, layer: null, nextAt: null }
+  if (!row) return { charged: false, used: 0, limit: 0, missing: true, closed: false, exhausted: false, layer: null, occurrenceTime: null, nextAt: null }
   const own = validateOwnerRow(row)
   if ((row.session_id as unknown as string) !== sid)
     throw new Error(`cross-identity gen ${row.gen_id} already owned by session ${row.session_id}`)
   if (own.closedAt !== null || own.reason !== null)
-    return { charged: false, used: own.used, limit: own.limit, missing: false, closed: true, exhausted: false, layer: own.layer, nextAt: null }
+    return { charged: false, used: own.used, limit: own.limit, missing: false, closed: true, exhausted: false, layer: own.layer, occurrenceTime: own.retryOccurrence, nextAt: null }
   if (own.used >= own.limit)
-    return { charged: false, used: own.used, limit: own.limit, missing: false, closed: false, exhausted: true, layer: own.layer, nextAt: own.nextAt }
-  return { charged: false, used: own.used, limit: own.limit, missing: false, closed: false, exhausted: true, layer: own.layer, nextAt: own.nextAt }
+    return { charged: false, used: own.used, limit: own.limit, missing: false, closed: false, exhausted: true, layer: own.layer, occurrenceTime: own.retryOccurrence, nextAt: own.nextAt }
+  return { charged: false, used: own.used, limit: own.limit, missing: false, closed: false, exhausted: true, layer: own.layer, occurrenceTime: own.retryOccurrence, nextAt: own.nextAt }
 }
 
 export function charge(
@@ -413,7 +523,7 @@ export function charge(
     const sid = sessionID as unknown as string
     if (typeof sid !== "string" || sid.length === 0) yield* Effect.die(new TypeError("session_id must be non-empty"))
     const pre = yield* chargeSelect(db as unknown as DbOrTx, genID)
-    if (!pre) return { charged: false, used: 0, limit: 0, missing: true, closed: false, exhausted: false, layer: null, nextAt: null } as ChargeResult
+    if (!pre) return { charged: false, used: 0, limit: 0, missing: true, closed: false, exhausted: false, layer: null, occurrenceTime: null, nextAt: null } as ChargeResult
     if ((pre.session_id as unknown as string) !== sid)
       yield* Effect.die(new Error(`cross-identity gen ${genID} already owned by session ${pre.session_id}`))
     let cur: Owner
@@ -423,16 +533,19 @@ export function charge(
       return yield* Effect.die(new TypeError(`invalid generation owner row ${genID}: ${e instanceof Error ? e.message : String(e)}`))
     }
     if (cur.closedAt !== null || cur.reason !== null)
-      return { charged: false, used: cur.used, limit: cur.limit, missing: false, closed: true, exhausted: false, layer: cur.layer, nextAt: null }
+      return { charged: false, used: cur.used, limit: cur.limit, missing: false, closed: true, exhausted: false, layer: cur.layer, occurrenceTime: cur.retryOccurrence, nextAt: null }
     if (cur.used >= cur.limit)
-      return { charged: false, used: cur.used, limit: cur.limit, missing: false, closed: false, exhausted: true, layer: cur.layer, nextAt: cur.nextAt }
-    // Single atomic CAS: consumed +1 with the layer attribution and the
-    // precomputed next-at intent in the same conditional UPDATE. A failed
-    // CAS writes nothing, so a retry is never deducted without its schedule.
+      return { charged: false, used: cur.used, limit: cur.limit, missing: false, closed: false, exhausted: true, layer: cur.layer, occurrenceTime: cur.retryOccurrence, nextAt: cur.nextAt }
+    // Single atomic CAS: consumed +1 with the layer attribution, the failure
+    // occurrence time, and the precomputed next-at intent in the same
+    // conditional UPDATE. Each charge is one budget consumption and overwrites
+    // the last occurrence (last-writer wins). A failed CAS writes nothing, so
+    // a retry is never deducted without its schedule.
     const set = schedule
       ? {
           retry_consumed: sql`${SessionGenerationOwnerTable.retry_consumed} + 1`,
           retry_layer: schedule.layer,
+          retry_occurrence_time: schedule.occurrenceTime,
           retry_next_at: schedule.nextAt,
         }
       : { retry_consumed: sql`${SessionGenerationOwnerTable.retry_consumed} + 1` }
@@ -450,16 +563,18 @@ export function charge(
         retry_consumed: SessionGenerationOwnerTable.retry_consumed,
         retry_limit: SessionGenerationOwnerTable.retry_limit,
         retry_layer: SessionGenerationOwnerTable.retry_layer,
+        retry_occurrence_time: SessionGenerationOwnerTable.retry_occurrence_time,
         retry_next_at: SessionGenerationOwnerTable.retry_next_at,
       })
       .all()
       .pipe(Effect.orDie)
-    const rows = updated as unknown as { retry_consumed: number; retry_limit: number; retry_layer: RetryLayer | null; retry_next_at: number | null }[]
+    const rows = updated as unknown as { retry_consumed: number; retry_limit: number; retry_layer: RetryLayer | null; retry_occurrence_time: number | null; retry_next_at: number | null }[]
     if (rows.length === 1) {
       const first = rows[0]!
       const layer = (first.retry_layer as RetryLayer | null | undefined) ?? null
+      const occurrenceTime = (first.retry_occurrence_time as number | null | undefined) ?? null
       const nextAt = (first.retry_next_at as number | null | undefined) ?? null
-      return { charged: true, used: first.retry_consumed, limit: first.retry_limit, missing: false, closed: false, exhausted: false, layer, nextAt }
+      return { charged: true, used: first.retry_consumed, limit: first.retry_limit, missing: false, closed: false, exhausted: false, layer, occurrenceTime, nextAt }
     }
     const fresh = yield* chargeSelect(db as unknown as DbOrTx, genID)
     return classifyNoCharge(fresh, sid)
@@ -504,6 +619,8 @@ export interface RetryIntent {
   /** Owning scope: the session that owns this generation. */
   scope: string
   layer: RetryLayer
+  /** Failure occurrence time for the last charged retry (ms). Null for legacy rows charged before this column existed; never fabricated. */
+  occurrenceTime: number | null
   nextAt: number
   used: number
   limit: number
@@ -524,6 +641,7 @@ export function getRetryIntent(
       sessionID: owner.sessionID,
       scope: owner.sessionID,
       layer: owner.layer,
+      occurrenceTime: owner.retryOccurrence,
       nextAt: owner.nextAt,
       used: owner.used,
       limit: owner.limit,

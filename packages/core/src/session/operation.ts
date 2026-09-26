@@ -5,7 +5,7 @@ import { Data, Effect } from "effect"
 import { createHash } from "node:crypto"
 import { isAbsolute, normalize, resolve } from "node:path"
 import { Database } from "../database/database"
-import { SessionTable, SessionOperationTable, SessionDeleteTombstoneTable } from "./sql"
+import { SessionTable, SessionOperationTable, SessionDeleteTombstoneTable, SessionGenerationOwnerTable, SessionGenerationMemberTable, SessionOperationReceiptTable } from "./sql"
 import type { SessionSchema } from "./schema"
 import * as Changefeed from "../retention/changefeed"
 import { SessionRevision } from "./revision"
@@ -778,6 +778,302 @@ export function isCancelQueuedConflict(
 }
 
 // ---------------------------------------------------------------------------
+// Terminal receipt — runtime-owned per-operation owner fact, same-tx only.
+// ---------------------------------------------------------------------------
+export const RECEIPT_REPLAY_FORBIDDEN = "forbidden" as const
+export const RECEIPT_GEN_UNKNOWNS = ["non_gen_kind", "no_member", "legacy_null"] as const
+export type ReceiptGenUnknown = (typeof RECEIPT_GEN_UNKNOWNS)[number]
+export const RECEIPT_OWNER_LAYERS = ["provider", "incomplete", "broker", "task", "restart"] as const
+export type ReceiptOwnerLayer = (typeof RECEIPT_OWNER_LAYERS)[number]
+export const RECEIPT_CLOSE_REASONS = ["completed", "interrupted", "error", "crash"] as const
+export type ReceiptCloseReason = (typeof RECEIPT_CLOSE_REASONS)[number]
+
+const receiptLayerSet = new Set<string>(RECEIPT_OWNER_LAYERS as readonly string[])
+const receiptCloseSet = new Set<string>(RECEIPT_CLOSE_REASONS as readonly string[])
+const receiptOutcomeSet = new Set<string>(["succeeded", "failed", "ambiguous", "superseded", "abandoned"])
+const receiptUnknownSet = new Set<string>(RECEIPT_GEN_UNKNOWNS as readonly string[])
+
+export interface OperationReceipt {
+  opId: string
+  sessionID: string
+  outcome: "succeeded" | "failed" | "ambiguous" | "superseded" | "abandoned"
+  time: number
+  genID: string | null
+  unknown: ReceiptGenUnknown | null
+  used: number | null
+  limit: number | null
+  layer: ReceiptOwnerLayer | null
+  retryOccurrence: number | null
+  nextAt: number | null
+  closeReason: ReceiptCloseReason | null
+  replay: typeof RECEIPT_REPLAY_FORBIDDEN
+}
+
+function assertReceiptGen(value: string) {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError("genID must be non-empty string")
+  if (value.includes(":")) throw new TypeError("genID must not contain ':'")
+}
+
+interface ReceiptOwnerSnapshot {
+  used: number
+  limit: number
+  layer: ReceiptOwnerLayer | null
+  retryOccurrence: number | null
+  nextAt: number | null
+  closeReason: ReceiptCloseReason | null
+}
+
+function snapshotOwnerRow(genID: string, sid: string, row: typeof SessionGenerationOwnerTable.$inferSelect): ReceiptOwnerSnapshot {
+  if ((row.session_id as unknown as string) !== sid)
+    throw new Error(`cross-identity gen ${genID} already owned by session ${row.session_id}`)
+  if (!Number.isInteger(row.retry_consumed) || (row.retry_consumed as number) < 0)
+    throw new TypeError(`invalid generation owner row ${genID}: retry_consumed invalid`)
+  if (!Number.isInteger(row.retry_limit) || (row.retry_limit as number) < 0)
+    throw new TypeError(`invalid generation owner row ${genID}: retry_limit invalid`)
+  if ((row.retry_consumed as number) > (row.retry_limit as number))
+    throw new TypeError(`invalid generation owner row ${genID}: retry_consumed exceeds limit`)
+  const layer = (row.retry_layer as ReceiptOwnerLayer | null | undefined) ?? null
+  if (layer !== null && !receiptLayerSet.has(layer as string))
+    throw new TypeError(`invalid generation owner row ${genID}: retry_layer invalid`)
+  const occurrence = (row.retry_occurrence_time as number | null | undefined) ?? null
+  if (occurrence !== null && (typeof occurrence !== "number" || !Number.isFinite(occurrence)))
+    throw new TypeError(`invalid generation owner row ${genID}: retry_occurrence_time invalid`)
+  const nextAt = (row.retry_next_at as number | null | undefined) ?? null
+  if (nextAt !== null && (typeof nextAt !== "number" || !Number.isFinite(nextAt)))
+    throw new TypeError(`invalid generation owner row ${genID}: retry_next_at invalid`)
+  const reason = (row.close_reason as ReceiptCloseReason | null | undefined) ?? null
+  if (reason !== null && !receiptCloseSet.has(reason as string))
+    throw new TypeError(`invalid generation owner row ${genID}: close_reason invalid`)
+  const closed = reason !== null
+  if (closed) {
+    if (nextAt !== null) throw new TypeError(`invalid generation owner row ${genID}: retry_next_at must be null once closed`)
+    if (occurrence !== null && layer === null)
+      throw new TypeError(`invalid generation owner row ${genID}: retry_occurrence_time requires retry_layer once closed`)
+  } else {
+    if ((layer === null) !== (nextAt === null))
+      throw new TypeError(`invalid generation owner row ${genID}: retry_layer and retry_next_at must be set together`)
+    if (occurrence !== null && (layer === null || nextAt === null))
+      throw new TypeError(`invalid generation owner row ${genID}: retry_occurrence_time requires retry_layer and retry_next_at`)
+  }
+  return { used: row.retry_consumed as number, limit: row.retry_limit as number, layer, retryOccurrence: occurrence, nextAt, closeReason: reason }
+}
+
+function resolveReceiptTx(
+  tx: DbOrTx,
+  normalized: FailureRecord,
+  sessionID: SessionSchema.ID,
+  providerLink: string | null,
+): Effect.Effect<Omit<OperationReceipt, "opId" | "sessionID" | "outcome" | "time" | "replay">, unknown, never> {
+  return Effect.gen(function* () {
+    const sid = sessionID as unknown as string
+    if (normalized.opKind === "provider") {
+      if (providerLink === null) return { genID: null, unknown: "legacy_null" as const, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+      try {
+        assertReceiptGen(providerLink)
+      } catch (e) {
+        yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+        return { genID: null, unknown: null, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+      }
+      const owner = yield* tx
+        .select()
+        .from(SessionGenerationOwnerTable)
+        .where(eq(SessionGenerationOwnerTable.gen_id, providerLink))
+        .get()
+        .pipe(Effect.orDie)
+      if (!owner) yield* Effect.die(new Error(`generation owner missing for ${providerLink}`))
+      let snap: ReceiptOwnerSnapshot
+      try {
+        snap = snapshotOwnerRow(providerLink, sid, owner as typeof SessionGenerationOwnerTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+        return { genID: null, unknown: null, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+      }
+      return { genID: providerLink, unknown: null, used: snap.used, limit: snap.limit, layer: snap.layer, retryOccurrence: snap.retryOccurrence, nextAt: snap.nextAt, closeReason: snap.closeReason }
+    }
+    if (normalized.opKind === "prompt") {
+      const members = yield* tx
+        .select()
+        .from(SessionGenerationMemberTable)
+        .where(eq(SessionGenerationMemberTable.prompt_op_id, normalized.opId))
+        .all()
+        .pipe(Effect.orDie)
+      const rows = members as (typeof SessionGenerationMemberTable.$inferSelect)[]
+      if (rows.length === 0)
+        return { genID: null, unknown: "no_member" as const, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+      if (rows.length !== 1) yield* Effect.die(new Error(`ambiguous generation membership for ${normalized.opId}: ${rows.length} members`))
+      const member = rows[0]!
+      const genID = member.gen_id
+      try {
+        assertReceiptGen(genID)
+      } catch (e) {
+        yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+        return { genID: null, unknown: null, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+      }
+      if ((member.session_id as unknown as string) !== sid)
+        yield* Effect.die(new Error(`cross-identity gen ${genID} already owned by session ${member.session_id}`))
+      const owner = yield* tx
+        .select()
+        .from(SessionGenerationOwnerTable)
+        .where(eq(SessionGenerationOwnerTable.gen_id, genID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!owner) yield* Effect.die(new Error(`generation owner missing for ${genID}`))
+      let snap: ReceiptOwnerSnapshot
+      try {
+        snap = snapshotOwnerRow(genID, sid, owner as typeof SessionGenerationOwnerTable.$inferSelect)
+      } catch (e) {
+        yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+        return { genID: null, unknown: null, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+      }
+      return { genID, unknown: null, used: snap.used, limit: snap.limit, layer: snap.layer, retryOccurrence: snap.retryOccurrence, nextAt: snap.nextAt, closeReason: snap.closeReason }
+    }
+    return { genID: null, unknown: "non_gen_kind" as const, used: null, limit: null, layer: null, retryOccurrence: null, nextAt: null, closeReason: null }
+  })
+}
+
+function writeReceiptTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  normalized: FailureRecord,
+  providerLink: string | null,
+): Effect.Effect<void, unknown, never> {
+  return Effect.gen(function* () {
+    if (!isTerminal(normalized.outcome)) return
+    const part = yield* resolveReceiptTx(tx, normalized, sessionID, providerLink)
+    yield* tx
+      .insert(SessionOperationReceiptTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: sessionID,
+        outcome: normalized.outcome as OperationReceipt["outcome"],
+        time: normalized.time,
+        gen_id: part.genID,
+        gen_unknown: part.unknown,
+        owner_used: part.used,
+        owner_limit: part.limit,
+        owner_layer: part.layer,
+        owner_retry_occurrence: part.retryOccurrence,
+        owner_next_at: part.nextAt,
+        owner_close_reason: part.closeReason,
+        replay: RECEIPT_REPLAY_FORBIDDEN,
+      } as unknown as typeof SessionOperationReceiptTable.$inferInsert)
+      .run()
+      .pipe(Effect.orDie)
+  })
+}
+
+function rowToReceipt(row: typeof SessionOperationReceiptTable.$inferSelect): OperationReceipt {
+  const raw = row as unknown as Record<string, unknown>
+  const op = raw["op_id"]
+  if (typeof op !== "string" || op.length === 0) throw new TypeError("op_id must be non-empty string")
+  const sid = raw["session_id"]
+  if (typeof sid !== "string" || sid.length === 0) throw new TypeError("session_id must be non-empty string")
+  const outcome = raw["outcome"]
+  if (typeof outcome !== "string" || !receiptOutcomeSet.has(outcome))
+    throw new TypeError(`outcome must be one of succeeded, failed, ambiguous, superseded, abandoned`)
+  const time = raw["time"]
+  if (typeof time !== "number" || !Number.isSafeInteger(time))
+    throw new TypeError("time must be safe integer")
+  const replay = raw["replay"]
+  if (replay !== RECEIPT_REPLAY_FORBIDDEN) throw new TypeError(`replay must be forbidden`)
+  const genRaw = raw["gen_id"]
+  const unkRaw = raw["gen_unknown"]
+  let gen: string | null
+  if (genRaw === null || genRaw === undefined) gen = null
+  else if (typeof genRaw === "string") gen = genRaw
+  else throw new TypeError("gen_id must be string or null")
+  let unk: ReceiptGenUnknown | null
+  if (unkRaw === null || unkRaw === undefined) unk = null
+  else if (typeof unkRaw === "string" && receiptUnknownSet.has(unkRaw)) unk = unkRaw as ReceiptGenUnknown
+  else throw new TypeError(`gen_unknown must be one of ${RECEIPT_GEN_UNKNOWNS.join(", ")} or null`)
+  if (gen !== null) {
+    if (gen.length === 0) throw new TypeError("gen_id must be non-empty string")
+    if (gen.includes(":")) throw new TypeError("gen_id must not contain ':'")
+  }
+  if ((gen === null) === (unk === null)) throw new TypeError("gen_id and gen_unknown must satisfy exact XOR")
+  const usedRaw = raw["owner_used"]
+  const limitRaw = raw["owner_limit"]
+  const layerRaw = raw["owner_layer"]
+  const occRaw = raw["owner_retry_occurrence"]
+  const nextRaw = raw["owner_next_at"]
+  const reasonRaw = raw["owner_close_reason"]
+  const numOrNull = (v: unknown, label: string): number | null => {
+    if (v === null || v === undefined) return null
+    if (typeof v !== "number" || !Number.isSafeInteger(v)) throw new TypeError(`${label} must be safe integer or null`)
+    return v
+  }
+  const used = numOrNull(usedRaw, "owner_used")
+  const limit = numOrNull(limitRaw, "owner_limit")
+  const occ = numOrNull(occRaw, "owner_retry_occurrence")
+  const next = numOrNull(nextRaw, "owner_next_at")
+  let layer: ReceiptOwnerLayer | null
+  if (layerRaw === null || layerRaw === undefined) layer = null
+  else if (typeof layerRaw === "string" && receiptLayerSet.has(layerRaw)) layer = layerRaw as ReceiptOwnerLayer
+  else throw new TypeError(`owner_layer must be one of ${RECEIPT_OWNER_LAYERS.join(", ")} or null`)
+  let reason: ReceiptCloseReason | null
+  if (reasonRaw === null || reasonRaw === undefined) reason = null
+  else if (typeof reasonRaw === "string" && receiptCloseSet.has(reasonRaw)) reason = reasonRaw as ReceiptCloseReason
+  else throw new TypeError(`owner_close_reason must be one of ${RECEIPT_CLOSE_REASONS.join(", ")} or null`)
+  if (unk !== null) {
+    if (used !== null || limit !== null || layer !== null || occ !== null || next !== null || reason !== null)
+      throw new TypeError("owner scope must be null when gen_unknown is set")
+  } else {
+    if (used === null || limit === null) throw new TypeError("owner_used and owner_limit must be set when gen_id is set")
+    if (used < 0 || limit < 0) throw new TypeError("owner_used and owner_limit must be nonnegative")
+    if (used > limit) throw new TypeError("owner_used must not exceed owner_limit")
+    const closed = reason !== null
+    if (closed) {
+      if (next !== null) throw new TypeError("owner_next_at must be null once closed")
+      if (occ !== null && layer === null)
+        throw new TypeError("owner_retry_occurrence requires owner_layer once closed")
+    } else {
+      if ((layer === null) !== (next === null))
+        throw new TypeError("owner_layer and owner_next_at must be set together")
+      if (occ !== null && (layer === null || next === null))
+        throw new TypeError("owner_retry_occurrence requires owner_layer and owner_next_at")
+    }
+  }
+  return {
+    opId: op,
+    sessionID: sid,
+    outcome: outcome as OperationReceipt["outcome"],
+    time,
+    genID: gen,
+    unknown: unk,
+    used,
+    limit,
+    layer,
+    retryOccurrence: occ,
+    nextAt: next,
+    closeReason: reason,
+    replay: RECEIPT_REPLAY_FORBIDDEN,
+  }
+}
+
+export function getReceipt(
+  db: Database.Interface["db"],
+  opId: string,
+): Effect.Effect<OperationReceipt | undefined> {
+  return Effect.gen(function* () {
+    if (typeof opId !== "string" || opId.length === 0) yield* Effect.die(new TypeError("opId must be non-empty string"))
+    const row = yield* db
+      .select()
+      .from(SessionOperationReceiptTable)
+      .where(eq(SessionOperationReceiptTable.op_id, opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    try {
+      return rowToReceipt(row as typeof SessionOperationReceiptTable.$inferSelect)
+    } catch (e) {
+      return yield* Effect.die(
+        new TypeError(`invalid persisted operation receipt row ${opId}: ${e instanceof Error ? e.message : String(e)}`),
+      )
+    }
+  }).pipe(Effect.orDie) as Effect.Effect<OperationReceipt | undefined>
+}
+
+// ---------------------------------------------------------------------------
 // Public API: put / get / list
 // ---------------------------------------------------------------------------
 type DbOrTx = Database.Interface["db"] | Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0]
@@ -872,6 +1168,7 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
       if (shouldGen) {
         genEntry = yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
       }
+      yield* writeReceiptTx(tx, sessionID, normalized, rowLink(existingRow))
       const updated = yield* tx
         .select()
         .from(SessionOperationTable)
@@ -918,6 +1215,7 @@ function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): 
       if (shouldGen) {
         genEntry = yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
       }
+      yield* writeReceiptTx(tx, sessionID, normalized, null)
       const inserted = yield* tx
         .select()
         .from(SessionOperationTable)
@@ -1001,6 +1299,7 @@ function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: Failur
         .run()
         .pipe(Effect.orDie)
       if (shouldGenU) yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
+      yield* writeReceiptTx(tx, sessionID, normalized, rowLink(existingRow))
       const updated = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
       if (!updated) yield* Effect.die(new Error(`operation row missing after update ${normalized.opId}`))
       let updatedRecord: FailureRecord
@@ -1038,6 +1337,7 @@ function putTxIdempotent(tx: DbOrTx, sessionID: SessionSchema.ID, record: Failur
         .run()
         .pipe(Effect.orDie)
       if (shouldGenI) yield* Changefeed.appendTx(tx, { session_id: sessionID, revision: nextRev, kind: "generation", time: entry.time })
+      yield* writeReceiptTx(tx, sessionID, normalized, null)
       const inserted = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
       if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
       let insertedRecord: FailureRecord
@@ -1425,6 +1725,220 @@ export function tryTransitionProviderTerminal(
   return db
     .transaction((tx) => tryTransitionProviderTerminalTx(tx as DbOrTx, sessionID, record), { behavior: "immediate" })
     .pipe(Effect.orDie) as Effect.Effect<TryTransitionProviderTerminalResult, unknown, never>
+}
+
+// ---------------------------------------------------------------------------
+// Provider generation link — minimal durable fact `provider op -> genID`.
+//
+// Only a strictly durable owner may persist the link: the caller passes the
+// ambient `KiloRetryBudget.Durable` binding's genID with its sessionID match
+// already checked. Ownerless/legacy (memory or absent binding) never writes
+// a link — the caller uses the plain provider path instead and no row is
+// fabricated. No derivation from `assistant.parentID` or string parsing
+// happens here; the genID is an explicit caller-supplied fact.
+//
+// The link lives in `session_operation.gen_id` (nullable, never part of the
+// 9-field `FailureRecord`, never `result_snapshot`). A single provider
+// in-flight insert carries the link in the same `BEGIN IMMEDIATE` row write,
+// so insert + link are transaction-atomic. Terminal transitions (`put` and
+// `tryTransitionProviderTerminal`) omit the column on UPDATE and therefore
+// preserve the link with idempotent replay; they never emit a `generation`
+// feed entry. Old databases without the column read as no link (existing
+// crash behavior, no guess); a strict write without the column dies
+// fail-closed instead of silently dropping the link.
+// ---------------------------------------------------------------------------
+function assertLinkGen(value: string) {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError("genID must be non-empty string")
+  if (value.includes(":")) throw new TypeError("genID must not contain ':'")
+}
+
+function rowLink(row: unknown): string | null {
+  const v = (row as Record<string, unknown> | null | undefined)?.["gen_id"]
+  if (typeof v !== "string" || v.length === 0) return null
+  return v
+}
+
+function hasLinkColumnTx(
+  tx: DbOrTx,
+): Effect.Effect<boolean, unknown, never> {
+  return Effect.gen(function* () {
+    const cols = yield* (tx as unknown as { all: (q: unknown) => Effect.Effect<{ name: string }[]> })
+      .all(sql`SELECT name FROM pragma_table_info('session_operation')`)
+      .pipe(
+        Effect.orDie,
+        Effect.catchDefect(() => Effect.succeed([] as { name: string }[])),
+      )
+    return cols.some((c) => c.name === "gen_id")
+  })
+}
+
+export function getProviderGen(
+  db: Database.Interface["db"],
+  opId: string,
+): Effect.Effect<string | null | undefined> {
+  return Effect.gen(function* () {
+    if (typeof opId !== "string" || opId.length === 0) yield* Effect.die(new TypeError("opId must be non-empty string"))
+    const parsed = parseOpId(opId)
+    if (parsed.kind !== "provider") yield* Effect.die(new TypeError(`provider gen opId kind must be provider, got ${parsed.kind}`))
+    const row = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, opId))
+      .get()
+      .pipe(
+        Effect.orDie,
+        Effect.catchIf(
+          (e) => typeof (e as Error)?.message === "string" && (e as Error).message.includes("gen_id"),
+          () => Effect.succeed(undefined),
+        ),
+        Effect.catchDefect((d) =>
+          typeof (d as Error)?.message === "string" && (d as Error).message.includes("gen_id")
+            ? Effect.succeed(undefined)
+            : Effect.fail(d),
+        ),
+      )
+    if (!row) return undefined
+    try {
+      return rowLink(row)
+    } catch {
+      return null
+    }
+  }).pipe(Effect.orDie) as Effect.Effect<string | null | undefined>
+}
+
+function putProviderInFlightTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  genID: string | null | undefined,
+): Effect.Effect<{ record: FailureRecord; entry?: Changefeed.Entry; fresh: boolean }, unknown, never> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.opKind !== "provider") yield* Effect.die(new TypeError(`provider in-flight opKind must be provider, got ${record.opKind}`))
+    if (record.outcome !== "in-flight") yield* Effect.die(new TypeError(`provider in-flight outcome must be in-flight, got ${record.outcome}`))
+    assertOpIdMatchesKind(record.opId, "provider")
+    const link = genID ?? null
+    if (link !== null) assertLinkGen(link)
+    const sid = sessionID as unknown as string
+    if (typeof sid !== "string" || sid.length === 0) yield* Effect.die(new TypeError("session_id must be non-empty"))
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${sid}`))
+    const existingRow = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, record.opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (existingRow) {
+      const existing = existingRow as typeof SessionOperationTable.$inferSelect
+      if ((existing.session_id as unknown as string) !== sid)
+        yield* Effect.die(new Error(`cross-identity opId ${record.opId} already owned by session ${existing.session_id}`))
+      if (existing.op_kind !== "provider")
+        yield* Effect.die(new Error(`cross-kind conflict for ${record.opId}: existing ${existing.op_kind} vs provider`))
+      let existingRecord: FailureRecord
+      try {
+        existingRecord = rowToValidatedRecord(existing)
+      } catch (e) {
+        yield* Effect.die(new TypeError(`invalid persisted operation row ${record.opId}: ${e instanceof Error ? e.message : String(e)}`))
+        return undefined as unknown as { record: FailureRecord; fresh: boolean }
+      }
+      const normalized = normalizeRecord(record)
+      if (!recordsEqual(existingRecord, normalized))
+        yield* Effect.die(new Error(`conflicting update for ${record.opId}: ${existingRecord.outcome} -> ${normalized.outcome}`))
+      const prev = rowLink(existing)
+      if (link !== null && prev !== link)
+        yield* Effect.die(new Error(`cross-generation conflict for ${record.opId}: existing ${prev ?? "null"} vs new ${link}`))
+      // Idempotent replay carries no revision and no feed. A legacy null
+      // link never backfills: the same 9-field record with a new link is a
+      // different durable fact and fails closed above instead of fabricating
+      // a link. True idempotence is exact record + exact link only.
+      return { record: existingRecord, fresh: false as const }
+    }
+    if (link !== null) {
+      const has = yield* hasLinkColumnTx(tx)
+      if (!has) yield* Effect.die(new Error(`provider gen link column missing for ${record.opId}`))
+      const owner = yield* tx
+        .select()
+        .from(SessionGenerationOwnerTable)
+        .where(eq(SessionGenerationOwnerTable.gen_id, link))
+        .get()
+        .pipe(Effect.orDie)
+      if (!owner) yield* Effect.die(new Error(`generation owner missing for ${link}`))
+      const own = owner as typeof SessionGenerationOwnerTable.$inferSelect
+      if ((own.session_id as unknown as string) !== sid)
+        yield* Effect.die(new Error(`cross-identity gen ${link} already owned by session ${own.session_id}`))
+      if (own.close_reason !== null && own.close_reason !== undefined)
+        yield* Effect.die(new Error(`generation owner closed for ${link}`))
+    }
+    const normalized = normalizeRecord(record)
+    const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+    const nextRev = entry.revision
+    const has = link !== null ? true : yield* hasLinkColumnTx(tx)
+    yield* tx
+      .insert(SessionOperationTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: sessionID,
+        op_kind: normalized.opKind,
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        cancel: normalized.cancel?.source ?? null,
+        detail: normalized.detail ?? null,
+        stack: normalized.stack ?? null,
+        revision: nextRev,
+        ...(has && link !== null ? { gen_id: link } : {}),
+      } as unknown as typeof SessionOperationTable.$inferInsert)
+      .run()
+      .pipe(Effect.orDie)
+    const inserted = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, normalized.opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
+    let insertedRecord: FailureRecord
+    try {
+      insertedRecord = rowToValidatedRecord(inserted as typeof SessionOperationTable.$inferSelect)
+    } catch (e) {
+      yield* Effect.die(new TypeError(`invalid persisted operation row ${normalized.opId}: ${e instanceof Error ? e.message : String(e)}`))
+      return undefined as unknown as { record: FailureRecord; entry: undefined; fresh: boolean }
+    }
+    if (link !== null && rowLink(inserted) !== link)
+      yield* Effect.die(new Error(`provider gen link missing after insert ${normalized.opId}`))
+    return { record: insertedRecord, entry, fresh: true as const }
+  })
+}
+
+function putProviderInFlightIdempotentTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  genID: string | null | undefined,
+): Effect.Effect<FailureRecord, unknown, never> {
+  return Effect.gen(function* () {
+    const out = yield* putProviderInFlightTx(tx, sessionID, record, genID)
+    return out.record
+  })
+}
+
+export function putProviderInFlight(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  genID?: string | null,
+): Effect.Effect<FailureRecord> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.opKind !== "provider") yield* Effect.die(new TypeError(`provider in-flight opKind must be provider`))
+    if (record.outcome !== "in-flight") yield* Effect.die(new TypeError(`provider in-flight outcome must be in-flight`))
+    if (genID !== undefined && genID !== null) assertLinkGen(genID)
+    return yield* db.transaction((tx) => putProviderInFlightIdempotentTx(tx as DbOrTx, sessionID, record, genID ?? null), {
+      behavior: "immediate",
+    })
+  }).pipe(Effect.orDie) as Effect.Effect<FailureRecord>
 }
 
 // ---------------------------------------------------------------------------

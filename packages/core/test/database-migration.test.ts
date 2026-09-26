@@ -53,7 +53,7 @@ describe("DatabaseMigration", () => {
         .quiet()
         .nothrow()
       expect(result.exitCode, result.stderr.toString()).toBe(0)
-      expect(result.stdout.toString()).toContain("No schema changes, nothing to migrate")
+      expect(result.stdout.toString()).toContain("Core migration check passed")
     }, 30_000)
   }
 

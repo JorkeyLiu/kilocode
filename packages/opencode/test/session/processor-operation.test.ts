@@ -197,6 +197,24 @@ const admittedThenPreflightEnv = SessionProcessor.layer.pipe(
 )
 const itAdmittedThenPreflight = testEffect(admittedThenPreflightEnv)
 
+const sameAttemptPreflightLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () =>
+      Stream.fromEffect(Admission.consume()).pipe(
+        Stream.flatMap(() => Stream.fail(new KiloSessionOverflow.PreflightError())),
+      ),
+  }),
+)
+const sameAttemptPreflightEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: false })),
+  Layer.provide(sameAttemptPreflightLLM),
+  Layer.provideMerge(deps),
+)
+const itSameAttemptPreflight = testEffect(sameAttemptPreflightEnv)
+
 const it = testEffect(env)
 
 const nativeRef = {
@@ -1155,6 +1173,64 @@ itAdmittedThenPreflight.live("admitted attempt keeps cleanup obligation across n
         expect("completed" in after.info.time).toBe(true)
       }),
     { config: cfg, git: true },
+  ),
+  { timeout: 20_000 },
+)
+
+itSameAttemptPreflight.live("same-attempt consume then preflight finalizes abandoned without user_stop", () =>
+  provideTmpdirInstance(
+    (dir: string) =>
+      Effect.gen(function* () {
+        const processors = yield* SessionProcessor.Service
+        const session = yield* Session.Service
+        const provider = yield* Provider.Service
+        const database = yield* Database.Service
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "hi")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const beforeFeed = yield* database.db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, chat.id)).all().pipe(Effect.orDie)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "hi" }],
+          tools: {},
+        })
+        expect(value).toBe("compact")
+        const opId = SessionOperation.providerId(msg.id, 0)
+        const rec = yield* SessionOperation.get(database.db, opId)
+        expect(rec).toBeDefined()
+        expect(rec!.opKind).toBe("provider")
+        expect(rec!.outcome).toBe("abandoned")
+        expect(rec!.code).toBe("provider.abandoned")
+        expect(rec!.message.length).toBeGreaterThan(0)
+        expect(rec!.cancel).toBeUndefined()
+        const all = yield* SessionOperation.list(database.db, toSessionId(chat.id))
+        expect(all.length).toBe(1)
+        for (const r of all) expect(r.outcome).not.toBe("in-flight")
+        const receipt = yield* SessionOperation.getReceipt(database.db, opId)
+        expect(receipt).toBeDefined()
+        expect(receipt!.outcome).toBe("abandoned")
+        const afterFeed = yield* database.db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, chat.id)).all().pipe(Effect.orDie)
+        expect(afterFeed.length).toBeGreaterThan(beforeFeed.length)
+        for (const row of afterFeed.slice(beforeFeed.length)) {
+          expect(row.kind).not.toBe("generation")
+          const keys = Object.keys(row).sort()
+          expect(keys).toEqual(["kind", "revision", "seq", "session_id", "time"].sort())
+        }
+      }),
+    { config: cfg },
   ),
   { timeout: 20_000 },
 )
