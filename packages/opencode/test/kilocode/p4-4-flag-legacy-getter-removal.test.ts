@@ -143,15 +143,16 @@ describe("P4.4-T21 Flag legacy getter removal — dead entries absent, protected
     expect(existsSync(migratePath)).toBe(false)
   })
 
-  test("generated SDK and OpenAPI unchanged — no KILO_CONFIG_CONTENT forwarding (static, descriptive)", () => {
-    const wrappers = ["packages/sdk/js/src/server.ts", "packages/sdk/js/src/v2/server.ts"]
-    for (const rel of wrappers) {
-      const src = readRepo(rel)
-      expect(src).not.toContain("KILO_CONFIG_CONTENT")
-      expect(src).not.toContain("buildConfigEnv")
-      expect(src).toContain("...process.env")
-      expect(src).toContain("createKiloServer")
+  test("generated SDK and OpenAPI unchanged — retired launch helpers absent (static, descriptive)", () => {
+    for (const rel of ["packages/sdk/js/src/server.ts", "packages/sdk/js/src/v2/server.ts", "packages/sdk/js/src/process.ts"]) {
+      expect(existsSync(join(repo, rel))).toBe(false)
     }
+    const index = readRepo("packages/sdk/js/src/index.ts")
+    expect(index).not.toContain("createKiloServer")
+    expect(index).not.toContain("./server.js")
+    const v2index = readRepo("packages/sdk/js/src/v2/index.ts")
+    expect(v2index).not.toContain("createKiloServer")
+    expect(v2index).not.toContain("./server.js")
     const gen = readRepo("packages/sdk/js/src/gen/sdk.gen.ts")
     expect(gen).not.toContain("KILO_CONFIG_CONTENT")
     expect(gen).not.toContain("buildConfigEnv")

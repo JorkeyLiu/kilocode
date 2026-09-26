@@ -605,13 +605,9 @@
     "packages/sdk/js": {
       "name": "@kilocode/sdk",
       "version": "7.4.11",
-      "dependencies": {
-        "cross-spawn": "catalog:",
-      },
       "devDependencies": {
         "@hey-api/openapi-ts": "0.90.10",
         "@tsconfig/node22": "catalog:",
-        "@types/cross-spawn": "catalog:",
         "@types/node": "catalog:",
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",

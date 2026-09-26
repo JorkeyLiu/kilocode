@@ -42,7 +42,7 @@ Root `package.json` defines `"dev"` as the full `bun run --cwd packages/opencode
 
 `bun dev` imports the source directly — no rebuild is needed between code edits. Just kill the running server and relaunch.
 
-Do **not** use `createKiloServer()` from `@kilocode/sdk` / `@kilocode/sdk/v2` to test local code: it still launches the retired `kilo` name on `PATH` (`packages/sdk/js/src/server.ts`, `packages/sdk/js/src/v2/server.ts`) and is currently unsupported for workspace backend testing — it does not run your worktree. Launch `bun dev serve` above instead.
+Do **not** use an SDK launcher to test local code: the `createKiloServer()` / `createKiloTui()` / `createKilo()` launch helpers were removed from `@kilocode/sdk` / `@kilocode/sdk/v2` (deleted `packages/sdk/js/src/server.ts`, `src/v2/server.ts`, `src/process.ts` and the `server` package subpaths) — they launched the retired `kilo` name on `PATH` and never ran your worktree. Connect with `createKiloClient` against `bun dev serve` above instead.
 
 Private runtime note: the extension always spawns its staged serve-only `bin/kilo-serve` child with `KILO_PRIVATE_RUNTIME=1`, which forces loopback `127.0.0.1`, ephemeral port `0`, and no mDNS/CORS, and requires `KILO_SERVER_PASSWORD` (`packages/opencode/src/cli/network.ts`, `src/server/server.ts`). Manual `bun dev serve` runs without those forced semantics unless you set `KILO_PRIVATE_RUNTIME=1` yourself — keep it unset for ordinary local testing so `--port`/`--hostname` behave as passed.
 
@@ -240,7 +240,7 @@ PORT="$PORT" KILO_SERVER_PASSWORD="$KILO_SERVER_PASSWORD" bun /tmp/probe.ts
 rm /tmp/probe.ts
 ```
 
-Reminder: this script **connects to** the server you launched in Section 3 — it does not start one. `createKiloServer()` would launch the retired `kilo` name on `PATH` and is currently unsupported for workspace backend testing — do not use it here.
+Reminder: this script **connects to** the server you launched in Section 3 — it does not start one. The retired `createKiloServer()` launcher was removed from the SDK — connect with `createKiloClient` here.
 
 ## 9. Pitfalls
 

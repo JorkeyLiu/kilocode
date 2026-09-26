@@ -5,11 +5,13 @@ import { join, resolve } from "node:path"
 // P4.4-T9 source-removal evidence — handwritten SDK `KILO_CONFIG_CONTENT`
 // forwarding physically removed (LOCK-010 canonical file authority; LOCK-009
 // HTTP/SSE/generated-SDK bridge preserved; LOCK-006/014 bounded removal).
-// - `packages/sdk/js/src/server.ts` and `packages/sdk/js/src/v2/server.ts`
-//   handwritten wrappers no longer contain `mergeConfig`, `parseExistingConfig`,
-//   `buildConfigEnv`, or `KILO_CONFIG_CONTENT` env forwarding.
-// - Direct obsolete test `packages/sdk/js/test/server.test.ts` buildConfigEnv
-//   suite removed; new SDK P4.4-T9 regression covers wrapper absence.
+// - Retired launch helpers `packages/sdk/js/src/server.ts` and
+//   `packages/sdk/js/src/v2/server.ts` (`createKiloServer`/`createKiloTui`,
+//   `createKilo` wrappers, `launch('kilo')`) plus `src/process.ts` removed:
+//   they hardcoded the retired `kilo` binary with no override and are unrelated
+//   to the extension-owned private `kilo-serve` runtime.
+// - Direct obsolete test `packages/sdk/js/test/server.test.ts` and legacy
+//   `packages/sdk/js/example/example.ts` removed with them.
 // - Generated SDK (`packages/sdk/js/src/gen/*`, `v2/gen/*`) and OpenAPI
 //   (`packages/sdk/openapi.json`) unchanged; HTTP/SSE transport contracts,
 //   custom-provider/plugin/auth, sandbox deny list, canonical config loader
@@ -27,26 +29,54 @@ function readRepo(rel: string): string {
 }
 
 describe("P4.4 SDK wrapper KILO_CONFIG_CONTENT forwarding removal — handwritten surface absent", () => {
-  test("handwritten SDK wrappers have no merge helpers or KILO_CONFIG_CONTENT forwarding", () => {
-    const wrappers = ["packages/sdk/js/src/server.ts", "packages/sdk/js/src/v2/server.ts"]
-    for (const rel of wrappers) {
-      const src = readRepo(rel)
-      expect(src).not.toContain("mergeConfig")
-      expect(src).not.toContain("parseExistingConfig")
-      expect(src).not.toContain("buildConfigEnv")
-      expect(src).not.toContain("KILO_CONFIG_CONTENT")
-      expect(src).not.toContain("parseExistingConfig()")
-      // preserves server spawning surface and canonical config passthrough via logLevel arg
-      expect(src).toContain("createKiloServer")
-      expect(src).toContain("createKiloTui")
-      expect(src).toContain("...process.env")
-      expect(src).toContain("logLevel")
-      // Config import remains for ServerOptions/TuiOptions logLevel passthrough
-      expect(src).toContain('from "./gen/types.gen.js"')
-      expect(src).toContain("type Config")
-      // no kilocode_change marker for the removed forwarding should remain
-      expect(src).not.toContain("KILO_CONFIG_CONTENT: buildConfigEnv")
+  test("retired SDK launch helpers are absent (no server/tui spawn surface)", () => {
+    for (const rel of [
+      "packages/sdk/js/src/server.ts",
+      "packages/sdk/js/src/v2/server.ts",
+      "packages/sdk/js/src/process.ts",
+    ]) {
+      expect(existsSync(join(repo, rel))).toBe(false)
     }
+    // no launcher symbols, retired binary spawn, or wrapper env forwarding remain
+    // in the handwritten SDK surface (generated src/gen excluded)
+    let combined = ""
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name === ".git") continue
+          if (entry.name === "gen") continue
+          walk(full)
+        } else if (entry.name.endsWith(".ts")) {
+          combined += readFileSync(full, "utf8") + "\n"
+        }
+      }
+    }
+    walk(join(repo, "packages/sdk/js/src"))
+    expect(combined).not.toContain("createKiloServer")
+    expect(combined).not.toContain("createKiloTui")
+    expect(combined).not.toContain("ServerOptions")
+    expect(combined).not.toContain("TuiOptions")
+    expect(combined).not.toContain("cross-spawn")
+    expect(combined).not.toContain("mergeConfig")
+    expect(combined).not.toContain("parseExistingConfig")
+    expect(combined).not.toContain("buildConfigEnv")
+    expect(combined).not.toContain("KILO_CONFIG_CONTENT")
+    // client entry remains the only handwritten surface, without server re-export
+    const index = readRepo("packages/sdk/js/src/index.ts")
+    expect(index).toContain("./client.js")
+    expect(index).not.toContain("./server.js")
+    expect(index).not.toContain("createKiloServer")
+    const v2index = readRepo("packages/sdk/js/src/v2/index.ts")
+    expect(v2index).toContain("./client.js")
+    expect(v2index).not.toContain("./server.js")
+    expect(v2index).not.toContain("createKiloServer")
+    // package exports expose no server subpath
+    const pkg = JSON.parse(readRepo("packages/sdk/js/package.json"))
+    expect(pkg.exports["./server"]).toBeUndefined()
+    expect(pkg.exports["./v2/server"]).toBeUndefined()
+    expect(pkg.exports["."]).toBeDefined()
+    expect(pkg.exports["./client"]).toBeDefined()
   })
 
   test("no production opencode source references SDK wrapper buildConfigEnv helpers", () => {
@@ -71,15 +101,15 @@ describe("P4.4 SDK wrapper KILO_CONFIG_CONTENT forwarding removal — handwritte
     expect(cfg.split("KILO_CONFIG_CONTENT").length).toBe(1)
   })
 
-  test("SDK test suite no longer contains buildConfigEnv merging assertions", () => {
-    const sdkTest = readRepo("packages/sdk/js/test/server.test.ts")
-    expect(sdkTest).not.toContain('from "../src/server"')
-    expect(sdkTest).not.toContain("describe(\"buildConfigEnv\"")
-    expect(sdkTest).not.toContain("process.env.KILO_CONFIG_CONTENT")
-    expect(sdkTest).not.toContain("originalEnv")
-    // new P4.4-T9 wrapper-absence regression remains
-    expect(sdkTest).toContain("KILO_CONFIG_CONTENT forwarding removed")
-    expect(sdkTest).toContain("createKiloServer")
+  test("retired SDK launcher test and example are absent (client regression remains)", () => {
+    expect(existsSync(join(repo, "packages/sdk/js/test/server.test.ts"))).toBe(false)
+    expect(existsSync(join(repo, "packages/sdk/js/example/example.ts"))).toBe(false)
+    // client regression preserved
+    expect(existsSync(join(repo, "packages/sdk/js/test/config-preservation.test.ts"))).toBe(true)
+    const client = readRepo("packages/sdk/js/src/client.ts")
+    expect(client).toContain("createKiloClient")
+    const v2client = readRepo("packages/sdk/js/src/v2/client.ts")
+    expect(v2client).toContain("createKiloClient")
   })
 
   test("generated SDK and OpenAPI unchanged (HTTP/SSE bridge preserved per LOCK-009)", () => {
