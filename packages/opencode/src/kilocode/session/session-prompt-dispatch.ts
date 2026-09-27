@@ -21,9 +21,9 @@ import {
   InstanceUnavailableDuringConfigRebuildError,
 } from "@/kilocode/server/drain-control-acquire"
 import { SessionOperationTable } from "@opencode-ai/core/session/sql"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { classifyGenerationResult } from "@/kilocode/session/generation-result"
 
 export const VERSION = 1 as const
 export const OP = "session/prompt" as const
@@ -228,17 +228,6 @@ function buildSucceeded(req: SessionPromptRequest, revision: Revision | undefine
     data: { accepted: true as const, messageId: req.payload.messageId, sessionId: req.context.sessionId },
     ...(revision !== undefined ? { revision } : {}),
   } as SessionPromptSucceeded
-}
-
-function isAbortedSuccess(value: unknown): boolean {
-  const info = (value as { info?: { error?: unknown } })?.info
-  if (!info || !info.error) return false
-  const err = info.error as { name?: unknown }
-  if (typeof err.name === "string" && (err.name === "MessageAbortedError" || err.name === "AbortedError")) return true
-  try {
-    if (SessionV1.AbortedError.isInstance(err as never)) return true
-  } catch {}
-  return false
 }
 
 export interface SessionPromptDispatch {
@@ -556,8 +545,25 @@ export const layer = Layer.effect(
         const run = Effect.gen(function* () {
           const exit = yield* promptSvc.prompt(input as unknown as Parameters<typeof promptSvc.prompt>[0]).pipe(Effect.exit)
           if (exit._tag === "Success") {
-            if (isAbortedSuccess(exit.value)) {
+            const classified = classifyGenerationResult(exit.value)
+            if (classified.outcome === "abandoned") {
               yield* terminalizePrompt(req.opId, sid, "abandoned", "prompt.abandoned", "prompt abandoned")
+            } else if (classified.outcome === "failed") {
+              // Accepted generation succeeded at the Effect level but the
+              // assistant carries a non-abort error (processor already emitted
+              // session.error): terminalize failed only, no duplicate event.
+              // generationTerminal inside terminalizePrompt scrubs/caps.
+              yield* terminalizePrompt(
+                req.opId,
+                sid,
+                "failed",
+                "prompt.failed",
+                classified.message,
+                (classified as { detail?: string }).detail,
+              )
+              yield* Effect.logError("prompt_async private assistant error").pipe(
+                Effect.annotateLogs({ sessionID: sid as unknown as string }),
+              )
             } else {
               yield* terminalizePrompt(req.opId, sid, "succeeded", "prompt.succeeded", "prompt succeeded")
             }

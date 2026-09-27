@@ -20,3 +20,19 @@ export function operationStatusTone(op?: PanelOperation): string {
   if (op.outcome === "abandoned") return "cancelled"
   return "neutral"
 }
+
+/**
+ * Concise owner status for a versioned redacted recovery projection.
+ * Renders only budget counts and termination — never layer timestamps,
+ * raw diagnostics, secrets, or anything readable as a replay instruction.
+ */
+export function operationRecoveryText(op?: PanelOperation): string | undefined {
+  const rec = op?.recovery
+  if (!rec) return undefined
+  if (op?.outcome !== "failed" && op?.outcome !== "abandoned") return undefined
+  if (typeof rec.used !== "number" || typeof rec.limit !== "number") return undefined
+  if (!Number.isSafeInteger(rec.used) || !Number.isSafeInteger(rec.limit)) return undefined
+  if (rec.used < 0 || rec.limit < 0 || rec.used > rec.limit) return undefined
+  const base = `retries ${rec.used}/${rec.limit}`
+  return rec.terminated ? `${base} · closed` : base
+}

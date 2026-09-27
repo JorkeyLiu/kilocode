@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Queue } from "effect"
+import { Effect, Exit, Fiber, Layer, Queue } from "effect"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { QuestionTool } from "../../src/tool/question"
 import { Question } from "../../src/question"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -92,6 +93,64 @@ describe("tool.question", () => {
 
       const result = yield* Fiber.join(fiber)
       expect(result.output).toContain(`"What is your favorite animal?"="Dog"`)
+    }),
+  )
+
+  it.instance("requests question_tool with the stable literal pattern before questioning", () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+      const seen: Array<Record<string, unknown>> = []
+      const gated = {
+        ...ctx,
+        ask: (req: Record<string, unknown>) => Effect.sync(() => void seen.push(req)),
+      }
+      const questions = [
+        {
+          question: "What is your favorite color?",
+          header: "Color",
+          options: [{ label: "Red", description: "The color of passion" }],
+        },
+      ]
+
+      const fiber = yield* tool.execute({ questions }, gated as typeof ctx).pipe(Effect.forkScoped)
+      const item = yield* pending(question)
+      yield* question.reply({ requestID: item.id, answers: [["Red"]] })
+      const result = yield* Fiber.join(fiber)
+      expect(result.title).toBe("Asked 1 question")
+      expect(seen).toHaveLength(1)
+      const req = seen[0] as { permission: string; patterns: string[]; always: string[] }
+      expect(req.permission).toBe("question_tool")
+      expect(req.patterns).toEqual(["ask-user"])
+      expect(req.always).toEqual(["ask-user"])
+      for (const p of [...req.patterns, ...req.always]) {
+        expect(p).not.toContain("*")
+        expect(p).not.toMatch(/[*?[\]{}]/)
+      }
+    }),
+  )
+
+  it.instance("never emits a question when question_tool permission is denied", () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+      const gated = {
+        ...ctx,
+        ask: () => Effect.fail(new PermissionV1.RejectedError()) as unknown as Effect.Effect<void>,
+      }
+      const questions = [
+        {
+          question: "What is your favorite color?",
+          header: "Color",
+          options: [{ label: "Red", description: "The color of passion" }],
+        },
+      ]
+
+      const exit = yield* tool.execute({ questions }, gated as typeof ctx).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* question.list()).toEqual([])
     }),
   )
 

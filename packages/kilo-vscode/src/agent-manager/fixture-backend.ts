@@ -105,6 +105,13 @@ export interface MessageTruth {
   text: string
   /** Completed tool-part summaries (task delegation, user tool, skill, MCP, question). */
   tools?: ToolPartTruth[]
+  /** Assistant terminal finish (panel-safe verbatim, e.g. "stop"); assistant only. */
+  finish?: string
+  /**
+   * Assistant terminal error (panel-safe error name only, never detail/stack;
+   * null means no error). Assistant only; absent on user messages.
+   */
+  error?: string | null
   /** H-13: the message carries the internal auto-compaction part (overflow safeguard). */
   compaction?: CompactionTruth
   /** H-13: the assistant message is the compaction summary (summary: true). */
@@ -251,6 +258,19 @@ export function summarizeMessage(row: { info: Message; parts: Part[] }): Message
         p.type === "text" &&
         !!(p as { metadata?: Record<string, unknown> }).metadata?.compaction_continue,
     ) || undefined
+  // D1 streaming-observation: assistant terminal finish/error are panel-safe
+  // fixture-only facts (finish verbatim, error name only, never detail/stack).
+  // User messages carry neither field.
+  const assistantTail =
+    row.info.role === "assistant"
+      ? (() => {
+          const info = row.info as { finish?: unknown; error?: unknown }
+          const finish = typeof info.finish === "string" ? info.finish : undefined
+          const err = info.error as { name?: unknown } | null | undefined
+          const error = err && typeof err === "object" && typeof err.name === "string" ? err.name : null
+          return { ...(finish !== undefined ? { finish } : {}), error }
+        })()
+      : {}
   return {
     id: row.info.id,
     role: row.info.role,
@@ -258,6 +278,7 @@ export function summarizeMessage(row: { info: Message; parts: Part[] }): Message
     ...(model ? { model } : {}),
     text,
     ...(tools ? { tools } : {}),
+    ...assistantTail,
     ...(compaction ? { compaction } : {}),
     // H-13: the compaction summary assistant is flagged summary: true (the
     // served backend also attaches the per-message session summary object

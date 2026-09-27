@@ -1672,8 +1672,15 @@ export class KiloConnectionService {
       }
     }
     // FD-ready single point (negotiation success + quarantine recovery):
+    // one-time lifecycle enumeration (init-completed only, deduped) then
     // redeliver parked external observe hints. No new listener owner;
-    // reconcile() is idempotent/safe-idle and never throws (internal catch/log).
+    // both are idempotent/safe-idle and never throw (internal catch/log).
+    try {
+      const svc = this.canonicalConfigService as unknown as { notifyPrivateReady?: () => void } | null
+      svc?.notifyPrivateReady?.()
+    } catch (err) {
+      console.warn("[Kilo] PrivatePeer lifecycle observe failed:", String(err))
+    }
     void this.canonicalConfigService?.reconcileExternalObserve()
   }
 
@@ -3735,15 +3742,23 @@ export class KiloConnectionService {
 
   /**
    * Fixture-only FD close for the private event-transport E2E proof.
-   * Closes the underlying FD peer transport through the real `onClosed`
-   * path (no production semantics change), then waits bounded for the
-   * single-source SSE fallback to converge (`liveEventSource==='sse'` +
-   * `connected`). Throws when the fixture env is absent or convergence
-   * times out. No model traffic is issued.
+   * True-closes the ServerManager-owned private pipes for the exact active
+   * epoch/pid through the owner action (backend observes EOF/EPIPE, child
+   * stays alive), then borrows the peer's fixture close so the real
+   * `onClosed` path fires (no production semantics change), then waits
+   * bounded for the single-source SSE fallback to converge
+   * (`liveEventSource==='sse'` + `connected`). Owner-gated: the borrowed
+   * peer dispose runs ONLY after the owner action reports a true close
+   * (`closed===true`, `alreadyClosed===false`, same pid/epoch). A stale
+   * epoch, foreign pid, already-closed/no-op, gate-absent, or thrown owner
+   * action fails closed BEFORE touching the borrowed peer and never returns
+   * `close.closed===true`. Throws when the fixture env is absent or
+   * convergence times out. No model traffic is issued.
    */
   public async fixturePrivateEventClosePeer(): Promise<{
     epoch: number | null
     close: { closed: boolean; state: string }
+    owner: { closed: boolean; alreadyClosed: boolean; pid: number | undefined; port: number | null; epoch: number | null } | null
     before: { source: "private" | "sse" | null; connectionState: ConnectionState; sseActive: boolean }
     after: { source: "private" | "sse" | null; connectionState: ConnectionState; sseActive: boolean }
   }> {
@@ -3751,16 +3766,51 @@ export class KiloConnectionService {
     const peer = this.privatePeer
     if (!peer) throw new Error("fixture privateEventClosePeer: no private peer")
     const epoch = this.privateEpoch
+    const pid = this.privatePid
     const before = { source: this.liveEventSource, connectionState: this.state, sseActive: !!this.sseClient }
     if (before.source !== "private") throw new Error(`fixture privateEventClosePeer: live source must be private, got ${String(before.source)}`)
+    if (epoch === null || epoch === undefined) {
+      throw new Error(`fixture privateEventClosePeer: missing epoch for owner close (pid=${String(pid)}) — refusing borrowed dispose`)
+    }
+    if (pid === undefined) {
+      throw new Error(`fixture privateEventClosePeer: missing pid for owner close (epoch=${String(epoch)}) — refusing borrowed dispose`)
+    }
+    let owner: { closed: boolean; alreadyClosed: boolean; pid: number | undefined; port: number | null; epoch: number | null } | null = null
+    try {
+      owner = this.serverManager.closePrivatePipesForFixture(epoch, pid)
+    } catch (err) {
+      throw new Error(
+        `fixture privateEventClosePeer: owner action threw (epoch=${String(epoch)} pid=${String(pid)}): ${String(err instanceof Error ? err.message : err).slice(0, 200)} — refusing borrowed dispose`,
+      )
+    }
+    if (!owner) {
+      throw new Error(
+        `fixture privateEventClosePeer: owner action unavailable (fixture gate absent, epoch=${String(epoch)} pid=${String(pid)}) — refusing borrowed dispose`,
+      )
+    }
+    if (owner.epoch !== epoch || owner.pid !== pid) {
+      throw new Error(
+        `fixture privateEventClosePeer: owner identity mismatch (want epoch=${String(epoch)} pid=${String(pid)}, got epoch=${String(owner.epoch)} pid=${String(owner.pid)} closed=${String(owner.closed)} alreadyClosed=${String(owner.alreadyClosed)}) — stale/no-op, refusing borrowed dispose`,
+      )
+    }
+    if (owner.closed !== true || owner.alreadyClosed !== false) {
+      throw new Error(
+        `fixture privateEventClosePeer: owner did not true-close (closed=${String(owner.closed)} alreadyClosed=${String(owner.alreadyClosed)} epoch=${String(epoch)} pid=${String(pid)}) — stale/no-op, refusing borrowed dispose`,
+      )
+    }
     const close = peer.fixtureCloseUnderlyingTransportForEvent()
+    if (close.closed !== true) {
+      throw new Error(
+        `fixture privateEventClosePeer: borrowed peer dispose did not close (closed=false state=${close.state}) despite owner true-close epoch=${String(epoch)} pid=${String(pid)}`,
+      )
+    }
     const deadline = Date.now() + 30_000
     for (;;) {
       const source = this.liveEventSource
       const connectionState = this.state
       const sseActive = !!this.sseClient
       if (source === "sse" && connectionState === "connected" && sseActive) {
-        return { epoch, close, before, after: { source, connectionState, sseActive } }
+        return { epoch, close, owner, before, after: { source, connectionState, sseActive } }
       }
       if (Date.now() > deadline) {
         throw new Error(

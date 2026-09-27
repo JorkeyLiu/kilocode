@@ -1,5 +1,7 @@
 import { describe, it, expect, spyOn } from "bun:test"
 import * as vscode from "vscode"
+import { canonicalDirectory } from "../../src/private-worker/canonical-directory"
+import { encodeMessageCursor } from "../../src/private-worker/message-read"
 import type { PartUpdate } from "../../src/shared/stream-messages"
 
 // vscode mock is provided by the shared preload (tests/setup/vscode-mock.ts)
@@ -31,15 +33,67 @@ async function waitFor(cond: () => boolean, timeoutMs = 1000): Promise<void> {
   }
 }
 
+// Transcript fixtures are private `observation/messages` rows: the wire shape
+// the reader returns, so ids and role-required fields satisfy the controller
+// boundary the provider revalidates.
 function mkMessage(id: string, role: "user" | "assistant", time = 0) {
+  const common = { id: `msg_${id}`, sessionID: "ses_s1", role, time: { created: time } }
+  return role === "user"
+    ? {
+        info: { ...common, agent: "build", model: { providerID: "anthropic", modelID: "claude" } },
+        parts: [] as unknown[],
+      }
+    : {
+        info: {
+          ...common,
+          parentID: "msg_parent",
+          modelID: "claude",
+          providerID: "anthropic",
+          mode: "build",
+          agent: "build",
+          path: { cwd: "/repo", root: "/repo" },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+        parts: [] as unknown[],
+      }
+}
+
+// Private `observation/messages` found page. A full page carries the cursor
+// anchored on its oldest message; a short page carries none.
+function mkPage(items: unknown[], limit?: number) {
+  const first = items[0] as { info?: { id?: string; time?: { created?: number } } } | undefined
+  const full = limit !== undefined && items.length > 0 && items.length === limit
+  const cursor =
+    full && first?.info?.id && typeof first.info.time?.created === "number"
+      ? encodeMessageCursor({ id: first.info.id, time: first.info.time.created })
+      : undefined
   return {
-    info: {
-      id,
-      sessionID: "ses_s1",
-      role,
-      time: { created: time },
+    v: "1.0",
+    status: "found",
+    messages: items,
+    ...(cursor ? { nextCursor: cursor } : {}),
+  }
+}
+
+// Private `observation/get` found session bound to the request.
+function mkFound(
+  input: { sessionId: string; directory: string },
+  extra?: { title?: string; revert?: { messageID: string } },
+) {
+  return {
+    v: "1.0",
+    status: "found",
+    session: {
+      id: input.sessionId,
+      title: extra?.title ?? "Session",
+      parentID: null,
+      directory: input.directory,
+      projectID: "project",
+      createdAt: 1,
+      updatedAt: 1,
+      ...(extra?.revert ? { revert: extra.revert } : {}),
     },
-    parts: [],
   }
 }
 
@@ -58,10 +112,6 @@ function mkSession(revert?: { messageID: string }) {
   }
 }
 
-function mkResult(items: unknown[]) {
-  return { data: items, response: { headers: new Headers() } }
-}
-
 function mkCreatedSession(id = "ses_created") {
   return {
     id,
@@ -72,13 +122,54 @@ function mkCreatedSession(id = "ses_created") {
   }
 }
 
-function createClient(options?: {
-  messagesDeferred?: Deferred<{ data: unknown[]; response: { headers: Headers } }>
+// Private-authority reader: the transcript and session-detail sources the
+// provider actually uses. Records every private page request, rebinds rows to
+// the requested session, and refuses a non-canonical directory spelling as
+// out of scope, matching the real private API surface.
+type PrivateReaderOptions = {
+  messagesDeferred?: Deferred<unknown>
   messagesData?: unknown[]
+  getDeferred?: Deferred<unknown>
+  getData?: unknown
+  getFn?: (input: { directory: string; sessionId: string; signal?: AbortSignal }) => Promise<unknown>
+}
+
+function createReader(options?: PrivateReaderOptions) {
+  const calls: { cursor?: string; limit: number; sessionId: string; directory: string }[] = []
+  const reader = {
+    isEnabled: () => true,
+    isStarted: () => true,
+    list: async () => ({ v: "1.0", entries: [] }),
+    get: async (input: { directory: string; sessionId: string; signal?: AbortSignal }) => {
+      if (options?.getFn) return options.getFn(input)
+      if (options?.getDeferred) return options.getDeferred.promise
+      if (options?.getData) return options.getData
+      return mkFound(input)
+    },
+    messages: async (input: { directory: string; sessionId: string; limit: number; cursor?: string }) => {
+      calls.push({ cursor: input.cursor, limit: input.limit, sessionId: input.sessionId, directory: input.directory })
+      if (canonicalDirectory(input.directory) !== input.directory) return { v: "1.0", status: "scope_mismatch" }
+      if (options?.messagesDeferred) return options.messagesDeferred.promise
+      const items = (options?.messagesData ?? []).map((item) => {
+        const row = item as { info: Record<string, unknown>; parts?: unknown[] }
+        return {
+          ...row,
+          info: { ...row.info, sessionID: input.sessionId },
+          parts: (row.parts ?? []).map((part) => ({
+            ...(part as Record<string, unknown>),
+            sessionID: input.sessionId,
+          })),
+        }
+      })
+      return mkPage(items, input.limit)
+    },
+  }
+  return { reader, calls }
+}
+
+function createClient(options?: {
   deleteDeferred?: Deferred<unknown>
   revertDeferred?: Deferred<{ data?: unknown; error?: unknown }>
-  sessionData?: unknown
-  sessionGet?: (params: { sessionID: string; directory?: string }) => Promise<{ data: unknown }>
   createDeferred?: Deferred<{ data: ReturnType<typeof mkCreatedSession> }>
   abortFailures?: string[]
   abortDeferred?: Deferred<void>
@@ -87,7 +178,8 @@ function createClient(options?: {
   sandboxStarted?: Deferred<void>
   createSession?: (params: Record<string, unknown>, index: number) => Promise<{ data: unknown }>
 }) {
-  const calls: { before?: string; limit?: number }[] = []
+  const messages: Array<Record<string, unknown>> = []
+  const gets: Array<Record<string, unknown>> = []
   const stopped: { sessionID: string; directory?: string }[] = []
   const aborted: { sessionID: string; directory?: string }[] = []
   const deleted: { sessionID: string; directory?: string }[] = []
@@ -98,7 +190,8 @@ function createClient(options?: {
   const sandboxSupport: Array<Record<string, unknown>> = []
   const configReads: Array<Record<string, unknown>> = []
   return {
-    calls,
+    messages,
+    gets,
     stopped,
     aborted,
     deleted,
@@ -115,9 +208,11 @@ function createClient(options?: {
         if (options?.createSession) return options.createSession(params, created.length - 1)
         return options?.createDeferred?.promise ?? { data: mkCreatedSession() }
       },
-      get: async (params: { sessionID: string; directory?: string }) => {
-        if (options?.sessionGet) return options.sessionGet(params)
-        return { data: options?.sessionData ?? null }
+      // Private-authority: session detail and transcripts never read the SDK.
+      // Any SDK attempt is recorded and fails loudly.
+      get: async (params: Record<string, unknown>) => {
+        gets.push(params)
+        throw new Error("SDK session.get must not be used (private-authority)")
       },
       status: async () => ({ data: {} }),
       revert: async (params: Record<string, unknown>) => {
@@ -135,10 +230,9 @@ function createClient(options?: {
         await options?.abortDeferred?.promise
         return { data: true }
       },
-      messages: async (params: { before?: string; limit?: number }) => {
-        calls.push({ before: params.before, limit: params.limit })
-        if (options?.messagesDeferred) return options.messagesDeferred.promise
-        return mkResult(options?.messagesData ?? [])
+      messages: async (params: Record<string, unknown>) => {
+        messages.push(params)
+        throw new Error("SDK session.messages must not be used (private-authority)")
       },
       delete: async (params: { sessionID: string; directory?: string }) => {
         deleted.push(params)
@@ -276,9 +370,11 @@ type ProviderInternals = {
   handleDeleteSession: (sid: string) => Promise<void>
 }
 
-function makeProvider(client: ReturnType<typeof createClient>) {
+function makeProvider(client: ReturnType<typeof createClient>, source?: ReturnType<typeof createReader>) {
   const connection = createConnection(client)
-  const provider = new KiloProvider({} as never, connection as never)
+  const provider = new KiloProvider({} as never, connection as never, undefined, {
+    privateSessionReader: (source ?? createReader()).reader as never,
+  } as never)
   const internal = provider as unknown as ProviderInternals
   internal.connectionState = "connected"
   const sent: unknown[] = []
@@ -788,7 +884,7 @@ describe("KiloProvider revert ordering", () => {
         type: "sessionUpdated",
         session: expect.objectContaining({ id: "ses_s1", revert: null }),
       }),
-      expect.objectContaining({ type: "messageCreated", message: expect.objectContaining({ id: "m2" }) }),
+      expect.objectContaining({ type: "messageCreated", message: expect.objectContaining({ id: "msg_m2" }) }),
     ])
   })
 
@@ -818,8 +914,9 @@ describe("KiloProvider revert ordering", () => {
   })
 
   it("publishes authoritative session state after a missed clear event", async () => {
-    const client = createClient({ sessionData: mkSession() })
-    const { internal, sent } = makeProvider(client)
+    const client = createClient()
+    const { reader } = createReader({ getData: mkFound({ sessionId: "ses_s1", directory: "/repo" }) })
+    const { internal, sent } = makeProvider(client, { reader, calls: [] })
     internal.currentSession = mkSession({ messageID: "msg_m1" })
     internal.contextSessionID = "ses_s1"
 
@@ -832,16 +929,17 @@ describe("KiloProvider revert ordering", () => {
   })
 
   it("retries a focused session refresh after a concurrent session update", async () => {
-    const first = defer<{ data: unknown }>()
-    const second = defer<{ data: unknown }>()
+    const first = defer<unknown>()
+    const second = defer<unknown>()
     let calls = 0
-    const client = createClient({
-      sessionGet: async () => {
+    const { reader } = createReader({
+      getFn: async () => {
         calls += 1
         return calls === 1 ? first.promise : second.promise
       },
     })
-    const { internal } = makeProvider(client)
+    const client = createClient()
+    const { internal } = makeProvider(client, { reader, calls: [] })
     internal.currentSession = mkSession({ messageID: "msg_m1" })
     internal.contextSessionID = "ses_s1"
     internal.trackedSessionIds.add("ses_s1")
@@ -854,12 +952,12 @@ describe("KiloProvider revert ordering", () => {
       type: "session.updated",
       properties: { sessionID: "ses_s1", info: { ...mkSession(), title: "updated" } },
     })
-    first.resolve({ data: mkSession() })
+    first.resolve(mkFound({ sessionId: "ses_s1", directory: "/repo" }))
     await Bun.sleep(10)
     await Bun.sleep(10)
     expect(calls).toBe(2)
 
-    second.resolve({ data: { ...mkSession(), title: "updated" } })
+    second.resolve(mkFound({ sessionId: "ses_s1", directory: "/repo" }, { title: "updated" }))
     await Bun.sleep(10)
     await Bun.sleep(10)
 
@@ -868,25 +966,26 @@ describe("KiloProvider revert ordering", () => {
   })
 
   it("ignores an older session refresh that resolves last", async () => {
-    const first = defer<{ data: unknown }>()
-    const second = defer<{ data: unknown }>()
+    const first = defer<unknown>()
+    const second = defer<unknown>()
     let calls = 0
-    const client = createClient({
-      sessionGet: async () => {
+    const { reader } = createReader({
+      getFn: async () => {
         calls += 1
         return calls === 1 ? first.promise : second.promise
       },
     })
-    const { internal, sent } = makeProvider(client)
+    const client = createClient()
+    const { internal, sent } = makeProvider(client, { reader, calls: [] })
     internal.currentSession = mkSession({ messageID: "msg_m1" })
     internal.contextSessionID = "ses_s1"
 
     internal.refreshSessionDetails("ses_s1", "/repo")
     internal.refreshSessionDetails("ses_s1", "/repo")
-    second.resolve({ data: mkSession() })
+    second.resolve(mkFound({ sessionId: "ses_s1", directory: "/repo" }))
     await Bun.sleep(10)
     await Bun.sleep(10)
-    first.resolve({ data: mkSession({ messageID: "msg_m1" }) })
+    first.resolve(mkFound({ sessionId: "ses_s1", directory: "/repo" }, { revert: { messageID: "msg_m1" } }))
     await Bun.sleep(10)
     await Bun.sleep(10)
 
@@ -895,15 +994,16 @@ describe("KiloProvider revert ordering", () => {
   })
 
   it("ignores a session refresh superseded by a revert response", async () => {
-    const session = defer<{ data: unknown }>()
-    const client = createClient({ sessionGet: async () => session.promise })
-    const { internal } = makeProvider(client)
+    const session = defer<unknown>()
+    const { reader } = createReader({ getFn: async () => session.promise })
+    const client = createClient()
+    const { internal } = makeProvider(client, { reader, calls: [] })
     internal.currentSession = mkSession()
     internal.contextSessionID = "ses_s1"
 
     internal.refreshSessionDetails("ses_s1", "/repo")
     await internal.handleRevertSession("ses_s1", "msg_m1")
-    session.resolve({ data: mkSession() })
+    session.resolve(mkFound({ sessionId: "ses_s1", directory: "/repo" }))
     await Bun.sleep(0)
 
     expect(internal.currentSession?.revert).toEqual({ messageID: "msg_m1" })
@@ -912,15 +1012,7 @@ describe("KiloProvider revert ordering", () => {
 
 describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
   it("stops background processes for the previous session when switching sessions", async () => {
-    const client = createClient({
-      sessionData: {
-        id: "ses_s2",
-        directory: "/repo/worktree",
-        title: "Session",
-        projectID: "project",
-        time: { created: 1, updated: 1 },
-      },
-    })
+    const client = createClient()
     const { internal } = makeProvider(client)
     internal.currentSession = { id: "ses_s1", directory: "/repo/old" }
 
@@ -931,54 +1023,40 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
   })
 
   it("does not stop background processes twice for focus-mode reconcile", async () => {
-    const client = createClient({ messagesData: [mkMessage("m1", "user", 1)] })
-    const { internal } = makeProvider(client)
+    const client = createClient()
+    const { internal } = makeProvider(client, createReader({ messagesData: [mkMessage("m1", "user", 1)] }))
     internal.currentSession = { id: "ses_s1", directory: "/repo/old" }
 
     await internal.handleLoadMessages("ses_s2", { mode: "focus" })
 
+    await waitFor(() => client.stopped.length === 1)
     expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/old" }])
   })
 
   it("ignores stale focus refreshes after switching sessions", async () => {
-    const s1 = defer<{ data: unknown }>()
-    const s2 = defer<{ data: unknown }>()
-    const client = createClient({
-      sessionGet: async (params) => {
-        if (params.sessionID === "ses_s1") return s1.promise
-        if (params.sessionID === "ses_s2") return s2.promise
-        return { data: null }
+    const s1 = defer<unknown>()
+    const s2 = defer<unknown>()
+    const { reader } = createReader({
+      getFn: async (input) => {
+        if (input.sessionId === "ses_s1") return s1.promise
+        if (input.sessionId === "ses_s2") return s2.promise
+        return mkFound(input)
       },
     })
-    const { internal } = makeProvider(client)
+    const client = createClient()
+    const { internal } = makeProvider(client, { reader, calls: [] })
     internal.currentSession = { id: "ses_s1", directory: "/repo/old" }
     internal.trackedSessionIds.add("ses_s1")
 
     await internal.handleLoadMessages("ses_s1", { mode: "focus" })
     const load = internal.handleLoadMessages("ses_s2")
-    s2.resolve({
-      data: {
-        id: "ses_s2",
-        directory: "/repo/new",
-        title: "Session",
-        projectID: "project",
-        time: { created: 2, updated: 2 },
-      },
-    })
+    s2.resolve(mkFound({ sessionId: "ses_s2", directory: "/repo" }))
     await load
     await Bun.sleep(0)
     await Bun.sleep(0)
     expect(internal.currentSession?.id).toBe("ses_s2")
 
-    s1.resolve({
-      data: {
-        id: "ses_s1",
-        directory: "/repo/old",
-        title: "Session",
-        projectID: "project",
-        time: { created: 1, updated: 1 },
-      },
-    })
+    s1.resolve(mkFound({ sessionId: "ses_s1", directory: "/repo" }))
     await Bun.sleep(0)
     await Bun.sleep(0)
 
@@ -988,9 +1066,9 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
   })
 
   it("stops each synchronously selected session during rapid switches", async () => {
-    const messages = defer<{ data: unknown[]; response: { headers: Headers } }>()
-    const client = createClient({ messagesDeferred: messages })
-    const { internal } = makeProvider(client)
+    const messages = defer<unknown>()
+    const client = createClient()
+    const { internal } = makeProvider(client, createReader({ messagesDeferred: messages }))
     internal.currentSession = { id: "ses_s1", directory: "/repo/s1" }
     internal.contextSessionID = "ses_s1"
     internal.sessionDirectories.set("ses_s2", "/repo/s2")
@@ -1004,7 +1082,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
       { sessionID: "ses_s2", directory: "/repo/s2" },
     ])
 
-    messages.resolve(mkResult([]))
+    messages.resolve(mkPage([]))
     await Promise.all([s2, s3])
   })
 
@@ -1036,14 +1114,17 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
       mkMessage("m2", "assistant", 2),
       mkMessage("m3", "user", 3), // delivered after SSE reconnect, missed by webview
     ]
-    const client = createClient({ messagesData: messages })
-    const { internal, sent } = makeProvider(client)
+    const client = createClient()
+    const source = createReader({ messagesData: messages })
+    const { internal, sent } = makeProvider(client, source)
     internal.trackedSessionIds.add("ses_s1")
 
     await internal.handleLoadMessages("ses_s1", { mode: "focus" })
 
-    // Server must be hit to reconcile the current state.
-    expect(client.calls.length).toBeGreaterThanOrEqual(1)
+    // The private reader must be hit to reconcile the current state.
+    expect(source.calls.length).toBeGreaterThanOrEqual(1)
+    // Private-authority: the transcript never comes from the SDK client.
+    expect(client.messages).toEqual([])
 
     // Must post a messagesLoaded snapshot tagged reconcile — not replace —
     // so the webview merges without tearing down existing reactive proxies.
@@ -1053,7 +1134,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     expect(loaded).toBeDefined()
     expect(loaded!.mode).toBe("reconcile")
     expect(typeof loaded!.since).toBe("number")
-    expect(loaded!.messages.map((m) => m.id)).toContain("m3")
+    expect(loaded!.messages.map((m) => m.id)).toContain("msg_m3")
   })
 
   it("throttles repeat focus-mode reconciles within 1s", async () => {
@@ -1061,29 +1142,30 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     // reconcile fetch per click, each doing a full-page fetch + 80-message
     // reactive-store reconcile. A 1s throttle kills the redundant work while
     // still catching SSE drops on normal use patterns.
-    const client = createClient({ messagesData: [mkMessage("m1", "user", 1)] })
-    const { internal } = makeProvider(client)
+    const client = createClient()
+    const source = createReader({ messagesData: [mkMessage("m1", "user", 1)] })
+    const { internal } = makeProvider(client, source)
     internal.trackedSessionIds.add("ses_s1")
 
     await internal.handleLoadMessages("ses_s1", { mode: "focus" })
-    const callsAfterFirst = client.calls.length
+    const callsAfterFirst = source.calls.length
 
     // Second focus within the throttle window — no fetch should happen.
     await internal.handleLoadMessages("ses_s1", { mode: "focus" })
-    expect(client.calls.length).toBe(callsAfterFirst)
+    expect(source.calls.length).toBe(callsAfterFirst)
   })
 
   it("does not post messagesLoaded on focus when the session is no longer tracked", async () => {
     // Defensive: if the user deletes the session while the background focus
     // refetch is in flight, drop the response (same invariant as prepend).
-    const messages = defer<{ data: unknown[]; response: { headers: Headers } }>()
-    const client = createClient({ messagesDeferred: messages })
-    const { internal, sent } = makeProvider(client)
+    const messages = defer<unknown>()
+    const client = createClient()
+    const { internal, sent } = makeProvider(client, createReader({ messagesDeferred: messages }))
     internal.trackedSessionIds.add("ses_s1")
 
     const load = internal.handleLoadMessages("ses_s1", { mode: "focus" })
     await internal.handleDeleteSession("ses_s1")
-    messages.resolve(mkResult([mkMessage("m1", "user", 10)]))
+    messages.resolve(mkPage([mkMessage("m1", "user", 10)]))
     await load
 
     const loaded = sent.filter(
@@ -1349,29 +1431,35 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
   it("strips transcript-only metadata before posting messages to the webview", async () => {
     const user = mkMessage("m1", "user", 1)
     const assistant = mkMessage("m2", "assistant", 2)
-    const client = createClient({
-      messagesData: [
-        {
-          ...user,
-          info: {
-            ...user.info,
-            summary: { diffs: [{ file: "a.ts", patch: "full patch", additions: 2, deletions: 1 }] },
-          },
-        },
-        {
-          ...assistant,
-          parts: [
-            {
-              type: "reasoning",
-              id: "r1",
-              text: "Considering options",
-              metadata: { openai: { reasoningEncryptedContent: "encrypted", itemId: "item-1" } },
+    const client = createClient()
+    const { provider, sent } = makeProvider(
+      client,
+      createReader({
+        messagesData: [
+          {
+            ...user,
+            info: {
+              ...user.info,
+              summary: { diffs: [{ file: "a.ts", patch: "full patch", additions: 2, deletions: 1 }] },
             },
-          ],
-        },
-      ],
-    })
-    const { provider, sent } = makeProvider(client)
+          },
+          {
+            ...assistant,
+            parts: [
+              {
+                type: "reasoning",
+                id: "prt_r1",
+                sessionID: "ses_s1",
+                messageID: assistant.info.id,
+                text: "Considering options",
+                time: { start: 2 },
+                metadata: { openai: { reasoningEncryptedContent: "encrypted", itemId: "item-1" } },
+              },
+            ],
+          },
+        ],
+      }),
+    )
 
     await provider.loadMessages("ses_s1")
 
@@ -1416,8 +1504,9 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
 describe("KiloProvider.loadMessages / sub-agent viewer", () => {
   it("uses the same paginated initial load as normal sessions", async () => {
     const page = Array.from({ length: 80 }, (_, i) => mkMessage(`m${i}`, i % 2 === 0 ? "user" : "assistant", i))
-    const client = createClient({ messagesData: page })
-    const { provider, sent } = makeProvider(client)
+    const client = createClient()
+    const source = createReader({ messagesData: page })
+    const { provider, sent } = makeProvider(client, source)
 
     await provider.loadMessages("ses_s1")
 
@@ -1425,40 +1514,43 @@ describe("KiloProvider.loadMessages / sub-agent viewer", () => {
       (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
     ) as { messages: unknown[]; hasMore: boolean } | undefined
     expect(loaded?.messages).toHaveLength(80)
+    // A full private page anchors a cursor, so the webview can page backwards.
     expect(loaded?.hasMore).toBe(true)
-    expect(client.calls).toEqual([{ before: undefined, limit: 80 }])
+    expect(source.calls).toEqual([{ sessionId: "ses_s1", directory: "/repo", limit: 80, cursor: undefined }])
+    expect(client.messages).toEqual([])
   })
 
   it("delivers reasoning updates received during the initial snapshot after messagesLoaded", async () => {
-    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
-    const client = createClient({ messagesDeferred: pending })
-    const { provider, internal, sent } = makeProvider(client)
+    const pending = defer<unknown>()
+    const client = createClient()
+    const { provider, internal, sent } = makeProvider(client, createReader({ messagesDeferred: pending }))
     const load = provider.loadMessages("ses_s1")
 
     internal.streams.push({
       type: "partUpdated",
       sessionID: "ses_s1",
-      messageID: "m2",
+      messageID: "msg_m2",
       part: {
-        id: "r1",
+        id: "prt_r1",
         sessionID: "ses_s1",
-        messageID: "m2",
+        messageID: "msg_m2",
         type: "reasoning",
         text: "Complete reasoning",
       },
     })
     pending.resolve(
-      mkResult([
+      mkPage([
         mkMessage("m1", "user", 1),
         {
           ...mkMessage("m2", "assistant", 2),
           parts: [
             {
-              id: "r1",
+              id: "prt_r1",
               sessionID: "ses_s1",
-              messageID: "m2",
+              messageID: "msg_m2",
               type: "reasoning",
               text: "",
+              time: { start: 2 },
             },
           ],
         },
@@ -1481,9 +1573,9 @@ describe("KiloProvider.handleLoadMessages / prepend into deleted session", () =>
     // fetch is in flight, the response still arrives and posts messagesLoaded
     // for a now-dead session ID, resurrecting a ghost entry in the webview
     // store until something else clears it.
-    const messages = defer<{ data: unknown[]; response: { headers: Headers } }>()
-    const client = createClient({ messagesDeferred: messages })
-    const { internal, sent } = makeProvider(client)
+    const messages = defer<unknown>()
+    const client = createClient()
+    const { internal, sent } = makeProvider(client, createReader({ messagesDeferred: messages }))
 
     // Simulate the session being tracked (as it would after the initial load).
     internal.trackedSessionIds.add("ses_s1")
@@ -1494,7 +1586,7 @@ describe("KiloProvider.handleLoadMessages / prepend into deleted session", () =>
     await internal.handleDeleteSession("ses_s1")
 
     // Fetch finally resolves after deletion.
-    messages.resolve(mkResult([mkMessage("m1", "user", 10)]))
+    messages.resolve(mkPage([mkMessage("m1", "user", 10)]))
     await load
 
     const loaded = sent.filter(

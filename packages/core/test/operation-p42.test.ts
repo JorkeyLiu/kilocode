@@ -180,6 +180,84 @@ describe("P4.2 persistence/projection redaction boundary", () => {
     }),
   )
 
+  it.effect("scrubs JSON quoted keys without over-redacting non-sensitive names", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const svc = yield* SessionV2.Service
+      const s = yield* svc.create({ location })
+      const opId = SessionOperation.promptId("msg_json_quoted")
+      const rec: SessionOperation.FailureRecord = {
+        opId,
+        opKind: "prompt",
+        outcome: "failed",
+        code: "provider.unknown",
+        message: '{"password":"xyz"} and {"api_key":"sk-live"}',
+        time: Date.now(),
+        detail: '{"outer":{"token":"abc123"}} plus {"Password" : "XYZ"} and {\'secret\' : \'s1\'}',
+        stack: 'bare token=stackSecret keep {"username":"bob"} boundary mytoken=stay secretary=stay {"mytoken":"x"} {"secretary":"y"}',
+      }
+      const stored = yield* SessionOperation.put(db, s.id, rec)
+      // no secret survives in any persisted string field
+      for (const secret of ["xyz", "sk-live", "abc123", "XYZ", "s1", "stackSecret"]) {
+        expect(stored.message).not.toContain(secret)
+        expect(stored.detail ?? "").not.toContain(secret)
+        expect(stored.stack ?? "").not.toContain(secret)
+      }
+      // quoted keys normalize separator to `=` and redact the value
+      expect(stored.message).toContain('"password"=[redacted]')
+      expect(stored.message).toContain('"api_key"=[redacted]')
+      // single/double quotes, case-insensitive key, whitespace around `:`, nested JSON
+      expect(stored.detail).toContain('"token"=[redacted]')
+      expect(stored.detail).toContain('"Password"=[redacted]')
+      expect(stored.detail).toContain("'secret'=[redacted]")
+      // bare key still scrubbed
+      expect(stored.stack).toContain("token=[redacted]")
+      // non-sensitive property name is preserved verbatim
+      expect(stored.stack).toContain('{"username":"bob"}')
+      // partial-key boundaries must not match
+      expect(stored.stack).toContain("mytoken=stay")
+      expect(stored.stack).toContain("secretary=stay")
+      expect(stored.stack).toContain('{"mytoken":"x"}')
+      expect(stored.stack).toContain('{"secretary":"y"}')
+
+      // DB row matches the scrubbed persisted record
+      const row = yield* db
+        .select()
+        .from(SessionOperationTable)
+        .where(eq(SessionOperationTable.op_id, opId))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toBeDefined()
+      expect(row!.message).toBe(stored.message)
+      expect(row!.detail ?? undefined).toBe(stored.detail)
+      expect(row!.stack ?? undefined).toBe(stored.stack)
+      for (const secret of ["xyz", "sk-live", "abc123", "XYZ", "s1", "stackSecret"]) {
+        expect(row!.message).not.toContain(secret)
+        expect(String(row!.detail ?? "")).not.toContain(secret)
+        expect(String(row!.stack ?? "")).not.toContain(secret)
+      }
+
+      // persisted projection keeps redacted diagnostic fields without secrets
+      const persisted = SessionOperation.toPersistedRecord(rec)
+      expect(persisted).toEqual(stored)
+      expect(persisted.detail ?? "").not.toContain("abc123")
+      expect(persisted.stack ?? "").toContain('{"username":"bob"}')
+
+      // panel projection carries only the scrubbed message, no diagnostic leak
+      const panel = SessionOperation.toPanelRecord(rec)
+      expect(panel.message).toBe(stored.message)
+      expect(panel.message ?? "").not.toContain("xyz")
+      expect(panel.message ?? "").not.toContain("sk-live")
+      expect(panel.detail).toBeUndefined()
+      expect(panel.stack).toBeUndefined()
+      const panelStored = SessionOperation.toPanelRecord(stored)
+      expect(panelStored.message).toBe(stored.message)
+      expect(panelStored.detail).toBeUndefined()
+      expect(panelStored.stack).toBeUndefined()
+    }),
+  )
+
   it.effect("caps match contract 500/1000/2000 with trailing ellipsis", () =>
     Effect.gen(function* () {
       yield* setup

@@ -15,6 +15,7 @@ export const PROMPT_PRIVATE_FIRST_SCENARIO = "prompt-private-first" as const
 export const COMMAND_PRIVATE_FIRST_SCENARIO = "command-private-first" as const
 export const OPERATION_PROJECTION_SCENARIO = "operation-projection" as const
 export const OPERATION_CRASH_SCENARIO = "operation-crash" as const
+export const STREAMING_OBSERVATION_SCENARIO = "streaming-observation" as const
 
 const OBSERVATION_PRODUCER_TIMEOUT_MS = 1_200_000 as const
 const OBSERVATION_PRODUCER_UPDATE_TIMEOUT_MS = 1_200_000 as const
@@ -26,6 +27,7 @@ const PROMPT_PRIVATE_FIRST_TIMEOUT_MS = 1_200_000 as const
 const COMMAND_PRIVATE_FIRST_TIMEOUT_MS = 1_200_000 as const
 const OPERATION_PROJECTION_TIMEOUT_MS = 1_200_000 as const
 const OPERATION_CRASH_TIMEOUT_MS = 1_200_000 as const
+const STREAMING_OBSERVATION_TIMEOUT_MS = 1_200_000 as const
 
 const SCENARIO_TIMEOUTS: Record<string, number> = {
   "real-completed": 6_000_000,
@@ -45,6 +47,7 @@ const SCENARIO_TIMEOUTS: Record<string, number> = {
   [COMMAND_PRIVATE_FIRST_SCENARIO]: COMMAND_PRIVATE_FIRST_TIMEOUT_MS,
   [OPERATION_PROJECTION_SCENARIO]: OPERATION_PROJECTION_TIMEOUT_MS,
   [OPERATION_CRASH_SCENARIO]: OPERATION_CRASH_TIMEOUT_MS,
+  [STREAMING_OBSERVATION_SCENARIO]: STREAMING_OBSERVATION_TIMEOUT_MS,
 }
 
 export function e2eTimeoutForScenario(scenario: string | undefined): number {

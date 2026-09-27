@@ -16,6 +16,7 @@ import { KiloSession } from "@/kilocode/session"
 import { KiloSessionMessageOrder } from "@/kilocode/session/message-order"
 import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
 import { Permission } from "@/permission"
+import { Wildcard } from "@/util/wildcard"
 import { setPromptCapability, getTrustedBrand, isTrustedAgentContext } from "@/kilocode/session/trusted-gate"
 import type { TrustedAgentContext } from "@/kilocode/session/trusted-gate"
 import { Question } from "@/question"
@@ -111,6 +112,65 @@ export namespace KiloSessionPrompt {
   }
 
   /**
+   * Free-form plan follow-up permission gate (direction.md:50-52). Non-tool
+   * free-form inquiry carries the `question` identity with the stable literal
+   * `free-form` pattern, composed through KiloSessionPrompt.askPermission (current
+   * session/agent synthesis including the agent hard guard). Deny/abort returns
+   * false so the caller breaks safely without emitting a questionRequest.
+   * Pending is runtime-decided; the host never self-approves.
+   */
+  async function askFreeformPermission(input: {
+    sessionID: SessionID
+    messages: MessageV2.WithParts[]
+    abort: AbortSignal
+  }): Promise<boolean> {
+    if (input.abort.aborted) return false
+    try {
+      const { AppRuntime } = await import("@/effect/app-runtime")
+      return await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const agents = yield* Agent.Service
+          const permission = yield* Permission.Service
+          const session = yield* sessions
+            .get(input.sessionID)
+            .pipe(Effect.catchCause(() => Effect.succeed(undefined as unknown as Session.Info)))
+          if (!session) return false
+          const user = [...input.messages].reverse().find((m) => m.info.role === "user")?.info
+          const name =
+            (user && user.role === "user" ? (user as { agent?: string }).agent : undefined) ??
+            (session as { agent?: string }).agent ??
+            "plan"
+          if (!name) return false
+          const agent = yield* agents
+            .get(name)
+            .pipe(Effect.catchCause(() => Effect.succeed(undefined as unknown as Agent.Info)))
+          if (!agent) return false
+          if (input.abort.aborted) return false
+          yield* KiloSessionPrompt.askPermission({
+            permission,
+            agents,
+            sessions,
+            agent,
+            session,
+            request: {
+              permission: "question",
+              patterns: ["free-form"],
+              always: ["free-form"],
+              metadata: {},
+              sessionID: input.sessionID,
+            },
+          })
+          return true
+        }),
+        { signal: input.abort },
+      ).catch(() => false)
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * Checks for plan follow-up and asks the user if needed.
    * Returns "continue" if the loop should continue, "break" otherwise.
    */
@@ -121,6 +181,15 @@ export namespace KiloSessionPrompt {
     question: Pick<Question.Interface, "ask" | "list" | "reject">
   }): Promise<"continue" | "break"> {
     if (!shouldAskPlanFollowup({ messages: input.messages, abort: input.abort })) return "break"
+    // kilocode_change start - free-form inquiry needs the runtime `question`
+    // permission first; deny/abort breaks safely with no questionRequest emitted.
+    // Bound to the caller instance context so the runtime gate resolves the
+    // current session/agent (same as the PlanFollowup.ask bind below).
+    const gate = Instance.bind(() =>
+      askFreeformPermission({ sessionID: input.sessionID, messages: input.messages, abort: input.abort }),
+    )
+    if (!(await gate())) return "break"
+    // kilocode_change end
     const ask = Instance.bind(PlanFollowup.ask)
     const action = await ask({
       sessionID: input.sessionID,
@@ -309,6 +378,88 @@ export namespace KiloSessionPrompt {
     return input.agent.permission
   }
 
+  const FREEFORM = "free-form"
+
+  function isFreeformQuestion(request: { permission: string; patterns: readonly string[] }) {
+    return (
+      request.permission === "question" &&
+      request.patterns.length > 0 &&
+      request.patterns.every((p) => p === FREEFORM)
+    )
+  }
+
+  function hasSyntax(s: string) {
+    return /[*?\[\]{}]/.test(s)
+  }
+
+  function tokenCount(s: string) {
+    const m = s.match(/\*\*|\*/g)
+    return m ? m.length : 0
+  }
+
+  function literalCount(s: string) {
+    return s.replace(/\*\*|\*/g, "").length
+  }
+
+  function winningHardRule(ruleset: Permission.Ruleset, permission: string, pattern: string) {
+    const scored: Array<{
+      rule: Permission.Rule
+      order: number
+      exact: number
+      wild: number
+      lit: number
+    }> = []
+    for (let i = 0; i < ruleset.length; i++) {
+      const rule = ruleset[i]
+      if (!Wildcard.match(permission, rule.permission)) continue
+      if (!Wildcard.match(pattern, rule.pattern)) continue
+      const exact = rule.pattern === pattern && !hasSyntax(rule.pattern) ? 1 : 0
+      scored.push({
+        rule,
+        order: i,
+        exact,
+        wild: tokenCount(rule.pattern) + tokenCount(rule.permission),
+        lit: literalCount(rule.pattern) + literalCount(rule.permission),
+      })
+    }
+    if (scored.length === 0) return undefined
+    scored.sort((a, b) => {
+      if (b.exact !== a.exact) return b.exact - a.exact
+      if (a.wild !== b.wild) return a.wild - b.wild
+      if (b.lit !== a.lit) return b.lit - a.lit
+      return b.order - a.order
+    })
+    return scored[0]
+  }
+
+  /**
+   * Projects the agent hard guard for the single free-form inquiry path
+   * (`permission:question`, `pattern:free-form`) to the document's own
+   * winning rule. When the winning rule allows/asks, only the generic mode
+   * fallback (`{permission:'*',pattern:'*',action:'deny'}`) is dropped so
+   * raw-any-deny cannot misread the fallback as ceiling-a. Every other
+   * matching deny — including broad explicit forms like
+   * `{question,'*',deny}`, `{*,'free-form',deny}`, or
+   * `{question,'free-*',deny}` — is retained so the evaluator's ceiling-a
+   * (any matching hard deny vetoes) still denies. An explicit `question`
+   * deny or a targeted `free-form` deny still wins and returns the full
+   * guard (hard veto kept). Every other permission/pattern passes through
+   * untouched, and `question_tool` never enters this path.
+   */
+  export function projectHardRulesetForFreeformQuestion(input: {
+    hard?: Permission.Ruleset
+    permission: string
+    patterns: readonly string[]
+  }) {
+    const hard = input.hard
+    if (!hard || hard.length === 0) return hard
+    if (!isFreeformQuestion({ permission: input.permission, patterns: input.patterns })) return hard
+    const win = winningHardRule(hard, "question", FREEFORM)
+    if (!win) return hard
+    if (win.rule.action === "deny") return hard
+    return hard.filter((rule) => !(rule.action === "deny" && rule.permission === "*" && rule.pattern === "*"))
+  }
+
   export function mergeToolPermissions(input: { existing: Permission.Ruleset; toggles: Permission.Ruleset }) {
     const names = new Set(input.toggles.map((rule) => rule.permission))
     return [...input.existing.filter((rule) => !names.has(rule.permission)), ...input.toggles]
@@ -336,7 +487,11 @@ export namespace KiloSessionPrompt {
       // kilocode_change end
       trustedContext: createTrustedAgentContext(input.agent.name),
       ruleset: Permission.merge(agent.permission, guardPermissions({ agent, session })),
-      hardRuleset: hardPermissions({ agent }),
+      hardRuleset: projectHardRulesetForFreeformQuestion({
+        hard: hardPermissions({ agent }),
+        permission: input.request.permission,
+        patterns: input.request.patterns,
+      }),
     } as any)
   })
 

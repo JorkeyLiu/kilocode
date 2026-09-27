@@ -38,6 +38,7 @@ describe("fetchProviderData", () => {
   })
 
   it("uses local Kilo auth status instead of profile availability", async () => {
+    let kiloSdk = 0
     const client = {
       provider: {
         catalog: async () => ({
@@ -60,12 +61,36 @@ describe("fetchProviderData", () => {
         auth: async () => ({ data: {} }),
       },
       kilo: {
-        authStatus: async () => ({ data: { authenticated: true, type: "oauth" } }),
+        authStatus: async () => {
+          kiloSdk += 1
+          return { data: { authenticated: false } }
+        },
       },
     } as unknown as Parameters<typeof fetchProviderData>[0]
+    // Private-authority kilo branch: zero SDK, validated private success only.
+    const connection = {
+      isPrivateAvailable: () => true,
+      privateKiloAuthStatusOutcomeWithHandle: (r: { requestId: string }) => ({
+        id: 3,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: r.requestId,
+            op: "kilo/auth-status",
+            status: "succeeded",
+            outcome: { type: "succeeded", time: 1 },
+            accepted: true,
+            data: { authenticated: true, type: "oauth" },
+          },
+        }),
+        cancel: () => true,
+      }),
+    }
 
-    const result = await fetchProviderData(client, "/tmp")
+    const result = await fetchProviderData(client, "/tmp", connection as never)
 
+    expect(kiloSdk).toBe(0)
     expect(result.authStates).toEqual({ kilo: "oauth" })
   })
 

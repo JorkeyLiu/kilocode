@@ -40,4 +40,10 @@ describe("permission-presets single source", () => {
     expect(classifyPermissionPreset({})).toBe("absent")
     expect(classifyPermissionPreset({ permissionLevel: "custom", permission: { "*": "ask" } })).toBe("custom")
   })
+
+  test("review baseline allows free-form inquiry while question_tool stays independent", () => {
+    expect(REVIEW_PERMISSION_PRESET["question"]).toBe("allow")
+    expect(Object.hasOwn(REVIEW_PERMISSION_PRESET, "question_tool")).toBe(false)
+    expect(REVIEW_PERMISSION_PRESET["*"]).toBe("ask")
+  })
 })

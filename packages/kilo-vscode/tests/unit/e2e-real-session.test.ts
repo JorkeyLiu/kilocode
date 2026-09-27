@@ -187,7 +187,9 @@ describe("real-session provider URL selection (hang server seam)", () => {
     const src = readFileSync(join(import.meta.dirname, "../../script/e2e-probe.ts"), "utf8")
     expect(src).toContain("KILO_E2E_PROVIDER_BASE_URL")
     expect(src).toContain("isLoopbackProviderBaseURL(providerBaseURL)")
-    expect(src).toContain("selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port)")
+    expect(src).toContain(
+      "selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port, generationModel?.port, crashHang?.port)",
+    )
   })
 })
 

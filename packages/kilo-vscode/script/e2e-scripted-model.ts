@@ -97,6 +97,22 @@ export const SCRIPTED = {
   restartMarker: "E2E_RESTART_PROMPT",
   restartFinal: "E2E_RESTART_DONE",
   restartToolArg: "restart",
+  // streaming-observation: controllable slow-streaming text turn. The harness
+  // sends the marker prompt; the server streams PARTS with gaps, then holds
+  // the final chunk until the harness writes the release gate, keeping the
+  // generation busy across switch/panel/reconnect boundaries.
+  streamObsMarker: "E2E_STREAM_OBS",
+  streamObsFinal: "E2E_STREAM_OBS_DONE",
+  streamObsParts: [
+    "E2E_STREAM_OBS_PART_01",
+    "E2E_STREAM_OBS_PART_02",
+    "E2E_STREAM_OBS_PART_03",
+    "E2E_STREAM_OBS_PART_04",
+    "E2E_STREAM_OBS_PART_05",
+    "E2E_STREAM_OBS_PART_06",
+    "E2E_STREAM_OBS_PART_07",
+    "E2E_STREAM_OBS_PART_08",
+  ] as unknown as string[],
   title: "E2E Title",
   defaultReply: "E2E default reply",
 } as const
@@ -105,6 +121,8 @@ export interface ScriptedModelHandle {
   port: number
   /** Every request the backend made (url + parsed body) — harness evidence. */
   requests: Array<{ url: string; body: unknown }>
+  /** Set when the scripted server observes its SSE client gone mid-stream (harness-only, run-owned). */
+  clientGone?: { current: boolean }
   close(): Promise<void>
 }
 
@@ -440,6 +458,146 @@ export async function createScriptedModel(workspace: string): Promise<ScriptedMo
   return {
     port: address.port,
     requests,
+    clientGone: { current: false },
+    close: async () => {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}
+
+function isStreamObsBody(body: unknown): boolean {
+  let marker = ""
+  try {
+    marker = JSON.stringify(body)
+  } catch {
+    return false
+  }
+  return marker.includes(SCRIPTED.streamObsMarker) && !marker.includes("Generate a title for this conversation")
+}
+
+async function writeStreamObs(
+  res: ServerResponse,
+  scratch: string,
+  exists: (p: string) => boolean,
+  joinPath: (...p: string[]) => string,
+  delay: (ms: number) => Promise<void>,
+  markGone: () => void,
+): Promise<void> {
+  const gone = (): boolean => {
+    if (res.destroyed) {
+      markGone()
+      return true
+    }
+    return false
+  }
+  const write = (s: string): void => {
+    try {
+      res.write(s)
+    } catch {}
+  }
+  const chunk = (delta: Record<string, unknown>, finish?: string): string =>
+    sse({ id: "chatcmpl-e2e", object: "chat.completion.chunk", choices: [{ delta, ...(finish ? { finish_reason: finish } : {}) }] })
+  write(chunk({ role: "assistant" }))
+  const parts = SCRIPTED.streamObsParts as unknown as string[]
+  for (let i = 0; i < 4; i++) {
+    await delay(500)
+    if (gone()) return
+    write(chunk({ content: `${parts[i]} ` }))
+  }
+  const release = joinPath(scratch, "so-release")
+  const deadline = Date.now() + 120_000
+  console.log(`[streaming-model] holding for release gate ${release}`)
+  while (!exists(release) && Date.now() < deadline) {
+    if (gone()) {
+      console.log("[streaming-model] client gone while holding for release")
+      return
+    }
+    await delay(250)
+  }
+  console.log(`[streaming-model] hold over (released=${exists(release)}) — streaming tail`)
+  for (let i = 4; i < parts.length; i++) {
+    await delay(400)
+    if (gone()) return
+    write(chunk({ content: `${parts[i]} ` }))
+  }
+  await delay(400)
+  if (!gone()) write(chunk({ content: SCRIPTED.streamObsFinal }))
+  if (!gone()) write(chunk({} as Record<string, unknown>, "stop"))
+  if (!gone()) write("data: [DONE]\n\n")
+  try {
+    res.end()
+  } catch {}
+}
+
+/**
+ * streaming-observation only: controllable slow-streaming scripted provider.
+ * Non-streaming requests behave exactly like createScriptedModel. The
+ * stream-obs marker request streams PARTS[0..3] with gaps, then holds the
+ * remaining parts + final until the harness writes `<scratch>/so-release`
+ * (poll, bounded), keeping the backend generation busy across the switch /
+ * panel / reconnect boundaries. Harness-only, never bundled.
+ */
+export async function createStreamingModel(workspace: string, scratch: string): Promise<ScriptedModelHandle> {
+  const requests: Array<{ url: string; body: unknown }> = []
+  const gone = { current: false }
+  const sockets = new Set<Socket>()
+  const { existsSync } = await import("node:fs")
+  const { join } = await import("node:path")
+  const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+  const server = createServer(async (req, res: ServerResponse) => {
+    const raw = await readBody(req)
+    let body: unknown = {}
+    try {
+      body = raw ? JSON.parse(raw) : {}
+    } catch {
+      body = { parseError: raw.slice(0, 500) }
+    }
+    requests.push({ url: req.url ?? "", body })
+    if (req.method !== "POST" || !(req.url ?? "").endsWith("/chat/completions")) {
+      res.writeHead(404, { "content-type": "application/json" })
+      res.end(JSON.stringify({ error: "scripted model: not found" }))
+      return
+    }
+    if (!isStreamObsBody(body)) {
+      const out = decideResponse(body, workspace)
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      })
+      res.end(out)
+      return
+    }
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    })
+    await writeStreamObs(res, scratch, existsSync, join, delay, () => {
+      gone.current = true
+    })
+  })
+  server.on("connection", (socket: Socket) => {
+    sockets.add(socket)
+    socket.on("close", () => sockets.delete(socket))
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject)
+      resolve()
+    })
+  })
+  const address = server.address()
+  if (!address || typeof address !== "object") {
+    server.close()
+    throw new Error("streaming model: address unavailable")
+  }
+  return {
+    port: address.port,
+    requests,
+    clientGone: gone,
     close: async () => {
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))

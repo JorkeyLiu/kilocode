@@ -81,7 +81,8 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
           .pipe(Effect.orDie),
       )) as unknown as Array<typeof SessionOperationTable.$inferSelect>
       if (rows.length === 0) return { v: "1.0", status: "found", operations: [] }
-      const ops = rows.map((r) => {
+      const ops: unknown[] = []
+      for (const r of rows) {
         let rec: SessionOperation.FailureRecord
         try {
           rec = SessionOperation.validatedRowToRecord(r as typeof SessionOperationTable.$inferSelect)
@@ -99,18 +100,29 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
           time: rec.time,
         }
         if (panel.cancel !== undefined) out.cancel = panel.cancel
-        const rb = (r as Record<string, unknown>).recovery_budget as number | null | undefined
-        const rn = (r as Record<string, unknown>).recovery_next_at as number | null | undefined
-        const rp = (r as Record<string, unknown>).recovery_provenance as string | null | undefined
-        if (rb !== null && rb !== undefined) {
-          if (rb !== 0) throw internalError("invalid recovery budget")
-          if (rn !== null && rn !== undefined) throw internalError("invalid recovery nextAt")
-          if (rp !== "terminal") throw internalError("invalid recovery provenance")
-          if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("recovery only for failed/abandoned")
-          out.recovery = { budget: 0 as const, nextAt: null, provenance: "terminal" as const }
+        if (rec.outcome === "failed" || rec.outcome === "abandoned") {
+          let proj: SessionOperation.RecoveryProjection | undefined
+          try {
+            proj = await Effect.runPromise(
+              SessionOperation.getRecoveryProjection(
+                db as unknown as Parameters<typeof SessionOperation.getRecoveryProjection>[0],
+                rec.opId,
+                sessionId as never,
+              ),
+            )
+          } catch {
+            proj = undefined
+          }
+          if (proj !== undefined) {
+            try {
+              out.recovery = SessionOperation.validateRecoveryProjection(proj)
+            } catch (e) {
+              throw internalError(e instanceof Error ? e.message : String(e))
+            }
+          }
         }
-        return out as unknown as ObservationOperationsResult extends { status: "found"; operations: infer U } ? (U extends (infer E)[] ? E : never) : never
-      })
+        ops.push(out as unknown as ObservationOperationsResult extends { status: "found"; operations: infer U } ? (U extends (infer E)[] ? E : never) : never)
+      }
       return { v: "1.0", status: "found", operations: ops as any }
     },
   }

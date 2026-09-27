@@ -221,6 +221,20 @@ export type ObservationMessagesResult =
   | { v: typeof OBSERVATION_VERSION; status: "not_found" }
   | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
 
+export interface ObservationOperationsRecovery {
+  v: 1
+  owner: "generation"
+  scope: string
+  used: number
+  limit: number
+  terminated: boolean
+  nextAt: number | null
+  retryOccurrence: number | null
+  layer: "provider" | "incomplete" | "broker" | "task" | "restart" | null
+  closeReason: "completed" | "interrupted" | "error" | "crash" | null
+  replay: false
+}
+
 export interface ObservationOperationsPanelEntry {
   opId: string
   outcome: string
@@ -228,7 +242,7 @@ export interface ObservationOperationsPanelEntry {
   message: string
   time: number
   cancel?: { source: string }
-  recovery?: { budget: 0; nextAt: number | null; provenance: "terminal" }
+  recovery?: ObservationOperationsRecovery
 }
 
 export type ObservationOperationsResult =
@@ -544,11 +558,27 @@ function validateOperationsResult(res: unknown): asserts res is ObservationOpera
      if ("recovery" in rec && rec.recovery !== undefined) {
       if (rec.recovery === null || typeof rec.recovery !== "object" || Array.isArray(rec.recovery)) throw internalError("operations returned invalid operation shape")
       const rv = rec.recovery as Record<string, unknown>
-      const allowedRec = new Set(["budget", "nextAt", "provenance"])
+      const allowedRec = new Set(["v", "owner", "scope", "used", "limit", "terminated", "nextAt", "retryOccurrence", "layer", "closeReason", "replay"])
       for (const k of Object.keys(rv)) if (!allowedRec.has(k)) throw internalError("operations returned invalid operation shape")
-      if (rv.budget !== 0) throw internalError("operations returned invalid operation shape")
-      if (rv.nextAt !== null) throw internalError("operations returned invalid operation shape")
-      if (rv.provenance !== "terminal") throw internalError("operations returned invalid operation shape")
+      if (rv.v !== 1) throw internalError("operations returned invalid operation shape")
+      if (rv.owner !== "generation") throw internalError("operations returned invalid operation shape")
+      if (typeof rv.scope !== "string" || rv.scope.length === 0 || (rv.scope as string).includes("\0")) throw internalError("operations returned invalid operation shape")
+      const isSafeInt = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && (x as number) >= 0
+      if (!isSafeInt(rv.used) || !isSafeInt(rv.limit)) throw internalError("operations returned invalid operation shape")
+      if ((rv.used as number) > (rv.limit as number)) throw internalError("operations returned invalid operation shape")
+      if (typeof rv.terminated !== "boolean") throw internalError("operations returned invalid operation shape")
+      if (rv.nextAt !== null && !isSafeInt(rv.nextAt)) throw internalError("operations returned invalid operation shape")
+      if (rv.retryOccurrence !== null && !isSafeInt(rv.retryOccurrence)) throw internalError("operations returned invalid operation shape")
+      const layers = new Set(["provider", "incomplete", "broker", "task", "restart"])
+      const closes = new Set(["completed", "interrupted", "error", "crash"])
+      if (rv.layer !== null && (typeof rv.layer !== "string" || !layers.has(rv.layer as string))) throw internalError("operations returned invalid operation shape")
+      if (rv.closeReason !== null && (typeof rv.closeReason !== "string" || !closes.has(rv.closeReason as string))) throw internalError("operations returned invalid operation shape")
+      if (rv.replay !== false) throw internalError("operations returned invalid operation shape")
+      if ((rv.terminated as boolean) !== (rv.closeReason !== null)) throw internalError("operations returned invalid operation shape")
+      if (rv.closeReason !== null && rv.nextAt !== null) throw internalError("operations returned invalid operation shape")
+      if (rv.closeReason === null && ((rv.layer === null) !== (rv.nextAt === null))) throw internalError("operations returned invalid operation shape")
+      if (rv.retryOccurrence !== null && rv.layer === null) throw internalError("operations returned invalid operation shape")
+      if (rv.retryOccurrence !== null && rv.closeReason === null && rv.nextAt === null) throw internalError("operations returned invalid operation shape")
       if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("operations returned invalid operation shape")
     }
     // Ensure no diagnostic fields leak

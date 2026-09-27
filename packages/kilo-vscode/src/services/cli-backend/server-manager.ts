@@ -878,6 +878,48 @@ export class ServerManager {
   }
 
   /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): true-close ONLY the exact
+   * active instance's private pipes (stdio[3]/stdio[4]) through the existing
+   * `releasePrivateStreams` owner path. No child kill, no instance nulling —
+   * the backend observes EOF/EPIPE and its own peer transitions to closed
+   * while the host child stays alive (same pid/port). Exact epoch+pid match
+   * only: a stale or foreign epoch/pid never touches another generation's
+   * streams. Idempotent: already-destroyed pipes report `alreadyClosed`
+   * without re-destroy. Returns null when the fixture env is absent.
+   */
+  public closePrivatePipesForFixture(
+    expectedEpoch: number | null,
+    expectedPid: number | undefined,
+  ): { closed: boolean; alreadyClosed: boolean; pid: number | undefined; port: number | null; epoch: number | null } | null {
+    if (!isE2EFixtureEnabled()) return null
+    const inst = this.instance
+    if (!inst) return { closed: false, alreadyClosed: false, pid: undefined, port: null, epoch: null }
+    if (expectedEpoch !== null && expectedEpoch !== undefined && inst.epoch !== expectedEpoch) {
+      return { closed: false, alreadyClosed: false, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
+    }
+    if (expectedPid !== undefined && inst.process.pid !== expectedPid) {
+      return { closed: false, alreadyClosed: false, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
+    }
+    if (inst.process.exitCode !== null) {
+      return { closed: false, alreadyClosed: false, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
+    }
+    const streams = [inst.privateReader, inst.privateWriter].filter(Boolean) as unknown as Array<{
+      destroyed?: boolean
+    }>
+    if (streams.length === 0 || streams.every((s) => s.destroyed === true)) {
+      return { closed: false, alreadyClosed: true, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
+    }
+    console.log(
+      "[Kilo New] ServerManager: fixture close — destroying exact owned private pipes, PID:",
+      inst.process.pid,
+      "epoch:",
+      inst.epoch,
+    )
+    ServerManager.releasePrivateStreams(inst)
+    return { closed: true, alreadyClosed: false, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
+  }
+
+  /**
    * E2E fixture bridge (KILO_E2E_FIXTURE only): aggregate generation-request
    * records from the run-owned store — every `service=llm` line observed
    * across ALL server instances and extension-host launches of this run

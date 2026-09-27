@@ -143,7 +143,8 @@ describe("generation failure single normalization boundary (direction 79-94)", (
             expect((entry as unknown as Record<string, unknown>).detail).toBeUndefined()
             expect((entry as unknown as Record<string, unknown>).stack).toBeUndefined()
             expect(entry.message).not.toContain("panel-secret")
-            expect(entry.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
+            // unattributable prompt (no generation member/receipt) omits recovery rather than a placeholder budget
+            expect(entry.recovery).toBeUndefined()
             // success/in-flight carry no failure recovery record
             const okMid = "msg_abc12300000000000022"
             const okOp = SessionOperation.promptId(okMid)
@@ -391,6 +392,7 @@ describe("generation failure single normalization boundary (direction 79-94)", (
       context: { directory: DIR, sessionId: SID, parentSessionId: null },
       payload: { messageId: mid, command: badCommand, arguments: "hello" },
     }
+    const published: Array<{ type: unknown; payload: unknown }> = []
     await runTest(
       Effect.scoped(
         Effect.gen(function* () {
@@ -410,7 +412,12 @@ describe("generation failure single normalization boundary (direction 79-94)", (
               get: (n: string) => (n === "probe" ? Effect.succeed({ name: "probe", template: "hi" } as any) : Effect.succeed(undefined as any)),
               list: () => Effect.succeed([{ name: "probe" } as any]),
             } as any),
-            Layer.succeed(EventV2Bridge.Service, { publish: () => Effect.void } as any),
+            Layer.succeed(EventV2Bridge.Service, {
+              publish: (type: unknown, payload: unknown) => {
+                published.push({ type, payload })
+                return Effect.void
+              },
+            } as any),
             fakeStore(),
             Layer.succeed(GenerationGate.Service, GenerationGate.noop),
             Layer.succeed(ControlLease.Service, ControlLease.noop),
@@ -429,6 +436,19 @@ describe("generation failure single normalization boundary (direction 79-94)", (
             expect(r.failure.retryable).toBe(false)
             expect(r.failure.message).not.toContain(secret)
             expect(r.failure.message).toContain("[redacted]")
+            // event message uses the same normalized/scrubbed result as the reply
+            expect(published.length).toBe(1)
+            expect(published[0]!.type).toBe(Session.Event.Error)
+            const eventPayload = published[0]!.payload as { error?: { data?: { message?: unknown }; message?: unknown } }
+            const eventMessage = String(eventPayload?.error?.data?.message ?? eventPayload?.error?.message ?? "")
+            expect(eventMessage).not.toContain(secret)
+            expect(eventMessage).toContain("[redacted]")
+            expect(eventMessage).toBe(r.failure.message)
+            const eventJson = JSON.stringify(published[0])
+            expect(eventJson).not.toContain(secret)
+            expect(eventJson).not.toContain(JSON.stringify(secret).slice(1, -1))
+            const replyJson = JSON.stringify(r)
+            expect(replyJson).not.toContain(secret)
             const stored = yield* SessionOperation.get(db, opId)
             expect(stored).toBeUndefined()
             const feedAfter = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, SID as any)).all().pipe(Effect.orDie)

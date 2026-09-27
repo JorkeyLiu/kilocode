@@ -174,9 +174,12 @@ describe("AgentManagerProvider recentOps cleanup", () => {
     expect(p["refreshRecentOpsForCurrent"]).toBeUndefined()
   })
 
-  it("fetchRecentOps valid failed/abandoned with recovery preserves exact shape", async () => {
+  it("fetchRecentOps valid failed/abandoned with v1 recovery preserves exact shape", async () => {
+    const rec = { v: 1, owner: "generation", scope: "ses_a", used: 1, limit: 2, terminated: false, nextAt: 5, retryOccurrence: 4, layer: "provider", closeReason: null, replay: false }
+    const recClosed = { ...rec, used: 2, terminated: true, nextAt: null, retryOccurrence: 4, closeReason: "crash" }
+    const cases = [{ outcome: "failed", recovery: rec }, { outcome: "abandoned", recovery: recClosed }] as const
     const p = makeProvider()
-    for (const outcome of ["failed", "abandoned"] as const) {
+    for (const { outcome, recovery } of cases) {
       p.coordinator = {
         observationReader: () => ({
           isEnabled: () => true,
@@ -184,25 +187,29 @@ describe("AgentManagerProvider recentOps cleanup", () => {
           operations: async () => ({
             v: "1.0",
             status: "found",
-            operations: [{ opId: "opRec", outcome, code: "E", message: "m", time: 999, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+            operations: [{ opId: "opRec", outcome, code: "E", message: "m", time: 999, recovery }],
           }),
         }),
       } as unknown as Prov["coordinator"]
       await p.fetchRecentOps(["ses_a"])
       const got = p.recentOps.get("ses_a") as unknown as Record<string, unknown>
       expect(got.outcome).toBe(outcome)
-      expect(got.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
+      expect(got.recovery).toEqual(recovery)
     }
   })
 
   it("fetchRecentOps invalid/mismatched recovery is rejected", async () => {
+    const rec = { v: 1, owner: "generation", scope: "ses_a", used: 1, limit: 2, terminated: false, nextAt: 5, retryOccurrence: 4, layer: "provider", closeReason: null, replay: false }
     const bad: unknown[] = [
-      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 1, nextAt: null, provenance: "terminal" } },
-      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: 123, provenance: "terminal" } },
-      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal", extra: 1 } },
-      { opId: "op1", outcome: "succeeded", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
-      { opId: "op1", outcome: "in-flight", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
-      { opId: "op1", outcome: "ambiguous", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
+      // legacy hardcoded stub is rejected (no fake budget)
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } },
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { ...rec, used: 5 } },
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { ...rec, replay: true } },
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { ...rec, scope: "ses_other" } },
+      { opId: "op1", outcome: "failed", code: "E", message: "m", time: 1, recovery: { ...rec, genID: "genA" } },
+      { opId: "op1", outcome: "succeeded", code: "C", message: "m", time: 1, recovery: rec },
+      { opId: "op1", outcome: "in-flight", code: "C", message: "m", time: 1, recovery: rec },
+      { opId: "op1", outcome: "ambiguous", code: "C", message: "m", time: 1, recovery: rec },
     ]
     for (const op of bad) {
       const p = makeProvider()
@@ -246,7 +253,7 @@ describe("AgentManagerProvider recentOps cleanup", () => {
         operations: async () => ({
           v: "1.0",
           status: "found",
-          operations: [{ opId: "opS2", outcome: "succeeded", code: "C", message: "ok", time: 10, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+          operations: [{ opId: "opS2", outcome: "succeeded", code: "C", message: "ok", time: 10, recovery: { v: 1, owner: "generation", scope: "ses_a", used: 0, limit: 2, terminated: true, nextAt: null, retryOccurrence: null, layer: null, closeReason: "completed", replay: false } }],
         }),
       }),
     } as unknown as Prov["coordinator"]

@@ -149,7 +149,9 @@ describe("generation retry live durable guard (real DB)", () => {
             expect(wire).not.toContain("live-secret")
             expect(wire).not.toContain("detail")
             expect(wire).not.toContain("stack")
-            expect(Object.keys(entry).sort()).toEqual(["code", "message", "opId", "outcome", "recovery", "time"].sort())
+            // unattributable prompt (no generation member/receipt) omits recovery rather than a placeholder budget
+            expect(Object.keys(entry).sort()).toEqual(["code", "message", "opId", "outcome", "time"].sort())
+            expect("recovery" in entry).toBe(false)
           }).pipe(Effect.provide(Layer.mergeAll(dbLayer)))
         }),
       ),

@@ -34,6 +34,39 @@ const ref = {
   modelID: ModelV2.ID.make("test-model"),
 }
 
+// kilocode_change - shared test provider declares test-model variants.xhigh so
+// KiloTask.resolveModel usable() keeps the inherited xhigh variant
+function testProvider() {
+  return {
+    name: "test",
+    id: "test",
+    env: [],
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "test-model": {
+        id: "test-model",
+        name: "test-model",
+        attachment: false,
+        reasoning: true,
+        temperature: false,
+        tool_call: true,
+        release_date: "2025-01-01",
+        limit: { context: 100_000, output: 10_000 },
+        cost: { input: 0, output: 0 },
+        options: {},
+        variants: { xhigh: {} },
+      },
+    },
+    options: { apiKey: "test-key", baseURL: "http://localhost:1/v1" },
+  }
+}
+
+const testProviderConfig = {
+  provider: {
+    test: testProvider(),
+  },
+}
+
 const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Layer.mergeAll(
     Agent.defaultLayer,
@@ -223,43 +256,48 @@ describe("tool.task", () => {
     },
   )
 
-  it.instance("execute resumes an existing task session from task_id", () =>
-    Effect.gen(function* () {
-      const sessions = yield* Session.Service
-      const { chat, assistant } = yield* seed()
-      const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ text: "resumed", onPrompt: (input) => (seen = input) })
+  it.instance(
+    "execute resumes an existing task session from task_id",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ text: "resumed", onPrompt: (input) => (seen = input) })
 
-      const result = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-          task_id: child.id,
-        },
-        {
-          sessionID: chat.id,
-          messageID: assistant.id,
-          agent: "build",
-          abort: new AbortController().signal,
-          extra: { promptOps },
-          messages: [],
-          metadata: () => Effect.void,
-          ask: () => Effect.void,
-        },
-      )
+        const result = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            task_id: child.id,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
 
-      const kids = yield* sessions.children(chat.id)
-      expect(kids).toHaveLength(1)
-      expect(kids[0]?.id).toBe(child.id)
-      expect(result.metadata.sessionId).toBe(child.id)
-      expect(result.output).toContain(`<task id="${child.id}" state="completed">`)
-      expect(seen?.sessionID).toBe(child.id)
-      expect(seen?.variant).toBe("xhigh")
-    }),
+        const kids = yield* sessions.children(chat.id)
+        expect(kids).toHaveLength(1)
+        expect(kids[0]?.id).toBe(child.id)
+        expect(result.metadata.sessionId).toBe(child.id)
+        expect(result.output).toContain(`<task id="${child.id}" state="completed">`)
+        expect(seen?.sessionID).toBe(child.id)
+        expect(seen?.variant).toBe("xhigh")
+      }),
+    {
+      config: testProviderConfig,
+    },
   )
 
   // kilocode_change start - resumed children rebuild parent platform attribution after restart
@@ -769,78 +807,83 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("background task completion waits for running updates", () =>
-    Effect.gen(function* () {
-      const jobs = yield* BackgroundJob.Service
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      const first = defer<void>()
-      const second = defer<void>()
-      const updated = defer<SessionPrompt.PromptInput>()
-      const injected = defer<SessionPrompt.PromptInput>()
-      let prompts = 0
-      const promptOps: TaskPromptOps = {
-        ...stubOps(),
-        prompt: (input) => {
-          if (input.sessionID === chat.id) {
-            injected.resolve(input)
-            return Effect.succeed(reply(input, "done"))
-          }
-          prompts++
-          if (prompts === 1) return Effect.promise(() => first.promise).pipe(Effect.as(reply(input, "first done")))
-          updated.resolve(input)
-          return Effect.promise(() => second.promise).pipe(Effect.as(reply(input, "second done")))
-        },
-      }
-      const context = {
-        sessionID: chat.id,
-        messageID: assistant.id,
-        agent: "build",
-        abort: new AbortController().signal,
-        extra: { promptOps },
-        messages: [],
-        metadata: () => Effect.void,
-        ask: () => Effect.void,
-      }
+  background.instance(
+    "background task completion waits for running updates",
+    () =>
+      Effect.gen(function* () {
+        const jobs = yield* BackgroundJob.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const first = defer<void>()
+        const second = defer<void>()
+        const updated = defer<SessionPrompt.PromptInput>()
+        const injected = defer<SessionPrompt.PromptInput>()
+        let prompts = 0
+        const promptOps: TaskPromptOps = {
+          ...stubOps(),
+          prompt: (input) => {
+            if (input.sessionID === chat.id) {
+              injected.resolve(input)
+              return Effect.succeed(reply(input, "done"))
+            }
+            prompts++
+            if (prompts === 1) return Effect.promise(() => first.promise).pipe(Effect.as(reply(input, "first done")))
+            updated.resolve(input)
+            return Effect.promise(() => second.promise).pipe(Effect.as(reply(input, "second done")))
+          },
+        }
+        const context = {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        }
 
-      const started = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-          background: true,
-        },
-        context,
-      )
-      const result = yield* def.execute(
-        {
-          description: "add investigation scope",
-          prompt: "also inspect cancellation",
-          subagent_type: "general",
-          task_id: started.metadata.sessionId,
-        },
-        context,
-      )
+        const started = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            background: true,
+          },
+          context,
+        )
+        const result = yield* def.execute(
+          {
+            description: "add investigation scope",
+            prompt: "also inspect cancellation",
+            subagent_type: "general",
+            task_id: started.metadata.sessionId,
+          },
+          context,
+        )
 
-      expect(result.metadata.sessionId).toBe(started.metadata.sessionId)
-      expect(result.metadata.background).toBe(true)
-      expect(result.output).toContain("Background task updated")
-      first.resolve()
-      expect((yield* jobs.get(started.metadata.sessionId))?.status).toBe("running")
-      expect((yield* Effect.promise(() => updated.promise)).parts).toEqual([
-        { type: "text", text: "also inspect cancellation" },
-      ])
+        expect(result.metadata.sessionId).toBe(started.metadata.sessionId)
+        expect(result.metadata.background).toBe(true)
+        expect(result.output).toContain("Background task updated")
+        first.resolve()
+        expect((yield* jobs.get(started.metadata.sessionId))?.status).toBe("running")
+        expect((yield* Effect.promise(() => updated.promise)).parts).toEqual([
+          { type: "text", text: "also inspect cancellation" },
+        ])
 
-      second.resolve()
-      const waited = yield* jobs.wait({ id: started.metadata.sessionId, timeout: 1_000 })
-      expect(waited.info?.status).toBe("completed")
-      expect(waited.info?.output).toBe("second done")
-      const notification = yield* Effect.promise(() => injected.promise)
-      expect(notification.variant).toBe("xhigh")
-      expect(notification.parts[0]?.type).toBe("text")
-      if (notification.parts[0]?.type === "text") expect(notification.parts[0].text).toContain("second done")
-    }),
+        second.resolve()
+        const waited = yield* jobs.wait({ id: started.metadata.sessionId, timeout: 1_000 })
+        expect(waited.info?.status).toBe("completed")
+        expect(waited.info?.output).toBe("second done")
+        const notification = yield* Effect.promise(() => injected.promise)
+        expect(notification.variant).toBe("xhigh")
+        expect(notification.parts[0]?.type).toBe("text")
+        if (notification.parts[0]?.type === "text") expect(notification.parts[0].text).toContain("second done")
+      }),
+    {
+      config: testProviderConfig,
+    },
   )
 
   // kilocode_change start - completed background tasks propagate their invocation cost delta

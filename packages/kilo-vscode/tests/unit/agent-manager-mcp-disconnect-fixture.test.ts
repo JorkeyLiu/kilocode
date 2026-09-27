@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { realpathSync } from "node:fs"
 
 function disconnectOk(req: { requestId: string; opId: string; idempotencyKey: string }) {
   return {
@@ -121,7 +122,7 @@ describe("fixture mcpDisconnect private authority", () => {
     expect(sdkCalls).toBe(0)
     expect(disconnectCalls).toBe(1)
     expect(statusCalls).toBe(1)
-    expect(seenDisconnect).toEqual([{ op: "mcp/disconnect", dir: "/tmp", name: "docs" }])
+    expect(seenDisconnect).toEqual([{ op: "mcp/disconnect", dir: realpathSync("/tmp"), name: "docs" }])
   })
 
   test("failed disconnect stays warn-only and still converges private status", async () => {

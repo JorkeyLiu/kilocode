@@ -3569,6 +3569,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     try {
       const resolved = await loadSessionsUtil(ctx)
       if (resolved) this.projectID = resolved
+      this.catalogPrivateRetried = false
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to load sessions:", error)
       // Scoped catalog errors are already posted by loadSessions with the
@@ -3579,8 +3580,40 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           message: getErrorMessage(error) || "Failed to load sessions",
         })
       }
+      // Reopen re-observe: a fresh panel's first catalog load can race
+      // private-observation readiness and fail closed while connected
+      // (transient, not a durable backend state). Bounded single re-observe
+      // of the same private-authoritative list — no SDK fallback, no prompt
+      // resubmission (list-only), no retry loop: the retry's own failure
+      // posts today's error path and stops.
+      this.retryCatalogOnceOnPrivateReady(error)
     }
     this.syncSessionPaging(ctx)
+  }
+
+  private catalogPrivateRetryUnsub: (() => void) | undefined
+  private catalogPrivateRetried = false
+
+  private retryCatalogOnceOnPrivateReady(error: unknown): void {
+    if (this.disposed) return
+    if (this.connectionState !== "connected") return
+    if (this.catalogPrivateRetried || this.catalogPrivateRetryUnsub) return
+    if (!String(getErrorMessage(error) || error).includes("private observation unavailable")) return
+    this.catalogPrivateRetried = true
+    const fire = () => {
+      if (this.catalogPrivateRetryUnsub) {
+        this.catalogPrivateRetryUnsub()
+        this.catalogPrivateRetryUnsub = undefined
+      }
+      if (this.disposed) return
+      if (this.connectionState !== "connected") return
+      void this.refreshSessions().catch(() => {})
+    }
+    if (this.connectionService.isPrivateAvailable()) {
+      fire()
+      return
+    }
+    this.catalogPrivateRetryUnsub = this.connectionService.onPrivateAvailable(fire)
   }
 
   /**
@@ -6623,10 +6656,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private getRootDirectory(): string {
     const workspaceFolders = vscode.workspace.workspaceFolders
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      return workspaceFolders[0]!.uri.fsPath
+    const raw =
+      workspaceFolders && workspaceFolders.length > 0 ? workspaceFolders[0]!.uri.fsPath : process.cwd()
+    // Private-authoritative reads bind the requested directory lexically
+    // against backend-stored rows, which carry the physical (realpath)
+    // spelling. Resolve once here so list/get/messages requests and backend
+    // writes share the stored spelling; falls back to raw when resolution
+    // fails. Identity where raw is already physical (Linux CI).
+    try {
+      return require("node:fs").realpathSync(raw)
+    } catch {
+      return raw
     }
-    return process.cwd()
   }
 
   private trackDirectory(sessionId: string, dir: string) {
@@ -6704,6 +6745,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (this.disposed) return
     this.lifecycleRefresh.dispose()
     this.unsubscribeRemote?.()
+    this.catalogPrivateRetryUnsub?.()
+    this.catalogPrivateRetryUnsub = undefined
     this.streams.focus(undefined)
     this.connectionService.unregisterVisible(this.instanceId)
     this.connectionService.unregisterAttached(this.instanceId)

@@ -71,6 +71,7 @@ import {
 import { type ConfigSnapshot, snapshot as makeSnapshot } from "./snapshot"
 import { ExternalObserveCoalescer } from "./external-observe"
 import { handleAssetChanged, handleSkillChanged, listSkillFiles, skillRootsFor, type SkillMeta } from "./asset-observe"
+import { lifecycleNotifyScope, pollLifecycleDescs, scanFp, skillFp } from "./lifecycle-observe"
 import {
   type ProviderIndex,
   type AgentIndex,
@@ -184,6 +185,8 @@ export interface CanonicalConfigServiceOptions {
   beforeConfigFinalCas?: (filePath: string) => void
   /** Runtime convergence adapter for controlled GUI disk writes. Production must provide; tests use an explicit fake. */
   convergence?: import("./convergence").ConfigConvergenceAdapter
+  /** FD private readiness probe. Production wires connectionService.isPrivateAvailable; absent means never ready. */
+  isPrivateReady?: () => boolean
 }
 
 export type ConfigScopePatch = {
@@ -314,6 +317,9 @@ export class CanonicalConfigService implements Disposable {
   /** Disposed flag. */
   private disposed = false
   private readonly observeCoalescer = new ExternalObserveCoalescer()
+  private readonly isPrivateReady: (() => boolean) | undefined
+  private initCompleted = false
+  private lifecycleFired = false
 
   constructor(
     private readonly context: any,
@@ -327,6 +333,7 @@ export class CanonicalConfigService implements Disposable {
     this.beforeAssetFinalCas = opts.beforeAssetFinalCas
     this.beforeConfigFinalCas = opts.beforeConfigFinalCas
     this.convergence = opts.convergence
+    this.isPrivateReady = opts.isPrivateReady
 
     // Use injected emitter factory or fall back to in-memory implementation
     const ef = opts.emitterFactory ?? createDefaultEmitterFactory()
@@ -566,29 +573,45 @@ export class CanonicalConfigService implements Disposable {
 
   private async doInitialize(): Promise<void> {
     if (this.disposed) return
-
-    // Rehydrate persisted indexes for immediate presentation (Blocker 3)
     this.rehydrateIndexes()
-
-    // Scan all six asset directories in both scopes (before materialization
-    // so persistIndexes() has scan data for agent index rebuild)
+    const disk = (s: "global" | "project"): string | null => {
+      const f = s === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile
+      if (!f) return null
+      const r = readFile(f)
+      return r.type === "present" ? r.hash : null
+    }
+    const aG = disk("global")
+    const aP = disk("project")
     this.lastAssetScan = this.scanAssets()
     this.lastSkillFiles = this.scanSkillFiles()
-
-    // Initial materialization from disk (through convergence scheduler).
-    // persistIndexes() rebuilds agent index from this.lastAssetScan (Finding 4).
+    const aS = scanFp(this.lastAssetScan)
+    const aK = skillFp(this.lastSkillFiles)
     try {
       await this.enqueueAndRunMaterialization("init")
     } catch (err) {
       if (!this.disposed) throw err
       return
     }
-
-    // Disposal check after await — no watcher creation after disposal
     if (this.disposed) return
-
-    // Start watching canonical files and asset directories
     this.startWatchers()
+    // Gap cover: rescan post-watcher latest; remat only when disk-before vs disk-after differs.
+    if (!this.disposed) {
+      const fS = this.scanAssets()
+      const fK = this.scanSkillFiles()
+      this.lastAssetScan = fS
+      this.lastSkillFiles = fK
+      if (aS !== scanFp(fS) || aK !== skillFp(fK) || disk("global") !== aG || disk("project") !== aP) {
+        try {
+          await this.enqueueAndRunMaterialization("init")
+        } catch (err) {
+          if (!this.disposed) throw err
+          return
+        }
+      }
+    }
+    if (this.disposed) return
+    this.initCompleted = true
+    this.notifyPrivateReady()
   }
 
   /**
@@ -2083,6 +2106,37 @@ export class CanonicalConfigService implements Disposable {
     } catch (err) {
       this.fireWatcherError(`External observe reconcile failed: ${String(err)}`)
     }
+  }
+
+  /** Single gate: init-done + FD-ready, once. Fired only on non-empty notify; empty retains intent, no loop. */
+  notifyPrivateReady(): void {
+    const descs = pollLifecycleDescs(
+      { disposed: this.disposed, initCompleted: this.initCompleted, lifecycleFired: this.lifecycleFired },
+      this.isPrivateReady,
+      {
+        paths: this.paths,
+        hasProject: this.hasProject,
+        projectRoot: this.paths.projectRoot,
+        materializationReady: this.materializationReady,
+        globalHash: this.globalHash,
+        projectHash: this.projectHash,
+        scan: this.lastAssetScan,
+        skills: this.lastSkillFiles,
+      },
+    )
+    if (!descs) return
+    this.lifecycleFired = true
+    this.observeCoalescer.notify(
+      lifecycleNotifyScope(descs, this.hasProject),
+      {
+        isDisposed: () => this.disposed,
+        hasProject: this.hasProject,
+        projectRoot: this.paths.projectRoot,
+        observe: this.convergence?.observe?.bind(this.convergence),
+        onPending: (message) => this.fireWatcherError(message),
+      },
+      descs as never,
+    )
   }
 
   /** Next-read poke: redrive parked hints; settled state stays silent (no loop). */

@@ -47,10 +47,19 @@ describe("provider catalog call-site lock", () => {
     expect(variant).not.toMatch(/\.app\.agents\s*\(/)
 
     const agent = await src("../../src/agent-manager/AgentManagerProvider.ts")
-    expect(agent).toContain("fetchProviderCatalogPrivateFirst")
+    expect(agent).toContain("backendSnapshotForFixture")
+    expect(agent).toContain("fixture-backend-snapshot")
     expect(agent).not.toMatch(/client\.provider\.catalog\s*\(/)
     expect(agent).not.toContain("client.provider\n      .list(")
     expect(agent).not.toMatch(/client\.provider\s*\n?\s*\.list\(/)
+
+    // AgentManagerProvider delegates the fixture snapshot to the extracted
+    // module; the private-first catalog import lives there transitively.
+    const snapshot = await src("../../src/agent-manager/fixture-backend-snapshot.ts")
+    expect(snapshot).toContain("fetchProviderCatalogPrivateFirst")
+    expect(snapshot).toContain("fetchAgentsPrivateFirst")
+    expect(snapshot).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(snapshot).not.toContain("client.provider.list")
   })
 
   it("fetchProviderData keeps message parity from redacted catalog", async () => {

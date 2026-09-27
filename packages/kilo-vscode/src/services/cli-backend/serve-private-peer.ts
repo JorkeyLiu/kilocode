@@ -7235,10 +7235,12 @@ export class ServePrivatePeer {
 
   /**
    * Fixture-only FD close for the private event-transport E2E proof.
-   * Disposes the underlying JsonRpcPeer WITHOUT touching the outer
-   * disposed/initSeq guards, so the real `onClosed` path fires
-   * (`available=false` + `peerClosedHandler` → connection SSE fallback).
-   * Never used by production; throws when the fixture env is absent.
+   * Borrows the underlying JsonRpcPeer dispose WITHOUT touching the outer
+   * disposed/initSeq guards and WITHOUT destroying the stdio pipes (pipes
+   * are ServerManager-owned; only its fixture owner action true-closes
+   * them), so the real `onClosed` path fires (`available=false` +
+   * `peerClosedHandler` → connection SSE fallback). Never used by
+   * production; throws when the fixture env is absent.
    */
   fixtureCloseUnderlyingTransportForEvent(): { closed: boolean; state: string } {
     if (!isE2EFixtureEnabled()) throw new Error("fixture closeUnderlyingTransport requires KILO_E2E_FIXTURE")

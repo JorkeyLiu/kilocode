@@ -136,7 +136,13 @@ export const layer = Layer.effect(
             "*": "ask",
             ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
           },
-          question: "deny",
+          // kilocode_change - question free-form (question) and tool identity
+          // (question_tool) stay separate: no shared question deny here so
+          // planGuard question allow remains reachable and question_tool keeps
+          // its no-explicit-rule default ask with exact approval. Dedicated
+          // non-asking agents keep deny via their own "*":deny overlay
+          // (explore/scout) or locked hardRules (compaction/title/summary);
+          // child tasks keep explicit question deny in KiloTask.permissions.
           interactive_terminal: "deny", // kilocode_change - human-driven tools are primary-agent only
           plan_enter: "deny",
           plan_exit: "deny",

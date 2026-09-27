@@ -353,6 +353,11 @@ export function activate(context: vscode.ExtensionContext) {
     globalState: createVscodeStateAdapter(context.globalState),
     workspaceState: createVscodeStateAdapter(context.workspaceState),
     watcherAdapter: createVscodeWatcherAdapter(),
+    // Lifecycle rebuild gate: init-completed + FD private ready. Covers both
+    // orderings (init-first parks via notifyPrivateReady, FD-first fires at
+    // init end). Fresh-backend extra cold is accepted: backend disk identity
+    // is indistinguishable from rebuild divergence, correctness wins.
+    isPrivateReady: () => connectionService.isPrivateAvailable(),
     convergence: new PrivateConvergenceAdapter(() => {
       const peer = connectionService.getPrivatePeer()
       if (!peer || !connectionService.isPrivateAvailable()) return null
@@ -751,6 +756,13 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.backendSnapshot", async () => {
         return agentManagerProvider.backendSnapshotForFixture()
       }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.privateSessionAuthority",
+        async (sessionId?: string) => {
+          if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+          return agentManagerProvider.privateSessionAuthorityForFixture(sessionId)
+        },
+      ),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.canonicalState", async () => {
         return canonicalConfig.fixtureStateSnapshot()
       }),

@@ -44,6 +44,20 @@ interface LocalStatsMessage {
   stats: { branch: string; files: number; additions: number; deletions: number; ahead: number; behind: number }
 }
 
+export interface PanelOperationRecovery {
+  v: 1
+  owner: "generation"
+  scope: string
+  used: number
+  limit: number
+  terminated: boolean
+  nextAt: number | null
+  retryOccurrence: number | null
+  layer: "provider" | "incomplete" | "broker" | "task" | "restart" | null
+  closeReason: "completed" | "interrupted" | "error" | "crash" | null
+  replay: false
+}
+
 export interface PanelOperation {
   opId: string
   outcome: "succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned"
@@ -51,7 +65,7 @@ export interface PanelOperation {
   message: string
   time: number
   cancel?: { source: "user_stop" | "steering" | "timeout" | "network_disconnect" | "unknown" }
-  recovery?: { budget: 0; nextAt: null; provenance: "terminal" }
+  recovery?: PanelOperationRecovery
 }
 
 interface StateMessage {

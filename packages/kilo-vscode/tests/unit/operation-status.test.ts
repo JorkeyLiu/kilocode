@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { operationStatusText, operationStatusTone } from "../../webview-ui/agent-manager/operation-status-helpers"
+import { operationRecoveryText, operationStatusText, operationStatusTone } from "../../webview-ui/agent-manager/operation-status-helpers"
 import type { PanelOperation } from "../../src/types/messages/agent-manager"
 
 function op(over: Partial<PanelOperation> & Pick<PanelOperation, "outcome" | "code" | "message" | "opId">): PanelOperation {
@@ -77,26 +77,42 @@ describe("OperationStatus mapping", () => {
     expect(operationStatusTone(undefined)).toBe("neutral")
   })
 
-  it("operation-status display unchanged with recovery present", () => {
+  it("operation-status display unchanged with recovery present; recovery text is concise owner status", () => {
+    const recOpen = { v: 1, owner: "generation", scope: "ses_a", used: 1, limit: 2, terminated: false, nextAt: 5, retryOccurrence: 4, layer: "provider", closeReason: null, replay: false } as const
+    const recClosed = { ...recOpen, used: 2, terminated: true, nextAt: null, closeReason: "crash" } as const
     const failedNoRec = op({ opId: "o1", outcome: "failed", code: "E_FOO", message: "boom" })
-    const failedWithRec = op({ opId: "o1", outcome: "failed", code: "E_FOO", message: "boom", recovery: { budget: 0, nextAt: null, provenance: "terminal" } })
+    const failedWithRec = op({ opId: "o1", outcome: "failed", code: "E_FOO", message: "boom", recovery: recOpen as never })
     expect(operationStatusText(failedWithRec)).toBe(operationStatusText(failedNoRec))
     expect(operationStatusTone(failedWithRec)).toBe(operationStatusTone(failedNoRec))
+    expect(operationRecoveryText(failedWithRec)).toBe("retries 1/2")
+    expect(operationRecoveryText(failedNoRec)).toBeUndefined()
 
     const abandonedNoRec = op({ opId: "o2", outcome: "abandoned", code: "C", message: "m", cancel: { source: "timeout" } })
-    const abandonedWithRec = op({ opId: "o2", outcome: "abandoned", code: "C", message: "m", cancel: { source: "timeout" }, recovery: { budget: 0, nextAt: null, provenance: "terminal" } })
+    const abandonedWithRec = op({ opId: "o2", outcome: "abandoned", code: "C", message: "m", cancel: { source: "timeout" }, recovery: recClosed as never })
     expect(operationStatusText(abandonedWithRec)).toBe(operationStatusText(abandonedNoRec))
     expect(operationStatusTone(abandonedWithRec)).toBe(operationStatusTone(abandonedNoRec))
+    expect(operationRecoveryText(abandonedWithRec)).toBe("retries 2/2 · closed")
 
     const inflightNoRec = op({ opId: "o3", outcome: "in-flight", code: "C", message: "m" })
-    const inflightWithRec = { ...inflightNoRec, recovery: { budget: 0, nextAt: null, provenance: "terminal" } } as unknown as PanelOperation
+    const inflightWithRec = { ...inflightNoRec, recovery: recOpen } as unknown as PanelOperation
     // in-flight with recovery is invalid panel fact but helper must ignore recovery for display
     expect(operationStatusText(inflightWithRec)).toBe("Running")
     expect(operationStatusTone(inflightWithRec)).toBe("running")
+    expect(operationRecoveryText(inflightWithRec)).toBeUndefined()
 
     const succeededNoRec = op({ opId: "o4", outcome: "succeeded", code: "C", message: "m" })
-    const succeededWithRec = { ...succeededNoRec, recovery: { budget: 0, nextAt: null, provenance: "terminal" } } as unknown as PanelOperation
+    const succeededWithRec = { ...succeededNoRec, recovery: recClosed } as unknown as PanelOperation
     expect(operationStatusText(succeededWithRec)).toBeUndefined()
     expect(operationStatusTone(succeededWithRec)).toBe("neutral")
+    expect(operationRecoveryText(succeededWithRec)).toBeUndefined()
+  })
+
+  it("recovery text never leaks layer/timestamps/diagnostics", () => {
+    const rec = { v: 1, owner: "generation", scope: "ses_a", used: 1, limit: 2, terminated: false, nextAt: 555, retryOccurrence: 444, layer: "broker", closeReason: null, replay: false } as const
+    const txt = operationRecoveryText(op({ opId: "o1", outcome: "failed", code: "E", message: "m", recovery: rec as never }))
+    expect(txt).toBe("retries 1/2")
+    expect(txt).not.toContain("broker")
+    expect(txt).not.toContain("555")
+    expect(txt).not.toContain("444")
   })
 })

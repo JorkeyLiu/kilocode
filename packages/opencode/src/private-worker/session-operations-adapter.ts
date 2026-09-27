@@ -67,7 +67,8 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
         db.select().from(SessionOperationTable).where(eq(SessionOperationTable.session_id, sessionId as never)).orderBy(desc(SessionOperationTable.time), desc(SessionOperationTable.op_id)).limit(limit).all().pipe(Effect.orDie),
       )
       if (rows.length === 0) return { v: "1.0", status: "found", operations: [] }
-      const ops = rows.map((r) => {
+      const ops: unknown[] = []
+      for (const r of rows) {
         let rec: SessionOperation.FailureRecord
         try {
           rec = SessionOperation.validatedRowToRecord(r as typeof SessionOperationTable.$inferSelect)
@@ -78,7 +79,8 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
         // toPanelRecord strips durable (opKind,time) + diagnostic (detail,stack); only panel-visible remains
         const allowed = new Set(["opId", "outcome", "code", "message", "cancel"])
         for (const k of Object.keys(panel)) if (!allowed.has(k)) throw internalError("panel projection leaked non-panel field")
-        // Build panel-safe wire entry: panel fields + validated durable time; never emit opKind/detail/stack/raw metadata
+        // Build panel-safe wire entry: panel fields + validated durable time; never emit opKind/detail/stack/raw metadata.
+        // Legacy recovery_* columns are never projected: recovery comes only from the durable receipt + live owner.
         const out: Record<string, unknown> = {
           opId: panel.opId,
           outcome: panel.outcome,
@@ -87,18 +89,25 @@ export function createSessionOperationsDeps(db: Database.Interface["db"]): {
           time: rec.time,
         }
         if (panel.cancel !== undefined) out.cancel = panel.cancel
-        const rb = (r as Record<string, unknown>).recovery_budget as number | null | undefined
-        const rn = (r as Record<string, unknown>).recovery_next_at as number | null | undefined
-        const rp = (r as Record<string, unknown>).recovery_provenance as string | null | undefined
-        if (rb !== null && rb !== undefined) {
-          if (rb !== 0) throw internalError("invalid recovery budget")
-          if (rn !== null && rn !== undefined) throw internalError("invalid recovery nextAt")
-          if (rp !== "terminal") throw internalError("invalid recovery provenance")
-          if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("recovery only for failed/abandoned")
-          out.recovery = { budget: 0 as const, nextAt: null, provenance: "terminal" as const }
+        if (rec.outcome === "failed" || rec.outcome === "abandoned") {
+          let proj: SessionOperation.RecoveryProjection | undefined
+          try {
+            proj = await Effect.runPromise(
+              SessionOperation.getRecoveryProjection(db, rec.opId, sessionId as never),
+            )
+          } catch {
+            proj = undefined
+          }
+          if (proj !== undefined) {
+            try {
+              out.recovery = SessionOperation.validateRecoveryProjection(proj)
+            } catch (e) {
+              throw internalError(e instanceof Error ? e.message : String(e))
+            }
+          }
         }
-        return out as unknown as ObservationOperationsResult extends { status: "found"; operations: infer U } ? (U extends (infer E)[] ? E : never) : never
-      })
+        ops.push(out as unknown as ObservationOperationsResult extends { status: "found"; operations: infer U } ? (U extends (infer E)[] ? E : never) : never)
+      }
       return { v: "1.0", status: "found", operations: ops as any }
     },
   }

@@ -323,8 +323,11 @@ export default [
     // alongside the existing asset seam. Orchestration lives in
     // `src/config/asset-observe.ts` (`handleSkillChanged`, classifiers, diff);
     // only the thin `onSkillChanged`/`skillHost` delegation plus the
-    // `lastSkillFiles` scan state remain inline. Minimal cap for the file.
-    rules: { "max-lines": ["error", 3080] },
+    // `lastSkillFiles` scan state remain inline. Lifecycle rebuild gate
+    // (init-done + FD-ready once, validated disk enumeration into the
+    // existing observe coalescer) keeps only the thin `notifyPrivateReady`
+    // gate inline; enumeration lives in `lifecycle-observe.ts`. Minimal cap.
+    rules: { "max-lines": ["error", 3135] },
   },
   {
     files: ["script/e2e-probe-observation-producer.ts", "script/e2e-probe-observation-producer-update.ts", "script/e2e-probe-observation-producer-revert.ts"],

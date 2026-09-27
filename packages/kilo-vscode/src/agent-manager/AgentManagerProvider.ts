@@ -1,31 +1,13 @@
 import * as fs from "fs"
 import * as path from "path"
-import type { KiloClient, Message, Part, Session, SessionStatus } from "@kilocode/sdk/v2/client"
-import {
-  summarizeMcp,
-  summarizeMessage,
-  summarizePermissions,
-  summarizeQuestions,
-  summarizeSession,
-  summarizeStatuses,
-  type BackendSnapshot,
-  type McpTruth,
-} from "./fixture-backend"
+import type { KiloClient, Session } from "@kilocode/sdk/v2/client"
+import type { BackendSnapshot, McpTruth } from "./fixture-backend"
+import { FixtureContentHandshake } from "./fixture-content-handshake"
+import { backendSnapshotForFixture, mcpDisconnectForFixture } from "./fixture-backend-snapshot"
+import { privateSessionAuthorityForFixture, type AuthorityResult } from "./fixture-session-authority"
 import type { KiloConnectionService } from "../services/cli-backend"
 import type { ConnectionState } from "../services/cli-backend/connection-service"
 import { getErrorMessage } from "../kilo-provider-utils"
-import { fetchSessionChildrenPrivateFirst } from "../kilo-provider/session-children-privatefirst"
-import { fetchSessionStatusesPrivateFirst } from "../kilo-provider/session-status-privatefirst"
-import { fetchMcpStatusPrivate } from "../kilo-provider/mcp-status-private"
-import { attemptMcpDisconnectPrivate, buildMcpDisconnectReq } from "../kilo-provider/mcp-connection-privatefirst"
-import { fetchAgentsPrivateFirst } from "../kilo-provider/agent-list-privatefirst"
-import { fetchProviderCatalogPrivateFirst } from "../kilo-provider/provider-catalog-privatefirst"
-import { readPermissionsForDir } from "../kilo-provider/permission-privatefirst"
-import { readQuestionsForDir } from "../kilo-provider/question-privatefirst"
-import {
-  fetchFixtureSessionListPrivateFirst,
-  fetchFixtureSessionMessagesPrivateFirst,
-} from "../kilo-provider/fixture-session-privatefirst"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
@@ -40,6 +22,7 @@ import { startSession } from "./mcp-warmup"
 import { readTerminalFont, watchTerminalFont } from "./terminal-font"
 import type { PtyPrivateConnection } from "../kilo-provider/pty-privatefirst"
 import { buildKeybindingMap } from "./format-keybinding"
+import { isPanelSafeOperation } from "./operation-recovery"
 import { Semaphore } from "./semaphore"
 import { SessionTiming } from "./session-timing"
 import { PLATFORM } from "./constants"
@@ -103,36 +86,7 @@ export class AgentManagerProvider implements Disposable {
   private hydrated = false
   private generation = 0
   private recentOps = new Map<string, import("./types").PanelOperation>()
-  // Fixture-only Agent Manager content-readiness handshake (KILO_E2E_FIXTURE).
-  // Scoped to a content generation distinct from `generation` because the
-  // fixture reload path preserves the same PanelContext/provider while the
-  // webview document is replaced. Bumped on attach, fixture reload start, and
-  // panel dispose; the ack resolves only waiters of the current generation
-  // that have already seen the current generation's webviewReady.
-  private contentGen = 0
-  private contentReadyGen: number | null = null
-  private contentWebviewReadyGen: number | null = null
-  private contentWaiters: Array<{
-    gen: number
-    resolve: (v: boolean) => void
-    reject: (e: Error) => void
-    timer: ReturnType<typeof setTimeout>
-  }> = []
-  // Fixture-only per-seed delivery barrier waiters (KILO_E2E_FIXTURE).
-  // Scoped to the content generation captured at wait time plus the exact
-  // barrier token. An ack resolves only waiters whose gen is still current
-  // and whose token matches exactly; stale generations and mismatched tokens
-  // are ignored. Same lifecycle as contentWaiters: attach/reload/dispose/
-  // shutdown reject and clear. Identical gen+token waiters coalesce (one ack
-  // resolves all); distinct tokens resolve independently so per-batch tokens
-  // never collide.
-  private barrierWaiters: Array<{
-    gen: number
-    token: string
-    resolve: (v: boolean) => void
-    reject: (e: Error) => void
-    timer: ReturnType<typeof setTimeout>
-  }> = []
+  private fixtureHandshake = new FixtureContentHandshake()
   private refreshPromise: Promise<void> | null = null
   private refreshGen: number | null = null
   private refreshSessions: unknown | null = null
@@ -456,10 +410,11 @@ export class AgentManagerProvider implements Disposable {
       panelDisposed = true
       if (this.panel === ctx) {
         this.log("Panel disposed")
-        const ids = [...this.panelSessions]
-        if (this.activeSessionId) ids.push(this.activeSessionId)
+        // Panel close/reopen is re-observe only: never cancel accepted
+        // generations here. Explicit user Stop/Delete paths still abort via
+        // KiloProvider.abortSessions/handleAbort/handleDeleteSession, and
+        // ctx.sessions.dispose() below still clears observation state.
         this.panelSessions.clear()
-        void ctx.sessions.abortSessions(ids).catch((err) => this.log("Failed to abort sessions on panel close:", err))
         this.statsPoller.stop()
         // Durable open-tab state survives panel dispose; only ephemeral
         // presence/streams are cleared. Keep managedSessions/tabOrder/active
@@ -476,10 +431,7 @@ export class AgentManagerProvider implements Disposable {
           this.catalogUnsub.dispose()
           this.catalogUnsub = undefined
         }
-        this.failContentWaitersForFixture(new Error("panel disposed"))
-        this.failBarrierWaitersForFixture(new Error("panel disposed"))
-        this.contentReadyGen = null
-        this.contentWebviewReadyGen = null
+        this.handshake().onPanelDisposed(new Error("panel disposed"))
       }
       ctx.sessions.dispose()
     })
@@ -1700,55 +1652,9 @@ export class AgentManagerProvider implements Disposable {
         if (!raw || raw.v !== "1.0") continue
         if (raw.status === "found" && Array.isArray(raw.operations) && raw.operations.length > 0) {
           const op = raw.operations[0] as unknown as import("./types").PanelOperation & Record<string, unknown>
-          // validate panel shape strictly — panel-safe derived fact only
-          const allowedOutcomes = new Set(["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"])
-          const allowedCancel = new Set(["user_stop", "steering", "timeout", "network_disconnect", "unknown"])
-          const allowedKeys = new Set(["opId", "outcome", "code", "message", "time", "cancel", "recovery"])
-          if (typeof op.opId !== "string" || op.opId.length === 0) continue
-          if (typeof op.outcome !== "string" || !allowedOutcomes.has(op.outcome)) continue
-          if (typeof op.code !== "string" || op.code.length === 0) continue
-          if (typeof op.message !== "string") continue
-          if (typeof op.time !== "number" || !Number.isFinite(op.time)) continue
-          // reject diagnostic/forbidden fields
-          let hasForbidden = false
-          for (const k of Object.keys(op as Record<string, unknown>)) {
-            if (!allowedKeys.has(k)) {
-              hasForbidden = true
-              break
-            }
-          }
-          if (hasForbidden) continue
-          if ((op as Record<string, unknown>).detail !== undefined || (op as Record<string, unknown>).stack !== undefined) continue
-          if (
-            (op as Record<string, unknown>).revision !== undefined ||
-            (op as Record<string, unknown>).idempotencyHash !== undefined ||
-            (op as Record<string, unknown>).requestId !== undefined ||
-            (op as Record<string, unknown>).opKind !== undefined
-          )
-            continue
-          // cancel validation
-          const cancelRaw = (op as Record<string, unknown>).cancel
-          if (cancelRaw !== undefined) {
-            if (cancelRaw === null || typeof cancelRaw !== "object" || Array.isArray(cancelRaw)) continue
-            const c = cancelRaw as Record<string, unknown>
-            if (typeof c.source !== "string" || !allowedCancel.has(c.source as string)) continue
-            if (Object.keys(c).length !== 1) continue
-          }
-          // recovery strict validation — panel-safe derived fact only
-          const rec = (op as Record<string, unknown>).recovery
-          if (rec !== undefined) {
-            if (rec === null || typeof rec !== "object" || Array.isArray(rec)) continue
-            const rv = rec as Record<string, unknown>
-            if (Object.keys(rv).length !== 3) continue
-            if (rv.budget !== 0) continue
-            if (rv.nextAt !== null) continue
-            if (rv.provenance !== "terminal") continue
-            if (op.outcome !== "failed" && op.outcome !== "abandoned") continue
-          }
-          // succeeded/in-flight must have no recovery (already covered: if outcome not failed/abandoned, rec must be undefined)
-          if ((op.outcome === "succeeded" || op.outcome === "in-flight") && rec !== undefined) continue
-          // ambiguous/superseded must also have no recovery
-          if ((op.outcome === "ambiguous" || op.outcome === "superseded") && rec !== undefined) continue
+          // Panel-safe derived fact only — versioned redacted generation
+          // projection; retry intent stays informational, never a replay instruction.
+          if (!isPanelSafeOperation(op, sid)) continue
           this.recentOps.set(sid, op as import("./types").PanelOperation)
         } else if (raw.status === "found" && Array.isArray(raw.operations) && raw.operations.length === 0) {
           this.recentOps.delete(sid)
@@ -1827,188 +1733,48 @@ export class AgentManagerProvider implements Disposable {
     return this.waitForPanelReady(panel)
   }
 
-  /**
-   * Fixture-only content-readiness intercept (KILO_E2E_FIXTURE).
-   * Returns null when the message is consumed, undefined when the caller
-   * should continue normal production handling. Production `webviewReady`
-   * passes through unchanged; the fixture-only `agentManager.contentReady`
-   * ack is consumed in all cases and only affects fixture state when the
-   * fixture flag is enabled, the panel is present, and the current
-   * generation has already seen its webviewReady. The fixture-only
-   * `agentManager.fixtureBarrierAck` echo is likewise consumed in all cases
-   * and resolves only exact current-generation/token barrier waiters.
-   */
+  private handshake(): FixtureContentHandshake {
+    if (!this.fixtureHandshake) this.fixtureHandshake = new FixtureContentHandshake()
+    return this.fixtureHandshake
+  }
+
   private interceptContentHandshakeForFixture(
     msg: Record<string, unknown>,
   ): Record<string, unknown> | null | undefined {
-    if (msg.type === "webviewReady") {
-      if (isE2EFixtureEnabled() && this.panel) {
-        this.contentWebviewReadyGen = this.contentGen ?? 0
-        this.contentReadyGen = null
-      }
-      return undefined
-    }
-    if (msg.type === "agentManager.fixtureBarrierAck") {
-      if (!isE2EFixtureEnabled()) return null
-      if (!this.panel) return null
-      const token = msg.token
-      if (typeof token !== "string" || token.length === 0) return null
-      const gen = this.contentGen ?? 0
-      const waiters = this.barrierWaiters ?? []
-      const ready = waiters.filter((w) => w.gen === gen && w.token === token)
-      if (ready.length === 0) return null
-      this.barrierWaiters = waiters.filter((w) => !(w.gen === gen && w.token === token))
-      for (const w of ready) {
-        clearTimeout(w.timer)
-        w.resolve(true)
-      }
-      return null
-    }
-    if (msg.type !== "agentManager.contentReady") return undefined
-    if (!isE2EFixtureEnabled()) return null
-    if (!this.panel) return null
-    const gen = this.contentGen ?? 0
-    if (this.contentWebviewReadyGen !== gen) return null
-    this.contentReadyGen = gen
-    const waiters = this.contentWaiters ?? []
-    const ready = waiters.filter((w) => w.gen === gen)
-    this.contentWaiters = waiters.filter((w) => w.gen !== gen)
-    for (const w of ready) {
-      clearTimeout(w.timer)
-      w.resolve(true)
-    }
-    return null
+    return this.handshake().intercept(msg, !!this.panel)
   }
 
   private bumpContentGenForFixture(reason: Error): void {
-    // Field initializers do not run on prototype-only test doubles
-    // (Object.create), so default defensively here.
-    this.contentGen = (this.contentGen ?? 0) + 1
-    this.contentReadyGen = null
-    this.contentWebviewReadyGen = null
-    this.failContentWaitersForFixture(reason)
-    this.failBarrierWaitersForFixture(reason)
+    this.handshake().bump(reason)
   }
 
   private failContentWaitersForFixture(reason: Error): void {
-    const waiters = this.contentWaiters
-    this.contentWaiters = []
-    for (const w of waiters ?? []) {
-      clearTimeout(w.timer)
-      w.reject(reason)
-    }
+    this.handshake().failContent(reason)
   }
 
   private failBarrierWaitersForFixture(reason: Error): void {
-    const waiters = this.barrierWaiters
-    this.barrierWaiters = []
-    for (const w of waiters ?? []) {
-      clearTimeout(w.timer)
-      w.reject(reason)
-    }
+    this.handshake().failBarrier(reason)
   }
 
-  /** Fixture-only: current content generation (test inspection). */
   public getContentGenerationForFixture(): number {
-    return this.contentGen ?? 0
+    return this.handshake().getGeneration()
   }
 
-  /** Fixture-only: pending content-ready waiter count (test inspection). */
   public getContentWaiterCountForFixture(): number {
-    return this.contentWaiters?.length ?? 0
+    return this.handshake().getContentCount()
   }
 
-  /** Fixture-only: pending barrier waiter count (test inspection). */
   public getBarrierWaiterCountForFixture(): number {
-    return this.barrierWaiters?.length ?? 0
+    return this.handshake().getBarrierCount()
   }
 
-  /**
-   * Fixture-only: wait for the current panel/webview generation's
-   * content-ready ack. Resolves true when the ack for the calling
-   * generation arrives after its webviewReady. Rejects on timeout,
-   * disposal, reload, or generation change. Coalesces concurrent waiters
-   * for the same generation. Never resolves from webviewReady alone or
-   * from a stale generation's ack.
-   */
   public waitForContentReadyForFixture(timeoutMs = 15_000): Promise<boolean> {
-    if (!isE2EFixtureEnabled()) throw new Error("fixture content-ready requires KILO_E2E_FIXTURE")
-    const panel = this.panel
-    if (!panel) throw new Error("fixture content-ready: no Agent Manager panel")
-    const gen = this.contentGen ?? 0
-    if (this.contentReadyGen === gen) return Promise.resolve(true)
-    if (!this.contentWaiters) this.contentWaiters = []
-    return new Promise<boolean>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const list = this.contentWaiters ?? []
-        const idx = list.indexOf(entry)
-        if (idx >= 0) list.splice(idx, 1)
-        reject(new Error(`fixture content-ready: timeout waiting for generation ${gen}`))
-      }, timeoutMs)
-      const entry = {
-        gen,
-        resolve: (v: boolean) => resolve(v),
-        reject: (e: Error) => reject(e),
-        timer,
-      }
-      ;(this.contentWaiters ??= []).push(entry)
-    })
+    return this.handshake().waitForContent(!!this.panel, timeoutMs)
   }
 
-  /**
-   * Fixture-only: per-seed delivery barrier (KILO_E2E_FIXTURE). Arranges the
-   * waiter for the current content generation + token BEFORE posting the
-   * barrier to the current panel (no fast-ack race), then awaits the
-   * webview's `agentManager.fixtureBarrierAck` echo. Resolves true only on
-   * the exact current generation/token ack. Rejects on empty token, no
-   * panel, post failure, timeout, or generation change (attach/reload/
-   * dispose/shutdown). Concurrent identical gen+token waiters coalesce (one
-   * ack resolves all); distinct tokens resolve independently. Production
-   * never calls this; no queue, no production postMessage change.
-   */
   public waitForFixtureBarrierForFixture(token: string, timeoutMs = 15_000): Promise<boolean> {
-    if (!isE2EFixtureEnabled()) throw new Error("fixture barrier requires KILO_E2E_FIXTURE")
-    if (typeof token !== "string" || token.length === 0) throw new Error("fixture barrier: non-empty token required")
     const panel = this.panel
-    if (!panel) throw new Error("fixture barrier: no Agent Manager panel")
-    const gen = this.contentGen ?? 0
-    if (!this.barrierWaiters) this.barrierWaiters = []
-    let entry: {
-      gen: number
-      token: string
-      resolve: (v: boolean) => void
-      reject: (e: Error) => void
-      timer: ReturnType<typeof setTimeout>
-    }
-    const gate = new Promise<boolean>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const list = this.barrierWaiters ?? []
-        const idx = list.indexOf(entry)
-        if (idx >= 0) list.splice(idx, 1)
-        reject(new Error(`fixture barrier: timeout waiting for token ${token} generation ${gen}`))
-      }, timeoutMs)
-      entry = {
-        gen,
-        token,
-        resolve: (v: boolean) => resolve(v),
-        reject: (e: Error) => reject(e),
-        timer,
-      }
-      ;(this.barrierWaiters ??= []).push(entry)
-    })
-    try {
-      panel.postMessage({ type: "agentManager.fixtureBarrier", token })
-    } catch (err) {
-      const list = this.barrierWaiters ?? []
-      const idx = list.indexOf(entry!)
-      if (idx >= 0) list.splice(idx, 1)
-      clearTimeout(entry!.timer)
-      throw new Error(`fixture barrier: post failed for token ${token}: ${String(err)}`)
-    }
-    return gate.then((ok) => {
-      if ((this.contentGen ?? 0) !== gen) throw new Error(`fixture barrier: generation changed for token ${token}`)
-      return ok
-    })
+    return this.handshake().waitForBarrier(!!panel, (m) => panel!.postMessage(m), token, timeoutMs)
   }
 
   /** Expose session→directory mappings for reload routing. */
@@ -2119,196 +1885,39 @@ export class AgentManagerProvider implements Disposable {
     }) as Promise<T>
   }
 
-  /**
-   * Read-only snapshot of served-backend truth for the real-session E2E
-   * fixture (KILO_E2E_FIXTURE only, registered by extension.ts): the session
-   * list, per-session transcripts (text + completed tool-part summaries),
-   * session statuses, the served agent catalog, the connected provider ids,
-   * MCP server statuses, pending permission/question requests, and the
-   * backend-derived child session ids. Session list and per-session
-   * transcripts go through their shared private-first helpers (same
-   * `observation/list` + `observation/messages` sources as production)
-   * with the same snapshot projections; statuses, children, MCP status,
-   * agent list, provider catalog, permission list, and question list go
-   * through their shared private-first helpers the same way. The
-   * extension-host runner writes this to the scratch dir and the harness
-   * asserts on it. No production effect: the command is unregistered when
-   * the env var is absent.
-   */
   public async backendSnapshotForFixture(): Promise<BackendSnapshot> {
     const root = this.getRoot() ?? ""
-    const client = await this.connectionService.getClientAsync(root)
-    const empty = (label: string): never[] => {
-      this.log(`fixture backendSnapshot: ${label} failed; returning empty`)
-      return []
-    }
-    const reader = this.coordinator?.observationReader() ?? null
-    const listOutcome = await fetchFixtureSessionListPrivateFirst({
-      reader,
-      client: client as unknown as Parameters<typeof fetchFixtureSessionListPrivateFirst>[0]["client"],
-      directory: root,
-    }).catch((err) => {
-      this.log("fixture backendSnapshot: session.list failed:", err)
-      return empty("session.list") as unknown as Awaited<ReturnType<typeof fetchFixtureSessionListPrivateFirst>>
+    return backendSnapshotForFixture({
+      root,
+      getClient: (dir) => this.connectionService.getClientAsync(dir),
+      connection: this.connectionService,
+      reader: this.coordinator?.observationReader() ?? null,
+      log: (...args) => this.log(...args),
     })
-    const sessions = listOutcome.kind === "ok" ? listOutcome.sessions : empty("session.list")
-    let statusReadable = true
-    let statuses: Record<string, SessionStatus> = {}
-    try {
-      const statusOutcome = await fetchSessionStatusesPrivateFirst({
-        connection: this.connectionService as unknown as Parameters<
-          typeof fetchSessionStatusesPrivateFirst
-        >[0]["connection"],
-        client: client as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["client"],
-        directory: root,
-      })
-      if (statusOutcome.kind === "ok") statuses = statusOutcome.statuses as Record<string, SessionStatus>
-      else {
-        statusReadable = false
-        this.log("fixture backendSnapshot: session.status failed; returning empty")
-        statuses = {}
-      }
-    } catch (err) {
-      this.log("fixture backendSnapshot: session.status failed:", err)
-      statusReadable = false
-      statuses = {}
-    }
-    const agents = await fetchAgentsPrivateFirst({
-      connection: this.connectionService as unknown as Parameters<typeof fetchAgentsPrivateFirst>[0]["connection"],
-      client: client as unknown as Parameters<typeof fetchAgentsPrivateFirst>[0]["client"],
-      directory: root,
-    })
-      .then((outcome) => (outcome.kind === "ok" ? outcome.agents : empty("app.agents")))
-      .catch(() => empty("app.agents"))
-    const connected = await fetchProviderCatalogPrivateFirst({
-      connection: this.connectionService as unknown as Parameters<
-        typeof fetchProviderCatalogPrivateFirst
-      >[0]["connection"],
-      client: client as unknown as Parameters<typeof fetchProviderCatalogPrivateFirst>[0]["client"],
-      directory: root,
-    })
-      .then((outcome) => (outcome.kind === "ok" ? (outcome.data.connected ?? []) : empty("provider.catalog")))
-      .catch(() => empty("provider.catalog"))
-    const messages: Record<string, ReturnType<typeof summarizeMessage>[]> = {}
-    const children: Record<string, string[]> = {}
-    const unreadableMessages: Record<string, boolean> = {}
-    for (const s of sessions) {
-      // Private-first transcript read: one private observation/messages
-      // attempt plus at most one same-session/directory SDK fallback per
-      // session. Valid private pages and SDK fallback produce the same
-      // fixture `messages` projection; terminal and unavailable close
-      // fail-soft to empty with the existing log label plus unreadable.
-      const msgOutcome = await fetchFixtureSessionMessagesPrivateFirst({
-        reader,
-        client: client as unknown as Parameters<typeof fetchFixtureSessionMessagesPrivateFirst>[0]["client"],
-        directory: root,
-        sessionId: s.id,
-      }).catch(
-        () =>
-          empty(`session.messages(${s.id})`) as unknown as Awaited<
-            ReturnType<typeof fetchFixtureSessionMessagesPrivateFirst>
-          >,
-      )
-      const rows = msgOutcome.kind === "ok" ? msgOutcome.items : empty(`session.messages(${s.id})`)
-      if (msgOutcome.kind !== "ok") unreadableMessages[s.id] = false
-      messages[s.id] = (rows as Parameters<typeof summarizeMessage>[0][]).map(summarizeMessage)
-      // Private-authority children read: one private attempt with zero SDK.
-      // Valid private `succeeded`+`accepted` (including valid empty) and
-      // validated terminal `failed` (`retryable === false`) are authoritative
-      // with zero SDK; every gate-off/not-started/worker-error/transport/
-      // protocol/malformed/ambiguous/retryable-fence/timeout/closed branch
-      // fails closed to explicit unavailable with zero SDK (`getClientAsync`,
-      // `client.session.children`); signal is transport-only cancellation
-      // via `$/cancelRequest` with abort-listener cleanup, never a wire
-      // payload. `compareChildrenParity` stays as pure diagnostic/test
-      // evidence only and issues no third request.
-      const kids = await fetchSessionChildrenPrivateFirst({
-        connection: this.connectionService as unknown as Parameters<
-          typeof fetchSessionChildrenPrivateFirst
-        >[0]["connection"],
-        parentSessionId: s.id,
-        directory: root,
-      })
-        .then((outcome) => (outcome.kind === "ok" ? outcome.children : empty(`session.children(${s.id})`)))
-        .catch((err: unknown) => {
-          this.log(`fixture backendSnapshot: session.children(${s.id}) failed:`, err)
-          return empty(`session.children(${s.id})`)
-        })
-      children[s.id] = kids.map((kid) => (kid as { id?: string }).id ?? "").filter((id) => id.length > 0)
-    }
-    const mcp = await fetchMcpStatusPrivate({ connection: this.connectionService, directory: root })
-      .then((outcome) => (outcome.kind === "ok" ? summarizeMcp(outcome.status) : undefined))
-      .catch((err) => {
-        this.log("fixture backendSnapshot: mcp.status failed:", err)
-        return undefined
-      })
-    const pending = await Promise.all([
-      readPermissionsForDir({
-        connection: this.connectionService as unknown as Parameters<typeof readPermissionsForDir>[0]["connection"],
-        client,
-        directory: root,
-      })
-        .then((read) =>
-          read.kind === "ok"
-            ? summarizePermissions(read.perms as unknown as Parameters<typeof summarizePermissions>[0])
-            : (empty("permission.list") as unknown as ReturnType<typeof summarizePermissions>),
-        )
-        .catch(() => empty("permission.list") as unknown as ReturnType<typeof summarizePermissions>),
-      readQuestionsForDir({
-        connection: this.connectionService as unknown as Parameters<typeof readQuestionsForDir>[0]["connection"],
-        client,
-        directory: root,
-      })
-        .then((read) =>
-          read.kind === "ok"
-            ? summarizeQuestions(read.items as unknown as Parameters<typeof summarizeQuestions>[0])
-            : (empty("question.list") as unknown as ReturnType<typeof summarizeQuestions>),
-        )
-        .catch(() => empty("question.list") as unknown as ReturnType<typeof summarizeQuestions>),
-    ]).then(([permissions, questions]) => ({ permissions, questions }))
-    return {
-      requestedAt: new Date().toISOString(),
-      sessions: sessions.map(summarizeSession),
-      messages,
-      statuses: summarizeStatuses(statuses),
-      ...(statusReadable ? {} : { statusReadable: false as const }),
-      ...(Object.keys(unreadableMessages).length > 0 ? { messagesReadable: unreadableMessages } : {}),
-      agents: agents.map((agent) => (agent as { name?: string }).name ?? "").filter((name) => name.length > 0),
-      connectedProviders: connected,
-      ...(mcp ? { mcp } : {}),
-      ...(pending ? { pending } : {}),
-      children,
-    }
   }
 
-  /**
-   * Disconnect a named MCP server through the private authority, then return
-   * the served MCP status map. Env-gated E2E fixture bridge only
-   * (KILO_E2E_FIXTURE): lets the harness prove the run-owned MCP stdio child
-   * is cleaned up by its exact owner (disconnect through the private
-   * authority, not a process-name kill). Once-only with zero SDK
-   * fallback/retry; every outcome converges through private status.
-   * No production effect when the env var is absent.
-   */
-  public async mcpDisconnectForFixture(name: string): Promise<McpTruth> {
+  public async privateSessionAuthorityForFixture(sessionId: string): Promise<AuthorityResult> {
     const root = this.getRoot() ?? ""
-    try {
-      const attempt = await attemptMcpDisconnectPrivate(this.connectionService, buildMcpDisconnectReq(root, name))
-      if (attempt.kind !== "ok") {
-        const detail = attempt.kind === "failed" ? attempt.code : attempt.reason
-        this.log(`fixture mcpDisconnect(${name}) failed:`, detail)
-      }
-    } catch (err) {
-      this.log(`fixture mcpDisconnect(${name}) failed:`, err)
-    }
-    const outcome = await fetchMcpStatusPrivate({ connection: this.connectionService, directory: root }).catch(
-      (err) => {
-        this.log("fixture mcpDisconnect: mcp.status failed:", err)
-        return { kind: "unavailable" } as const
+    return privateSessionAuthorityForFixture(
+      {
+        root,
+        rawRoot: this.host.workspacePath() ?? root,
+        reader: this.coordinator?.observationReader() ?? null,
+        log: (...args) => this.log(...args),
       },
+      sessionId,
     )
-    if (outcome.kind === "ok") return summarizeMcp(outcome.status)
-    return summarizeMcp({})
+  }
+
+  public async mcpDisconnectForFixture(name: string): Promise<McpTruth> {
+    return mcpDisconnectForFixture(
+      {
+        root: this.getRoot() ?? "",
+        connection: this.connectionService,
+        log: (...args) => this.log(...args),
+      },
+      name,
+    )
   }
 
   public shutdown(): Promise<void> {

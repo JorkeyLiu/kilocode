@@ -265,14 +265,14 @@ describe("observation/operations DB-backed adapter (vscode mirror, real DB)", ()
     }
   })
 
-  it("recovery projection for failed/abandoned terminal is panel-safe, invalid shapes throw", async () => {
+  it("legacy recovery_* columns are never projected: unattributable rows omit recovery, no throw", async () => {
     const { file, cleanup } = tmpDb()
     try {
       await withRuntime(file, async (db) => {
         const dir = canonicalDirectory("/tmp/ws")
         await ensureProject(db)
         await insertSession(db, "ses_ops_rec", dir)
-        // failed with valid recovery
+        // failed with legacy columns but no receipt => no recovery field
         await Effect.runPromise(
           db.insert(SessionOperationTable).values({
             op_id: "prompt:msg_rec_failed" as never,
@@ -296,9 +296,8 @@ describe("observation/operations DB-backed adapter (vscode mirror, real DB)", ()
         const deps = createSessionOperationsDeps(db as never)
         const out = await deps.operations({ directory: dir, sessionId: "ses_ops_rec", limit: 1 })
         if (out.status !== "found") throw new Error("expected found")
-        expect(out.operations[0]!.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
-        expect(new Set(Object.keys(out.operations[0]!))).toEqual(new Set(["opId", "outcome", "code", "message", "time", "recovery"]))
-        // succeeded with recovery must throw internal error (invalid projection)
+        expect("recovery" in out.operations[0]!).toBe(false)
+        // succeeded with legacy columns also omits without throwing
         await insertSession(db, "ses_ops_rec2", dir)
         await Effect.runPromise(
           db.insert(SessionOperationTable).values({
@@ -321,6 +320,9 @@ describe("observation/operations DB-backed adapter (vscode mirror, real DB)", ()
           } as never).run().pipe(Effect.orDie),
         )
         const deps2 = createSessionOperationsDeps(db as never)
+        const out2 = await deps2.operations({ directory: dir, sessionId: "ses_ops_rec2", limit: 1 })
+        if (out2.status !== "found") throw new Error("expected found")
+        expect("recovery" in out2.operations[0]!).toBe(false)
         const ctrl = new ObservationController({
           getSnapshot: async () => ({ cursor: 0, snapshot: null }),
           readAfter: async () => ({ type: "deltas", cursor: 0, entries: [] }),
@@ -331,12 +333,8 @@ describe("observation/operations DB-backed adapter (vscode mirror, real DB)", ()
         const bToA = new PassThrough()
         const server = new JsonRpcPeer({ reader: aToB, writer: bToA, onRequest: (m, p) => ctrl.handle(m, p) })
         const client = new JsonRpcPeer({ reader: bToA, writer: aToB })
-        try {
-          await client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: "ses_ops_rec2", limit: 1 })
-          expect(false).toBe(true)
-        } catch (e) {
-          expect((e as { code?: number }).code).toBe(ErrorCode.InternalError)
-        }
+        const via = (await client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: "ses_ops_rec2", limit: 1 })) as typeof out2
+        expect(via.status).toBe("found")
         client.dispose()
         server.dispose()
       })

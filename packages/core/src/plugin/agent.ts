@@ -110,10 +110,13 @@ export const Plugin = PluginV2.define({
         (resource): PermissionV2.Rule => ({ action: "external_directory", resource, effect: "allow" }),
       ),
     ]
+    // question free-form and question_tool stay separate: no shared question
+    // deny here so plan question allow remains reachable and question_tool
+    // keeps its no-explicit-rule default ask. Non-asking agents keep deny via
+    // their own "*":deny overlay; child isolation keeps its explicit deny.
     const defaults: PermissionV2.Ruleset = [
       { action: "*", resource: "*", effect: "allow" },
       ...readonlyExternalDirectory,
-      { action: "question", resource: "*", effect: "deny" },
       { action: "plan_enter", resource: "*", effect: "deny" },
       { action: "plan_exit", resource: "*", effect: "deny" },
       { action: "read", resource: "*", effect: "allow" },

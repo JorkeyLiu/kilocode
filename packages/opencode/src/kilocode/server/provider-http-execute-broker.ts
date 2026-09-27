@@ -169,10 +169,19 @@ export const layer = Layer.effect(
                   acquired.drop()
                 } catch {}
               }
-              // If metadata never arrived, fail it so caller doesn't hang
+              // If metadata never arrived, fail it so caller doesn't hang.
+              // Deferred is first-wins: a recorded terminal failure already
+              // owns it, so this only fires for genuine scope-close races.
               Deferred.doneUnsafe(metaDeferred, Effect.fail(new ProviderHttpProtocolError({ message: "peer closed before metadata" })))
-              // End queue gracefully; if already failed/ended this is no-op
-              ;(Queue.endUnsafe as unknown as (q: unknown) => boolean)(queue)
+              if (protocolError) {
+                // A recorded terminal failure owns the queue: re-assert it so
+                // a concurrent graceful end can never mask provider loss as
+                // clean EOF (silent truncation). No-op when already failed.
+                Queue.failCauseUnsafe(queue, Cause.fail(protocolError))
+              } else {
+                // End queue gracefully; if already failed/ended this is no-op
+                ;(Queue.endUnsafe as unknown as (q: unknown) => boolean)(queue)
+              }
             }),
         )
 
@@ -195,26 +204,27 @@ export const layer = Layer.effect(
                   validated = ProviderHttpExecuteWire.validateResult(raw)
                 } catch (e) {
                   const err = new ProviderHttpProtocolError({ message: e instanceof Error ? e.message : String(e), cause: e })
-                  Deferred.doneUnsafe(metaDeferred, Effect.fail(err))
-                  Queue.failCauseUnsafe(queue, Cause.fail(err))
+                  failAll(err)
                   return
                 }
                 if (chunks === 0) {
                   if (validated.seq !== 0 || validated.chunks !== 0 || validated.bytes !== 0) {
                     const err = new ProviderHttpProtocolError({ message: "terminal count mismatch empty" })
-                    Deferred.doneUnsafe(metaDeferred, Effect.fail(err))
-                    Queue.failCauseUnsafe(queue, Cause.fail(err))
+                    failAll(err)
                     return
                   }
                 } else {
                   if (validated.seq !== lastSeq || validated.chunks !== chunks || validated.bytes !== totalBytes) {
                     const err = new ProviderHttpProtocolError({ message: "terminal count mismatch" })
-                    Deferred.doneUnsafe(metaDeferred, Effect.fail(err))
-                    Queue.failCauseUnsafe(queue, Cause.fail(err))
+                    failAll(err)
                     return
                   }
                 }
-                ;(Queue.endUnsafe as unknown as (q: unknown) => boolean)(queue)
+                // End only when no terminal failure was recorded concurrently;
+                // ending a failed queue is a no-op, so failure always wins.
+                if (!protocolError) {
+                  ;(Queue.endUnsafe as unknown as (q: unknown) => boolean)(queue)
+                }
               }),
             ),
             Effect.catch((err: unknown) => {
@@ -222,10 +232,10 @@ export const layer = Layer.effect(
               const brokerErr: BrokerError = maybe
                 ? new ProviderHttpFailure({ code: maybe.code, message: maybe.message })
                 : new ProviderHttpProtocolError({ message: err instanceof Error ? err.message : String(err), cause: err })
-              if (!protocolError) {
-                Deferred.doneUnsafe(metaDeferred, Effect.fail(brokerErr))
-                Queue.failCauseUnsafe(queue, Cause.fail(brokerErr))
-              }
+              // First terminal failure wins (failAll no-ops when recorded):
+              // a peer-close reject owns meta + queue even if scope teardown
+              // races in, so provider loss never degrades to clean EOF.
+              failAll(brokerErr)
               return Effect.void
             }),
           ),

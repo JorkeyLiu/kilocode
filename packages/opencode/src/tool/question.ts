@@ -23,6 +23,20 @@ export const QuestionTool = Tool.define<typeof Parameters, Metadata, Question.Se
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
+          // kilocode_change start - production permission identity separation
+          // (direction.md:50-52): the question tool carries its own `question_tool`
+          // identity with the stable literal `ask-user` pattern (never `*`, so
+          // once/session approvals stay exact-bound). Routed through the existing
+          // ToolContext.ask so session/agent/tool identity and provenance apply.
+          // Single gate only; Question.ask below is the inquiry transport, never
+          // the permission decision.
+          yield* ctx.ask({
+            permission: "question_tool",
+            patterns: ["ask-user"],
+            always: ["ask-user"],
+            metadata: {},
+          })
+          // kilocode_change end
           // kilocode_change start - surface Question.dismissAll's RejectedError as a normal
           // tool result via KiloQuestionTool helpers, so Effect.orDie below does not turn
           // it into a defect and kill the in-flight stream.

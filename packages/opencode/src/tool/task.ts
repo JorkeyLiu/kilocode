@@ -19,8 +19,9 @@ import { KiloSessionProcessor } from "../kilocode/session/processor" // kilocode
 import { KiloSession } from "../kilocode/session" // kilocode_change
 import { errorMessage } from "@/util/error" // kilocode_change
 import { KiloTaskRetry } from "../kilocode/tool/task-retry" // kilocode_change
+import { KiloTaskOperation } from "../kilocode/tool/task-operation" // kilocode_change
 import { KiloRetryBudget } from "../kilocode/session/retry-budget" // kilocode_change
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { AgentCapability } from "@/agent/capability" // kilocode_change
@@ -280,7 +281,16 @@ export const TaskTool = Tool.define(
           },
           parts,
         })
-        const result = yield* ops.prompt(input())
+        // kilocode_change - runtime-owned prompt:<messageID> inception/terminal/receipt per child attempt;
+        // each real retry uses a fresh mid/new op, duplicate mid never re-executes via traced.
+        const first = input()
+        const result = yield* KiloTaskOperation.traced({
+          db: database.db,
+          sessions,
+          sessionID: nextSession.id,
+          messageID: first.messageID as MessageID,
+          run: ops.prompt(first),
+        })
         // kilocode_change end
         // kilocode_change start - expose terminal child assistant errors through the task tool boundary,
         // including the resumable task_id so the parent agent can continue the subagent (#11620).
@@ -293,7 +303,16 @@ export const TaskTool = Tool.define(
             error: result.info.error,
             sessions,
             sessionID: nextSession.id,
-            attempt: () => ops.prompt(input()),
+            attempt: () => {
+              const req = input()
+              return KiloTaskOperation.traced({
+                db: database.db,
+                sessions,
+                sessionID: nextSession.id,
+                messageID: req.messageID as MessageID,
+                run: ops.prompt(req),
+              })
+            },
             // kilocode_change - child re-invocations charge the parent
             // generation's owning budget/row and never the child row
             ...(parentBudget ? { budget: parentBudget } : {}),
@@ -318,28 +337,48 @@ export const TaskTool = Tool.define(
         text: string,
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
-        yield* ops
-          .prompt({
-            sessionID: ctx.sessionID,
-            agent: currentParent.agent ?? ctx.agent,
-            variant,
-            parts: [
-              {
-                type: "text",
-                synthetic: true,
-                text: renderOutput({
-                  sessionID: nextSession.id,
-                  state,
-                  summary:
-                    state === "completed"
-                      ? `Background task completed: ${params.description}`
-                      : `Background task failed: ${params.description}`,
-                  text,
-                }),
-              },
-            ],
-          })
-          .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+        // kilocode_change - stable mid per child so duplicate injects never re-execute;
+        // forkIn stays outer so background lifecycle is not inverted.
+        const mid = KiloTaskOperation.backgroundMessageID(nextSession.id)
+        const req: SessionPrompt.PromptInput = {
+          messageID: mid,
+          sessionID: ctx.sessionID,
+          agent: currentParent.agent ?? ctx.agent,
+          variant,
+          parts: [
+            {
+              type: "text",
+              synthetic: true,
+              text: renderOutput({
+                sessionID: nextSession.id,
+                state,
+                summary:
+                  state === "completed"
+                    ? `Background task completed: ${params.description}`
+                    : `Background task failed: ${params.description}`,
+                text,
+              }),
+            },
+          ],
+        }
+        yield* KiloTaskOperation.traced({
+          db: database.db,
+          sessions,
+          sessionID: ctx.sessionID,
+          messageID: mid,
+          run: ops.prompt(req),
+        }).pipe(
+          // kilocode_change - background inject already ignores errors; log first so a
+          // terminalize failure/orphan stays visible instead of vanishing silently
+          Effect.tapCause((cause) =>
+            Effect.logWarning("background inject failed").pipe(
+              Effect.annotateLogs({ sessionID: ctx.sessionID, messageID: mid, cause: Cause.pretty(cause) }),
+              Effect.ignore,
+            ),
+          ),
+          Effect.ignore,
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
       })
       // kilocode_change end
 

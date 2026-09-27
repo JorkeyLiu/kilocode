@@ -166,16 +166,18 @@ describe("observation/operations wire validation (vscode mirror)", () => {
     p.server.dispose()
   })
 
-  it("valid recovery for failed/abandoned with exact shape passes, invalid recovery/mismatched outcome fails", async () => {
+  it("valid recovery v1 for failed/abandoned passes, old stub and malformed v1 fail", async () => {
+    const recOpen = { v: 1, owner: "generation", scope: sid, used: 1, limit: 2, terminated: false, nextAt: 5, retryOccurrence: 4, layer: "provider", closeReason: null, replay: false }
+    const recClosed = { v: 1, owner: "generation", scope: sid, used: 2, limit: 2, terminated: true, nextAt: null, retryOccurrence: 4, layer: "provider", closeReason: "crash", replay: false }
     const goodFailed: ObservationOperationsResult = {
       v: "1.0",
       status: "found",
-      operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+      operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: recOpen as never }],
     }
     const goodAbandoned: ObservationOperationsResult = {
       v: "1.0",
       status: "found",
-      operations: [{ opId: "prompt:msg_a", outcome: "abandoned", code: "C", message: "m", time: 1, cancel: { source: "user_stop" }, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }],
+      operations: [{ opId: "prompt:msg_a", outcome: "abandoned", code: "C", message: "m", time: 1, cancel: { source: "user_stop" }, recovery: recClosed as never }],
     }
     for (const good of [goodFailed, goodAbandoned]) {
       const c = ctrlWith(async () => good)
@@ -183,18 +185,18 @@ describe("observation/operations wire validation (vscode mirror)", () => {
       const res = (await p.client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: sid, limit: 1 })) as ObservationOperationsResult
       expect(res.status).toBe("found")
       if (res.status === "found") {
-        expect(res.operations[0]!.recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
+        expect(res.operations[0]!.recovery).toEqual(good.status === "found" ? (good as typeof goodFailed).operations[0]!.recovery : undefined)
         expect(new Set(Object.keys(res.operations[0]!))).toEqual(new Set(["opId", "outcome", "code", "message", "time", ...(res.operations[0]!.cancel ? ["cancel"] : []), "recovery"]))
       }
       p.client.dispose()
       p.server.dispose()
     }
     const bad: unknown[] = [
-      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 1, nextAt: null, provenance: "terminal" } }] },
-      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: 123, provenance: "terminal" } }] },
-      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal", extra: 1 } }] },
-      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "succeeded", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }] },
-      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "in-flight", code: "C", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { budget: 0, nextAt: null, provenance: "terminal" } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { ...recOpen, used: 9 } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "failed", code: "E", message: "m", time: 1, recovery: { ...recOpen, replay: true } }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "succeeded", code: "C", message: "m", time: 1, recovery: recClosed }] },
+      { v: "1.0", status: "found", operations: [{ opId: "prompt:msg_a", outcome: "in-flight", code: "C", message: "m", time: 1, recovery: recOpen }] },
     ]
     for (const fake of bad) {
       const c = ctrlWith(async () => fake as ObservationOperationsResult)

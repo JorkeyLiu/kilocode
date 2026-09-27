@@ -26,13 +26,33 @@ describe("provider auth call-site lock", () => {
     expect(kilo).toContain("fetchProviderData")
     expect(kilo).not.toMatch(/\.provider\.auth\s*\(/)
 
-    // Fixture callers are explicitly excluded and stay on the direct SDK read.
+    // Fixture callers go through the shared private-first projections; the
+    // SDK lives only in the helpers' exactly-once same-directory fallback.
     const ext = await src("../../src/extension.ts")
-    expect(ext).toContain("client.provider.catalog")
+    expect(ext).toContain("fetchFixtureVariantRealPrivateFirst")
+    expect(ext).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(ext).not.toContain("client.provider.list")
     expect(ext).not.toMatch(/\.provider\.auth\s*\(/)
 
+    const variant = await src("../../src/kilo-provider/fixture-variant-real-privatefirst.ts")
+    expect(variant).toContain("fetchProviderCatalogPrivateFirst")
+    expect(variant).toContain("fetchAgentsPrivateFirst")
+    expect(variant).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(variant).not.toMatch(/\.provider\.auth\s*\(/)
+    expect(variant).not.toMatch(/\.app\.agents\s*\(/)
+
     const agent = await src("../../src/agent-manager/AgentManagerProvider.ts")
-    expect(agent).toContain(".provider")
+    expect(agent).toContain("backendSnapshotForFixture")
+    expect(agent).toContain("fixture-backend-snapshot")
+    expect(agent).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(agent).not.toMatch(/\.provider\.auth\s*\(/)
+    expect(agent).not.toContain("client.provider.list")
+
+    const snapshot = await src("../../src/agent-manager/fixture-backend-snapshot.ts")
+    expect(snapshot).toContain("fetchProviderCatalogPrivateFirst")
+    expect(snapshot).not.toMatch(/client\.provider\.catalog\s*\(/)
+    expect(snapshot).not.toMatch(/\.provider\.auth\s*\(/)
+    expect(snapshot).not.toContain("client.provider.list")
   })
 
   it("fetchProviderData keeps message parity with soft auth", async () => {

@@ -312,6 +312,10 @@ import { assertCommandPrivateFirstLifecycle } from "./e2e-probe-command-private"
 import { assertOperationProjectionLifecycle } from "./e2e-probe-operation-projection"
 import { assertOperationCrashLifecycle, prepareOperationCrash } from "./e2e-probe-operation-crash"
 import {
+  assertStreamingObservationLifecycle,
+  prepareStreamingObservation,
+} from "./e2e-probe-streaming-observation"
+import {
   COMMAND_PRIVATE_FIRST_SCENARIO,
   OBSERVATION_PRODUCER_DELETE_SCENARIO,
   OBSERVATION_PRODUCER_FORK_SCENARIO,
@@ -322,6 +326,7 @@ import {
   OPERATION_CRASH_SCENARIO,
   OPERATION_PROJECTION_SCENARIO,
   PROMPT_PRIVATE_FIRST_SCENARIO,
+  STREAMING_OBSERVATION_SCENARIO,
   e2eTimeoutForScenario,
 } from "./e2e-observation-producer-registry"
 import { runGcLifecycleBoundaries } from "./e2e-probe-lifecycle"
@@ -404,38 +409,11 @@ const SCENARIO_VALUES = [
   COMMAND_PRIVATE_FIRST_SCENARIO,
   OPERATION_PROJECTION_SCENARIO,
   OPERATION_CRASH_SCENARIO,
+  STREAMING_OBSERVATION_SCENARIO,
 ] as const
 export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
-  if (
-    value === "tab-close" ||
-    value === "child-task-order" ||
-    value === "variant-memory" ||
-    value === "topic-navigation" ||
-    value === "real-session" ||
-    value === "real-completed" ||
-    value === "real-overflow" ||
-    value === "real-restart" ||
-    value === "real-lifecycle" ||
-    value === "real-generation" ||
-    value === "sidebar-removal" ||
-    value === "worktree-removal" ||
-    value === "cloud-claw-removal" ||
-    value === "p3-4-removal" ||
-    value === "r9-observation" ||
-    value === OBSERVATION_PRODUCER_SCENARIO ||
-    value === OBSERVATION_PRODUCER_UPDATE_SCENARIO ||
-    value === OBSERVATION_PRODUCER_DELETE_SCENARIO ||
-    value === OBSERVATION_PRODUCER_FORK_SCENARIO ||
-    value === OBSERVATION_PRODUCER_REVERT_SCENARIO ||
-    value === OBSERVATION_PRODUCER_SANDBOX_SCENARIO ||
-    value === PROMPT_PRIVATE_FIRST_SCENARIO ||
-    value === COMMAND_PRIVATE_FIRST_SCENARIO ||
-    value === OPERATION_PROJECTION_SCENARIO ||
-    value === OPERATION_CRASH_SCENARIO
-  ) {
-    return new Set([value])
-  }
+  if ((SCENARIO_VALUES as readonly string[]).includes(value)) return new Set([value])
   throw new Error(
     `[probe] unknown KILO_E2E_SCENARIO "${value}". ` +
       `Supported values: ${SCENARIO_VALUES.join(" | ")} (default: all).`,
@@ -466,7 +444,8 @@ export function needsCanonicalStorage(value: string): boolean {
     parseScenarios(value).has(PROMPT_PRIVATE_FIRST_SCENARIO) ||
     parseScenarios(value).has(COMMAND_PRIVATE_FIRST_SCENARIO) ||
     parseScenarios(value).has(OPERATION_PROJECTION_SCENARIO) ||
-    parseScenarios(value).has(OPERATION_CRASH_SCENARIO)
+    parseScenarios(value).has(OPERATION_CRASH_SCENARIO) ||
+    parseScenarios(value).has(STREAMING_OBSERVATION_SCENARIO)
   )
 }
 
@@ -482,11 +461,13 @@ export function selectProviderBaseURL(
   lifecyclePort?: number,
   generationPort?: number,
   crashPort?: number,
+  streamingPort?: number,
 ): string | undefined {
   if (s.has("real-session") && hangPort !== undefined) return `http://127.0.0.1:${hangPort}/v1`
   if (s.has("real-lifecycle") && lifecyclePort !== undefined) return `http://127.0.0.1:${lifecyclePort}/v1`
   if (s.has("real-generation") && generationPort !== undefined) return `http://127.0.0.1:${generationPort}/v1`
   if (s.has(OPERATION_CRASH_SCENARIO) && crashPort !== undefined) return `http://127.0.0.1:${crashPort}/v1`
+  if (s.has(STREAMING_OBSERVATION_SCENARIO) && streamingPort !== undefined) return `http://127.0.0.1:${streamingPort}/v1`
   return undefined
 }
 
@@ -2603,6 +2584,7 @@ async function runScenario(
   lifecycleModel?: ScriptedModelHandle,
   generationModel?: ScriptedModelHandle,
   crashHang?: import("./e2e-probe-operation-crash").CrashHang,
+  streamingModel?: import("./e2e-scripted-model").ScriptedModelHandle,
 ): Promise<void> {
   if (scenarios.has("tab-close")) {
     await assertTabCloseSuccessor(browser, plan, scratch)
@@ -2699,6 +2681,11 @@ async function runScenario(
     if (!crashHang) throw new Error("probe: operation-crash preparation missing")
     await assertOperationCrashLifecycle(browser, plan, scratch, workspace, crashHang, root)
     console.log("[probe] operation-crash lifecycle assertion passed")
+  }
+  if (scenarios.has(STREAMING_OBSERVATION_SCENARIO)) {
+    if (!streamingModel) throw new Error("probe: streaming-observation preparation missing")
+    await assertStreamingObservationLifecycle(browser, plan, scratch, streamingModel, root)
+    console.log("[probe] streaming-observation lifecycle assertion passed")
   }
   if (scenarios.has("real-lifecycle")) {
     if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
@@ -2814,6 +2801,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has(COMMAND_PRIVATE_FIRST_SCENARIO)) return "command-private-ready"
   if (scenarios.has(OPERATION_PROJECTION_SCENARIO)) return "operation-projection-ready"
   if (scenarios.has(OPERATION_CRASH_SCENARIO)) return "operation-crash-ready"
+  if (scenarios.has(STREAMING_OBSERVATION_SCENARIO)) return "streaming-observation-ready"
   return "ready"
 }
 
@@ -3090,6 +3078,7 @@ async function main() {
   let generationModel: Awaited<ReturnType<typeof prepareRealGeneration>>
   let wtModel: Awaited<ReturnType<typeof prepareWorktreeRemoval>>
   let crashHang: Awaited<ReturnType<typeof prepareOperationCrash>>
+  let streamingModel: Awaited<ReturnType<typeof prepareStreamingObservation>>
   try {
     // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
     evidenceDir = evidenceDirFor(scratch)
@@ -3118,6 +3107,7 @@ async function main() {
     lifecycleModel = await prepareRealLifecycle(workspace, scenarios.has("real-lifecycle"))
     generationModel = await prepareRealGeneration(workspace, scenarios.has("real-generation"))
     crashHang = await prepareOperationCrash(workspace, scenarios.has(OPERATION_CRASH_SCENARIO))
+    streamingModel = await prepareStreamingObservation(workspace, scenarios.has(STREAMING_OBSERVATION_SCENARIO))
     // canonical post-cutover wiring (P4.2 H-10/H-11 for real-restart + real-session):
     // allocate a run-owned isolated temp root at scratch/xdg-data/kilo, execute
     // the existing hidden `__internal-storage-cutover cutover --data-root` against
@@ -3178,7 +3168,7 @@ async function main() {
         console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
-      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port, generationModel?.port, crashHang?.port)
+      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port, generationModel?.port, crashHang?.port, streamingModel?.port)
       vscodeRun = launchVSCode({
         executable,
         runnerOut,
@@ -3221,6 +3211,7 @@ async function main() {
           lifecycleModel,
           generationModel,
           crashHang,
+          streamingModel,
         )
         // Real-session post-boundary canonical archive stability: same fresh
         // canonical data root must show no archive mutation after the panel
@@ -3251,7 +3242,7 @@ async function main() {
   }
 
   // Release the run-owned scripted/hang listeners before process settle + scratch deletion.
-  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel, crashHang })
+  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel, crashHang, streamingModel })
 
   // VS Code exits only after the runner sees the `done` marker (or times out).
   // Await it before touching the scratch dir so the unique user-data/extensions
@@ -3327,8 +3318,9 @@ async function closeHandles(opts: {
   wtModel: { close: () => Promise<void> } | undefined
   generationModel: { close: () => Promise<void> } | undefined
   crashHang?: { close: () => Promise<void> } | undefined
+  streamingModel?: { close: () => Promise<void> } | undefined
 }) {
-  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel, crashHang } = opts
+  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel, generationModel, crashHang, streamingModel } = opts
   if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
   if (completed)
     await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
@@ -3343,6 +3335,7 @@ async function closeHandles(opts: {
   if (generationModel)
     await generationModel.close().catch((err) => console.error("[probe] generation scripted model close failed:", err))
   if (crashHang) await crashHang.close().catch((err) => console.error("[probe] crash hang close failed:", err))
+  if (streamingModel) await streamingModel.close().catch((err) => console.error("[probe] streaming model close failed:", err))
 }
 
 async function verifyCleanup(userData: string, cdpPort: number, scratch: string) {

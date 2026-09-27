@@ -146,6 +146,7 @@ import { servicePromptPrivateFirstBoundary } from "./prompt-private-first-bounda
 import { serviceCommandPrivateFirstBoundary } from "./command-private-first-boundary"
 import { serviceOperationProjectionBoundary } from "./operation-projection-boundary"
 import { serviceOperationCrashBoundary } from "./operation-crash-boundary"
+import { serviceStreamingObservationBoundary } from "./streaming-observation-boundary"
 
 const EXTENSION_ID = "kilocode.kilo-code"
 const CMD_OPEN = "kilo-code.new.agentManagerOpen"
@@ -815,6 +816,7 @@ interface ScenarioFlags {
   runCommandPrivateFirst: boolean
   runOperationProjection: boolean
   runOperationCrash: boolean
+  runStreamingObservation: boolean
 }
 
 /**
@@ -947,6 +949,14 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // crash + no provider replay + recentOperations/DOM Cancelled once, panel
     // reopen/read-ack cursor convergence.
     runOperationCrash: scenario === "operation-crash",
+    // streaming-observation is focused-only: controllable slow-streaming
+    // generation with in-flight tail capture, one in-flight boundary
+    // (switch A→B→A), then release-to-complete and one post-completion
+    // transport boundary (FD reconnect private→SSE with the same worker),
+    // converging onto the same backend authoritative read with no
+    // loss/dup/resubmit. Panel close/reopen stays wired (handleReopen) for
+    // post-fix re-probe; in-flight FD/panel defects documented in harness.
+    runStreamingObservation: scenario === "streaming-observation",
   }
 }
 
@@ -987,11 +997,12 @@ export async function run(): Promise<void> {
     "command-private-first",
     "operation-projection",
     "operation-crash",
+    "streaming-observation",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | real-generation | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first | operation-projection | operation-crash (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | real-generation | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation | observation-producer | observation-producer-update | observation-producer-delete | observation-producer-fork | observation-producer-revert | observation-producer-sandbox | prompt-private-first | command-private-first | operation-projection | operation-crash | streaming-observation (default: all)",
     )
   }
   const {
@@ -1020,6 +1031,7 @@ export async function run(): Promise<void> {
     runCommandPrivateFirst,
     runOperationProjection,
     runOperationCrash,
+    runStreamingObservation,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -1337,6 +1349,11 @@ export async function run(): Promise<void> {
   // --- operation-crash bounded live E2E proof (focused only) ---
   if (runOperationCrash) {
     await serviceOperationCrashBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- streaming-observation narrow proof (focused only) ---
+  if (runStreamingObservation) {
+    await serviceStreamingObservationBoundary(vscode, scratch, fixtureId)
   }
 
   if (runRealLifecycle) {

@@ -222,25 +222,39 @@ describe("Agent Manager Provider Messages", () => {
   // Session close is now handled by the webview sending abort directly.
   // The TSX close-tab handler and panelSessions tracking remain intact.
 
-  it("stops open sessions and clears remote registrations when the panel closes", () => {
+  it("re-observes only when the panel closes (never cancels accepted generations)", () => {
     const body = getMethodBody("attachPanel")
-    const abort = body.indexOf("ctx.sessions.abortSessions(ids)")
-    const dispose = body.indexOf("ctx.sessions.dispose()")
-    expect(abort).toBeGreaterThanOrEqual(0)
-    expect(dispose).toBeGreaterThan(abort)
-    expect(body).toContain("const ids = [...this.panelSessions]")
-    expect(body).toContain("if (this.activeSessionId) ids.push(this.activeSessionId)")
+    // Panel close must not abort: accepted generations survive close/reopen
+    // and rehydrate from durable managedSessions/tabOrder/active on attach.
+    // Explicit user Stop/Delete paths still abort via KiloProvider.
+    expect(body).not.toContain("ctx.sessions.abortSessions")
+    expect(body).not.toContain("const ids = [...this.panelSessions]")
+    expect(body).not.toContain("if (this.activeSessionId) ids.push(this.activeSessionId)")
+    expect(body).toContain("this.panelSessions.clear()")
+    expect(body).toContain("ctx.sessions.dispose()")
     // Presence must be cleared via visiblePresence.clear() — a direct
     // registerVisible("agent-manager", []) would leave a stale displayed id
     // that re-registers on the next flush after the panel reopens.
     expect(body).toContain("this.visiblePresence.clear()")
     expect(body).not.toContain('this.connectionService.registerVisible("agent-manager"')
     expect(body).not.toContain('this.connectionService.registerAttached("agent-manager"')
-    expect(body).toContain("this.activeSessionId = undefined")
+    // Durable active survives dispose for reopen recovery: attachPanel must
+    // not assign `this.activeSessionId = undefined` outside comments.
+    const code = body
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("//"))
+      .join("\n")
+    expect(code).not.toContain("this.activeSessionId = undefined")
     const messages = getMethodBody("onSessionMessage")
     expect(messages).toContain("if (m.draftID) this.panelSessions.add(m.draftID)")
     expect(messages).toContain("this.panel?.sessions.acknowledgeDraft(m.draftID, m.sessionId)")
     expect(messages).toContain("for (const id of m.sessionIDs) this.panelSessions.add(id)")
+    // Explicit user Stop/Delete abort paths stay intact on KiloProvider.
+    const kilo = fs.readFileSync(KILO_PROVIDER_FILE, "utf-8")
+    expect(kilo).toContain("public async abortSessions(")
+    expect(kilo).toContain("private async handleAbort(")
+    expect(kilo).toContain("private async handleDeleteSession(")
+    expect(kilo).toContain("dispose(): void")
   })
 
   it("does not treat extension shutdown as a user panel close", () => {

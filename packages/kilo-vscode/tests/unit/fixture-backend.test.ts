@@ -392,6 +392,60 @@ describe("fixture-backend summaries", () => {
     expect(summary.model).toBeUndefined()
   })
 
+  it("D1: surfaces assistant finish verbatim with error null when clean", () => {
+    const row = messageRow({
+      info: {
+        id: "msg-a",
+        sessionID: "sess-1",
+        role: "assistant",
+        parentID: "msg-1",
+        time: { created: 1600, completed: 1700 },
+        path: { cwd: "/ws", root: "/ws" },
+        providerID: "e2e-local",
+        modelID: "e2e-model",
+        mode: "primary",
+        agent: "e2e-agent",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        finish: "stop",
+      } as Message,
+      parts: [{ id: "p1", sessionID: "sess-1", messageID: "msg-a", type: "text", text: "done" }] as Part[],
+    })
+    expect(summarizeMessage(row)).toMatchObject({ id: "msg-a", role: "assistant", finish: "stop", error: null })
+  })
+
+  it("D1: redacts assistant error to name only (never detail/stack)", () => {
+    const row = messageRow({
+      info: {
+        id: "msg-e",
+        sessionID: "sess-1",
+        role: "assistant",
+        parentID: "msg-1",
+        time: { created: 1600, completed: 1700 },
+        path: { cwd: "/ws", root: "/ws" },
+        providerID: "e2e-local",
+        modelID: "e2e-model",
+        mode: "primary",
+        agent: "e2e-agent",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        finish: "error",
+        error: { name: "UnknownError", data: { message: "boom", ref: "secret-ref" } },
+      } as unknown as Message,
+      parts: [{ id: "p1", sessionID: "sess-1", messageID: "msg-e", type: "text", text: "oops" }] as Part[],
+    })
+    const summary = summarizeMessage(row)
+    expect(summary.finish).toBe("error")
+    expect(summary.error).toBe("UnknownError")
+    expect(JSON.stringify(summary)).not.toContain("secret-ref")
+    expect(JSON.stringify(summary)).not.toContain("boom")
+  })
+
+  it("D1: user messages carry neither finish nor error", () => {
+    expect(summarizeMessage(messageRow({}))).not.toHaveProperty("finish")
+    expect(summarizeMessage(messageRow({}))).not.toHaveProperty("error")
+  })
+
   it("reduces SessionStatus objects to their type strings", () => {
     const statuses: Record<string, SessionStatus> = {
       "sess-1": { type: "busy" },

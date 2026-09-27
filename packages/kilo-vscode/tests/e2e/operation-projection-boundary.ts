@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { isIsolatedDataRoot, validateGateEvidence } from "../../script/e2e-canonical"
+import { isValidPanelRecovery as isValidRecoveryProjection } from "../../src/agent-manager/operation-recovery"
 
 const CMD_PROD_STATUS = "kilo-code.new.e2eFixture.privateObservationStatus" as const
 const CMD_CANONICAL_STATE = "kilo-code.new.e2eFixture.canonicalState" as const
@@ -22,25 +23,16 @@ const CMD_CONTENT_READY = "kilo-code.new.e2eFixture.agentManagerContentReady" as
 const OPERATION_PROJECTION_BUDGET = 900_000
 
 const ALLOWED_OUTCOMES = new Set(["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"])
-const PANEL_SAFE_KEYS = new Set(["opId", "outcome", "code", "message", "time", "cancel"])
 const PANEL_SAFE_BASE_KEYS = new Set(["opId", "outcome", "code", "message", "time", "cancel"])
-function isValidPanelRecovery(op: Record<string, unknown>): boolean {
-  const rec = (op as Record<string, unknown>).recovery
+function isValidPanelRecovery(op: Record<string, unknown>, sid: string): boolean {
+  const rec = op.recovery
   if (rec === undefined) return true
-  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return false
-  const rv = rec as Record<string, unknown>
-  if (Object.keys(rv).length !== 3) return false
-  if (rv.budget !== 0) return false
-  if (rv.nextAt !== null) return false
-  if (rv.provenance !== "terminal") return false
-  const outcome = op.outcome as string
-  if (outcome !== "failed" && outcome !== "abandoned") return false
-  return true
+  return isValidRecoveryProjection(rec, sid, op.outcome as string)
 }
-function isPanelSafeWithRecovery(op: Record<string, unknown>): boolean {
+function isPanelSafeWithRecovery(op: Record<string, unknown>, sid: string): boolean {
   for (const k of Object.keys(op)) {
     if (k === "recovery") {
-      if (!isValidPanelRecovery(op)) return false
+      if (!isValidPanelRecovery(op, sid)) return false
       continue
     }
     if (!PANEL_SAFE_BASE_KEYS.has(k)) return false
@@ -50,7 +42,7 @@ function isPanelSafeWithRecovery(op: Record<string, unknown>): boolean {
     const outcome = op.outcome as string
     if (outcome !== "failed" && outcome !== "abandoned") return false
   }
-  return isValidPanelRecovery(op)
+  return isValidPanelRecovery(op, sid)
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -349,7 +341,7 @@ async function observeOperations(
           const time = op.time as unknown
           const timeOk = typeof time === "number" && Number.isFinite(time) && time > 0
           found = opIdOk
-          safe = isPanelSafeWithRecovery(op)
+          safe = isPanelSafeWithRecovery(op, sessionId)
           finite = timeOk
           outcomeLegal = outcomeOk
           if (opIdOk && outcomeOk && timeOk && safe) break
@@ -825,7 +817,7 @@ export async function serviceOperationProjectionBoundary(
         amOp = candidate as Record<string, unknown>
         amFound = true
         amOpIdMatch = (candidate as Record<string, unknown>).opId === `prompt:${messageId}`
-        amSafe = isPanelSafeWithRecovery(candidate as Record<string, unknown>)
+        amSafe = isPanelSafeWithRecovery(candidate as Record<string, unknown>, sessionId)
         diag.amRecentOp = candidate as Record<string, unknown>
         if (amFound && amOpIdMatch && amSafe) break
       }

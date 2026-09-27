@@ -334,7 +334,7 @@ describe("observation/operations DB-backed adapter (real DB, no lease)", () => {
     }
   })
 
-  it("recovery projection for failed/abandoned terminal is panel-safe, invalid shapes throw", async () => {
+  it("legacy recovery_* columns are never projected: unattributable rows omit recovery, no throw", async () => {
     const { file, cleanup } = tmpDb()
     try {
       await withRuntime(file, async (db) => {
@@ -365,8 +365,9 @@ describe("observation/operations DB-backed adapter (real DB, no lease)", () => {
         const out = await deps.operations({ directory: dir, sessionId: "ses_ops_rec", limit: 1 })
         expect(out.status).toBe("found")
         if (out.status !== "found") throw new Error("expected found")
-        expect((out.operations[0] as unknown as Record<string, unknown>).recovery).toEqual({ budget: 0, nextAt: null, provenance: "terminal" })
-        // succeeded with recovery must throw
+        // no receipt => no recovery field (conservative, never a placeholder budget)
+        expect("recovery" in out.operations[0]!).toBe(false)
+        // succeeded with legacy recovery columns also omits without throwing
         await insertSession(db, "ses_ops_rec2", dir)
         await Effect.runPromise(
           db.insert(SessionOperationTable).values({
@@ -389,24 +390,10 @@ describe("observation/operations DB-backed adapter (real DB, no lease)", () => {
           } as never).run().pipe(Effect.orDie),
         )
         const deps2 = createSessionOperationsDeps(db)
-        const ctrl = new ObservationController({
-          getSnapshot: async () => ({ cursor: 0, snapshot: null }),
-          readAfter: async () => ({ type: "deltas", cursor: 0, entries: [] }),
-          ack: async () => {},
-          operations: deps2.operations,
-        })
-        const aToB = new PassThrough()
-        const bToA = new PassThrough()
-        const server = new JsonRpcPeer({ reader: aToB, writer: bToA, onRequest: (m, p) => ctrl.handle(m, p) })
-        const client = new JsonRpcPeer({ reader: bToA, writer: aToB })
-        try {
-          await client.request(OBSERVATION_METHODS.OPERATIONS, { v: "1.0", directory: dir, sessionId: "ses_ops_rec2", limit: 1 })
-          expect(false).toBe(true)
-        } catch (e) {
-          expect((e as { code?: number }).code).toBe(ErrorCode.InternalError)
-        }
-        client.dispose()
-        server.dispose()
+        const out2 = await deps2.operations({ directory: dir, sessionId: "ses_ops_rec2", limit: 1 })
+        expect(out2.status).toBe("found")
+        if (out2.status !== "found") throw new Error("expected found")
+        expect("recovery" in out2.operations[0]!).toBe(false)
       })
     } finally {
       cleanup()

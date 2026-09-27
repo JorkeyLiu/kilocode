@@ -117,12 +117,31 @@ export const FIELD_TIERS: Readonly<Record<keyof FailureRecord, Tier>> = {
   stack: "diagnostic",
 }
 
-const quotedScrub =
-  /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/gi
-const bearerScrub =
-  /(authorization)\s*[:=]\s*Bearer\s+(?:\[redacted\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;"')\]}]+)/gi
-const valueScrub =
-  /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*(?:\[redacted\]|[^\s,;"')\]}]+)/gi
+const sensitiveKey = String.raw`api[_-]?key|apikey|token|authorization|password|secret|credential`
+const bareOrQuotedKey = String.raw`(?:"(?:${sensitiveKey})"|'(?:${sensitiveKey})'|(?:${sensitiveKey}))`
+const quotedScrub = new RegExp(
+  String.raw`(^|[^A-Za-z0-9_-])(${bareOrQuotedKey})(?![A-Za-z0-9_-])\s*[:=]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`,
+  "gi",
+)
+const bearerScrub = new RegExp(
+  String.raw`(^|[^A-Za-z0-9_-])((?:"authorization"|'authorization'|authorization))(?![A-Za-z0-9_-])\s*[:=]\s*Bearer\s+(?:\[redacted\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;"')\]}]+)`,
+  "gi",
+)
+const valueScrub = new RegExp(
+  String.raw`(^|[^A-Za-z0-9_-])(${bareOrQuotedKey})(?![A-Za-z0-9_-])\s*[:=]\s*(?:\[redacted\]|[^\s,;"')\]}]+)`,
+  "gi",
+)
+// JSON-stringified diagnostics carry backslash-escaped quotes
+// (e.g. detail `{\"api_key\": \"secret\"}`); the plain quoted scrub above
+// cannot see the key, so scrub the escaped form with the same redaction.
+const escapedQuotedScrub = new RegExp(
+  String.raw`(^|[^A-Za-z0-9_-])((?:\\"(?:${sensitiveKey})\\"|\\'(?:${sensitiveKey})\\'))(?![A-Za-z0-9_-])\s*[:=]\s*(?:\\"(?:[^"\\]|\\.)*\\"|\\'(?:[^'\\]|\\.)*\\')`,
+  "gi",
+)
+const escapedValueScrub = new RegExp(
+  String.raw`(^|[^A-Za-z0-9_-])((?:\\"(?:${sensitiveKey})\\"|\\'(?:${sensitiveKey})\\'))(?![A-Za-z0-9_-])\s*[:=]\s*(?:\[redacted\]|[^\s,;"')\]}]+)`,
+  "gi",
+)
 
 function cap(s: string, max: number): string {
   if (s.length > max) return s.slice(0, max) + "…"
@@ -130,9 +149,11 @@ function cap(s: string, max: number): string {
 }
 
 function scrubString(s: string): string {
-  s = s.replace(quotedScrub, (_m: string, k: string) => `${k}=[redacted]`)
-  s = s.replace(bearerScrub, (_m: string, k: string) => `${k}=[redacted]`)
-  return s.replace(valueScrub, (_m: string, k: string) => `${k}=[redacted]`)
+  s = s.replace(quotedScrub, (_m: string, prefix: string, k: string) => `${prefix}${k}=[redacted]`)
+  s = s.replace(bearerScrub, (_m: string, prefix: string, k: string) => `${prefix}${k}=[redacted]`)
+  s = s.replace(valueScrub, (_m: string, prefix: string, k: string) => `${prefix}${k}=[redacted]`)
+  s = s.replace(escapedQuotedScrub, (_m: string, prefix: string, k: string) => `${prefix}${k}=[redacted]`)
+  return s.replace(escapedValueScrub, (_m: string, prefix: string, k: string) => `${prefix}${k}=[redacted]`)
 }
 
 export function normalizeRecord(record: FailureRecord): FailureRecord {
@@ -1048,6 +1069,166 @@ function rowToReceipt(row: typeof SessionOperationReceiptTable.$inferSelect): Op
     closeReason: reason,
     replay: RECEIPT_REPLAY_FORBIDDEN,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Versioned redacted recovery projection — read-only, receipt + live owner.
+//
+// A terminal `prompt`/`provider` operation carries a durable receipt snapshot
+// (written atomically with the terminal transition) plus a live generation
+// owner row. This projection combines both without inventing facts:
+//
+// - Attribution comes from the receipt only: `gen_unknown != null`, missing
+//   receipt (legacy rows, direct inserts, pre-receipt databases), or a
+//   session/gen mismatch yields `undefined` (no recovery field), never a
+//   placeholder budget.
+// - Budget/termination/provenance come from the CURRENT owner row (live
+//   truth), not the receipt snapshot: crash ordering writes the receipt while
+//   the owner is still open, then the generation sweep closes the owner and
+//   clears the pending intent. Projecting the snapshot's stale `nextAt`
+//   would present a superseded schedule as current.
+// - `nextAt`/`retryOccurrence` are informational occurrence times only and
+//   are never copied from the terminal `time`; `replay` is always `false`
+//   so the intent can never be read as a replayable instruction.
+// - No secrets cross: `genID`, `detail`, `stack`, request identities, and
+//   raw diagnostics are never projected; only counts, termination, safe
+//   occurrence times, and closed-vocabulary provenance remain.
+// ---------------------------------------------------------------------------
+export const RECOVERY_PROJECTION_VERSION = 1 as const
+
+export interface RecoveryProjection {
+  v: typeof RECOVERY_PROJECTION_VERSION
+  owner: "generation"
+  scope: string
+  used: number
+  limit: number
+  terminated: boolean
+  nextAt: number | null
+  retryOccurrence: number | null
+  layer: ReceiptOwnerLayer | null
+  closeReason: ReceiptCloseReason | null
+  replay: false
+}
+
+function isSafeNonNegativeInt(v: unknown): v is number {
+  return typeof v === "number" && Number.isSafeInteger(v) && (v as number) >= 0
+}
+
+export function validateRecoveryProjection(v: unknown): RecoveryProjection {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new TypeError("recovery must be object")
+  const r = v as Record<string, unknown>
+  const allowed = new Set(["v", "owner", "scope", "used", "limit", "terminated", "nextAt", "retryOccurrence", "layer", "closeReason", "replay"])
+  for (const k of Object.keys(r)) if (!allowed.has(k)) throw new TypeError(`recovery has extra key ${k}`)
+  if (r.v !== RECOVERY_PROJECTION_VERSION) throw new TypeError("recovery version must be 1")
+  if (r.owner !== "generation") throw new TypeError(`recovery owner must be generation`)
+  if (typeof r.scope !== "string" || r.scope.length === 0 || r.scope.includes("\0")) throw new TypeError("recovery scope must be non-empty string")
+  if (!isSafeNonNegativeInt(r.used)) throw new TypeError("recovery used must be safe integer >=0")
+  if (!isSafeNonNegativeInt(r.limit)) throw new TypeError("recovery limit must be safe integer >=0")
+  if ((r.used as number) > (r.limit as number)) throw new TypeError("recovery used must not exceed limit")
+  if (typeof r.terminated !== "boolean") throw new TypeError("recovery terminated must be boolean")
+  if (r.nextAt !== null && !isSafeNonNegativeInt(r.nextAt)) throw new TypeError("recovery nextAt must be safe integer or null")
+  if (r.retryOccurrence !== null && !isSafeNonNegativeInt(r.retryOccurrence)) throw new TypeError("recovery retryOccurrence must be safe integer or null")
+  if (r.layer !== null && (typeof r.layer !== "string" || !receiptLayerSet.has(r.layer as string))) throw new TypeError("recovery layer invalid")
+  if (r.closeReason !== null && (typeof r.closeReason !== "string" || !receiptCloseSet.has(r.closeReason as string))) throw new TypeError("recovery closeReason invalid")
+  if (r.replay !== false) throw new TypeError("recovery replay must be false")
+  const closed = r.closeReason !== null
+  if ((r.terminated as boolean) !== closed) throw new TypeError("recovery terminated must match closeReason presence")
+  if (closed && r.nextAt !== null) throw new TypeError("recovery nextAt must be null once closed")
+  if (!closed && ((r.layer === null) !== (r.nextAt === null))) throw new TypeError("recovery layer and nextAt must be set together while open")
+  if (r.retryOccurrence !== null && r.layer === null) throw new TypeError("recovery retryOccurrence requires layer")
+  if (r.retryOccurrence !== null && !closed && r.nextAt === null) throw new TypeError("recovery retryOccurrence requires nextAt while open")
+  return v as RecoveryProjection
+}
+
+function isMissingTableError(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e ?? "")
+  return msg.includes("no such table") || msg.includes("no such column") || msg.includes("gen_id")
+}
+
+export function getRecoveryProjection(
+  db: Database.Interface["db"],
+  opId: string,
+  sessionID: SessionSchema.ID,
+): Effect.Effect<RecoveryProjection | undefined> {
+  return Effect.gen(function* () {
+    if (typeof opId !== "string" || opId.length === 0) yield* Effect.die(new TypeError("opId must be non-empty string"))
+    const sid = sessionID as unknown as string
+    if (typeof sid !== "string" || sid.length === 0) yield* Effect.die(new TypeError("session_id must be non-empty"))
+    let kind: OpKind
+    try {
+      kind = parseOpId(opId).kind
+    } catch {
+      return undefined
+    }
+    if (kind !== "prompt" && kind !== "provider") return undefined
+    const opRow = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!opRow) return undefined
+    let rec: FailureRecord
+    try {
+      rec = rowToValidatedRecord(opRow as typeof SessionOperationTable.$inferSelect)
+    } catch {
+      return undefined
+    }
+    if ((opRow.session_id as unknown as string) !== sid) return undefined
+    if (rec.outcome !== "failed" && rec.outcome !== "abandoned") return undefined
+    let receipt: OperationReceipt | undefined
+    try {
+      receipt = yield* getReceipt(db, opId)
+    } catch (e) {
+      if (isMissingTableError(e)) return undefined
+      return undefined
+    }
+    if (!receipt) return undefined
+    if (receipt.unknown !== null || receipt.genID === null) return undefined
+    if (receipt.sessionID !== sid) return undefined
+    if (receipt.outcome !== rec.outcome || receipt.time !== rec.time) return undefined
+    let ownerRow: typeof SessionGenerationOwnerTable.$inferSelect | undefined
+    try {
+      const found = yield* db
+        .select()
+        .from(SessionGenerationOwnerTable)
+        .where(eq(SessionGenerationOwnerTable.gen_id, receipt.genID!))
+        .get()
+        .pipe(Effect.orDie)
+      ownerRow = (found ?? undefined) as typeof SessionGenerationOwnerTable.$inferSelect | undefined
+    } catch (e) {
+      if (isMissingTableError(e)) return undefined
+      return undefined
+    }
+    if (!ownerRow) return undefined
+    if ((ownerRow.session_id as unknown as string) !== sid) return undefined
+    let snap: ReceiptOwnerSnapshot
+    try {
+      snap = snapshotOwnerRow(receipt.genID!, sid, ownerRow)
+    } catch {
+      return undefined
+    }
+    if (snap.limit !== receipt.limit) return undefined
+    if (snap.used < (receipt.used ?? 0)) return undefined
+    const candidate: RecoveryProjection = {
+      v: RECOVERY_PROJECTION_VERSION,
+      owner: "generation",
+      scope: sid,
+      used: snap.used,
+      limit: snap.limit,
+      terminated: snap.closeReason !== null,
+      nextAt: snap.nextAt,
+      retryOccurrence: snap.retryOccurrence,
+      layer: snap.layer,
+      closeReason: snap.closeReason,
+      replay: false as const,
+    }
+    try {
+      return validateRecoveryProjection(candidate)
+    } catch {
+      return undefined
+    }
+  }).pipe(Effect.orDie) as Effect.Effect<RecoveryProjection | undefined>
 }
 
 export function getReceipt(

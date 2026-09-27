@@ -19,6 +19,7 @@ import { SessionOperationTable } from "@opencode-ai/core/session/sql"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "@/private-worker/observation"
 import { Service as PrivatePeerService } from "@/kilocode/server/private-peer-registry"
+import { classifyGenerationResult } from "@/kilocode/session/generation-result"
 import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirements"
 import {
   acquireDrainControl,
@@ -230,17 +231,6 @@ function buildSucceeded(req: SessionCommandRequest, revision: Revision | undefin
     data: { accepted: true as const, messageId: req.payload.messageId, sessionId: req.context.sessionId },
     ...(revision !== undefined ? { revision } : {}),
   } as SessionCommandSucceeded
-}
-
-function isAbortedSuccess(value: unknown): boolean {
-  const info = (value as { info?: { error?: unknown } })?.info
-  if (!info || !info.error) return false
-  const err = info.error as { name?: unknown }
-  if (typeof err.name === "string" && (err.name === "MessageAbortedError" || err.name === "AbortedError")) return true
-  try {
-    if (SessionV1.AbortedError.isInstance(err as never)) return true
-  } catch {}
-  return false
 }
 
 export interface SessionCommandDispatch {
@@ -517,16 +507,24 @@ export const layer = Layer.effect(
             Effect.catchDefect(() => Effect.succeed([] as string[])),
           )
           const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
-          const message = `Command not found: "${req.payload.command}".${hint}`
+          const raw = `Command not found: "${req.payload.command}".${hint}`
+          const scrubbed = SessionOperation.normalizeRecord({
+            opId: req.opId,
+            opKind: "prompt",
+            outcome: "failed",
+            code: "command.not_found",
+            message: raw,
+            time: Date.now(),
+          })
           yield* events
             .publish(Session.Event.Error, {
               sessionID: sid,
-              error: new NamedError.Unknown({ message }).toObject(),
+              error: new NamedError.Unknown({ message: scrubbed.message }).toObject(),
             } as never)
             .pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
           const curCfg = yield* readCfgOmit(canonDir)
           const revision = curCfg !== undefined ? { session: 0, config: curCfg } : undefined
-          return buildFailed(req, "command.not_found", message, false, false, revision) as SessionCommandResult
+          return buildFailed(req, "command.not_found", scrubbed.message, false, false, revision) as SessionCommandResult
         }
 
         const input = {
@@ -583,8 +581,23 @@ export const layer = Layer.effect(
         const run = Effect.gen(function* () {
           const exit = yield* promptSvc.command(input as unknown as Parameters<typeof promptSvc.command>[0]).pipe(Effect.exit)
           if (exit._tag === "Success") {
-            if (isAbortedSuccess(exit.value)) {
+            const classified = classifyGenerationResult(exit.value)
+            if (classified.outcome === "abandoned") {
               yield* terminalizeCommand(req.opId, sid, "abandoned", "prompt.abandoned", "prompt abandoned")
+            } else if (classified.outcome === "failed") {
+              // Same rule as prompt: assistant non-abort error terminalizes
+              // failed only; processor already emitted session.error.
+              yield* terminalizeCommand(
+                req.opId,
+                sid,
+                "failed",
+                "prompt.failed",
+                classified.message,
+                (classified as { detail?: string }).detail,
+              )
+              yield* Effect.logError("command_async private assistant error").pipe(
+                Effect.annotateLogs({ sessionID: sid as unknown as string }),
+              )
             } else {
               yield* terminalizeCommand(req.opId, sid, "succeeded", "prompt.succeeded", "prompt succeeded")
             }
