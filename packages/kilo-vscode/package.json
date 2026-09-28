@@ -86,12 +86,6 @@
         "icon": "$(history)"
       },
       {
-        "command": "kilo-code.new.profileButtonClicked",
-        "title": "Profile",
-        "category": "Kilo Code",
-        "icon": "$(account)"
-      },
-      {
         "command": "kilo-code.new.settingsButtonClicked",
         "title": "Settings",
         "category": "Kilo Code",

@@ -2,9 +2,9 @@ import { describe, expect, it } from "bun:test"
 import * as fs from "fs"
 import * as path from "path"
 
-/** Direct `client.kilo.profile(` may only remain in the helper fallback. */
+/** No production `client.kilo.profile(` reads remain on the custom-only host. */
 describe("kilo-profile call-site guard", () => {
-  it("all production kilo.profile reads converge on fetchKiloProfilePrivateFirst", () => {
+  it("no production kilo.profile reads or private profile carrier remain", () => {
     const root = path.join(__dirname, "..")
     const hits: string[] = []
     const walk = (dir: string) => {
@@ -24,21 +24,31 @@ describe("kilo-profile call-site guard", () => {
       }
     }
     walk(root)
-    expect(hits).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("kilo-provider/kilo-profile-privatefirst.ts"),
-      ]),
-    )
-    for (const h of hits) {
-      expect(h).toContain("kilo-provider/kilo-profile-privatefirst.ts")
-    }
+    expect(hits).toEqual([])
+    // Dead host-side carrier stays deleted: no private helper, contract, or
+    // connection modules.
+    expect(fs.existsSync(path.join(__dirname, "kilo-profile-privatefirst.ts"))).toBe(false)
+    expect(
+      fs.existsSync(
+        path.join(__dirname, "..", "services", "cli-backend", "serve-private-kilo-profile-contract.ts"),
+      ),
+    ).toBe(false)
+    expect(
+      fs.existsSync(
+        path.join(__dirname, "..", "services", "cli-backend", "serve-private-kilo-profile-connection.ts"),
+      ),
+    ).toBe(false)
   })
 
-  it("the VS Code host keeps its profile readers on the helper with no dormant auth module", () => {
+  it("the VS Code host performs no proactive kilo.profile reads; broadcast + local refresh paths intact", () => {
     const provider = fs.readFileSync(path.join(__dirname, "..", "KiloProvider.ts"), "utf8")
-    expect(provider).toContain("fetchKiloProfilePrivateFirst")
+    expect(provider).not.toContain("fetchKiloProfilePrivateFirst")
+    expect(provider).not.toContain("syncProfileBestEffort")
     expect(provider.match(/\.kilo\.profile\(/g) ?? []).toEqual([])
     expect(fs.existsSync(path.join(__dirname, "handlers", "auth.ts"))).toBe(false)
+    // Scope locks: the onProfileChanged broadcast forward and the local
+    // refreshProfile null answer stay, so profileData routing remains.
+    expect(provider).toContain("onProfileChanged")
     expect(provider).toContain('type: "profileData"')
   })
 })

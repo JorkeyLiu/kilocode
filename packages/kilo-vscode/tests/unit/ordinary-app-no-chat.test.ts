@@ -26,7 +26,7 @@ describe("ordinary App no-chat", () => {
     expect(setStr).not.toContain("newTask")
     expect(setStr).not.toContain("chat")
     expect(setStr).toContain("settings")
-    expect(setStr).toContain("profile")
+    expect(setStr).not.toContain("profile")
   })
 
   it("does not import or render ChatView/SidebarEmptyState/HistoryView", () => {
@@ -50,12 +50,12 @@ describe("ordinary App no-chat", () => {
     expect(s).not.toContain("fallback={<ChatView")
   })
 
-  it("handles only settings/profile navigate, fail-safe pending", () => {
+  it("handles only settings navigate, fail-safe pending", () => {
     const s = src()
     // should check VALID_VIEWS has check before setCurrentView
     expect(s).toContain("VALID_VIEWS.has(message.view)")
-    // Switch should only have profile and settings matches
-    expect(s).toContain('currentView() === "profile"')
+    // Switch should only have the settings match (custom-only: no Profile route)
+    expect(s).not.toContain('currentView() === "profile"')
     expect(s).toContain('currentView() === "settings"')
     expect(s).not.toContain('currentView() === "newTask"')
     expect(s).not.toContain('currentView() === "history"')

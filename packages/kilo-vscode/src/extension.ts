@@ -581,17 +581,14 @@ export function activate(context: vscode.ExtensionContext) {
   settingsEditorProvider.setRemoteService(remoteService)
   context.subscriptions.push(settingsEditorProvider)
 
-  const settingsViews = ["settingsPanel", "profilePanel"] as const
-  for (const suffix of settingsViews) {
-    context.subscriptions.push(
-      vscode.window.registerWebviewPanelSerializer(`kilo-code.new.${suffix}`, {
-        deserializeWebviewPanel(panel: vscode.WebviewPanel) {
-          settingsEditorProvider.deserializePanel(panel)
-          return Promise.resolve()
-        },
-      }),
-    )
-  }
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer("kilo-code.new.settingsPanel", {
+      deserializeWebviewPanel(panel: vscode.WebviewPanel) {
+        settingsEditorProvider.deserializePanel(panel)
+        return Promise.resolve()
+      },
+    }),
+  )
 
   context.subscriptions.push(
     vscode.commands.registerCommand("kilo-code.new.plusButtonClicked", async () => {
@@ -608,9 +605,6 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("kilo-code.new.cyclePreviousAgentMode", async () => {
       await postToAgentManager({ type: "action", action: "cyclePreviousAgentMode" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.profileButtonClicked", () => {
-      settingsEditorProvider.openPanel("profile")
     }),
     vscode.commands.registerCommand("kilo-code.new.settingsButtonClicked", (tab?: string) => {
       settingsEditorProvider.openPanel("settings", tab)

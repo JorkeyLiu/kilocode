@@ -271,7 +271,6 @@ const server = {
   deviceAuth: () => ({ status: "idle" as const }),
   startLogin: () => undefined,
   goToLogin: () => undefined,
-  goToProfile: () => undefined,
   vscodeLanguage: () => "en",
   languageOverride: () => undefined,
   workspaceDirectory: () => "/project",

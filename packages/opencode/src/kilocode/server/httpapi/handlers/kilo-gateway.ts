@@ -32,8 +32,7 @@ export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo",
 
     const profile = Effect.fn("KiloGatewayHttpApi.profile")(function* () {
       // kilocode_change: shared `fetchKiloProfileData` body (same Auth +
-      // gateway fetches as the private `kilo/profile` op). External
-      // behavior/error mapping is unchanged: only explicit local
+      // gateway fetches). External behavior/error mapping is unchanged: only explicit local
       // missing/non-oauth stays `Unauthorized`; auth-store failure, gateway
       // shape failure, and every gateway fetch failure (including the
       // gateway's own invalid-token 401/403) stay `BadRequest`.

@@ -243,8 +243,9 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(ext).not.toContain("kilo-code.new.TabPanel")
   })
 
-  it("still registers the standalone settings panel serializer", () => {
-    expect(ext).toContain("registerWebviewPanelSerializer(`kilo-code.new.${suffix}`")
+  it("still registers the standalone settings panel serializer (settings-only, no Profile)", () => {
+    expect(ext).toContain('registerWebviewPanelSerializer("kilo-code.new.settingsPanel"')
+    expect(ext).not.toContain("profilePanel")
   })
 
   it("no longer registers a Diff Viewer serializer (P3.2 custom surface removal)", () => {

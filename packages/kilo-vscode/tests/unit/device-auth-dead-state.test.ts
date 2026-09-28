@@ -76,33 +76,10 @@ describe("device-auth dead state removal", () => {
     host.dispose()
   })
 
-  it("ProfileCustomOnly story bundles", async () => {
-    const out = path.join(WEBVIEW, `.tmp-profile-custom-only-${randomUUID()}.js`)
-    try {
-      const built = await esbuild.build({
-        entryPoints: [path.join(WEBVIEW, "src/stories/profile.stories.tsx")],
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        outfile: out,
-        plugins: [
-          solidPlugin(),
-          {
-            name: "worker-url-external",
-            setup(b) {
-              b.onResolve({ filter: /worker/ }, (a) => ({ path: a.path, external: true }))
-            },
-          },
-        ],
-        external: ["happy-dom"],
-        logLevel: "silent",
-      })
-      expect(built.errors.length).toBe(0)
-      const bundled = fs.readFileSync(out, "utf8")
-      expect(bundled).toContain("ProfileCustomOnly")
-    } finally {
-      fs.rmSync(out, { force: true })
-    }
+  it("profile account UI and its dedicated story stay deleted", async () => {
+    expect(fs.existsSync(path.join(WEBVIEW, "src/components/profile/ProfileView.tsx"))).toBe(false)
+    expect(fs.existsSync(path.join(WEBVIEW, "src/components/profile/DeviceAuthCard.tsx"))).toBe(false)
+    expect(fs.existsSync(path.join(WEBVIEW, "src/stories/profile.stories.tsx"))).toBe(false)
   }, 30_000)
 })
 

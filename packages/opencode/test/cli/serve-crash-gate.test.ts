@@ -334,6 +334,116 @@ describe("serve crash gate pre-bind", () => {
     }
   })
 
+  test("crash gate leaves durable receipt linked to crash-closed owner and second gate is no-op", async () => {
+    const { dir, file } = await freshFile()
+    try {
+      // Accepted prompt/command share canonical prompt:<messageId>; one prompt
+      // row plus its generation owner covers both. Charge one pending intent
+      // so crash must clear retry_next_at while retaining provenance.
+      const ids = await withStack(file, ({ db, svc }) =>
+        Effect.gen(function* () {
+          yield* setupProject(db)
+          const s = yield* svc.create({ location: { directory: AbsolutePath.make("/project") } }).pipe(Effect.orDie)
+          const base = "msg_gate_receipt_link"
+          const op = SessionOperation.promptId(base)
+          const r = yield* SessionOperation.ensurePromptInFlight(db, s.id, op)
+          expect(r.fresh).toBe(true)
+          const gen = `gen_gate_receipt_${Date.now()}`
+          const begun = yield* SessionGeneration.begin(db, s.id as never, gen, base, 2).pipe(Effect.orDie)
+          expect(begun).toEqual({ created: true, added: op })
+          const occ = Date.now()
+          const charged = yield* SessionGeneration.charge(db, s.id as never, gen, {
+            layer: "provider",
+            occurrenceTime: occ,
+            nextAt: occ + 1000,
+          }).pipe(Effect.orDie)
+          expect(charged.charged).toBe(true)
+          const owner = yield* SessionGeneration.getOwner(db, gen).pipe(Effect.orDie)
+          expect(owner?.reason).toBeNull()
+          expect(owner?.nextAt).toBe(occ + 1000)
+          expect(yield* SessionOperation.getReceipt(db, op)).toBeUndefined()
+          const feed = (yield* feedRows(db)) as { seq: number; kind: string }[]
+          return { sid: s.id as string, gen, op, occ, feed: feed.length }
+        }),
+      )
+      const out = await withStack(file, ({ db }) =>
+        Effect.gen(function* () {
+          const before = ((yield* feedRows(db)) as { seq: number; kind: string }[]).length
+          expect(before).toBe(ids.feed)
+          // Actual production ordering: operation convergence then generation
+          // convergence then bind.
+          const res = yield* gateThenListen(db, async () => ({ fake: true as const })).pipe(Effect.orDie)
+          expect(res.sweep.converged).toEqual([ids.op])
+          expect(res.sweep.raced).toEqual([])
+          expect(res.generation.converged).toEqual([ids.gen])
+          expect(res.generation.raced).toEqual([])
+          // Durable operation terminal.
+          const rec = yield* SessionOperation.get(db, ids.op)
+          expect(rec?.outcome).toBe("abandoned")
+          expect(rec?.code).toBe(SessionOperation.CRASH_CONVERGE_CODE)
+          // Durable receipt linked to the same owner; snapshot was taken while
+          // the owner was still open so it keeps the pending intent.
+          const receipt = yield* SessionOperation.getReceipt(db, ids.op)
+          expect(receipt?.opId).toBe(ids.op)
+          expect(receipt?.sessionID).toBe(ids.sid)
+          expect(receipt?.outcome).toBe("abandoned")
+          expect(receipt?.time).toBe(rec?.time)
+          expect(receipt?.genID).toBe(ids.gen)
+          expect(receipt?.unknown).toBeNull()
+          expect(receipt?.used).toBe(1)
+          expect(receipt?.limit).toBe(2)
+          expect(receipt?.layer).toBe("provider")
+          expect(receipt?.retryOccurrence).toBe(ids.occ)
+          expect(receipt?.nextAt).toBe(ids.occ + 1000)
+          expect(receipt?.closeReason).toBeNull()
+          expect(receipt?.replay).toBe("forbidden")
+          // Same owner closed as crash with pending intent cleared.
+          const owner = yield* SessionGeneration.getOwner(db, ids.gen).pipe(Effect.orDie)
+          expect(owner?.reason).toBe("crash")
+          expect(Number.isFinite(owner?.closedAt)).toBe(true)
+          expect(owner?.nextAt).toBeNull()
+          expect(owner?.used).toBe(1)
+          expect(owner?.limit).toBe(2)
+          expect(owner?.layer).toBe("provider")
+          expect(owner?.retryOccurrence).toBe(ids.occ)
+          expect(yield* SessionGeneration.getRetryIntent(db, ids.gen)).toBeUndefined()
+          // Live projection reflects closed owner, not the stale receipt intent.
+          const proj = yield* SessionOperation.getRecoveryProjection(db, ids.op, ids.sid as never)
+          expect(proj?.terminated).toBe(true)
+          expect(proj?.closeReason).toBe("crash")
+          expect(proj?.nextAt).toBeNull()
+          expect(proj?.replay).toBe(false)
+          // Operation sweep adds changed+generation; generation close is feedless.
+          const after = (yield* feedRows(db)) as { seq: number; kind: string }[]
+          expect(after.length - before).toBe(2)
+          expect(after.slice(before).map((r) => r.kind).sort()).toEqual(["changed", "generation"])
+          const receiptSnap = JSON.stringify(receipt)
+          const closedAt = owner?.closedAt
+          // Second full gate pass must not duplicate/overwrite either terminal.
+          const rerun = yield* gateThenListen(db, async () => ({ fake: true as const })).pipe(Effect.orDie)
+          expect(rerun.sweep).toEqual({ converged: [], raced: [], skipped: [] })
+          expect(rerun.generation).toEqual({ converged: [], raced: [], skipped: [] })
+          const again = (yield* feedRows(db)) as { seq: number; kind: string }[]
+          expect(again.length).toBe(after.length)
+          expect(JSON.stringify(yield* SessionOperation.getReceipt(db, ids.op))).toBe(receiptSnap)
+          const owner2 = yield* SessionGeneration.getOwner(db, ids.gen).pipe(Effect.orDie)
+          expect(owner2?.reason).toBe("crash")
+          expect(owner2?.closedAt).toBe(closedAt)
+          expect(owner2?.nextAt).toBeNull()
+          const replay = yield* SessionOperation.ensurePromptInFlight(db, ids.sid as never, ids.op)
+          expect(replay.fresh).toBe(false)
+          if (!replay.fresh) expect(replay.record.outcome).toBe("abandoned")
+          const closed = yield* SessionGeneration.close(db, ids.sid as never, ids.gen, "error").pipe(Effect.orDie)
+          expect(closed).toEqual({ applied: false })
+          return true
+        }),
+      )
+      expect(out).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("generation poison blocks listen without fabricating terminal", async () => {
     const { dir, file } = await freshFile()
     try {

@@ -19,7 +19,6 @@ interface ServerContextValue {
   deviceAuth: Accessor<DeviceAuthState>
   startLogin: () => void
   goToLogin: () => void
-  goToProfile: () => void
   vscodeLanguage: Accessor<string | undefined>
   languageOverride: Accessor<string | undefined>
   workspaceDirectory: Accessor<string>
@@ -138,15 +137,12 @@ export const ServerProvider: ParentComponent = (props) => {
   }
 
   /**
-   * Custom-only: sign-in entry points are disabled. Navigation is retained
-   * so the Profile view can show its temporarily-unavailable status.
+   * Custom-only: sign-in entry points are disabled and the Profile panel is
+   * removed. goToLogin is retained as a no-op only so obsolete chat callers
+   * keep typechecking; it must not trigger profile navigation or login.
    */
   const goToLogin = () => {
-    window.postMessage({ type: "navigate", view: "profile" }, "*")
-  }
-
-  const goToProfile = () => {
-    vscode.postMessage({ type: "openProfilePanel" })
+    return
   }
 
   const value: ServerContextValue = {
@@ -160,7 +156,6 @@ export const ServerProvider: ParentComponent = (props) => {
     deviceAuth,
     startLogin,
     goToLogin,
-    goToProfile,
     vscodeLanguage,
     languageOverride,
     workspaceDirectory,

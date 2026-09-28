@@ -5,22 +5,26 @@ import type { KiloConnectionService } from "./services/cli-backend"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 import type { CanonicalConfigService } from "./config/service"
 
-type PanelView = "settings" | "profile"
+type PanelView = "settings"
 
 const PANEL_TITLES: Record<PanelView, string> = {
   settings: "Kilo Settings",
-  profile: "Kilo Profile",
 }
 
 /**
- * Opens Settings or Profile as an editor-area WebviewPanel,
+ * Opens Settings as an editor-area WebviewPanel,
  * leaving the chat panels undisturbed.
  *
- * Each view type is a singleton panel — calling openPanel() again
+ * The settings view is a singleton panel — calling openPanel() again
  * reveals the existing panel instead of creating a duplicate.
  *
+ * Custom-only product boundary: there is no Profile panel. Any persisted
+ * or deserialized panel whose view type is not settings (for example a
+ * legacy kilo-code.new.profilePanel) fails closed via deserializePanel
+ * disposal and is never rewired.
+ *
  * Uses a full KiloProvider under the hood so each panel has
- * the same backend connectivity (config, providers, profile, auth)
+ * the same backend connectivity (config, providers)
  * as the chat panels.
  */
 export class SettingsEditorProvider implements vscode.Disposable {
@@ -48,7 +52,7 @@ export class SettingsEditorProvider implements vscode.Disposable {
     return resolvePanelProjectDirectory(active, vscode.workspace.workspaceFolders)
   }
 
-  /** Extract the PanelView from a viewType string like "kilo-code.new.settingsPanel". */
+  /** Extract the PanelView from a viewType string like "kilo-code.new.settingsPanel". Unknown types (including legacy profilePanel) return undefined and fail closed. */
   static viewFromType(type: string): PanelView | undefined {
     const match = type.match(/^kilo-code\.new\.(\w+)Panel$/)
     if (!match) return undefined
@@ -87,7 +91,7 @@ export class SettingsEditorProvider implements vscode.Disposable {
     this.wirePanel(panel, view, projectDirectory)
   }
 
-  /** Re-wire a deserialized panel after extension restart. */
+  /** Re-wire a deserialized settings panel after extension restart. Unknown view types fail closed via disposal. */
   deserializePanel(panel: vscode.WebviewPanel): void {
     const view = SettingsEditorProvider.viewFromType(panel.viewType)
     if (!view) {

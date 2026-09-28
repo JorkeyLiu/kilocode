@@ -125,13 +125,6 @@ import {
   reloadInstancePrivate,
 } from "@/kilocode/instance-reload-private"
 import {
-  INTERNAL_MESSAGE as KILO_PROFILE_INTERNAL_MESSAGE,
-  OP as KILO_PROFILE_OP,
-  VERSION as KILO_PROFILE_VERSION,
-  fallbackKiloProfileIds,
-  kiloProfilePrivate,
-} from "@/kilocode/kilo-profile"
-import {
   INTERNAL_MESSAGE as KILO_AUTH_STATUS_INTERNAL_MESSAGE,
   OP as KILO_AUTH_STATUS_OP,
   VERSION as KILO_AUTH_STATUS_VERSION,
@@ -5898,54 +5891,6 @@ export function createFdCarrier(
                   },
                   accepted: false as const,
                   failure: { code: "internal", message: SESSION_VIEWED_INTERNAL_MESSAGE, retryable: true },
-                }),
-              ),
-            )
-            return out
-          }),
-        )
-        return result
-      }
-      if (method === KILO_PROFILE_OP || method === "kilo/profile") {
-        // Read-only `kilo/profile` observation: the same `Auth.Service` +
-        // gateway fetches as `GET /kilo/profile` via the shared
-        // `kiloProfilePrivate` (no `acquireDrainControl`, no `InstanceRef`
-        // lane, no fence, no cache, no timeout, no `AbortSignal`).
-        // `directory`/`workspace` are carrier routing identity only and never
-        // reach the gateway. Read-only, safely repeatable: an ambiguous
-        // transport outcome may safely repeat via the same-directory SDK
-        // `client.kilo.profile` fallback; the op never retries.
-        const result = await AppRuntime.runPromise(
-          Effect.gen(function* () {
-            const out = yield* kiloProfilePrivate(params).pipe(
-              Effect.catch(() =>
-                Effect.succeed({
-                  v: KILO_PROFILE_VERSION,
-                  requestId: fallbackKiloProfileIds(params).requestId,
-                  op: KILO_PROFILE_OP,
-                  status: "failed" as const,
-                  outcome: {
-                    type: "failed" as const,
-                    time: Date.now(),
-                    failure: { code: "internal", message: KILO_PROFILE_INTERNAL_MESSAGE, retryable: false },
-                  },
-                  accepted: false as const,
-                  failure: { code: "internal", message: KILO_PROFILE_INTERNAL_MESSAGE, retryable: false },
-                }),
-              ),
-              Effect.catchDefect(() =>
-                Effect.succeed({
-                  v: KILO_PROFILE_VERSION,
-                  requestId: fallbackKiloProfileIds(params).requestId,
-                  op: KILO_PROFILE_OP,
-                  status: "failed" as const,
-                  outcome: {
-                    type: "failed" as const,
-                    time: Date.now(),
-                    failure: { code: "internal", message: KILO_PROFILE_INTERNAL_MESSAGE, retryable: false },
-                  },
-                  accepted: false as const,
-                  failure: { code: "internal", message: KILO_PROFILE_INTERNAL_MESSAGE, retryable: false },
                 }),
               ),
             )

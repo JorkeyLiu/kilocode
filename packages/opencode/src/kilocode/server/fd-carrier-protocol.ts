@@ -60,7 +60,6 @@ export const FD_CAPABILITIES = [
   "auth/remove",
   "kilo/organization/set",
   "instance/reload",
-  "kilo/profile",
   "kilo/auth-status",
   "background-process/stop-session",
   "pty/create",

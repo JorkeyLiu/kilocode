@@ -15,10 +15,6 @@
 - <https://app.kilo.ai/config.json>
   <!-- packages/kilo-vscode/src/kilo-provider/config-file.ts -->
   <!-- packages/opencode/src/config/config.ts -->
-- <https://app.kilo.ai/credits>
-  <!-- packages/kilo-vscode/webview-ui/src/components/profile/ProfileView.tsx -->
-- <https://app.kilo.ai/profile>
-  <!-- packages/kilo-vscode/webview-ui/src/components/profile/ProfileView.tsx -->
 - <https://app.kilo.ai/usage>
   <!-- packages/opencode/src/kilocode/components/dialog-kilo-profile.tsx -->
 - <https://arxiv.org/abs/2601.16746>
@@ -112,8 +108,6 @@
   <!-- packages/opencode/src/cli/cmd/github.handler.ts -->
 - <https://kilo.ai/pricing>
   <!-- packages/opencode/src/cli/cmd/tui/component/dialog-retry-action.tsx -->
-- <https://kilo.ai/pricing/kilo-pass>
-  <!-- packages/kilo-vscode/webview-ui/src/components/profile/ProfileView.tsx -->
 - <https://kilo.ai/support>
   <!-- packages/kilo-vscode/webview-ui/src/components/chat/FeedbackDialog.tsx -->
   <!-- packages/kilo-vscode/webview-ui/src/components/settings/AboutKiloCodeTab.tsx -->

@@ -287,7 +287,7 @@ export interface DeviceAuthCancelledMessage {
 
 export interface NavigateMessage {
   type: "navigate"
-  view: "newTask" | "history" | "profile" | "settings"
+  view: "newTask" | "history" | "settings"
   tab?: string
 }
 

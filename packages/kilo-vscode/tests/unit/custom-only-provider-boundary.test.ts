@@ -159,14 +159,13 @@ describe("custom-only webview surface", () => {
     expect(existsSync(resolve(ROOT, "webview-ui/src/stories/anaconda-desktop.stories.tsx"))).toBe(false)
   })
 
-  it("ProfileView hides sign-in actions and keeps only the unavailable notice", () => {
-    const src = read("webview-ui/src/components/profile/ProfileView.tsx")
-    expect(src).toContain("CUSTOM_ONLY")
-    expect(src).toContain("temporarily unavailable")
-    expect(src).toContain("if (CUSTOM_ONLY) return")
-    expect(src).toContain("CUSTOM_ONLY_PROFILE_MESSAGE")
-    expect(src).not.toContain("disabled title={CUSTOM_ONLY_PROFILE_MESSAGE}")
-    expect(src).not.toMatch(/variant="primary" disabled/)
+  it("ProfileView/DeviceAuthCard account UI stays deleted with no production references", () => {
+    expect(existsSync(resolve(ROOT, "webview-ui/src/components/profile/ProfileView.tsx"))).toBe(false)
+    expect(existsSync(resolve(ROOT, "webview-ui/src/components/profile/DeviceAuthCard.tsx"))).toBe(false)
+    expect(existsSync(resolve(ROOT, "webview-ui/src/stories/profile.stories.tsx"))).toBe(false)
+    const app = read("webview-ui/src/App.tsx")
+    expect(app).not.toContain("ProfileView")
+    expect(app).not.toContain("DeviceAuthCard")
   })
 
   it("speech-to-text shows no sign-in action in custom-only mode", () => {
@@ -927,5 +926,65 @@ describe("custom-only preserves custom guards", () => {
     expect(String(stale?.error)).toContain("stale")
     host.dispose()
     canonical.dispose()
+  })
+})
+
+describe("custom-only product boundary — no Profile panel", () => {
+  it("registers no Profile panel serializer or command; Settings stays registered", () => {
+    const ext = read("src/extension.ts")
+    expect(ext).not.toContain("profilePanel")
+    expect(ext).not.toContain("profileButtonClicked")
+    expect(ext).not.toContain('openPanel("profile")')
+    expect(ext).toContain("kilo-code.new.settingsPanel")
+    expect(ext).toContain("kilo-code.new.settingsButtonClicked")
+    expect(ext).toContain('openPanel("settings"')
+  })
+
+  it("declares no Profile command in package.json; Settings command stays", () => {
+    const pkg = JSON.parse(read("package.json"))
+    const declared: string[] = pkg.contributes?.commands?.map((c: { command: string }) => c.command) ?? []
+    expect(declared).not.toContain("kilo-code.new.profileButtonClicked")
+    expect(declared).toContain("kilo-code.new.settingsButtonClicked")
+  })
+
+  it("narrows SettingsEditorProvider to settings-only with fail-closed deserialize", async () => {
+    const src = read("src/SettingsEditorProvider.ts")
+    expect(src).not.toContain('"profile"')
+    expect(src).not.toContain("Kilo Profile")
+    expect(src).toContain('type PanelView = "settings"')
+    expect(src).toContain("panel.dispose()")
+    const { SettingsEditorProvider } = await import("../../src/SettingsEditorProvider")
+    expect(SettingsEditorProvider.viewFromType("kilo-code.new.settingsPanel")).toBe("settings")
+    expect(SettingsEditorProvider.viewFromType("kilo-code.new.profilePanel")).toBeUndefined()
+  })
+
+  it("removes openProfilePanel host routing while keeping Settings routing and profile broadcasts", () => {
+    const src = read("src/KiloProvider.ts")
+    expect(src).not.toContain("openProfilePanel")
+    expect(src).not.toContain("profileButtonClicked")
+    expect(src).toContain("openSettingsPanel")
+    expect(src).toContain("onProfileChanged")
+    expect(src).toContain("CUSTOM_ONLY_AUTH_MESSAGE")
+  })
+
+  it("removes the profile-only webview route and sender while keeping Settings", () => {
+    const app = read("webview-ui/src/App.tsx")
+    expect(app).not.toContain("ProfileView")
+    expect(app).not.toContain('"profile"')
+    expect(app).not.toContain("currentView() === \"profile\"")
+    expect(app).toContain("currentView() === \"settings\"")
+    const webview = read("webview-ui/src/types/messages/webview-messages.ts")
+    expect(webview).not.toContain("openProfilePanel")
+    expect(webview).not.toContain("OpenProfilePanelRequest")
+    expect(webview).toContain("openSettingsPanel")
+    const navigate = read("webview-ui/src/types/messages/extension-messages.ts")
+    expect(navigate).not.toContain('"profile"')
+    expect(navigate).toContain('"settings"')
+    const server = read("webview-ui/src/context/server.tsx")
+    expect(server).not.toContain("goToProfile")
+    expect(server).not.toContain("openProfilePanel")
+    expect(server).not.toContain('view: "profile"')
+    expect(server).toContain("goToLogin")
+    expect(server).toContain("profileData")
   })
 })

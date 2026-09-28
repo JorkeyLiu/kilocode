@@ -96,7 +96,6 @@ import { loadSkills } from "./kilo-provider/skills"
 import { fetchAgentsPrivateFirst } from "./kilo-provider/agent-list-privatefirst"
 import { discoverModelsPrivateFirst } from "./kilo-provider/models-discover-privatefirst"
 import { fetchConfigWarningsPrivateFirst } from "./kilo-provider/config-warnings-privatefirst"
-import { fetchKiloProfilePrivateFirst } from "./kilo-provider/kilo-profile-privatefirst"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
 import { childID } from "./kilo-provider/task-session"
 import { VisibleTaskStreams } from "./kilo-provider/visible-task-streams"
@@ -1623,62 +1622,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  /**
-   * Best-effort profile publish: same private-first/SDK-fallback request
-   * tuple and same `profileData` (data or null) semantics as the inline
-   * retry it replaces, but never rejects and never blocks the caller.
-   * `syncWebviewState` fires it in background so the transient `retry`
-   * round never gates `extensionDataReady` or the must-arrive messages
-   * below; eventual consistency comes from the late `profileData` post.
-   */
-  private async syncProfileBestEffort(): Promise<void> {
-    const generation = this.connectionGeneration
-    const client = this.client
-    if (this.connectionState !== "connected" || !client) return
-    const dir = this.getWorkspaceDirectory()
-    const conn = this.connectionService
-    try {
-      const out = await retry(() =>
-        fetchKiloProfilePrivateFirst({
-          connection: conn as never,
-          client: client as never,
-          directory: dir,
-        }).then((r) => {
-          if (r.kind === "ok") return r
-          // Preserve the transient retry surface: surface the underlying
-          // cause (e.g. network) so `retry` retries transient failures and
-          // fails fast on terminal/unauthorized.
-          throw (r as { cause?: unknown }).cause ?? r
-        }),
-      ).catch(() => ({ kind: "unavailable" as const }))
-      if (
-        this.connectionState !== "connected" ||
-        this.connectionGeneration !== generation ||
-        this.client !== client ||
-        !sameDirectory(dir, this.getWorkspaceDirectory())
-      ) {
-        console.debug("[Kilo New] KiloProvider: 👤 syncWebviewState profile stale, dropping")
-        return
-      }
-      const profileData = out.kind === "ok" ? out.data : null
-      console.log("[Kilo New] KiloProvider: 👤 syncWebviewState profile:", profileData ? "received" : "null")
-      this.postMessage({
-        type: "profileData",
-        data: profileData,
-      })
-    } catch (e) {
-      if (
-        this.connectionGeneration !== generation ||
-        this.client !== client ||
-        !sameDirectory(dir, this.getWorkspaceDirectory())
-      ) {
-        console.debug("[Kilo New] KiloProvider: 👤 syncWebviewState profile stale error, dropping")
-        return
-      }
-      console.error("[Kilo New] KiloProvider: 👤 syncWebviewState profile background failed:", e)
-    }
-  }
-
   private async syncWebviewState(reason: string): Promise<void> {
     const serverInfo = this.connectionService.getServerInfo()
     console.log("[Kilo New] KiloProvider: 🔄 syncWebviewState()", {
@@ -1711,20 +1654,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       })
     }
 
-    // Always attempt to fetch+push profile when connected.
-    // Profile returns 401 when user isn't logged into Kilo Gateway — that's expected.
-    // Use fire-and-forget (no throwOnError) to match old getProfile() which returned null on error.
-    // Private-first `kilo/profile` observation (the SDK call lives only in
-    // the helper fallback — never here); the transient retry wrapper is
-    // retained around the whole observation.
-    // Profile is best-effort and runs in background: it must never gate
-    // `extensionDataReady` nor delay the must-arrive messages below
-    // (session refresh trigger, gitStatus, session-status seed,
-    // remote status), which are posted synchronously before this returns.
+    // Custom-only boundary: no proactive profile/account network reads on
+    // startup or reconnect. Profile broadcasts via onProfileChanged are
+    // still forwarded; refreshProfile answers locally without a fetch.
     if (this.connectionState === "connected" && this.client) {
-      console.log("[Kilo New] KiloProvider: 👤 syncWebviewState fetching profile...")
-      void this.syncProfileBestEffort()
-
       if (this.currentSession) {
         this.refreshSessionDetails(this.currentSession.id, this.getWorkspaceDirectory(this.currentSession.id))
       }
@@ -2199,9 +2132,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "openSettingsPanel":
           vscode.commands.executeCommand("kilo-code.new.settingsButtonClicked", message.tab)
           break
-        case "openProfilePanel":
-          vscode.commands.executeCommand("kilo-code.new.profileButtonClicked")
-          break
         case "openVSCodeSettings":
           vscode.commands.executeCommand("workbench.action.openSettings", message.query)
           break
@@ -2661,10 +2591,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           // sequential await chain doesn't prevent warnings from being shown
           void this.checkConfigWarnings("state")
           try {
-            // Profile is owned by syncWebviewState → syncProfileBestEffort
-            // (generation/client/directory-guarded retry/fallback/null
-            // path); no direct read here to avoid duplicate reads and a
-            // stale result overwriting the new connection.
+            // Custom-only boundary: syncWebviewState performs no proactive
+            // profile/account network reads; profile broadcasts via
+            // onProfileChanged below are still forwarded as-is.
             await this.syncWebviewState("sse-connected")
             await this.flushPendingSessionRefresh("sse-connected")
             this.recoverPendingPrompts()

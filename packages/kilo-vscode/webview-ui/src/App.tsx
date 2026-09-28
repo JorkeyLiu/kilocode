@@ -10,9 +10,8 @@ import { Diff } from "@kilocode/kilo-ui/diff"
 import { File } from "@kilocode/kilo-ui/file"
 import { Toast } from "@kilocode/kilo-ui/toast"
 import Settings from "./components/settings/Settings"
-import ProfileView from "./components/profile/ProfileView"
 import { VSCodeProvider, useVSCode } from "./context/vscode"
-import { ServerProvider, useServer } from "./context/server"
+import { ServerProvider } from "./context/server"
 import { ProviderProvider } from "./context/provider"
 import { ConfigProvider } from "./context/config"
 import { DisplayProvider } from "./context/display"
@@ -29,13 +28,12 @@ import { DataBridge, MermaidDownloadBridge } from "./AppBridge"
 export { DataBridge, MermaidDownloadBridge }
 import "./styles/chat.css"
 
-type ViewType = "pending" | "profile" | "settings"
-const VALID_VIEWS = new Set<string>(["profile", "settings"])
+type ViewType = "pending" | "settings"
+const VALID_VIEWS = new Set<string>(["settings"])
 
 const AppContent: Component = () => {
   const [currentView, setCurrentView] = createSignal<ViewType>("pending")
   const [settingsTab, setSettingsTab] = createSignal<string | undefined>()
-  const server = useServer()
   const vscode = useVSCode()
 
   onMount(() => {
@@ -55,13 +53,6 @@ const AppContent: Component = () => {
   return (
     <div class="container">
       <Switch fallback={<div class="ordinary-pending" aria-hidden="true" />}>
-        <Match when={currentView() === "profile"}>
-          <ProfileView
-            profileData={server.profileData()}
-            deviceAuth={server.deviceAuth()}
-            onLogin={server.startLogin}
-          />
-        </Match>
         <Match when={currentView() === "settings"}>
           <Settings tab={settingsTab()} onTabChange={setSettingsTab} />
         </Match>
