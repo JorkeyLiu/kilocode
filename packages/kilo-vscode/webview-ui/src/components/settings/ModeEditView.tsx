@@ -6,6 +6,7 @@ import { Button } from "@kilocode/kilo-ui/button"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 
 import { createAgentDraft, type AgentDraft } from "./agent-draft"
+import { isToolEnabled, listAgentTools, normalizeToolName, toggleAgentTool } from "./agent-tools"
 import { useConfig } from "../../context/config"
 import { useProvider } from "../../context/provider"
 import { useSession } from "../../context/session"
@@ -120,6 +121,44 @@ const ModeEditView: Component<Props> = (props) => {
   const updatePermission = (patch: PermissionConfig) => {
     if (native()) return
     update({ permission: patch })
+  }
+
+  const tools = () => (shown().tools ?? undefined) as Record<string, unknown> | undefined
+  const toolNames = () => listAgentTools(tools())
+  const [customTool, setCustomTool] = createSignal("")
+  const [customError, setCustomError] = createSignal<string | null>(null)
+
+  const setToolEnabled = (name: string, enabled: boolean) => {
+    if (native()) return
+    update({ tools: toggleAgentTool(tools(), name, enabled) as AgentConfig["tools"] })
+  }
+
+  const addCustomTool = () => {
+    if (native()) return
+    const raw = customTool().trim()
+    if (raw === "*") {
+      if (!isToolEnabled(tools(), "*")) {
+        setCustomError(`* is already disabled for this agent.`)
+        return
+      }
+      setCustomError(null)
+      setCustomTool("")
+      update({ tools: toggleAgentTool(tools(), "*", false) as AgentConfig["tools"] })
+      return
+    }
+    const name = normalizeToolName(customTool())
+    if (name === null) {
+      setCustomError("Use letters, numbers, dot, underscore, or hyphen (e.g. my-mcp-tool).")
+      return
+    }
+    if (!isToolEnabled(tools(), name)) {
+      setCustomError(`${name} is already disabled for this agent.`)
+      return
+    }
+    setCustomError(null)
+    setCustomTool("")
+    // Adding a custom name disables it (false); other authored entries stay intact.
+    update({ tools: toggleAgentTool(tools(), name, false) as AgentConfig["tools"] })
   }
 
   const exportMode = () => {
@@ -341,6 +380,92 @@ const ModeEditView: Component<Props> = (props) => {
           </Switch>
         </SettingsRow>
       </Card>
+
+      <Show when={!native()}>
+        <Card
+          data-testid="agent-tools"
+          style={{
+            "margin-bottom": "12px",
+            padding: "0",
+            overflow: "hidden",
+            border: "1px solid var(--border-base, var(--vscode-panel-border))",
+          }}
+        >
+          <div
+            style={{
+              padding: "14px 16px 12px",
+              "border-bottom": "1px solid var(--border-weak-base, var(--vscode-panel-border))",
+              background: "var(--bg-subtle-base, var(--vscode-editorWidget-background))",
+            }}
+          >
+            <div data-slot="settings-row-label-title" style={{ "margin-bottom": "6px" }}>
+              Tools
+            </div>
+            <div
+              style={{
+                "font-size": "var(--kilo-font-size-12)",
+                color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
+                "line-height": "1.45",
+              }}
+            >
+              Disable tool calls for this agent only. A disabled tool is rejected by the runtime and cannot be
+              reopened by permissions or approvals. Turning a tool back on removes its entry; other tools stay
+              unchanged. Edit, Write and Apply Patch share one gate (patch counts as Apply Patch): disabling any
+              disables all three. * disables every tool unless that tool is explicitly enabled.
+            </div>
+          </div>
+          <div style={{ padding: "0 16px 4px" }}>
+            <For each={toolNames()}>
+              {(name) => (
+                <SettingsRow
+                  title={name === "*" ? "* (all tools)" : name}
+                  description={
+                    name === "*"
+                      ? "Disables every tool unless a specific tool is explicitly enabled. Turning it back on removes only this entry."
+                      : undefined
+                  }
+                  last={false}
+                >
+                  <Switch
+                    data-testid={`agent-tool-${name}`}
+                    checked={isToolEnabled(tools(), name)}
+                    onChange={(val) => setToolEnabled(name, val)}
+                    disabled={native()}
+                    hideLabel
+                  >
+                    {name === "*" ? "* (all tools)" : name}
+                  </Switch>
+                </SettingsRow>
+              )}
+            </For>
+            <div style={{ display: "flex", gap: "8px", "align-items": "center", padding: "8px 0" }}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  data-testid="agent-tool-custom-input"
+                  value={customTool()}
+                  placeholder="e.g. my-mcp-tool"
+                  onChange={(val) => {
+                    setCustomTool(val)
+                    if (customError() !== null) setCustomError(null)
+                  }}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === "Enter") addCustomTool()
+                  }}
+                  disabled={native()}
+                />
+              </div>
+              <Button data-testid="agent-tool-add" variant="secondary" onClick={addCustomTool} disabled={native()}>
+                Add
+              </Button>
+            </div>
+            <Show when={customError() !== null}>
+              <div role="alert" style={{ "font-size": "var(--kilo-font-size-12)", color: "var(--vscode-errorForeground)", "padding-bottom": "8px" }}>
+                {customError()}
+              </div>
+            </Show>
+          </div>
+        </Card>
+      </Show>
 
       <Show when={!native()}>
         <Card

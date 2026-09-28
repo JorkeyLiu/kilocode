@@ -91,7 +91,10 @@ describe("P4.4-T20 preset-provider priority/catalog residue removed", () => {
 
     const helpers = await Bun.file("webview-ui/src/components/settings/provider-tab-helpers.ts").text()
     expect(helpers).toContain("KILO_PROVIDER_ID")
-    expect(helpers).toContain("isCustomProviderPackage")
+    // Legacy npm shapes are inert, never custom: helpers classify via the
+    // canonical endpoint/protocol shape, not npm packages.
+    expect(helpers).not.toContain("isCustomProviderPackage")
+    expect(helpers).toContain("isCanonicalCustomConfig")
     expect(helpers).toContain("buildAddList")
     expect(helpers).toContain("buildConfiguredList")
 

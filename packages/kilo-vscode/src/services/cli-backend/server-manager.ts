@@ -74,6 +74,30 @@ function parseCutoverJson(stdout: string): Record<string, unknown> {
 }
 type ServerExitListener = (code: number | null) => void
 
+type ChildLike = Pick<ChildProcess, "exitCode" | "signalCode">
+
+/**
+ * Signal-aware liveness: Node keeps `exitCode === null` both while running
+ * AND after signal termination (`signalCode !== null`). Only
+ * `exitCode === null && signalCode == null` means still running.
+ * Hidden `detached:false` children and serve `detached:true` children share
+ * this predicate; the kill path still differs (killDirect vs killGroup).
+ */
+export function isChildAlive(proc: ChildLike | null | undefined): boolean {
+  if (!proc) return false
+  return proc.exitCode === null && (proc.signalCode === null || proc.signalCode === undefined)
+}
+
+/** Signal-aware death: numeric exit OR signal termination. Never cached as live, never re-killed. */
+export function isChildDead(proc: ChildLike | null | undefined): boolean {
+  if (!proc) return false
+  return proc.exitCode !== null || (proc.signalCode !== null && proc.signalCode !== undefined)
+}
+
+function describeChildExit(proc: ChildLike): string {
+  return `code ${String(proc.exitCode ?? "null")} signal ${String(proc.signalCode ?? "null")}`
+}
+
 export function isValidE2EBaseURLForServerManager(value: string | undefined): boolean {
   if (!value) return false
   try {
@@ -251,8 +275,8 @@ export class ServerManager {
     console.log("[Kilo New] ServerManager: 🔍 getServer called")
     if (this.disposed) throw new Error("ServerManager disposed")
     if (this.instance) {
-      if (this.instance.process.exitCode !== null) {
-        // Dead process cannot be cached — clear and fall through to restart
+      if (isChildDead(this.instance.process)) {
+        // Dead process (numeric exit OR signal termination) cannot be cached — clear and fall through to restart
         const dying = this.instance
         this.instance = null
         ServerManager.releasePrivateStreams(dying)
@@ -273,14 +297,14 @@ export class ServerManager {
     try {
       const started = await this.startupPromise
       if (this.disposed || this.startupGeneration !== genAtStart) {
-        // Startup outlived dispose or was superseded — kill exact owned child only
-        if (started.process.exitCode === null) ServerManager.killProcess(started.process, "SIGTERM")
+        // Startup outlived dispose or was superseded — kill exact owned child only when still alive
+        if (isChildAlive(started.process)) ServerManager.killProcess(started.process, "SIGTERM")
         ServerManager.releasePrivateStreams(started)
         throw new Error("Server startup superseded by dispose")
       }
-      if (started.process.exitCode !== null) {
+      if (isChildDead(started.process)) {
         ServerManager.releasePrivateStreams(started)
-        throw new ServerStartupError("CLI background process exited after port detection", `pid ${started.pid ?? "?"} exited with code ${started.process.exitCode}`)
+        throw new ServerStartupError("CLI background process exited after port detection", `pid ${started.pid ?? "?"} exited with ${describeChildExit(started.process)}`)
       }
       this.instance = started
       console.log("[Kilo New] ServerManager: ✅ Server started successfully:", { port: this.instance.port })
@@ -290,7 +314,7 @@ export class ServerManager {
         this.startupPromise = null
         // Retain exact child handle until exit; avoid race clearing newer startingProc.
         // Hidden commands own their handle until exit; main server's handle transitions to instance ownership.
-        if (this.startingProc && this.startingProc.exitCode !== null) {
+        if (this.startingProc && isChildDead(this.startingProc)) {
           this.startingProc = null
         } else if (this.instance && this.startingProc === this.instance.process) {
           this.startingProc = null
@@ -299,7 +323,7 @@ export class ServerManager {
         } else if (this.startingProc && this.instance === null && this.startupPromise === null) {
           // Startup failed without instance; if no live hidden child retained, allow clear on next tick via exit handler.
           // Do not blindly null a live hidden child; its exit handler will clear when it exits.
-          if (this.startingProc.exitCode !== null) this.startingProc = null
+          if (isChildDead(this.startingProc)) this.startingProc = null
         }
       }
     }
@@ -413,10 +437,10 @@ export class ServerManager {
         if (settled) return
         settled = true
         console.error(`[Kilo New] ServerManager: hidden command timeout after ${timeoutMs}ms`, args.join(" "))
-        if (child.exitCode === null) ServerManager.killDirect(child, "SIGTERM")
-        // SIGKILL fallback 5s after timeout; retained until child exit.
+        if (isChildAlive(child)) ServerManager.killDirect(child, "SIGTERM")
+        // SIGKILL fallback 5s after timeout; retained until child exit. Only when still alive — never re-kill signal-dead.
         let killTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-          if (child.exitCode === null) ServerManager.killDirect(child, "SIGKILL")
+          if (isChildAlive(child)) ServerManager.killDirect(child, "SIGKILL")
         }, HIDDEN_SIGKILL_DELAY_MS)
         ;(killTimer as unknown as { unref?: () => void })?.unref?.()
         const clearKill = () => {
@@ -459,14 +483,14 @@ export class ServerManager {
         clearIfOurs()
         reject(new ServerStartupError("Failed to spawn hidden storage command", `${String(err.message ?? err)} ${stderr.slice(0, 2000)}`))
       })
-      child.on("exit", (code: number | null) => {
+      child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
         clearTimer()
         clearIfOurs()
         if (settled) return
         settled = true
         if (this.disposed || this.canonicalStorageGeneration !== generation) {
-          if (child.exitCode === null) ServerManager.killDirect(child, "SIGTERM")
-          reject(new ServerStartupError("Server startup superseded by dispose", `generation ${generation} superseded during hidden command ${args.join(" ")} code ${String(code)}`))
+          if (isChildAlive(child)) ServerManager.killDirect(child, "SIGTERM")
+          reject(new ServerStartupError("Server startup superseded by dispose", `generation ${generation} superseded during hidden command ${args.join(" ")} code ${String(code ?? signal ?? "null")}`))
           return
         }
         if (code === 0) {
@@ -475,7 +499,7 @@ export class ServerManager {
         }
         const combined = stderr || stdout
         const { userMessage, userDetails } = toErrorMessage(
-          `Storage cutover command failed with code ${code ?? "null"}`,
+          `Storage cutover command failed with code ${String(code ?? signal ?? "null")}`,
           combined.split("\n"),
           cliPath,
         )
@@ -642,7 +666,7 @@ export class ServerManager {
       const scheduleStartupSigkill = () => {
         clearSigkillWatchdog()
         startupSigkill = setTimeout(() => {
-          if (serverProcess.exitCode === null) ServerManager.killProcess(serverProcess, "SIGKILL")
+          if (isChildAlive(serverProcess)) ServerManager.killProcess(serverProcess, "SIGKILL")
         }, 5000)
         ;(startupSigkill as unknown as { unref?: () => void })?.unref?.()
         serverProcess.on("exit", () => clearSigkillWatchdog())
@@ -674,7 +698,7 @@ export class ServerManager {
           if (this.disposed || this.startupGeneration !== generation) {
             console.warn("[Kilo New] ServerManager: port detected but startup superseded by dispose — discarding")
             ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
-            if (serverProcess.exitCode === null) {
+            if (isChildAlive(serverProcess)) {
               ServerManager.killProcess(serverProcess, "SIGTERM")
               scheduleStartupSigkill()
             }
@@ -687,15 +711,15 @@ export class ServerManager {
             }
             return
           }
-          if (serverProcess.exitCode !== null) {
-            console.warn("[Kilo New] ServerManager: port detected but process already exited — not caching")
+          if (isChildDead(serverProcess)) {
+            console.warn("[Kilo New] ServerManager: port detected but process already exited — not caching", describeChildExit(serverProcess))
             ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
             if (!resolved) {
               clearStartupWatchdog()
               clearSigkillWatchdog()
               stderrTail.flush()
               const { userMessage, userDetails } = toErrorMessage(
-                t("server.processExited", { code: String(serverProcess.exitCode) }),
+                t("server.processExited", { code: String(serverProcess.exitCode ?? serverProcess.signalCode ?? "null") }),
                 stderrTail.tail(),
                 cliPath,
               )
@@ -709,10 +733,11 @@ export class ServerManager {
           clearSigkillWatchdog()
           console.log("[Kilo New] ServerManager: 🎯 Port detected:", port)
           p0Stage("port.detected", { port })
-          // Defer install until next tick so an immediate exit after port log is observed
+          // Defer install until next tick so an immediate exit after port log is observed.
+          // Signal death keeps exitCode null, so check both fields — never cache signal-dead.
           setImmediate(() => {
-            if (serverProcess.exitCode !== null) {
-              console.warn("[Kilo New] ServerManager: process exited immediately after port detection — not caching")
+            if (isChildDead(serverProcess)) {
+              console.warn("[Kilo New] ServerManager: process exited immediately after port detection — not caching", describeChildExit(serverProcess))
               ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
               // If already resolved, getServer's post-install check will handle; here we already resolved so rely on that check
               return
@@ -737,8 +762,8 @@ export class ServerManager {
         }
       })
 
-      serverProcess.on("exit", (code) => {
-        console.log("[Kilo New] ServerManager: 🛑 Process exited with code:", code)
+      serverProcess.on("exit", (code, signal) => {
+        console.log("[Kilo New] ServerManager: 🛑 Process exited with code:", code, "signal:", signal ?? "null")
         clearStartupWatchdog()
         clearSigkillWatchdog()
         if (this.instance?.process === serverProcess) {
@@ -753,7 +778,7 @@ export class ServerManager {
           resolved = true
           stderrTail.flush()
           const { userMessage, userDetails } = toErrorMessage(
-            t("server.processExited", { code: code ?? "null" }),
+            t("server.processExited", { code: String(code ?? signal ?? "null") }),
             stderrTail.tail(),
             cliPath,
           )
@@ -792,7 +817,7 @@ export class ServerManager {
     const inst = this.instance
     if (!inst) return null
     if (this.disposed) return null
-    if (inst.process.exitCode !== null) return null
+    if (isChildDead(inst.process)) return null
     return typeof inst.spawnCwd === "string" && inst.spawnCwd.length > 0 ? inst.spawnCwd : null
   }
 
@@ -807,6 +832,7 @@ export class ServerManager {
     if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance?.process.pid) return null
+    if (isChildDead(instance.process)) return null
     return { pid: instance.process.pid, port: instance.port }
   }
 
@@ -819,6 +845,7 @@ export class ServerManager {
     if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance) return null
+    if (isChildDead(instance.process)) return null
     return instance.epoch
   }
 
@@ -831,6 +858,7 @@ export class ServerManager {
     if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance?.process.pid) return null
+    if (isChildDead(instance.process)) return null
     return { pid: instance.process.pid, port: instance.port, epoch: instance.epoch }
   }
 
@@ -848,6 +876,7 @@ export class ServerManager {
     if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance?.process.pid) return null
+    if (!isChildAlive(instance.process)) return null
     console.log(
       "[Kilo New] ServerManager: fixture kill — SIGTERM to exact owned process group, PID:",
       instance.process.pid,
@@ -869,6 +898,7 @@ export class ServerManager {
     if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance?.process.pid) return null
+    if (!isChildAlive(instance.process)) return null
     console.log(
       "[Kilo New] ServerManager: fixture hard kill — SIGKILL to exact owned process group, PID:",
       instance.process.pid,
@@ -900,7 +930,7 @@ export class ServerManager {
     if (expectedPid !== undefined && inst.process.pid !== expectedPid) {
       return { closed: false, alreadyClosed: false, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
     }
-    if (inst.process.exitCode !== null) {
+    if (isChildDead(inst.process)) {
       return { closed: false, alreadyClosed: false, pid: inst.process.pid, port: inst.port, epoch: inst.epoch }
     }
     const streams = [inst.privateReader, inst.privateWriter].filter(Boolean) as unknown as Array<{
@@ -1031,15 +1061,16 @@ export class ServerManager {
     if (this.disposed) {
       // Already disposed — ensure starting proc also cleaned if still pending, retain handle until exit.
       const cur = this.startingProc
-      if (cur && cur.exitCode === null) {
+      if (cur && isChildAlive(cur)) {
         ServerManager.killForStartingProc(cur, "SIGTERM")
         ServerManager.releasePrivateStreams({
           privateReader: (cur.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
           privateWriter: (cur.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
         } as unknown as ServerInstance)
         // Retain handle until exit; clear only if still ours to avoid race with newer startingProc.
+        // SIGKILL only while still alive — a signal-dead child (signalCode set) is never re-killed.
         const timer = setTimeout(() => {
-          if (cur.exitCode === null) ServerManager.killForStartingProc(cur, "SIGKILL")
+          if (isChildAlive(cur)) ServerManager.killForStartingProc(cur, "SIGKILL")
         }, 5000)
         ;(timer as unknown as { unref?: () => void })?.unref?.()
         cur.on("exit", () => {
@@ -1059,7 +1090,7 @@ export class ServerManager {
     this.canonicalStorageError = null
     const starting = this.startingProc
     // Retain exact child handle until exit; clear only if still ours.
-    if (starting && starting.exitCode === null) {
+    if (starting && isChildAlive(starting)) {
       console.log("[Kilo New] ServerManager: 🔴 Disposing — killing in-flight startup PID:", starting.pid)
       ServerManager.releasePrivateStreams({
         privateReader: (starting.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
@@ -1067,7 +1098,7 @@ export class ServerManager {
       } as unknown as ServerInstance)
       ServerManager.killForStartingProc(starting, "SIGTERM")
       const timer = setTimeout(() => {
-        if (starting.exitCode === null) ServerManager.killForStartingProc(starting, "SIGKILL")
+        if (isChildAlive(starting)) ServerManager.killForStartingProc(starting, "SIGKILL")
       }, 5000)
       ;(timer as unknown as { unref?: () => void })?.unref?.()
       starting.on("exit", () => {
@@ -1085,13 +1116,22 @@ export class ServerManager {
     this.instance = null
     ServerManager.releasePrivateStreams(inst)
 
-    console.log("[Kilo New] ServerManager: 🔴 Disposing — sending SIGTERM to process group, PID:", proc.pid)
-    ServerManager.killProcess(proc, "SIGTERM")
+    // Dispose kills the exact owned serve child only when still alive. A signal-dead
+    // child (exitCode null + signalCode set) is already gone: no SIGTERM and no
+    // post-crash kill(-pid) group guess, so a reused PGID is never signalled.
+    // No name-based kill: foreign/persistent background processes are never touched.
+    if (isChildAlive(proc)) {
+      console.log("[Kilo New] ServerManager: 🔴 Disposing — sending SIGTERM to process group, PID:", proc.pid)
+      ServerManager.killProcess(proc, "SIGTERM")
+    } else {
+      console.log("[Kilo New] ServerManager: 🔴 Disposing — owned child already dead, no kill", describeChildExit(proc))
+    }
 
     // SIGKILL fallback after 5s. Ensures the process tree dies even if SIGTERM is ignored
     // or Instance.disposeAll() hangs past the serve.ts shutdown timeout.
+    // Guarded by signal-aware aliveness: signal-dead children are never re-killed.
     const timer = setTimeout(() => {
-      if (proc.exitCode === null) {
+      if (isChildAlive(proc)) {
         console.warn("[Kilo New] ServerManager: ⚠️ Process did not exit after SIGTERM, sending SIGKILL")
         ServerManager.killProcess(proc, "SIGKILL")
       }

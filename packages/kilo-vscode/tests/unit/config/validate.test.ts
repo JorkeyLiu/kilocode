@@ -627,34 +627,41 @@ describe("LOCK-1: Provider model schema exactness", () => {
     expect(result.valid).toBe(false)
   })
 
-  it("rejects provider with legacy npm field", () => {
+  it("treats pure legacy npm entry as inert (valid, canonical view empty)", () => {
     const config = JSON.stringify({
       provider: {
         openai: { npm: "@ai-sdk/openai", name: "OpenAI" },
       },
     })
     const result = validateConfig(config, "global", "test")
-    expect(result.valid).toBe(false)
+    expect(result.valid).toBe(true)
+    expect(result.parsed?.provider).toEqual({})
+    // Shared strict payload stays closed: pure legacy never validates as canonical.
+    expect(toCanonicalPayload(JSON.parse(config))).toBeUndefined()
   })
 
-  it("rejects provider with legacy env field", () => {
+  it("treats pure legacy env entry as inert (valid, canonical view empty)", () => {
     const config = JSON.stringify({
       provider: {
         openai: { env: ["OPENAI_API_KEY"] },
       },
     })
     const result = validateConfig(config, "global", "test")
-    expect(result.valid).toBe(false)
+    expect(result.valid).toBe(true)
+    expect(result.parsed?.provider).toEqual({})
+    expect(toCanonicalPayload(JSON.parse(config))).toBeUndefined()
   })
 
-  it("rejects provider with legacy options/baseURL field", () => {
+  it("treats pure legacy options entry as inert (valid, canonical view empty)", () => {
     const config = JSON.stringify({
       provider: {
         openai: { options: { baseURL: "https://api.openai.com" } },
       },
     })
     const result = validateConfig(config, "global", "test")
-    expect(result.valid).toBe(false)
+    expect(result.valid).toBe(true)
+    expect(result.parsed?.provider).toEqual({})
+    expect(toCanonicalPayload(JSON.parse(config))).toBeUndefined()
   })
 
   it("rejects provider with legacy headers field", () => {
@@ -907,19 +914,10 @@ describe("LOCK-1b: Provider schema equivalence", () => {
     },
   ]
 
+  // Pure legacy npm/env/options without endpoint/protocol/credential are
+  // inert (validateConfig valid with empty canonical view) while the shared
+  // strict payload stays closed. They are covered separately below, not here.
   const rejectedFixtures = [
-    {
-      name: "provider with legacy npm field",
-      value: { provider: { openai: { npm: "@ai-sdk/openai", name: "OpenAI" } } },
-    },
-    {
-      name: "provider with legacy env field",
-      value: { provider: { openai: { env: ["OPENAI_API_KEY"] } } },
-    },
-    {
-      name: "provider with legacy options field",
-      value: { provider: { openai: { options: { baseURL: "https://api.openai.com" } } } },
-    },
     {
       name: "provider with legacy apiKey field",
       value: { provider: { openai: { apiKey: "sk-test" } } },
@@ -1024,5 +1022,75 @@ describe("LOCK-1b: Provider schema equivalence", () => {
     expect(toCanonicalPayload(missingId)).toBeUndefined()
     const badScope = { provider: { openai: { credential: "secret:kilo.credentials.workspace.provider.openai" } } }
     expect(toCanonicalPayload(badScope)).toBeUndefined()
+  })
+
+  it("legacy-inert split: credentialless legacy valid with empty canonical view, strict payload rejects", () => {
+    for (const entry of [
+      { npm: "@ai-sdk/openai", name: "OpenAI" },
+      { npm: "@ai-sdk/openai-compatible", api: "https://api.custom.com/v1", models: { m: { name: "M" } } },
+      { npm: "@ai-sdk/openai-compatible", api: "https://legacy.test/v1", models: { m: { name: "M" } }, options: { baseURL: "https://legacy.test/v1" } },
+      { env: ["OPENAI_API_KEY"] },
+      { options: { baseURL: "https://api.openai.com" } },
+    ]) {
+      const value = { provider: { legacy: entry } }
+      const result = validateConfig(JSON.stringify(value), "global", "test")
+      expect(result.valid).toBe(true)
+      expect(result.parsed?.provider).toEqual({})
+      expect(toCanonicalPayload(value)).toBeUndefined()
+    }
+  })
+
+  it("legacy-inert entries with plaintext credentials are invalid (never silently preserved)", () => {
+    for (const entry of [
+      { npm: "@ai-sdk/openai", name: "Legacy", apiKey: "sk-test" },
+      { npm: "@ai-sdk/openai-compatible", api: "https://api.custom.com/v1", models: { m: { name: "M" } }, options: { apiKey: "k" } },
+      { npm: "@ai-sdk/openai", name: "Legacy", options: { headers: { Authorization: "Bearer sk-test" } } },
+      { npm: "@ai-sdk/openai", name: "Legacy", headers: { Authorization: "Bearer sk-test" } },
+    ]) {
+      const value = { provider: { legacy: entry } }
+      const result = validateConfig(JSON.stringify(value), "global", "test")
+      expect(result.valid).toBe(false)
+      expect(result.parsed).toBeNull()
+      expect(result.errors.some((e) => e.path[0] === "provider" && e.message.includes("Plaintext credential"))).toBe(true)
+      expect(toCanonicalPayload(value)).toBeUndefined()
+    }
+  })
+
+  it("mixed legacy + canonical custom validates with canonical-only view", () => {
+    const value = {
+      provider: {
+        legacy: { name: "Legacy", npm: "@ai-sdk/openai-compatible", api: "https://legacy.test/v1", models: { m: { name: "M" } } },
+        custom: { name: "Custom", endpoint: "https://api.example.com/v1", protocol: "openai/completions", models: { m1: { name: "M1" } } },
+      },
+    }
+    const result = validateConfig(JSON.stringify(value), "global", "test")
+    expect(result.valid).toBe(true)
+    expect(Object.keys(result.parsed?.provider as Record<string, unknown>)).toEqual(["custom"])
+  })
+
+  it("hybrid definitive + legacy still rejects (fail-closed)", () => {
+    const value = {
+      provider: {
+        hybrid: { name: "Hybrid", endpoint: "https://api.example.com/v1", protocol: "openai/completions", npm: "@ai-sdk/openai-compatible", models: { m1: { name: "M1" } } },
+      },
+    }
+    const result = validateConfig(JSON.stringify(value), "global", "test")
+    expect(result.valid).toBe(false)
+    expect(toCanonicalPayload(value)).toBeUndefined()
+  })
+
+  it("canonical with wrong credential scope/id still rejects", () => {
+    const badScope = { provider: { custom: { endpoint: "https://api.example.com/v1", credential: "secret:kilo.credentials.project.provider.custom" } } }
+    expect(validateConfig(JSON.stringify(badScope), "global", "test").valid).toBe(false)
+    const badId = { provider: { custom: { endpoint: "https://api.example.com/v1", credential: "secret:kilo.credentials.global.provider.other" } } }
+    expect(validateConfig(JSON.stringify(badId), "global", "test").valid).toBe(false)
+  })
+
+  it("cross-scope legacy same ID does not conflict; canonical same ID does", () => {
+    const legacyGlobal = { provider: { same: { npm: "@ai-sdk/openai", name: "Legacy" } } }
+    const canonicalProject = { provider: { same: { endpoint: "https://api.example.com/v1", protocol: "openai/completions" } } }
+    expect(validateCrossScope(legacyGlobal, canonicalProject)).toHaveLength(0)
+    const canonicalGlobal = { provider: { same: { endpoint: "https://a.test/v1" } } }
+    expect(validateCrossScope(canonicalGlobal, canonicalProject)).toHaveLength(1)
   })
 })

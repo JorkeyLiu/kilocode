@@ -64,6 +64,117 @@ function mergeConfigConcatArrays(target: Info, source: Info): Info {
   return merged
 }
 
+// kilocode_change start - restrictive agent tools floor across authored layers.
+// Any explicit `tools:false` in any of the four authored layers (global/project
+// JSONC, global/project markdown) survives into the effective config: a later
+// `tools:true` from a different authored definition cannot reopen it. Within a
+// single authored definition the existing explicit enable semantics are kept
+// (specific enable punches through that same definition's wildcard/group
+// disable; wildcard enable never clears specific disables). Single-layer and
+// no-disable behavior is unchanged. Implemented as a derived in-memory
+// synthesis of the effective `agent.<name>.tools` map only; persisted files
+// keep their authored values (overlay read/write parity) and ordinary
+// permission semantics are untouched. Mirrors
+// `packages/opencode/src/agent/capability.ts` expansion without importing the
+// agent layer (config cannot depend on agent).
+const EDIT_GROUP = ["edit", "write", "apply_patch"] as const
+
+function floorKey(key: string): string {
+  return key === "build" ? "code" : key
+}
+
+function floorCanon(key: string): string {
+  return key === "patch" ? "apply_patch" : key
+}
+
+function floorExpand(key: string): string[] {
+  const canon = floorCanon(key)
+  if (canon === "*") return ["*"]
+  if ((EDIT_GROUP as readonly string[]).includes(canon)) return [...EDIT_GROUP]
+  return [canon]
+}
+
+function floorSplit(tools: Record<string, boolean> | undefined): { disabled: Set<string>; enabled: Set<string> } {
+  const disabled = new Set<string>()
+  const enabled = new Set<string>()
+  for (const [key, value] of Object.entries(tools ?? {})) {
+    if (value === false) for (const id of floorExpand(key)) disabled.add(id)
+    else if (value === true) for (const id of floorExpand(key)) enabled.add(id)
+  }
+  return { disabled, enabled }
+}
+
+function floorBlocks(disabled: Set<string>, enabled: Set<string>, tool: string): boolean {
+  const id = floorCanon(tool)
+  if (disabled.has(id)) return !enabled.has(id)
+  if (disabled.has("*")) return !enabled.has(id)
+  return false
+}
+
+function floorToolsFor(layers: Array<Record<string, boolean> | undefined>): Record<string, boolean> | undefined {
+  const defined = layers.filter((tools) => tools !== undefined)
+  // Single authored definition needs no synthesis: the effective map already
+  // carries it and downstream capability expansion owns same-definition
+  // wildcard/specific semantics. Skipping also avoids rewriting the visible
+  // map (e.g. expanding `write:false` into the edit group) when there is no
+  // cross-definition conflict to resolve. No new ledger or state.
+  if (defined.length <= 1) return undefined
+  const splits = defined.map((tools) => floorSplit(tools))
+  const unionDisabled = new Set<string>()
+  const unionEnabled = new Set<string>()
+  for (const split of splits) {
+    for (const id of split.disabled) unionDisabled.add(id)
+    for (const id of split.enabled) unionEnabled.add(id)
+  }
+  if (unionDisabled.size === 0) return undefined
+  const kept = new Set<string>()
+  for (const id of unionEnabled) {
+    // No wildcard short-circuit: a cross-layer `'*':false` blocks both a
+    // wildcard and a specific `true` from another authored definition.
+    // Same-definition `'*':false` + specific `true` stays enabled because
+    // floorBlocks consults each definition's own enabled set.
+    const blocked = splits.some((split) => floorBlocks(split.disabled, split.enabled, id))
+    if (!blocked) kept.add(id)
+  }
+  const out: Record<string, boolean> = {}
+  for (const id of unionDisabled) out[id] = false
+  for (const id of kept) out[id] = true
+  return out
+}
+
+function applyAgentToolsFloor(
+  effective: Record<string, { tools?: Record<string, boolean> }>,
+  layers: Array<Record<string, { tools?: Record<string, boolean> }>>,
+): void {
+  const names = new Set<string>()
+  for (const map of [effective, ...layers]) {
+    for (const key of Object.keys(map ?? {})) names.add(floorKey(key))
+  }
+  for (const name of names) {
+    const raws = name === "code" ? [name, "build"] : [name]
+    const per: Array<Record<string, boolean> | undefined> = []
+    for (const map of layers) {
+      for (const raw of raws) {
+        const tools = (map as Record<string, { tools?: Record<string, boolean> }>)[raw]?.tools
+        if (tools) per.push(tools)
+      }
+    }
+    if (per.length <= 1) continue
+    const next = floorToolsFor(per)
+    if (!next) continue
+    // Copy-on-write: `effective` nested entries may share references with the
+    // cached global/project layer objects via mergeDeep. Replacing the entry
+    // (and cloning the derived tools map per entry) leaves every input layer
+    // object and shared map untouched so one project's floor cannot pollute
+    // getGlobal or another project, and reloads can refresh.
+    for (const raw of raws) {
+      const hit = (effective as Record<string, { tools?: Record<string, boolean> }>)[raw]
+      if (hit) (effective as Record<string, { tools?: Record<string, boolean> }>)[raw] = { ...hit, tools: { ...next } }
+    }
+  }
+}
+// kilocode_change end
+
 function normalizeLoadedConfig(data: unknown, source: string) {
   if (!isRecord(data)) return data
   const copy = { ...data } // kilocode_change
@@ -109,6 +220,14 @@ async function resolveLoadedPlugins<T extends { plugin?: ConfigPluginV1.Spec[] }
   return config
 }
 
+export type AgentPermissionSourceKind = "global-jsonc" | "project-jsonc" | "global-md" | "project-md"
+export type AgentPermissionSource = {
+  agent: string
+  kind: AgentPermissionSourceKind
+  source: string
+  permission: Record<string, unknown> | undefined
+}
+
 export type Info = ConfigV1.Info & {
   // kilocode_change - keep exported so existing Config.Info call sites don't need repo-wide migration to ConfigV1.Info
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
@@ -117,6 +236,13 @@ export type Info = ConfigV1.Info & {
   // kilocode_change start - derived provenance for markdown paths selected by config
   instruction_origins?: Record<string, KilocodeMarkdown.Source>
   skill_path_origins?: Record<string, KilocodeMarkdown.Source>
+  // kilocode_change start - derived agent.permission provenance across the four
+  // authored layers (global/project JSONC + global/project markdown). Runtime-only,
+  // never persisted: `permission === undefined` means absent (non-applicable, no
+  // evaluator layer); defined (even {}) means authored (empty {} is applicable ask).
+  // Ordinary `agent.<name>.permission` readback keeps the merged effective map.
+  agent_permission_sources?: AgentPermissionSource[]
+  // kilocode_change end
   // kilocode_change end
 }
 
@@ -244,6 +370,7 @@ function writable(info: Info) {
     plugin_origins: _plugin_origins,
     instruction_origins: _instruction_origins,
     skill_path_origins: _skill_path_origins,
+    agent_permission_sources: _agent_permission_sources,
     ...next
   } = info
   // kilocode_change end
@@ -296,6 +423,39 @@ function parseRawProviderMap(text: string | undefined, source: string): Record<s
     return out
   } catch {
     return Object.create(null) as Record<string, unknown>
+  }
+}
+
+// kilocode_change start - raw agent.permission provenance (disk truth, no schema normalization).
+// Returns per-agent presence + raw permission value so authored empty {} (applicable
+// ask) stays distinct from absent (non-applicable, no evaluator layer). Invalid or
+// missing files yield an empty map, mirroring the loader skipping invalid files.
+function parseRawAgentPermissions(
+  text: string | undefined,
+  source: string,
+): Record<string, { present: boolean; raw: unknown }> {
+  const out: Record<string, { present: boolean; raw: unknown }> = Object.create(null)
+  if (!text) return out
+  try {
+    const data = ConfigParse.jsonc(text, source) as Record<string, unknown>
+    if (!isRecord(data)) return out
+    const agents = (data as Record<string, unknown>).agent
+    if (!isRecord(agents)) return out
+    for (const [name, entry] of Object.entries(agents as Record<string, unknown>)) {
+      // eslint-disable-next-line no-prototype-builtins
+      if (!Object.prototype.hasOwnProperty.call(agents, name)) continue
+      if (!isRecord(entry as unknown)) continue
+      const rec = entry as Record<string, unknown>
+      // eslint-disable-next-line no-prototype-builtins
+      if (!Object.prototype.hasOwnProperty.call(rec, "permission")) continue
+      const raw = rec.permission
+      if (raw === undefined || raw === null) continue
+      if (!isRecord(raw as unknown)) continue
+      out[name] = { present: true, raw }
+    }
+    return out
+  } catch {
+    return Object.create(null) as Record<string, { present: boolean; raw: unknown }>
   }
 }
 
@@ -580,14 +740,20 @@ export const layer = Layer.effect(
     ) {
       log.info("loading", { path: filepath })
       const text = yield* readConfigFile(filepath)
-      if (!text) return { info: {} as Info, rawMap: Object.create(null) as Record<string, unknown> }
+      if (!text)
+        return {
+          info: {} as Info,
+          rawMap: Object.create(null) as Record<string, unknown>,
+          rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
+        }
       const rawMap = parseRawProviderMap(text, filepath)
+      const rawAgentMap = parseRawAgentPermissions(text, filepath)
       const exit = yield* Effect.exit(loadConfig(text, { path: filepath }, env, trusted, fileScope))
-      if (exit._tag === "Success") return { info: exit.value as Info, rawMap }
+      if (exit._tag === "Success") return { info: exit.value as Info, rawMap, rawAgentMap }
       // Squash Cause to the original Config Json/Invalid error so existing
       // recoverable warning behavior (toWarning/caught) recognizes it.
       const failure = Cause.squash(exit.cause)
-      return { info: {} as Info, rawMap, error: failure }
+      return { info: {} as Info, rawMap, rawAgentMap, error: failure }
     })
 
     const loadFile = Effect.fnUntraced(function* (
@@ -613,7 +779,7 @@ export const layer = Layer.effect(
         log.error("failed to load global config, using defaults", { error: String(single.error) })
       }
       globalStamp = yield* KilocodeGlobalConfigStamp.read(fs, Global.Path.config)
-      return { info: single.info, rawMap: single.rawMap, error: single.error }
+      return { info: single.info, rawMap: single.rawMap, rawAgentMap: single.rawAgentMap, error: single.error }
     })
 
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
@@ -621,10 +787,13 @@ export const layer = Layer.effect(
         Effect.tapError((error) =>
           Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
         ),
-        Effect.orElseSucceed((): { info: Info; rawMap: Record<string, unknown>; error?: unknown } => ({
-          info: {} as Info,
-          rawMap: Object.create(null) as Record<string, unknown>,
-        })),
+        Effect.orElseSucceed(
+          (): { info: Info; rawMap: Record<string, unknown>; rawAgentMap: Record<string, { present: boolean; raw: unknown }>; error?: unknown } => ({
+            info: {} as Info,
+            rawMap: Object.create(null) as Record<string, unknown>,
+            rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
+          }),
+        ),
       ),
       Duration.infinity,
     )
@@ -741,6 +910,7 @@ export const layer = Layer.effect(
             return Effect.succeed({
               info: {} as Info,
               rawMap: Object.create(null) as Record<string, unknown>,
+              rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
               error: undefined as unknown,
             })
           }),
@@ -761,6 +931,7 @@ export const layer = Layer.effect(
             return Effect.succeed({
               info: {} as Info,
               rawMap: Object.create(null) as Record<string, unknown>,
+              rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
               error: undefined as unknown,
             })
           }),
@@ -781,6 +952,12 @@ export const layer = Layer.effect(
 
         const deps: Fiber.Fiber<void>[] = []
 
+        // kilocode_change start - keep per-layer markdown agents for the tools floor
+        let globalMd: Record<string, { tools?: Record<string, boolean> }> = {}
+        let projectMd: Record<string, { tools?: Record<string, boolean> }> = {}
+        let globalMdSources: Array<{ agent: string; file: string; present: boolean; raw: unknown }> = []
+        let projectMdSources: Array<{ agent: string; file: string; present: boolean; raw: unknown }> = []
+        // kilocode_change end
         for (const dir of directories) {
           const dirTrusted = dir === globalDir
           const dirFileScope = dirTrusted ? undefined : { root: projectRoot, source: dir }
@@ -791,13 +968,82 @@ export const layer = Layer.effect(
             result.command ?? {},
             yield* Effect.promise(() => ConfigCommand.load(dir, warnings, dirTrusted, dirFileScope, dirSourceScope)),
           )
+          const loaded = yield* Effect.promise(() =>
+            ConfigAgent.loadWithSources(dir, warnings, dirTrusted, dirFileScope, dirSourceScope),
+          )
+          const md = loaded.agents
+          // kilocode_change start
+          if (dir === globalDir) {
+            globalMd = md as Record<string, { tools?: Record<string, boolean> }>
+            globalMdSources = loaded.sources
+          } else {
+            projectMd = md as Record<string, { tools?: Record<string, boolean> }>
+            projectMdSources = loaded.sources
+          }
+          // kilocode_change end
           result.agent = mergeDeep(
             result.agent ?? {},
-            yield* Effect.promise(() => ConfigAgent.load(dir, warnings, dirTrusted, dirFileScope, dirSourceScope)),
+            md,
           )
           const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
           yield* mergePluginOrigins(dir, list, dirScope)
         }
+        // kilocode_change start - restrictive tools floor: any explicit false in
+        // global/project JSONC or markdown survives later trues from another
+        // authored definition; same-definition explicit enables stay intact.
+        applyAgentToolsFloor(
+          result.agent as Record<string, { tools?: Record<string, boolean> }>,
+          [
+            (globalWithRaw.info.agent ?? {}) as Record<string, { tools?: Record<string, boolean> }>,
+            (projectSingle.info.agent ?? {}) as Record<string, { tools?: Record<string, boolean> }>,
+            globalMd,
+            projectMd,
+          ],
+        )
+        // kilocode_change start - derived agent.permission provenance across the four
+        // authored layers. Raw JSONC maps preserve authored empty {} vs absent;
+        // markdown sources preserve raw frontmatter presence for successfully decoded
+        // agents only. Effective `agent.<name>.permission` readback keeps the merged
+        // map; this array is runtime-only for Permission.ask/evaluateForDebug dual
+        // assembly (deny > ask > allow across sources, same-document specific/order
+        // via winningRule per source). Never persisted (see writable()).
+        {
+          const derived: AgentPermissionSource[] = []
+          const globalRawAgent =
+            ((globalWithRaw as { rawAgentMap?: Record<string, { present: boolean; raw: unknown }> }).rawAgentMap ??
+              {}) as Record<string, { present: boolean; raw: unknown }>
+          const projectRawAgent =
+            ((projectSingle as { rawAgentMap?: Record<string, { present: boolean; raw: unknown }> }).rawAgentMap ??
+              {}) as Record<string, { present: boolean; raw: unknown }>
+          const globalFilePath = globalConfigFile()
+          for (const [name, entry] of Object.entries(globalRawAgent)) {
+            if (!entry?.present) continue
+            if (!isRecord(entry.raw as unknown)) continue
+            derived.push({
+              agent: name,
+              kind: "global-jsonc",
+              source: globalFilePath,
+              permission: entry.raw as Record<string, unknown>,
+            })
+          }
+          for (const [name, entry] of Object.entries(projectRawAgent)) {
+            if (!entry?.present) continue
+            if (!isRecord(entry.raw as unknown)) continue
+            derived.push({ agent: name, kind: "project-jsonc", source: projectFile, permission: entry.raw as Record<string, unknown> })
+          }
+          for (const src of globalMdSources) {
+            if (!src.present) continue
+            if (!isRecord(src.raw as unknown)) continue
+            derived.push({ agent: src.agent, kind: "global-md", source: src.file, permission: src.raw as Record<string, unknown> })
+          }
+          for (const src of projectMdSources) {
+            if (!src.present) continue
+            if (!isRecord(src.raw as unknown)) continue
+            derived.push({ agent: src.agent, kind: "project-md", source: src.file, permission: src.raw as Record<string, unknown> })
+          }
+          if (derived.length > 0) result.agent_permission_sources = derived
+        }
+        // kilocode_change end
 
         if (!result.username) {
           try {

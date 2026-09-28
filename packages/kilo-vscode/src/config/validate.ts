@@ -279,17 +279,31 @@ export function validateConfig(
 
   const errors: ValidationError[] = []
 
+  // Legacy-inert provider entries (pure npm/api without endpoint/protocol/
+  // credential) are preserved on disk but excluded from canonical validation,
+  // materialization, and cross-scope conflict detection. Hybrid and malformed
+  // canonical entries stay strict and fail closed below.
+  const { partitionProviderRecord } = require("./types") as typeof import("./types")
+  const filtered: Record<string, unknown> = { ...parsed.value }
+  if (parsed.value.provider && typeof parsed.value.provider === "object" && !Array.isArray(parsed.value.provider)) {
+    const { canonical } = partitionProviderRecord(parsed.value.provider)
+    filtered.provider = canonical
+  }
+
   // 1. Unknown keys (closed registry)
   errors.push(...validateNoUnknownKeys(parsed.value, scope, file))
 
-  // 2. Plaintext credentials (provider + MCP)
+  // 2. Plaintext credentials (provider + MCP) — raw record, so legacy-inert
+  // entries still fail on plaintext (apiKey/options.apiKey/
+  // headers.Authorization/…) via the original recursive checker. Legacy
+  // skips only the canonical shape/disallowed-key scan inside the checker.
   errors.push(...validateNoPlaintextCredentials(parsed.value, scope, file))
 
   // 3. Strict canonical validation — no legacy normalization.
-  errors.push(...validateSchemaFields(parsed.value, scope, file))
+  errors.push(...validateSchemaFields(filtered, scope, file))
 
-  // 4. Provider credential scope context
-  errors.push(...validateCredentialScopes(parsed.value.provider, "provider", scope, file))
+  // 4. Provider credential scope context — legacy-inert filtered
+  errors.push(...validateCredentialScopes(filtered.provider, "provider", scope, file))
 
   // 5. MCP credential scope context
   errors.push(...validateCredentialScopes(parsed.value.mcp, "mcp", scope, file))
@@ -297,7 +311,7 @@ export function validateConfig(
   return {
     valid: errors.length === 0,
     errors,
-    parsed: errors.length === 0 ? parsed.value : null,
+    parsed: errors.length === 0 ? filtered : null,
   }
 }
 
@@ -542,6 +556,24 @@ export function validateCrossScope(
       const gVal = global[key]
       const pVal = project[key]
       if (!isRecord(gVal) || !isRecord(pVal)) continue
+
+      // Provider IDs: legacy-inert entries never conflict across scopes.
+      // Canonical-canonical same IDs still conflict decisively.
+      if (key === "provider") {
+        const { partitionProviderRecord: part } = require("./types") as typeof import("./types")
+        const gCan = part(gVal).canonical
+        const pCan = part(pVal).canonical
+        for (const id of Object.keys(pCan)) {
+          if (id in gCan) {
+            errors.push({
+              path: [key, id],
+              message: `Duplicate keyed ID "${id}" in field "${key}" across global and project scopes`,
+              scope: "project",
+            })
+          }
+        }
+        continue
+      }
 
       for (const id of Object.keys(pVal)) {
         if (id in gVal) {

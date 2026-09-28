@@ -180,9 +180,14 @@ export class TerminalManager {
    * Failure modes we surface in the log:
    *   - The SDK client is unavailable (connection service already torn
    *     down). We can't reach the server to call `pty.remove`; the
-   *     server-side PTYs are then only reaped when `kilo serve` itself
-   *     dies, which ServerManager does on extension deactivate via
-   *     SIGTERM → SIGKILL on the process group. OS kills every child.
+   *     server-side PTYs then linger until `kilo serve` exits and its
+   *     per-directory `Pty.Service` disposers run. ServerManager owns that
+   *     lifecycle: on extension deactivate it sends SIGTERM then SIGKILL to
+   *     the exact owned serve process group. That group signal reaches only
+   *     members still in the group — the OS does not kill every child
+   *     automatically, and orphaned/reparented processes outside the group
+   *     are not reaped by the OS. PTYs are backend-owned, not a PTY process
+   *     group owned here.
    *   - Individual `pty.remove` requests error (404 because the server
    *     already cleaned up, or network blip). Logged per-entry and then
    *     summarized with a "may leak" notice so it's obvious something
@@ -202,9 +207,10 @@ export class TerminalManager {
     this.deps.log(`Disposing ${snapshot.length} terminal(s)`)
     const connection = this.conn()
     // No control path at all (private absent-or-unavailable plus SDK client
-    // torn down): fall back to the `kilo serve` process-group kill, same as
-    // the null-connection branch. A live private peer still attempts per-entry
-    // private cleanup first, so it skips this branch.
+    // torn down): this manager performs no process-group kill itself — it
+    // clears bookkeeping and relies on the outer ServerManager dispose (exact
+    // owned serve child SIGTERM→SIGKILL) to reap backend PTYs. A live private
+    // peer still attempts per-entry private cleanup first, so it skips this branch.
     const usable = ((): boolean => {
       try {
         return !!connection?.isPrivateAvailable()
@@ -218,7 +224,7 @@ export class TerminalManager {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.deps.log(
-          `Terminal dispose: SDK client unavailable (${msg}); relying on kilo serve process-group kill to reap PTYs`,
+          `Terminal dispose: SDK client unavailable (${msg}); this manager performs no process-group kill — outer ServerManager dispose signals the owned serve group only, PTYs/group-outside children not guaranteed released, hard-kill cleanup unclosed`,
         )
         this.entries.clear()
         return

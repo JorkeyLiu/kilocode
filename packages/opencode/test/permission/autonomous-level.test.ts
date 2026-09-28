@@ -36,7 +36,7 @@ function layer(
 
 const auto = { permissionLevel: "autonomous" as const }
 
-describe("autonomous permission_level", () => {
+describe("autonomous permission_level binding semantics", () => {
   test("review (absent level) keeps agent ordinary ask", () => {
     const out = evaluate({
       request: req("bash", ["npm test"]),
@@ -47,7 +47,7 @@ describe("autonomous permission_level", () => {
     expect(out.result).toBe("ask")
   })
 
-  test("autonomous allows ordinary ask from every layer without approval", () => {
+  test("autonomous keeps explicit ask from every layer", () => {
     for (const kind of ["global", "project", "agent", "session-restriction"] as const) {
       const out = evaluate({
         request: req("bash", ["npm test"]),
@@ -56,13 +56,31 @@ describe("autonomous permission_level", () => {
         allowEverything: false,
         ...auto,
       })
-      expect(out.result).toBe("allow")
-      expect(out.provenance.decisive.reason).toBe("autonomous")
+      expect(out.result).toBe("ask")
+      expect(out.provenance.decisive.reason).toContain("no-rule-ask")
       expect(out.provenance.approval).toBeUndefined()
+      const contributing = out.provenance.contributingLayers.find((l) => l.canonicalPath === layer(kind, []).canonicalPath)
+      expect(contributing?.decision).toBe("ask")
     }
   })
 
-  test("autonomous allows doom_loop and question lifecycle asks", () => {
+  test("autonomous global allow with project ask still asks", () => {
+    const out = evaluate({
+      request: req("bash", ["npm test"]),
+      layers: [
+        layer("runtime-ceiling", []),
+        layer("global", [{ permission: "bash", pattern: "*", action: "allow" }]),
+        layer("project", [{ permission: "bash", pattern: "npm test", action: "ask" }]),
+      ],
+      approvals: [],
+      allowEverything: false,
+      ...auto,
+    })
+    expect(out.result).toBe("ask")
+    expect(out.provenance.decisive.reason).toBe("project-no-rule-ask")
+  })
+
+  test("autonomous keeps doom_loop and question lifecycle asks", () => {
     for (const permission of ["doom_loop", "question", "question_tool"]) {
       const pattern = permission === "doom_loop" ? "bash" : "*"
       const out = evaluate({
@@ -72,12 +90,12 @@ describe("autonomous permission_level", () => {
         allowEverything: false,
         ...auto,
       })
-      expect(out.result).toBe("allow")
-      expect(out.provenance.decisive.reason).toBe("autonomous")
+      expect(out.result).toBe("ask")
+      expect(out.provenance.approval).toBeUndefined()
     }
   })
 
-  test("autonomous allows ceiling-b protected mutation with ceiling provenance", () => {
+  test("autonomous keeps ceiling-b protected mutation as ask-ceiling", () => {
     const out = evaluate({
       request: req("edit", [".kilo/kilo.jsonc"]),
       layers: [layer("global", [{ permission: "edit", pattern: "*", action: "allow" }])],
@@ -85,12 +103,12 @@ describe("autonomous permission_level", () => {
       allowEverything: false,
       ...auto,
     })
-    expect(out.result).toBe("allow")
-    expect(out.provenance.decisive.reason).toBe("autonomous-ceiling")
-    expect(out.provenance.decisive.ceilingId).toBe(null)
+    expect(out.result).toBe("ask-ceiling")
+    expect(out.provenance.decisive.reason).toBe("ceiling-b")
+    expect(out.provenance.decisive.ceilingId).toBe("(b)")
   })
 
-  test("autonomous allows ceiling-c .env read with ceiling provenance", () => {
+  test("autonomous keeps ceiling-c .env read as ask-ceiling", () => {
     const out = evaluate({
       request: req("read", ["secret.env"]),
       layers: [layer("global", [{ permission: "read", pattern: "*", action: "allow" }])],
@@ -98,26 +116,69 @@ describe("autonomous permission_level", () => {
       allowEverything: false,
       ...auto,
     })
-    expect(out.result).toBe("allow")
-    expect(out.provenance.decisive.reason).toBe("autonomous-ceiling")
+    expect(out.result).toBe("ask-ceiling")
+    expect(out.provenance.decisive.reason).toBe("ceiling-c")
+    expect(out.provenance.decisive.ceilingId).toBe("(c)")
   })
 
-  test("autonomous allows the empty default-ask", () => {
-    const out = evaluate({
+  test("autonomous keeps authored empty applicable layer and default no-rule as ask", () => {
+    const emptyLayer = evaluate({
+      request: req("bash", ["npm test"]),
+      layers: [layer("runtime-ceiling", []), layer("global", []), layer("project", [{ permission: "bash", pattern: "*", action: "allow" }])],
+      approvals: [],
+      allowEverything: false,
+      ...auto,
+    })
+    expect(emptyLayer.result).toBe("ask")
+
+    const noRule = evaluate({
       request: req("bash", ["npm test"]),
       layers: [layer("runtime-ceiling", [])],
       approvals: [],
       allowEverything: false,
       ...auto,
     })
-    expect(out.result).toBe("allow")
-    expect(out.provenance.decisive.reason).toBe("autonomous")
+    expect(noRule.result).toBe("ask")
+    expect(noRule.provenance.decisive.reason).toBe("default-ask")
+  })
+
+  test("autonomous exact approval still follows existing approval conditions", () => {
+    const without = evaluate({
+      request: req("bash", ["npm test"]),
+      layers: [layer("runtime-ceiling", []), layer("agent", [{ permission: "bash", pattern: "npm test", action: "ask" }])],
+      approvals: [],
+      allowEverything: false,
+      ...auto,
+    })
+    expect(without.result).toBe("ask")
+
+    const exact = evaluate({
+      request: req("bash", ["npm test"]),
+      layers: [layer("runtime-ceiling", []), layer("agent", [{ permission: "bash", pattern: "npm test", action: "ask" }])],
+      approvals: [{ kind: "session", patterns: ["npm test"], sessionID: sess, agent: "build", permission: "bash" }],
+      allowEverything: false,
+      ...auto,
+    })
+    expect(exact.result).toBe("allow")
+    expect(exact.provenance.decisive.reason).toBe("approval-exact")
   })
 
   test("autonomous keeps all-allow truthful", () => {
     const out = evaluate({
       request: req("read", ["notes.md"]),
       layers: [layer("runtime-ceiling", []), layer("global", [{ permission: "read", pattern: "*", action: "allow" }])],
+      approvals: [],
+      allowEverything: false,
+      ...auto,
+    })
+    expect(out.result).toBe("allow")
+    expect(out.provenance.decisive.reason).toBe("all-allow")
+  })
+
+  test("autonomous plain {'*':'allow'} preset unconstrained stays all-allow", () => {
+    const out = evaluate({
+      request: req("bash", ["ls"]),
+      layers: [layer("runtime-ceiling", []), layer("global", [{ permission: "*", pattern: "*", action: "allow" }])],
       approvals: [],
       allowEverything: false,
       ...auto,
@@ -160,7 +221,7 @@ describe("autonomous permission_level", () => {
       allowEverything: false,
       ...auto,
     })
-    expect(out.result).toBe("allow")
+    expect(out.result).toBe("ask")
     expect(out.provenance.approval).toBeUndefined()
     expect(out.provenance.decisive.reason).not.toBe("allow-everything")
     expect(out.provenance.decisive.reason).not.toBe("approval-exact")

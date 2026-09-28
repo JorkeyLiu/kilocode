@@ -18,15 +18,22 @@ import type { Warning } from "./config"
 const log = Log.create({ service: "config" })
 
 // kilocode_change start - trusted gates {env:}; fileScope confines untrusted agent prompt {file:} reads
-export async function load(
+export type PermissionSource = {
+  agent: string
+  file: string
+  present: boolean
+  raw: unknown
+}
+
+export async function loadWithSources(
   dir: string,
   warnings?: Warning[],
   trusted = false,
   fileScope?: ConfigVariable.FileScope,
   sourceScope?: ConfigVariable.FileScope,
-) {
-  // kilocode_change end
+): Promise<{ agents: Record<string, ConfigAgentV1.Info>; sources: PermissionSource[] }> {
   const result: Record<string, ConfigAgentV1.Info> = {}
+  const sources: PermissionSource[] = []
   for (const item of await Glob.scan("{agent,agents}/**/*.md", {
     cwd: dir,
     absolute: true,
@@ -55,6 +62,8 @@ export async function load(
     if (!md) continue
 
     const name = configEntryNameFromPath(path.relative(dir, item), ["agent/", "agents/"])
+    const present = Object.prototype.hasOwnProperty.call(md.data ?? {}, "permission")
+    const raw = (md.data as Record<string, unknown> | undefined)?.permission
 
     // kilocode_change start - substitute agent prompt variables relative to the agent file. Project agents are
     // untrusted (no {env:}, {file:} confined to fileScope.root); a rejected substitution must skip only this
@@ -94,6 +103,22 @@ export async function load(
       throw err
     }
     // kilocode_change end
+    // Only successfully decoded agents contribute permission provenance, so an
+    // invalid markdown file never creates a phantom allow/deny layer. Presence
+    // is raw frontmatter truth (empty {} stays applicable ask, absent stays
+    // non-applicable) independent of schema normalization.
+    sources.push({ agent: config.name, file: item, present, raw })
   }
-  return result
+  return { agents: result, sources }
+}
+
+export async function load(
+  dir: string,
+  warnings?: Warning[],
+  trusted = false,
+  fileScope?: ConfigVariable.FileScope,
+  sourceScope?: ConfigVariable.FileScope,
+) {
+  const out = await loadWithSources(dir, warnings, trusted, fileScope, sourceScope)
+  return out.agents
 }

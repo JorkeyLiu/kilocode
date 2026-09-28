@@ -411,13 +411,14 @@ function hasBroadAllowFor(request: Request, layers: LayerInput[]) {
 }
 
 /**
- * Autonomous semantics: when level=autonomous, every decision that would
- * otherwise ask — ordinary ask from any layer (global/project/agent/
- * session-restriction), doom_loop, question lifecycle, runtime ceiling b/c
- * (protected files, .env reads), and the empty default-ask — resolves
- * directly to allow with an explicit autonomous provenance reason. Only
- * deny (any layer) and ceiling-a hard deny stay deny. File-authoritative
- * hint only — never an approval and never allowEverything.
+ * Binding semantics (specs/vscode-orchestrator/direction.md:40-55): any
+ * applicable denial or hard-safety ceiling holds; an explicit confirmation
+ * requirement beats a plain grant; where no rule applies the decision
+ * defaults to asking. `permission_level` is a file-authoritative hint only —
+ * it never auto-bypasses ask/ask-ceiling and never acts as an approval or
+ * allowEverything. A plain Autonomous preset (`{'*':'allow'}`) still reaches
+ * `all-allow` when every applicable layer permits and no ceiling triggers.
+ * Retained for compatibility; no longer a bypass authority.
  */
 export function autonomousReason(ceilingAskPresent: boolean): "autonomous" | "autonomous-ceiling" {
   if (ceilingAskPresent) return "autonomous-ceiling"
@@ -634,11 +635,7 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
     const hasExact = !!exactApproval
     const ceilingResolved = !ceilingAskPresent || hasExact
     const ordinaryResolved = !ordinaryAskPresent || hasExact || input.allowEverything
-    if (input.permissionLevel === "autonomous") {
-      result = "allow"
-      reason = autonomousReason(ceilingAskPresent)
-      finalCeilingId = null
-    } else if (ceilingResolved && ordinaryResolved) {
+    if (ceilingResolved && ordinaryResolved) {
       result = "allow"
       if (hasExact) reason = "approval-exact"
       else reason = "allow-everything"
@@ -685,10 +682,6 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
           expiry: exactApproval.kind === "once" ? "once-consumed" : isDurable2 ? "persistent" : "session-end",
         }
         contributingLayers.push(approvalLayer!)
-      } else if (input.permissionLevel === "autonomous") {
-        result = "allow"
-        reason = "autonomous"
-        finalCeilingId = null
       } else {
         result = "ask"
         reason = "default-ask"

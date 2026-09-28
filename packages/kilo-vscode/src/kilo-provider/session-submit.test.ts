@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test"
-import { submitPrivateFirst } from "./session-submit"
+import { describe, expect, test, spyOn } from "bun:test"
+import { isPrivateTerminalError, PrivateTerminalError, submitPrivateFirst } from "./session-submit"
 
 function mockHandle(id: number, promise: Promise<unknown>, cancel?: () => boolean) {
   return { id, promise, cancel: cancel ?? (() => true) }
@@ -413,5 +413,46 @@ describe("session-submit accepted-only private-first", () => {
     }))
     expect(priv).toBe(0)
     expect(sdk).toBe(1)
+  })
+
+  test("terminal errors use verifiable discriminant; forged code/terminal flags are untrusted", () => {
+    const trusted = new PrivateTerminalError("validation.failed", "validation.failed boom")
+    expect(isPrivateTerminalError(trusted)).toBe(true)
+    expect(trusted.code).toBe("validation.failed")
+    expect(trusted.message).toBe("validation.failed boom")
+    const forged = new Error("validation.failed boom") as Error & { code?: string; terminal?: boolean }
+    forged.code = "validation.failed"
+    forged.terminal = true
+    expect(isPrivateTerminalError(forged)).toBe(false)
+    expect(isPrivateTerminalError({ code: "validation.failed", terminal: true })).toBe(false)
+    expect(isPrivateTerminalError(new Error("boom"))).toBe(false)
+  })
+
+  test("uncertain private transport warn carries only opId, never raw secret/URL", async () => {
+    const SECRET = "sk-live-submit-SECRET123"
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      let thrown: unknown = null
+      try {
+        await submitPrivateFirst(baseInput({
+          dispatch: {
+            factory: () => { throw new Error(`Peer closed ${SECRET} https://u:${SECRET}@example.com/`) },
+            direct: null,
+            cancel: null,
+            invalidate: null,
+            peek: null,
+          },
+          fallback: async () => ({ data: null }),
+          observeExact: async () => ({ kind: "unavailable" as const }),
+        }))
+      } catch (e) { thrown = e }
+      expect(isPrivateTerminalError(thrown)).toBe(true)
+      const text = warn.mock.calls.map((args) => args.map((part) => typeof part === "string" ? part : JSON.stringify(part)).join(" ")).join("\n")
+      expect(text).not.toContain(SECRET)
+      expect(text).not.toContain("example.com")
+      expect(text).toContain("prompt:msg_1")
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

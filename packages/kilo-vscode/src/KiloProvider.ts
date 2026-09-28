@@ -161,6 +161,8 @@ import {
   type CanonicalStamp,
   type CleanupRetryRecord,
   parseCanonicalProviderRecord,
+  parseCanonicalProviderRecordIgnoringLegacy,
+  isLegacyInertProviderEntry,
   narrowProviderEntry,
   isValidCanonicalProviderEntry,
 } from "./config/types"
@@ -169,6 +171,7 @@ import { parseSecretKey } from "./config/secret-adapter"
 import { CLOSED_JSONC_FIELDS, isGuiField } from "./config/registry"
 import { composeScopePatch } from "./util/config-patch"
 import { mapProviderIndexToWebviewProviders } from "./config/selectors"
+import { isPrivateTerminalError } from "./kilo-provider/session-submit"
 
 let maxCost = 0
 
@@ -324,6 +327,36 @@ function isCanonicalStamp(value: unknown): value is CanonicalStamp {
 function sandboxClient(client: KiloClient | null) {
   const sandbox = client?.sandbox
   return sandbox as (typeof sandbox & SandboxSupportClient) | undefined
+}
+
+// Send-failure display boundary: SDK fallback transport/business errors are
+// plain untrusted JSON (secret-bearing fields, cause/body/URL/stack,
+// unbounded detail). They must never reach toast/console via
+// getErrorMessage/redact: the redact regex set is incomplete (bare keys,
+// Bearer, URL userinfo, non-string cause objects slip through), so the only
+// safe rendering is a fixed generic string. Only errors constructed locally
+// as PrivateTerminalError — from runtime `SessionOperation.normalizeRecord`
+// projections already scrubbed+capped, or locally built unresolved messages
+// carrying just code+messageId — pass through, distinguished by
+// `isPrivateTerminalError` (proprietary class + internal symbol), never by a
+// forgeable err.code/err.terminal flag. SDK backend business errors were
+// audited: messages echo session IDs/paths/provider HTTP bodies with no
+// allowlisted safe-constant code at this seam, so no SDK code/message is
+// preserved; diagnosis of provider failures stays with runtime
+// `session.status`/`session.error`, not this toast. No SessionOperation
+// record is created and no occurrence time is inferred here.
+export const SEND_MESSAGE_GENERIC = "Unable to send message. Check the connection and try again."
+export const SEND_COMMAND_GENERIC = "Unable to send command. Check the connection and try again."
+
+function resolveSendError(error: unknown, generic: string): string {
+  if (isPrivateTerminalError(error)) {
+    const msg = error.message
+    if (typeof msg === "string" && msg.length > 0) {
+      if (msg.length > 500) return `${msg.slice(0, 500)}…`
+      return msg
+    }
+  }
+  return generic
 }
 
 // Helper to map agent data to the subset of fields sent to the webview
@@ -854,9 +887,22 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   private providerScope(id: string): "global" | "project" {
+    // Scope follows the canonical entry when one scope holds canonical custom
+    // for the ID and the other holds only legacy-inert bytes: edits target the
+    // canonical scope and the other scope's raw legacy stays untouched.
+    // Pure legacy/malformed IDs fall back to raw presence so they fail closed
+    // with the correct stamp instead of silently falling back to global.
     const project = this.canonicalConfig?.getScopeConfig("project").provider
-    const parsed = parseCanonicalProviderRecord(project)
-    if (parsed && id in parsed) return "project"
+    const global = this.canonicalConfig?.getScopeConfig("global").provider
+    const projectMap =
+      project && typeof project === "object" && !Array.isArray(project) ? (project as Record<string, unknown>) : null
+    const globalMap =
+      global && typeof global === "object" && !Array.isArray(global) ? (global as Record<string, unknown>) : null
+    const projectCanonical = projectMap ? parseCanonicalProviderRecordIgnoringLegacy(projectMap)?.[id] : undefined
+    const globalCanonical = globalMap ? parseCanonicalProviderRecordIgnoringLegacy(globalMap)?.[id] : undefined
+    if (projectCanonical && !globalCanonical) return "project"
+    if (globalCanonical && !projectCanonical) return "global"
+    if (projectMap && id in projectMap) return "project"
     return "global"
   }
 
@@ -976,7 +1022,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const current = service.getScopeConfig(scope)
     const rawProviders =
       current.provider && typeof current.provider === "object" ? (current.provider as Record<string, unknown>) : {}
-    const parsedProviders = parseCanonicalProviderRecord(rawProviders)
+    // Mixed on-disk files may carry pure legacy entries alongside canonical
+    // custom entries. Legacy IDs are preserved verbatim and stay inert;
+    // every non-legacy entry must still pass the shared strict validator.
+    const parsedProviders = parseCanonicalProviderRecordIgnoringLegacy(rawProviders)
     if (!parsedProviders) return fail("Provider record contains invalid entries", "invalid")
     const providers: Record<string, CanonicalProviderPayload> = { ...parsedProviders }
     const ref = `secret:kilo.credentials.${scope}.provider.${id}`
@@ -1033,7 +1082,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         "provider",
         id,
         key,
-        { provider: { ...providers, [id]: { ...provider, credential: ref } } },
+        { provider: { ...rawProviders, ...providers, [id]: { ...provider, credential: ref } } },
         expected ?? "absent",
         stamp,
         priorRef,
@@ -1046,7 +1095,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       const prior = providers[id]
       const provider: Record<string, unknown> = prior ? { ...prior } : (undefined as unknown as Record<string, unknown>)
       if (provider) delete provider.credential
-      const next = provider ? { ...providers, [id]: provider as CanonicalProviderPayload } : providers
+      // Top-level provider shallow replace per ID: preserve unrelated
+      // on-disk entries (including legacy-inert IDs) verbatim.
+      const next = provider ? { ...rawProviders, [id]: provider as CanonicalProviderPayload } : { ...rawProviders }
       const result = await service.writeConfig(scope, { provider: next }, expected ?? "absent")
       if (!result.ok) return fail(result.message, result.kind)
       const cleanup = await service.cleanupProviderCredential(
@@ -1081,8 +1132,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     if (msg.type === "deleteCustomProvider") {
       const prior = providers[id]
-      delete providers[id]
-      const result = await service.writeConfig(scope, { provider: providers }, expected ?? "absent")
+      // Preserve unrelated on-disk entries (including legacy-inert IDs).
+      const nextProviders: Record<string, unknown> = { ...rawProviders }
+      delete nextProviders[id]
+      const result = await service.writeConfig(scope, { provider: nextProviders }, expected ?? "absent")
       if (!result.ok) return fail(result.message, result.kind)
       const cleanup = await service.cleanupProviderCredential(
         scope,
@@ -1122,12 +1175,26 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (msg.type === "saveCustomProvider") {
       for (const other of ["global", "project"] as const) {
         const rawScope = service.getScopeConfig(other).provider as Record<string, unknown> | undefined
-        const parsedScope = parseCanonicalProviderRecord(rawScope ?? {})
+        const scopeMap = rawScope && typeof rawScope === "object" && !Array.isArray(rawScope) ? rawScope : {}
+        if (!(id in scopeMap)) continue
+        const existingRaw = scopeMap[id]
+        // Cross-scope legacy-inert entries are preserved verbatim and never
+        // block edits to the canonical scope: only the target scope's own
+        // legacy entry is non-overwritable. Configured non-custom IDs fail
+        // closed in every scope.
+        if (isLegacyInertProviderEntry(existingRaw)) {
+          if (other === scope) return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
+          continue
+        }
+        const parsedScope = parseCanonicalProviderRecordIgnoringLegacy(scopeMap)
         if (!parsedScope) return fail("Provider record contains invalid entries", "invalid")
         const existing = parsedScope[id]
         if (existing && !isCanonicalCustomEntry(existing)) {
           return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
         }
+        // Absent from the canonical view but present raw with a malformed
+        // non-legacy shape also fails closed (unparseable/non-custom).
+        if (!existing) return fail(CUSTOM_ONLY_PROVIDER_MESSAGE, "unsupported")
       }
     }
     // Canonical-only serialization: emit name/endpoint/protocol/models.
@@ -1168,12 +1235,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             "provider",
             id,
             key,
-            { provider: { ...providers, [id]: provider } },
+            { provider: { ...rawProviders, ...providers, [id]: provider } },
             expected ?? "absent",
             stamp,
             existingPriorRef,
           )
-        : await service.writeConfig(scope, { provider: { ...providers, [id]: provider } }, expected ?? "absent")
+        : await service.writeConfig(scope, { provider: { ...rawProviders, ...providers, [id]: provider } }, expected ?? "absent")
     if (!result.ok) return fail(result.message, result.kind)
     // credentialRequested=false preserves the existing opaque reference; explicit
     // removal is a separate disconnectProvider operation.
@@ -1280,11 +1347,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     try {
       if (mode === "restore" && retry.priorRecord) {
         if (retry.priorValue !== undefined && retry.ref) await service.restoreSecret(retry.ref, retry.priorValue)
+        const rawScopeProviders = service.getScopeConfig(scope).provider
+        const baseProviders =
+          rawScopeProviders && typeof rawScopeProviders === "object" && !Array.isArray(rawScopeProviders)
+            ? (rawScopeProviders as Record<string, unknown>)
+            : {}
         const restored = await service.writeConfig(
           scope,
           {
             provider: {
-              ...(parseCanonicalProviderRecord(service.getScopeConfig(scope).provider) ?? {}),
+              ...baseProviders,
               [id]: retry.priorRecord,
             },
           },
@@ -3906,7 +3978,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     for (const scope of ["global", "project"] as const) {
       const raw = service.getScopeConfig(scope).provider as Record<string, unknown> | undefined
       if (!raw || typeof raw !== "object" || !(pid in raw)) continue
-      const parsed = parseCanonicalProviderRecord(raw)
+      const entryRaw = (raw as Record<string, unknown>)[pid]
+      // Legacy-inert IDs are never custom: discovery fails closed.
+      if (isLegacyInertProviderEntry(entryRaw)) return true
+      const parsed = parseCanonicalProviderRecordIgnoringLegacy(raw)
       const entry = parsed?.[pid]
       if (!entry || !isCanonicalCustomEntry(entry)) return true
     }
@@ -3976,7 +4051,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (!key && this.canonicalConfig && typeof msg.providerID === "string") {
       const scope = this.providerScope(msg.providerID)
       const provider = this.canonicalConfig.getScopeConfig(scope).provider
-      const parsed = parseCanonicalProviderRecord(provider)
+      const parsed = parseCanonicalProviderRecordIgnoringLegacy(provider)
       const record = parsed?.[msg.providerID]
       const ref = record && typeof record.credential === "string" ? record.credential : undefined
       // Exact owned ref only — never reconstruct a derived key as fallback.
@@ -5468,10 +5543,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         }),
       )
     } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to send message:", error)
+      const safe = resolveSendError(error, SEND_MESSAGE_GENERIC)
+      console.error("[Kilo New] KiloProvider: Failed to send message:", {
+        messageID: stableMessageID,
+        sessionID: resolved?.sid ?? sessionID,
+      })
       this.postMessage({
         type: "sendMessageFailed",
-        error: getErrorMessage(error) || "Failed to send message",
+        error: safe,
         text,
         sessionID: resolved?.sid ?? sessionID,
         draftID,
@@ -5569,10 +5648,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         }),
       )
     } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to send command:", error)
+      const safe = resolveSendError(error, SEND_COMMAND_GENERIC)
+      console.error("[Kilo New] KiloProvider: Failed to send command:", {
+        messageID: stableMessageID,
+        sessionID: resolved?.sid ?? sessionID,
+      })
       this.postMessage({
         type: "sendMessageFailed",
-        error: getErrorMessage(error) || "Failed to send command",
+        error: safe,
         text: `/${command} ${args}`.trim(),
         sessionID: resolved?.sid ?? sessionID,
         draftID,

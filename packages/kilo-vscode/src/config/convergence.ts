@@ -29,9 +29,11 @@
  * internally four-key-bound observe token over the identical descriptor
  * batch. Eventual delivery lives one layer up: the scope-bucketed
  * accumulator (`external-observe.ts`) parks unconverged batches
- * descriptor-only (no bytes copy, no new queue, no timer) and redelivers
- * them once per explicit reconcile signal (transport-recovery notification
- * or the next canonical config read) or per fresh watcher event. Own-write
+ * descriptor-only (no bytes copy, no new queue) and redelivers them once
+ * per explicit reconcile signal (transport-recovery notification or the
+ * next canonical config read) or per fresh watcher event, plus via its own
+ * single bounded backoff wakeup while parked work remains (dispose clears
+ * it; firing only redrives reconcile, never claims success). Own-write
  * hash hits send no observe (they already acquire/resolve) and never park;
  * non-`.md`, invalid/unmaterializable, and nested-subdir events keep
  * fail-soft semantics with diagnostics and no error descriptor.

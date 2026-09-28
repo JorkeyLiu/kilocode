@@ -40,7 +40,13 @@ describe("custom-only helpers", () => {
       anthropic: makeProviderItem("anthropic", "Anthropic", "api"),
       mycustom: makeProviderItem("mycustom", "My Custom", "custom"),
     }
-    const list = buildCustomConfiguredList(all, ["anthropic"], new Set(), { mycustom: { npm: "@ai-sdk/openai-compatible" } }, { anthropic: "api" })
+    const list = buildCustomConfiguredList(
+      all,
+      ["anthropic"],
+      new Set(),
+      { mycustom: { name: "My Custom", endpoint: "https://example.com/v1", protocol: "openai/completions" } },
+      { anthropic: "api" },
+    )
     expect(list.map((p) => p.id)).toEqual(["mycustom"])
   })
 
@@ -73,13 +79,13 @@ describe("custom-only helpers", () => {
     expect(list).toEqual([])
   })
 
-  it("keeps legacy npm custom shape compatible", () => {
+  it("treats legacy npm entries as inert, never custom", () => {
     const all = {
       legacycustom: makeProviderItem("legacycustom", "Legacy Custom", "config"),
     }
     const cfg = { legacycustom: { name: "Legacy Custom", npm: "@ai-sdk/anthropic" } }
     const list = buildCustomConfiguredList(all, [], new Set(), cfg, {})
-    expect(list.map((p) => p.id)).toEqual(["legacycustom"])
+    expect(list.map((p) => p.id)).toEqual([])
   })
 
   it("never treats reserved internal IDs as custom", () => {
@@ -106,9 +112,11 @@ describe("custom-only helpers", () => {
   })
 
   it("matches isCustomConfigured semantics", () => {
-    const cfg = { mycustom: { npm: "@ai-sdk/openai-compatible" } }
+    const cfg = { mycustom: { name: "My Custom", endpoint: "https://example.com/v1", protocol: "openai/completions" } }
     expect(isCustomOnlyConfigured(makeProviderItem("mycustom", "My Custom", "custom"), cfg)).toBe(true)
     expect(isCustomOnlyConfigured(makeProviderItem("anthropic", "Anthropic", "api"), cfg)).toBe(false)
+    const legacyCfg = { legacycustom: { name: "Legacy", npm: "@ai-sdk/openai-compatible" } }
+    expect(isCustomOnlyConfigured(makeProviderItem("legacycustom", "Legacy", "config"), legacyCfg)).toBe(false)
   })
 })
 

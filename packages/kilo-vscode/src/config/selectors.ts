@@ -17,7 +17,7 @@
  */
 
 import type { MaterializedConfig, ProvenanceStamp, StateAdapter, CanonicalProviderPayload, CanonicalProviderVariantPayload } from "./types"
-import { parseCanonicalProviderRecord, isValidModelsMap, parseOwnedCredentialRef } from "./types"
+import { parseCanonicalProviderRecord, parseCanonicalProviderRecordIgnoringLegacy, isValidModelsMap, parseOwnedCredentialRef } from "./types"
 import type { ConfigSnapshot } from "./snapshot"
 
 // ── Schema version ───────────────────────────────────────────────────
@@ -169,7 +169,10 @@ export function buildProviderIndex(
   credentialStatus?: ReadonlyMap<string, boolean>,
 ): ProviderIndex {
   const config = snapshot.config
-  const parsedProviders = parseCanonicalProviderRecord(config.value.provider)
+  // On-disk mixed files may carry legacy-inert entries; the materialized
+  // snapshot is canonical-only, but filter defensively so legacy IDs never
+  // enter the custom-only index even for directly constructed snapshots.
+  const parsedProviders = parseCanonicalProviderRecordIgnoringLegacy(config.value.provider) ?? parseCanonicalProviderRecord(config.value.provider)
   const providers: ProviderIndexEntry[] = []
 
   if (parsedProviders) {

@@ -6,7 +6,7 @@
  */
 
 import type { Provider, ProviderAuthState } from "../../types/messages"
-import { isCustomProviderPackage, KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
+import { KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
 import { isCanonicalProviderProtocol } from "../../../../src/config/types"
 import { sortProviders } from "./provider-catalog"
 
@@ -43,16 +43,16 @@ function isCanonicalCustomConfig(cfg: unknown): boolean {
 /**
  * Determine if a provider is a custom provider.
  * Accepts (a) the canonical view signal `source === "custom"` on a
- * non-reserved ID (canonical providers always carry `source: "custom"`),
- * (b) the legal canonical authored shape `{endpoint, protocol}`, or
- * (c) the legacy compat shape `{npm: <custom package>}`.
+ * non-reserved ID (canonical providers always carry `source: "custom"`), or
+ * (b) the legal canonical authored shape `{endpoint, protocol}`.
+ * Legacy npm shapes (`{npm, ...}` without endpoint/protocol/credential) are
+ * inert on-disk entries: preserved but never materialized, never indexed,
+ * and never counted as custom in the custom-only UI.
  */
 export function isCustom(item: Provider, configProvider?: Record<string, unknown>): boolean {
   if (RESERVED_CUSTOM_IDS.has(item.id)) return false
   const cfg = configProvider?.[item.id]
   if (cfg && typeof cfg === "object") {
-    const rec = cfg as Record<string, unknown>
-    if (isCustomProviderPackage(rec.npm)) return true
     if (isCanonicalCustomConfig(cfg)) return true
   }
   if (providerSource(item) === "custom") return true
@@ -113,7 +113,7 @@ export function resolveConfiguredProvider(
       id,
       name: typeof c.name === "string" ? c.name : id,
       models: {},
-      source: isCustomProviderPackage(c.npm) || isCanonicalCustomConfig(cfg) ? "custom" : "config",
+      source: isCanonicalCustomConfig(cfg) ? "custom" : "config",
     }
   }
 

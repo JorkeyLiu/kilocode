@@ -58,8 +58,9 @@ describe("R18 service - subset saveAlwaysRules", () => {
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_subset"), reply: "once" })
       yield* Fiber.join(fiber)
 
+      // Same session same pattern is allowed; other session must ask
       const ok = yield* perm.ask({
-        sessionID: SessionID.make("sess_subset2"),
+        sessionID: SessionID.make("sess_subset"),
         permission: "bash",
         patterns: ["npm install lodash"],
         metadata: {},
@@ -67,6 +68,19 @@ describe("R18 service - subset saveAlwaysRules", () => {
         ruleset: [],
       })
       expect(ok).toBeUndefined()
+      const otherFiber = yield* perm.ask({
+        id: PermissionV1.ID.make("per_subset_other"),
+        sessionID: SessionID.make("sess_subset2"),
+        permission: "bash",
+        patterns: ["npm install lodash"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_subset_other"), reply: "reject" })
+      const otherExit = yield* Fiber.await(otherFiber)
+      expect(Exit.isFailure(otherExit)).toBe(true)
 
       const fiber2 = yield* perm.ask({
         id: PermissionV1.ID.make("per_subset2"),
@@ -344,10 +358,10 @@ describe("blocker regressions - service", () => {
       })
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_always_multi"), reply: "once" })
       yield* Fiber.join(fiber)
-      // alpha should now be allowed
+      // alpha should now be allowed in the same session
       const ok = yield* perm.ask({
         id: PermissionV1.ID.make("per_alpha_check"),
-        sessionID: SessionID.make("sess_other"),
+        sessionID: sess,
         permission: "bash",
         patterns: ["alpha"],
         metadata: {},
@@ -355,11 +369,27 @@ describe("blocker regressions - service", () => {
         ruleset: [],
       })
       expect(ok).toBeUndefined()
+      // alpha in another session must still require approval (no cross-session leak)
+      const fiberAlphaOther = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_alpha_other"),
+          sessionID: SessionID.make("sess_other"),
+          permission: "bash",
+          patterns: ["alpha"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_alpha_other"), reply: "reject" })
+      const exitAlphaOther = yield* Fiber.await(fiberAlphaOther)
+      expect(Exit.isFailure(exitAlphaOther)).toBe(true)
       // beta should still require approval
       const fiberBeta = yield* perm
         .ask({
           id: PermissionV1.ID.make("per_beta_check"),
-          sessionID: SessionID.make("sess_other"),
+          sessionID: sess,
           permission: "bash",
           patterns: ["beta"],
           metadata: {},
@@ -389,7 +419,7 @@ describe("blocker regressions - service", () => {
       expect(Exit.isFailure(exitBoth)).toBe(true)
     }), { git: true })
 
-  it.instance("runtime approval sourceKind is approval with memory path", () =>
+  it.instance("runtime approval sourceKind is session-bound approval", () =>
     Effect.gen(function* () {
       const perm = yield* Permission.Service
       const sess = SessionID.make("sess_approval_meta")
@@ -407,10 +437,10 @@ describe("blocker regressions - service", () => {
       yield* waitForPending(1)
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_approval_meta"), reply: "always" })
       yield* Fiber.join(fiber)
-      // second request with same pattern should be immediately allowed and provenance should show approval sourceKind
+      // second request same session same pattern is immediately allowed with session approval provenance
       const ok = yield* perm.ask({
         id: PermissionV1.ID.make("per_approval_check"),
-        sessionID: SessionID.make("sess_other2"),
+        sessionID: sess,
         permission: "bash",
         patterns: ["ls"],
         metadata: {},
@@ -419,17 +449,31 @@ describe("blocker regressions - service", () => {
       })
       expect(ok).toBeUndefined()
       const prov = yield* perm.provenance("per_approval_check")
-      // The approved rule is stored as global layer with sourceKind approval and memory path
-      // For ordinary allow, provenance contributingLayers should contain approval memory entry
       expect(prov).toBeDefined()
       if (prov) {
-        const mem = prov.contributingLayers.find((l) => l.canonicalPath === "memory:global-approved")
+        const mem = prov.contributingLayers.find((l) => l.canonicalPath === `approval:${String(sess)}`)
         expect(mem).toBeDefined()
         expect(mem?.sourceKind).toBe("approval")
-        // ensure no global-file memory entry remains
-        const wrong = prov.contributingLayers.find((l) => l.canonicalPath === "memory:global-approved" && l.sourceKind === "global-file")
-        expect(wrong).toBeUndefined()
+        expect(prov.approval?.kind).toBe("session")
+        // ordinary session-bound grant must not create a global memory approval layer
+        expect(prov.contributingLayers.some((l) => l.canonicalPath === "memory:global-approved")).toBe(false)
       }
+      // other session must still ask
+      const otherFiber = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_approval_other"),
+          sessionID: SessionID.make("sess_other2"),
+          permission: "bash",
+          patterns: ["ls"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_approval_other"), reply: "reject" })
+      const otherExit = yield* Fiber.await(otherFiber)
+      expect(Exit.isFailure(otherExit)).toBe(true)
     }), { git: true })
 
   it.instance("bash literal provenance preserves exact command", () =>
@@ -666,10 +710,10 @@ describe("blocker regressions - additional coverage", () => {
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_ordinary_drain2"), reply: "reject" })
       const exit2 = yield* Fiber.await(fiber2)
       expect(Exit.isFailure(exit2)).toBe(true)
-      // Exact same pattern should be allow
+      // Exact same pattern same session should be allow; other session must ask
       const exactOk = yield* perm
         .ask({
-          sessionID: SessionID.make("sess_other2"),
+          sessionID: sess,
           permission: "bash",
           patterns: ["npm install lodash"],
           metadata: {},
@@ -678,6 +722,21 @@ describe("blocker regressions - additional coverage", () => {
         })
         .pipe(Effect.exit)
       expect(Exit.isSuccess(exactOk)).toBe(true)
+      const otherExact = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_ordinary_drain_other"),
+          sessionID: SessionID.make("sess_other2"),
+          permission: "bash",
+          patterns: ["npm install lodash"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_ordinary_drain_other"), reply: "reject" })
+      const otherExactExit = yield* Fiber.await(otherExact)
+      expect(Exit.isFailure(otherExactExit)).toBe(true)
       // Cleanup second fiber if pending
       const list = yield* perm.list()
       for (const req of list) {
@@ -811,17 +870,17 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
       expect(before?.request.permissionRequestId).toBe("per_prov_truth")
       expect(before?.request.operationId).toBe("permission:per_prov_truth")
       expect(before?.contributingLayers[0].sourceKind).toBe("runtime-safety")
-      // Reply with always to create runtime approval with memory:global-approved
+      // Reply with always creates a session-bound runtime approval
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_prov_truth"), reply: "always" })
       yield* Fiber.join(fiber)
       const after = yield* perm.provenance("per_prov_truth")
       expect(after).toBeDefined()
       expect(after?.request.permissionRequestId).toBe("per_prov_truth")
       expect(after?.request.operationId).toBe("permission:per_prov_truth")
-      // Verify runtime approval provenance truthful
+      // Verify runtime approval provenance truthful — same session allows via session approval
       const ok = yield* perm.ask({
         id: PermissionV1.ID.make("per_prov_check"),
-        sessionID: SessionID.make("sess_prov_check"),
+        sessionID: SessionID.make("sess_prov_truth"),
         permission: "bash",
         patterns: ["echo hi"],
         metadata: {},
@@ -830,7 +889,7 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
       })
       expect(ok).toBeUndefined()
       const prov2 = yield* perm.provenance("per_prov_check")
-      expect(prov2?.contributingLayers.some((l) => l.sourceKind === "approval" && l.canonicalPath === "memory:global-approved")).toBe(true)
+      expect(prov2?.contributingLayers.some((l) => l.sourceKind === "approval" && l.canonicalPath === "approval:sess_prov_truth")).toBe(true)
       expect(prov2?.contributingLayers.some((l) => l.sourceKind === "global-file" && l.canonicalPath === "config:global-override")).toBe(false)
       const ctx = yield* store.load({ directory: test.directory })
       yield* store.dispose(ctx)
@@ -997,8 +1056,9 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
       const prov = yield* perm.provenance("per_prov_always")
       expect(prov).toBeDefined()
       expect(prov?.decisive.result).toBe("allow")
-      // ordinary always uses global approval layer, not r18 once
-      expect(prov?.contributingLayers.some((l) => l.canonicalPath === "memory:global-approved")).toBe(true)
+      // ordinary always uses session-bound r18 approval, not global memory
+      expect(prov?.contributingLayers.some((l) => l.canonicalPath === "approval:sess_prov_always")).toBe(true)
+      expect(prov?.approval?.kind).toBe("session")
     }), { git: true })
 
   it.instance("final provenance after saveAlwaysRules drain and allowEverything drain", () =>
@@ -1024,17 +1084,29 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
         always: ["echo drain"],
         ruleset: [],
       }).pipe(Effect.forkScoped)
-      yield* waitForPending(2)
+      const fiberSame = yield* perm.ask({
+        id: PermissionV1.ID.make("per_drain_same"),
+        sessionID: SessionID.make("sess_drain_orig"),
+        permission: "bash",
+        patterns: ["echo drain"],
+        metadata: {},
+        always: ["echo drain"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(3)
       yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_drain_orig"), approvedAlways: ["echo drain"] })
-      // Drains per_drain_other via evaluator
+      // saveAlwaysRules drains same-session sibling via evaluator; other-session stays pending
+      yield* Effect.sleep("20 millis")
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_drain_orig"), reply: "once" })
       yield* Fiber.join(fiberOrig)
-      // per_drain_other should be auto-allowed and its provenance stored as allow
-      // Wait a bit for drain to settle
+      yield* Fiber.join(fiberSame)
+      // per_drain_other (different session) must stay pending, not auto-allowed
       yield* Effect.sleep("10 millis")
+      const stillPending = yield* perm.list()
+      expect(stillPending.some((r) => String(r.id) === "per_drain_other")).toBe(true)
       const provOther = yield* perm.provenance("per_drain_other")
       expect(provOther).toBeDefined()
-      expect(provOther?.decisive.result).toBe("allow")
+      expect(["ask", "ask-ceiling"]).toContain(provOther?.decisive.result ?? "")
       // Cleanup if still pending
       const list = yield* perm.list()
       for (const r of list) yield* perm.reply({ requestID: r.id, reply: "reject" }).pipe(Effect.catchCause((cause) => Effect.sync(() => console.warn("cleanup reply failed", Cause.pretty(cause)))))

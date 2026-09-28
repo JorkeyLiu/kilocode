@@ -3,8 +3,9 @@
  * Stories for Settings and ProvidersTab components.
  */
 
-import { onMount } from "solid-js"
+import { createSignal, onMount } from "solid-js"
 import type { Meta, StoryObj } from "storybook-solidjs-vite"
+import { createAgentMutationCoordinator } from "../context/agent-mutations"
 import { StoryProviders, mockSessionValue } from "./StoryProviders"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { SessionContext } from "../context/session"
@@ -886,6 +887,43 @@ export const ProvidersCustomOnly: Story = {
   ),
 }
 
+/**
+ * Custom-only mixed legacy+canonical: one canonical custom provider and one
+ * legacy npm on-disk entry. Only the canonical row is rendered (name/Custom
+ * tag/edit/delete/switch); the legacy npm entry stays inert on disk and
+ * renders no row and no action.
+ */
+export const ProvidersCustomOnlyMixedLegacy: Story = {
+  name: "ProvidersTab — custom-only mixed legacy+canonical",
+  render: () => (
+    <StoryProviders
+      canonical
+      connected={["custom-acme", "legacy-npm"]}
+      authStates={{ "custom-acme": "api", "legacy-npm": "api" }}
+      config={
+        {
+          provider: {
+            "custom-acme": {
+              name: "Acme Custom",
+              endpoint: "https://api.acme.example/v1",
+              protocol: "openai/completions",
+            },
+            "legacy-npm": {
+              name: "Legacy NPM",
+              npm: "@ai-sdk/openai-compatible",
+              options: { baseURL: "https://legacy.example.com/v1" },
+            },
+          },
+        } as any
+      }
+    >
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <ProvidersTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
 export const AutoApproveLevelReview: Story = {
   name: "AutoApproveTab — Review level",
   render: () => (
@@ -952,6 +990,157 @@ export const AutoApproveLevelCustom200: Story = {
       <div style={{ width: "200px", "max-height": "700px", overflow: "auto" }}>
         <AutoApproveTab />
       </div>
+    </StoryProviders>
+  ),
+}
+
+const TOOLS_CUSTOM_AGENT = {
+  ...CANONICAL_CUSTOM_AGENT,
+  frontmatter: {
+    ...CANONICAL_CUSTOM_AGENT.frontmatter,
+    tools: { bash: false, edit: true, "my-mcp-tool": false },
+    permission: { read: "allow" },
+  },
+}
+
+function ModeEditToolsInner() {
+  const [last, setLast] = createSignal<unknown>(null)
+  const [wire, setWire] = createSignal<unknown>(null)
+  const base = canonicalAgentSession("agent-tools-story")
+  const coord = createAgentMutationCoordinator({
+    post: (msg) => {
+      setWire({ name: msg.name, frontmatter: msg.frontmatter, body: msg.body })
+      coord.handleMessage({
+        type: "agentMutationApplied",
+        requestId: msg.requestId,
+        name: msg.name,
+        contentHash: "story-asset-hash-002",
+      })
+    },
+    getStamp: () => ({
+      globalHash: null,
+      projectHash: "story-project-hash-001",
+      materializationVersion: 3,
+      assetHash: "story-asset-hash-001",
+    }),
+    getIdentity: (name) => {
+      if (name !== "reviewer") return undefined
+      return {
+        scope: "project" as const,
+        assetHash: "story-asset-hash-001",
+        frontmatter: TOOLS_CUSTOM_AGENT.frontmatter as Record<string, unknown>,
+        body: TOOLS_CUSTOM_AGENT.body as string,
+      }
+    },
+    exists: (name) => name === "reviewer" || name === "planner",
+    editDelay: 20,
+  })
+  const value = {
+    ...base.value,
+    agents: () => [TOOLS_CUSTOM_AGENT],
+    allAgents: () => [TOOLS_CUSTOM_AGENT, { ...CANONICAL_CUSTOM_AGENT, name: "planner" }],
+    scheduleAgentEdit: (name: string, patch: unknown) => {
+      setLast({ name, patch })
+      return coord.scheduleEdit(name, patch as { frontmatter?: Record<string, unknown>; body?: string })
+    },
+    flushAgentEdits: (name?: string) => coord.flush(name),
+    cancelAgentMutations: () => coord.cancelAll(),
+  }
+  return (
+    <SessionContext.Provider value={value as any}>
+      <div style={{ width: "460px", height: "760px", overflow: "auto" }}>
+        <ModeEditView name="reviewer" onBack={noop} onRemove={noop} />
+        <pre data-testid="agent-tools-last-patch" style={{ display: "none" }}>
+          {JSON.stringify(last() ?? {})}
+        </pre>
+        <pre data-testid="agent-tools-last-wire" style={{ display: "none" }}>
+          {JSON.stringify(wire() ?? {})}
+        </pre>
+      </div>
+    </SessionContext.Provider>
+  )
+}
+
+export const ModeEditTools: Story = {
+  name: "ModeEditView — agent tools",
+  render: () => (
+    <StoryProviders sessionID="agent-tools-story" status="idle" canonical>
+      <ModeEditToolsInner />
+    </StoryProviders>
+  ),
+}
+
+const TOOLS_ALIAS_WILDCARD_AGENT = {
+  ...CANONICAL_CUSTOM_AGENT,
+  frontmatter: {
+    ...CANONICAL_CUSTOM_AGENT.frontmatter,
+    tools: { patch: false, build: false, "*": false, "my-mcp-tool": false },
+  },
+}
+
+function ModeEditToolsAliasWildcardInner() {
+  const [last, setLast] = createSignal<unknown>(null)
+  const [wire, setWire] = createSignal<unknown>(null)
+  const base = canonicalAgentSession("agent-tools-alias-story")
+  const coord = createAgentMutationCoordinator({
+    post: (msg) => {
+      setWire({ name: msg.name, frontmatter: msg.frontmatter, body: msg.body })
+      coord.handleMessage({
+        type: "agentMutationApplied",
+        requestId: msg.requestId,
+        name: msg.name,
+        contentHash: "story-asset-hash-002",
+      })
+    },
+    getStamp: () => ({
+      globalHash: null,
+      projectHash: "story-project-hash-001",
+      materializationVersion: 3,
+      assetHash: "story-asset-hash-001",
+    }),
+    getIdentity: (name) => {
+      if (name !== "reviewer") return undefined
+      return {
+        scope: "project" as const,
+        assetHash: "story-asset-hash-001",
+        frontmatter: TOOLS_ALIAS_WILDCARD_AGENT.frontmatter as Record<string, unknown>,
+        body: TOOLS_ALIAS_WILDCARD_AGENT.body as string,
+      }
+    },
+    exists: (name) => name === "reviewer" || name === "planner",
+    editDelay: 20,
+  })
+  const value = {
+    ...base.value,
+    agents: () => [TOOLS_ALIAS_WILDCARD_AGENT],
+    allAgents: () => [TOOLS_ALIAS_WILDCARD_AGENT, { ...CANONICAL_CUSTOM_AGENT, name: "planner" }],
+    scheduleAgentEdit: (name: string, patch: unknown) => {
+      setLast({ name, patch })
+      return coord.scheduleEdit(name, patch as { frontmatter?: Record<string, unknown>; body?: string })
+    },
+    flushAgentEdits: (name?: string) => coord.flush(name),
+    cancelAgentMutations: () => coord.cancelAll(),
+  }
+  return (
+    <SessionContext.Provider value={value as any}>
+      <div style={{ width: "460px", height: "760px", overflow: "auto" }}>
+        <ModeEditView name="reviewer" onBack={noop} onRemove={noop} />
+        <pre data-testid="agent-tools-last-patch" style={{ display: "none" }}>
+          {JSON.stringify(last() ?? {})}
+        </pre>
+        <pre data-testid="agent-tools-last-wire" style={{ display: "none" }}>
+          {JSON.stringify(wire() ?? {})}
+        </pre>
+      </div>
+    </SessionContext.Provider>
+  )
+}
+
+export const ModeEditToolsAliasWildcard: Story = {
+  name: "ModeEditView — agent tools alias wildcard",
+  render: () => (
+    <StoryProviders sessionID="agent-tools-alias-story" status="idle" canonical>
+      <ModeEditToolsAliasWildcardInner />
     </StoryProviders>
   ),
 }

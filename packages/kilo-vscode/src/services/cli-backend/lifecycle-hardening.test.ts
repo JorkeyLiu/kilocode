@@ -246,8 +246,20 @@ setInterval(()=>{}, 1000);
     fs.writeFileSync(script, content, "utf8")
     fs.chmodSync(script, 0o755)
     const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-timeout-"))
+    const extRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-ext-timeout-"))
+    fs.mkdirSync(path.join(extRoot, "bin"), { recursive: true })
+    const hiddenContent = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '__internal-storage-cutover') { console.log(JSON.stringify({ ok: true, canonical: true, archiveID: 'test' })); process.exit(0); }
+console.error('unexpected hidden args'); process.exit(1);
+`
+    for (const name of ["kilo-serve", "kilo"]) {
+      const p = path.join(extRoot, "bin", name)
+      fs.writeFileSync(p, hiddenContent, "utf8")
+      fs.chmodSync(p, 0o755)
+    }
     const ctx = {
-      extensionPath: os.tmpdir(),
+      extensionPath: extRoot,
       globalStorageUri: { fsPath: storage },
       extensionMode: 1,
       extension: { packageJSON: { version: "7.4.11" } },
@@ -305,6 +317,7 @@ setInterval(()=>{}, 1000);
       try { decoy.kill("SIGTERM") } catch {}
       try { fs.unlinkSync(script) } catch {}
       try { fs.rmSync(storage, { recursive: true }) } catch {}
+      try { fs.rmSync(extRoot, { recursive: true }) } catch {}
       ;(ServerManager.prototype as unknown as Record<string, unknown>).getCliPath = origGetCliPath
       ws.workspaceFolders = origFolders
       ws.getConfiguration = origGetConfig
@@ -328,8 +341,20 @@ setTimeout(()=>process.exit(0), 5000);
     fs.writeFileSync(script, content, "utf8")
     fs.chmodSync(script, 0o755)
     const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-hardening-"))
+    const extRoot = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-ext-hardening-"))
+    fs.mkdirSync(path.join(extRoot, "bin"), { recursive: true })
+    const hiddenContent = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '__internal-storage-cutover') { console.log(JSON.stringify({ ok: true, canonical: true, archiveID: 'test' })); process.exit(0); }
+console.error('unexpected hidden args'); process.exit(1);
+`
+    for (const name of ["kilo-serve", "kilo"]) {
+      const p = path.join(extRoot, "bin", name)
+      fs.writeFileSync(p, hiddenContent, "utf8")
+      fs.chmodSync(p, 0o755)
+    }
     const ctx = {
-      extensionPath: os.tmpdir(),
+      extensionPath: extRoot,
       globalStorageUri: { fsPath: storage },
       extensionMode: 1,
       extension: { packageJSON: { version: "7.4.11" } },
@@ -477,6 +502,167 @@ process.nextTick(()=>process.exit(1));
       ws.getConfiguration = origGetConfig
       ;(vscode.window as unknown as Record<string, unknown>).state = origState
       try { fs.rmSync(storage, { recursive: true }) } catch {}
+    }
+  })
+
+  test("signal-terminated child (exitCode null + signalCode) is dead, never alive", async () => {
+    const { isChildAlive, isChildDead } = await import("./server-manager")
+    const { spawn } = await import("child_process")
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { detached: true, stdio: "ignore" })
+    const deadPid = child.pid!
+    expect(deadPid).toBeDefined()
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.on("exit", (code, signal) => resolve({ code, signal: signal ?? null }))
+    })
+    child.kill("SIGTERM")
+    const { code, signal } = await exited
+    // Node signal termination: exitCode stays null, signalCode is set — the exact misread branch.
+    expect(code).toBeNull()
+    expect(signal).toBe("SIGTERM")
+    expect(child.exitCode).toBeNull()
+    expect(child.signalCode).toBe("SIGTERM")
+    expect(isChildAlive(child)).toBeFalse()
+    expect(isChildDead(child)).toBeTrue()
+    // Simulated pre-exit shape (exitCode null, signal pending) behaves the same via explicit object.
+    expect(isChildAlive({ exitCode: null, signalCode: "SIGTERM" } as unknown as import("child_process").ChildProcess)).toBeFalse()
+    expect(isChildDead({ exitCode: null, signalCode: "SIGTERM" } as unknown as import("child_process").ChildProcess)).toBeTrue()
+    expect(isChildAlive({ exitCode: null, signalCode: null } as unknown as import("child_process").ChildProcess)).toBeTrue()
+    expect(isChildDead({ exitCode: 1, signalCode: null } as unknown as import("child_process").ChildProcess)).toBeTrue()
+    try {
+      process.kill(deadPid, 0)
+      expect.unreachable("signal-dead child must not answer kill(pid,0)")
+    } catch {
+      // expected: already gone
+    }
+  })
+
+  test("signal-dead owned instance is not cached as live and dispose sends no crash-after group kill", async () => {
+    const { ServerManager, isChildAlive } = await import("./server-manager")
+    const { spawn } = await import("child_process")
+    const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-signal-dead-"))
+    const ctx = {
+      extensionPath: os.tmpdir(),
+      globalStorageUri: { fsPath: storage },
+      extensionMode: 1,
+      extension: { packageJSON: { version: "7.4.11" } },
+    } as unknown as import("vscode").ExtensionContext
+    const mgr = new ServerManager(ctx)
+    // Real signal-dead child to prove exitCode===null + signalCode!=null after SIGTERM.
+    const victim = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { detached: true, stdio: "ignore" })
+    const victimPid = victim.pid!
+    const victimExit = new Promise<void>((resolve) => victim.on("exit", () => resolve()))
+    victim.kill("SIGTERM")
+    await victimExit
+    expect(victim.signalCode).toBe("SIGTERM")
+    expect(isChildAlive(victim)).toBeFalse()
+    // Persistent background process NOT created by this manager — must never be touched.
+    const persistent = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 10000)"], { detached: true, stdio: "ignore" })
+    persistent.unref()
+    const persistentPid = persistent.pid!
+    // Inject the real signal-dead child as the current instance (exit event already fired in production clears it;
+    // this covers the race where the handle is still retained with signalCode set).
+    const rec = mgr as unknown as Record<string, unknown>
+    rec.instance = {
+      port: 41911,
+      password: "x",
+      process: victim,
+      privateReader: null,
+      privateWriter: null,
+      pid: victimPid,
+      epoch: 1,
+      spawnCwd: storage,
+    }
+    expect(mgr.getActiveSpawnCwd()).toBeNull()
+    // Spy group kills: record every process.kill(-pid) while disposing.
+    const origKill = process.kill
+    const groupKills: Array<{ pid: number; signal: string | undefined }> = []
+    const patched = ((pid: number, signal?: string) => {
+      if (pid < 0) groupKills.push({ pid, signal: signal as string | undefined })
+      return (origKill as (...args: unknown[]) => unknown).apply(process, [pid, signal] as unknown as [])
+    }) as unknown as typeof process.kill
+    // @ts-ignore
+    process.kill = patched
+    try {
+      mgr.dispose()
+      await new Promise((r) => setTimeout(r, 100))
+    } finally {
+      process.kill = origKill
+    }
+    expect(groupKills.filter((k) => k.pid === -victimPid).length).toBe(0)
+    let persistentAlive = true
+    try {
+      origKill(persistentPid, 0)
+    } catch {
+      persistentAlive = false
+    }
+    expect(persistentAlive).toBeTrue()
+    // No name-based cleanup exists: exact-PID/group only, never pkill/taskkill/killall.
+    const src = fs.readFileSync(path.join(__dirname, "server-manager.ts"), "utf8")
+    expect(src).not.toContain("pkill")
+    expect(src).not.toContain("taskkill")
+    expect(src).not.toContain("killall")
+    try {
+      origKill(-persistentPid, "SIGTERM")
+    } catch {
+      try {
+        persistent.kill("SIGTERM")
+      } catch {}
+    }
+    try {
+      persistent.kill("SIGTERM")
+    } catch {}
+    try {
+      mgr.dispose()
+    } catch {}
+    try {
+      fs.rmSync(storage, { recursive: true })
+    } catch {}
+  })
+
+  test("hidden startingProc dispose uses direct child.kill, never group kill(-pid)", async () => {
+    const { ServerManager } = await import("./server-manager")
+    const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-hidden-direct-"))
+    const ctx = {
+      extensionPath: os.tmpdir(),
+      globalStorageUri: { fsPath: storage },
+      extensionMode: 1,
+      extension: { packageJSON: { version: "7.4.11" } },
+    } as unknown as import("vscode").ExtensionContext
+    const mgr = new ServerManager(ctx)
+    const directKills: string[] = []
+    const groupKills: number[] = []
+    const origKill = process.kill
+    // @ts-ignore
+    process.kill = ((pid: number, signal?: string) => {
+      if (pid < 0) groupKills.push(pid)
+      return origKill(pid, signal as NodeJS.Signals)
+    }) as unknown as typeof process.kill
+    const fakePid = 987654321
+    const fake = {
+      pid: fakePid,
+      exitCode: null,
+      signalCode: null,
+      stdio: [],
+      kill: (signal: string) => {
+        directKills.push(signal)
+        return true
+      },
+      on: () => {},
+    } as unknown as import("child_process").ChildProcess
+    ;(fake as unknown as { __kiloHidden?: boolean }).__kiloHidden = true
+    ;(mgr as unknown as Record<string, unknown>).startingProc = fake
+    try {
+      mgr.dispose()
+      expect(directKills).toContain("SIGTERM")
+      expect(groupKills).not.toContain(-fakePid)
+    } finally {
+      process.kill = origKill
+      try {
+        mgr.dispose()
+      } catch {}
+      try {
+        fs.rmSync(storage, { recursive: true })
+      } catch {}
     }
   })
 })

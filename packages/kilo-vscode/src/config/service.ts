@@ -69,7 +69,7 @@ import {
   rollbackCredential as credentialRollback,
 } from "./credential-rollback"
 import { type ConfigSnapshot, snapshot as makeSnapshot } from "./snapshot"
-import { ExternalObserveCoalescer } from "./external-observe"
+import { ExternalObserveCoalescer, type ExternalObserveRetryOptions } from "./external-observe"
 import { handleAssetChanged, handleSkillChanged, listSkillFiles, skillRootsFor, type SkillMeta } from "./asset-observe"
 import { lifecycleNotifyScope, pollLifecycleDescs, scanFp, skillFp } from "./lifecycle-observe"
 import {
@@ -187,6 +187,8 @@ export interface CanonicalConfigServiceOptions {
   convergence?: import("./convergence").ConfigConvergenceAdapter
   /** FD private readiness probe. Production wires connectionService.isPrivateAvailable; absent means never ready. */
   isPrivateReady?: () => boolean
+  /** Test seam for the parked observe backoff window. Production uses the coalescer defaults. */
+  observeRetry?: ExternalObserveRetryOptions
 }
 
 export type ConfigScopePatch = {
@@ -316,7 +318,7 @@ export class CanonicalConfigService implements Disposable {
 
   /** Disposed flag. */
   private disposed = false
-  private readonly observeCoalescer = new ExternalObserveCoalescer()
+  private readonly observeCoalescer: ExternalObserveCoalescer
   private readonly isPrivateReady: (() => boolean) | undefined
   private initCompleted = false
   private lifecycleFired = false
@@ -334,6 +336,7 @@ export class CanonicalConfigService implements Disposable {
     this.beforeConfigFinalCas = opts.beforeConfigFinalCas
     this.convergence = opts.convergence
     this.isPrivateReady = opts.isPrivateReady
+    this.observeCoalescer = new ExternalObserveCoalescer(opts.observeRetry ?? {})
 
     // Use injected emitter factory or fall back to in-memory implementation
     const ef = opts.emitterFactory ?? createDefaultEmitterFactory()

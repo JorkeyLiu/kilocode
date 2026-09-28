@@ -278,9 +278,19 @@ export function validateNoPlaintextCredentials(
   // Check provider records
   const provider = raw.provider
   if (provider && typeof provider === "object" && !Array.isArray(provider)) {
+    const { isLegacyInertProviderEntry } = require("./types") as typeof import("./types")
     for (const [id, config] of Object.entries(provider as Record<string, unknown>)) {
       if (!config || typeof config !== "object" || Array.isArray(config)) continue
       const cfg = config as Record<string, unknown>
+      // Legacy-inert entries stay inert for shape purposes only: they skip
+      // the canonical shape/disallowed-key scan below, but plaintext
+      // credentials (apiKey, options.apiKey, headers.Authorization, …) are
+      // still rejected recursively via the original checker. A plaintext hit
+      // makes the file invalid — never silently preserved.
+      if (isLegacyInertProviderEntry(config)) {
+        checkPlaintextCredentials(cfg, ["provider", id], scope, file, errors)
+        continue
+      }
 
       // Schema-limited: only canonical provider keys allowed (name/endpoint/protocol/models/credential)
        const allowedKeys = new Set(["name", "endpoint", "protocol", "models", "credential"])

@@ -82,15 +82,41 @@ function withTimeout(promise: Promise<unknown>, ms: number): Promise<unknown> {
   })
 }
 
-function terminal(code: string, message: string): Error {
-  const err = new Error(message) as Error & { code: string; terminal: boolean }
-  err.code = code
-  err.terminal = true
-  return err
+// Trusted private terminal failure. Only the private-first core constructs
+// this type from runtime-validated operation records
+// (`SessionOperation.normalizeRecord` projection: code/message already
+// scrubbed and capped, never raw SDK/transport fields). The SDK fallback
+// transport path never constructs it: SDK/backend business errors are plain
+// JSON objects whose message/body/cause/URL/stack are untrusted and must
+// stay generic at the display boundary. Callers distinguish trust with
+// `isPrivateTerminalError` (instanceof + internal brand), never with a
+// forgeable `err.code`/`err.terminal` string flag.
+const PRIVATE_TERMINAL_TAG = Symbol("PrivateTerminalError")
+
+export class PrivateTerminalError extends Error {
+  readonly code: string
+  readonly [PRIVATE_TERMINAL_TAG] = true as const
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = "PrivateTerminalError"
+    this.code = code
+  }
+}
+
+export function isPrivateTerminalError(error: unknown): error is PrivateTerminalError {
+  return (
+    error instanceof PrivateTerminalError &&
+    (error as unknown as Record<symbol, unknown>)[PRIVATE_TERMINAL_TAG] === true &&
+    typeof (error as PrivateTerminalError).code === "string"
+  )
+}
+
+function terminal(code: string, message: string): PrivateTerminalError {
+  return new PrivateTerminalError(code, message)
 }
 
 function isTerminal(e: unknown): boolean {
-  return !!e && typeof e === "object" && (e as { terminal?: unknown }).terminal === true
+  return isPrivateTerminalError(e)
 }
 
 function unresolved(scope: "Prompt" | "Command", messageId: string): Error {
@@ -163,21 +189,24 @@ export async function submitPrivateFirst(input: Input): Promise<Result> {
     }
   } catch (e) {
     if (isTerminal(e)) throw e
+    // Transport uncertainty carries untrusted detail (secret-bearing fields,
+    // URLs, stacks). Never copy the raw message into logs: fall back to the
+    // fixed retryable-fence category or re-observe the exact op once.
     const msg = e instanceof Error ? e.message : String(e)
     if (!isUncertainMessage(msg) && msg.includes("private failed retryable")) {
-      console.warn(`[Kilo ${input.scope}] private fallback to SDK`, { opId: input.opId, reason: msg.slice(0, 120) })
+      console.warn(`[Kilo ${input.scope}] private fallback to SDK`, { opId: input.opId })
       return input.fallback()
     }
-    return reobserve(input, msg)
+    return reobserve(input)
   }
 
   const typed = result as { status?: string; accepted?: boolean; transportUnknown?: unknown }
-  if (typed.transportUnknown === true) return reobserve(input, "invalid private result")
+  if (typed.transportUnknown === true) return reobserve(input)
   if (typed.status === "succeeded" && typed.accepted === true) {
     try {
       input.validate(result)
     } catch {
-      return reobserve(input, "invalid private result")
+      return reobserve(input)
     }
     return {}
   }
@@ -185,11 +214,11 @@ export async function submitPrivateFirst(input: Input): Promise<Result> {
     try {
       input.validate(result)
     } catch {
-      return reobserve(input, "invalid private result")
+      return reobserve(input)
     }
     const failure = (result as { failure?: { code?: unknown; message?: unknown; retryable?: unknown } }).failure
     if (failure?.retryable === true) {
-      console.warn(`[Kilo ${input.scope}] private fallback to SDK`, { opId: input.opId, reason: "private failed retryable" })
+      console.warn(`[Kilo ${input.scope}] private fallback to SDK`, { opId: input.opId })
       return input.fallback()
     }
     if (failure?.retryable === false) {
@@ -197,15 +226,16 @@ export async function submitPrivateFirst(input: Input): Promise<Result> {
       const message = typeof failure?.message === "string" && failure.message ? failure.message : code
       throw terminal(code, message)
     }
-    return reobserve(input, "invalid private result")
+    return reobserve(input)
   }
-  return reobserve(input, `private not succeeded: ${String(typed.status)}`)
+  return reobserve(input)
 }
 
-async function reobserve(input: Input, reason: string): Promise<Result> {
+async function reobserve(input: Input): Promise<Result> {
+  // Fixed-category log only: opId is a durable local identity
+  // (`prompt:<messageId>`), never a URL/secret/object field.
   console.warn(`[Kilo ${input.scope}] private uncertain, re-observe exact op`, {
     opId: input.opId,
-    reason: reason.slice(0, 120),
   })
   if (!input.observeExact) throw unresolved(input.scope, input.messageId)
   let attempt: ExactAttempt

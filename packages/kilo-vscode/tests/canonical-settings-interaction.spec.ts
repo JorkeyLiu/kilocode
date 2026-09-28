@@ -38,3 +38,37 @@ test("canonical settings expose native disabled controls", async ({ page }) => {
   await expect(page.locator("input[disabled], button[disabled]").count()).toBeGreaterThan(0)
   await expect(page.getByTestId("canonical-unsupported-controls")).toContainText("read-only")
 })
+
+test("custom-only mixed legacy+canonical hides legacy npm row and keeps canonical row interactive", async ({
+  page,
+}) => {
+  const messages: unknown[] = []
+  await page.exposeFunction("recordWebviewMessage", (message: unknown) => messages.push(message))
+  await page.addInitScript(() => {
+    window.addEventListener("kilo-webview-message", (event) => {
+      void (window as unknown as { recordWebviewMessage?: (message: unknown) => void }).recordWebviewMessage?.((event as CustomEvent).detail)
+    })
+  })
+  await page.goto("/iframe.html?id=settings--providers-custom-only-mixed-legacy&viewMode=story")
+  const canonicalRow = page.locator(".settings-provider-row", { hasText: "Acme Custom" })
+  await expect(canonicalRow).toBeVisible()
+  await expect(canonicalRow.getByText("Custom", { exact: true })).toBeVisible()
+  await expect(page.getByText("Legacy NPM", { exact: true })).toHaveCount(0)
+  await expect(page.locator(".settings-provider-row", { hasText: "Legacy NPM" })).toHaveCount(0)
+
+  const edit = canonicalRow.getByRole("button", { name: "Edit" })
+  await expect(edit).toBeVisible()
+  await edit.click()
+  await expect(page.getByText("Edit provider")).toBeVisible()
+
+  const legacyRefs = messages.filter((message) => JSON.stringify(message).includes("legacy-npm"))
+  expect(legacyRefs).toEqual([])
+  expect(
+    messages.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        ["updateConfig", "connectProvider"].includes((message as { type?: string }).type ?? ""),
+    ),
+  ).toEqual([])
+})

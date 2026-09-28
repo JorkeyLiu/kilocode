@@ -195,8 +195,12 @@ export async function runWithMessageConfirmation<T>(
     return await run()
   } catch (error) {
     if (await state.wait(id)) {
+      // Race won by the server: the message was accepted despite the
+      // transport error. The transport error is untrusted (may carry
+      // secret/cause/URL/body/stack), so never log getErrorMessage here;
+      // log only the fixed category plus the safe local message id.
       console.warn(`[Kilo New] ${label} ended after server accepted it; ignoring transport error`, {
-        error: getErrorMessage(error),
+        id,
       })
       return undefined
     }

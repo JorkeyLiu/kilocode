@@ -63,12 +63,12 @@ describe("resolveConfiguredProvider", () => {
     expect(p!.name).toBe("Anthropic")
   })
 
-  it("creates synthetic provider from config entry when backend is missing", () => {
+  it("creates synthetic provider from legacy npm config entry as config source (inert, never custom)", () => {
     const p = resolveConfiguredProvider("myprovider", allProviders, {
       myprovider: { name: "My Provider", npm: "@ai-sdk/openai-compatible" },
     })
     expect(p!.name).toBe("My Provider")
-    expect(p!.source).toBe("custom")
+    expect(p!.source).toBe("config")
   })
 
   it("creates synthetic provider from config entry with config source", () => {
@@ -85,12 +85,12 @@ describe("resolveConfiguredProvider", () => {
     expect(p!.name).toBe("unknown-provider")
   })
 
-  it("uses config name when available for custom provider", () => {
+  it("treats legacy npm entries as config source, never custom", () => {
     const p = resolveConfiguredProvider("custom1", allProviders, {
       custom1: { name: "Custom One", npm: "@ai-sdk/openai" },
     })
     expect(p!.name).toBe("Custom One")
-    expect(p!.source).toBe("custom")
+    expect(p!.source).toBe("config")
   })
 
   it("marks canonical endpoint+protocol config entries as custom source", () => {
@@ -113,12 +113,13 @@ describe("resolveConfiguredProvider", () => {
     expect(p).toBeUndefined()
   })
 
-  it("still synthesizes generic custom provider when backend omits it", () => {
+  it("still synthesizes generic provider from legacy npm entry when backend omits it (config source)", () => {
     const p = resolveConfiguredProvider("my-custom-x", allProviders, {
       "my-custom-x": { name: "My Custom X", npm: "@ai-sdk/openai-compatible" },
     })
     expect(p!.id).toBe("my-custom-x")
     expect(p!.name).toBe("My Custom X")
+    expect(p!.source).toBe("config")
   })
 })
 
@@ -263,8 +264,12 @@ describe("buildAddList", () => {
 })
 
 describe("isCustomConfigured", () => {
-  it("returns true for custom provider with npm config", () => {
+  it("returns false for legacy npm config without a custom view signal (inert, never custom)", () => {
     const config = { mycustom: { npm: "@ai-sdk/openai-compatible" } }
+    expect(isCustomConfigured(makeProvider("mycustom", "My Custom", "config"), config)).toBe(false)
+    expect(isCustomConfigured(makeProvider("mycustom", "My Custom"), config)).toBe(false)
+    // Canonical view signal stays authoritative: a backend source==="custom"
+    // still counts even when on-disk bytes are legacy-shaped.
     expect(isCustomConfigured(makeProvider("mycustom", "My Custom", "custom"), config)).toBe(true)
   })
 

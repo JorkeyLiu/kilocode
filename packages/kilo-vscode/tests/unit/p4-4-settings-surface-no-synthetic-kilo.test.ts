@@ -94,7 +94,10 @@ describe("P4.4-T12 dead factory/i18n residue removal — no synthetic Kilo", () 
     expect(text).toContain("PrimarySlot")
     expect(text).toContain('"edit"')
     expect(text).toContain('return { id, name: id, models: {} }')
-    expect(text).toContain("isCustomProviderPackage")
+    // Legacy npm shapes are inert on-disk entries, never custom: helpers must
+    // classify via the canonical endpoint/protocol shape, not npm packages.
+    expect(text).not.toContain("isCustomProviderPackage")
+    expect(text).toContain("isCanonicalCustomConfig")
     // T20: no popularity filter
     expect(text).not.toContain("isPopularProvider")
     expect(text).not.toContain("popularProviderIndex")

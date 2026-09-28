@@ -98,7 +98,7 @@ background, and every session stays a full agent with its complete harness.
   never manufacture detached work, and telemetry enrichment never gates
   listener readiness.
 - Nothing outside the approved target above carries a default compatibility
-  promise. Legacy behavior is handled when implementation reaches it.
+  promise. Legacy behavior is handled when implementation reaches it. The one reached legacy file commitment is narrow: on-disk pure legacy provider entries coexist with canonical custom entries — preserved verbatim, never migrated or deleted by canonical writes, never executed. No legacy execution, migration, or write-back promise follows from this preservation.
 - The terminal UI is removal-bound and outside the target surface. It carries
   no compatibility promise, must not constrain new architecture, and receives
   no new compatibility investment.

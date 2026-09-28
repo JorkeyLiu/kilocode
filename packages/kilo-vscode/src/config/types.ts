@@ -372,6 +372,75 @@ const APPROVED_PROVIDER_KEYS = new Set(["name", "endpoint", "protocol", "models"
 /** Approved MCP-level keys — must match CanonicalMcpPayload exactly. */
 const APPROVED_MCP_KEYS = new Set(["type", "command", "args", "url", "enabled", "credential"])
 
+// ── Legacy inert provider partitioning (extension-only, backend predicate unchanged) ──
+// Mirrors backend V1 legacy operational keys (packages/core/src/kilocode/canonical-provider.ts
+// V1_LEGACY_PROVIDER_KEYS) without importing its private set: a provider entry is
+// legacy-inert iff it carries a legacy operational key (api/npm/env/options/id/
+// whitelist/blacklist) and carries NO definitive canonical signal
+// (endpoint/protocol/credential). Hybrid entries (definitive + legacy) are NOT
+// legacy — they stay on the strict canonical path and fail closed. Entries with
+// neither signal nor legacy keys (e.g. {name}) stay canonical-minimal. Pure
+// credential-bearing keys outside the V1 set (apiKey/headers/baseURL/model) are
+// NOT legacy — they stay strict so existing plaintext/disallowed-key rejections
+// and credential/id/scope fail-closed semantics are unchanged. Backend shared
+// predicates (isValidCanonicalProviderEntry, isCanonicalProviderCandidate,
+// isCanonicalOnlyProviderV1) are never redefined here.
+
+const LEGACY_INERT_PROVIDER_KEYS = new Set(["api", "npm", "env", "options", "id", "whitelist", "blacklist"])
+
+function hasDefinitiveProviderSignal(v: Record<string, unknown>): boolean {
+  return v.endpoint !== undefined || v.protocol !== undefined || v.credential !== undefined
+}
+
+function hasLegacyInertProviderKey(v: Record<string, unknown>): boolean {
+  for (const key of Object.keys(v)) {
+    if (LEGACY_INERT_PROVIDER_KEYS.has(key) && v[key] !== undefined) return true
+  }
+  return false
+}
+
+/** True when an on-disk provider entry is pure legacy (inert, preserved, never materialized). */
+export function isLegacyInertProviderEntry(v: unknown): boolean {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false
+  const r = v as Record<string, unknown>
+  if (hasDefinitiveProviderSignal(r)) return false
+  return hasLegacyInertProviderKey(r)
+}
+
+/** Split a raw provider map into canonical candidates vs legacy-inert entries. */
+export function partitionProviderRecord(
+  value: unknown,
+): { readonly canonical: Record<string, unknown>; readonly legacy: Record<string, unknown> } {
+  const canonical: Record<string, unknown> = {}
+  const legacy: Record<string, unknown> = {}
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { canonical, legacy }
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (isLegacyInertProviderEntry(entry)) legacy[id] = entry
+    else canonical[id] = entry
+  }
+  return { canonical, legacy }
+}
+
+/**
+ * Lenient canonical provider record parse for on-disk scope configs that may
+ * mix pure legacy entries with canonical custom entries. Legacy-inert entries
+ * are ignored; every non-legacy entry must pass the shared strict validator
+ * (with id context). Returns undefined when any canonical candidate is
+ * malformed — callers fail closed exactly as the strict parse did.
+ */
+export function parseCanonicalProviderRecordIgnoringLegacy(
+  value: unknown,
+): { readonly [id: string]: CanonicalProviderPayload } | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const result: Record<string, CanonicalProviderPayload> = {}
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (isLegacyInertProviderEntry(entry)) continue
+    if (!isValidCanonicalProviderEntry(entry, id)) return undefined
+    result[id] = entry
+  }
+  return result
+}
+
 export function isOwnedCredentialRef(ref: string): boolean {
   return isOwnedCredentialRefCore(ref)
 }

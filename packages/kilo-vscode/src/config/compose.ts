@@ -150,6 +150,16 @@ function composeKeyed(
   }
 
   if (!gRecord) {
+    if (entry.key === "provider") {
+      const { partitionProviderRecord: partSingle } = require("./types") as typeof import("./types")
+      const only = partSingle(pRecord).canonical
+      return {
+        key: entry.key,
+        value: only,
+        source: "project",
+        provenance: makeProvenance("project", project!.provenance.canonicalPath, entry.composition, true),
+      }
+    }
     return {
       key: entry.key,
       value: pVal,
@@ -159,11 +169,52 @@ function composeKeyed(
   }
 
   if (!pRecord) {
+    if (entry.key === "provider") {
+      const { partitionProviderRecord: partOnly } = require("./types") as typeof import("./types")
+      const only = partOnly(gRecord).canonical
+      return {
+        key: entry.key,
+        value: only,
+        source: "global",
+        provenance: makeProvenance("global", global!.provenance.canonicalPath, entry.composition, true),
+      }
+    }
     return {
       key: entry.key,
       value: gVal,
       source: "global",
       provenance: makeProvenance("global", global!.provenance.canonicalPath, entry.composition, true),
+    }
+  }
+
+  // Provider keyed composition ignores legacy-inert IDs: they are preserved
+  // on disk but never merged and never conflict across scopes. Canonical
+  // IDs keep decisive duplicate-conflict semantics (F9).
+  if (entry.key === "provider") {
+    const { partitionProviderRecord } = require("./types") as typeof import("./types")
+    const gCan = partitionProviderRecord(gRecord).canonical
+    const pCan = partitionProviderRecord(pRecord).canonical
+    const merged: Record<string, unknown> = { ...gCan }
+    for (const [id, pEntry] of Object.entries(pCan)) {
+      if (id in merged) {
+        return {
+          path: [entry.key, id],
+          message: `Duplicate keyed ID "${id}" in field "${entry.key}" across global and project scopes`,
+          scope: "project",
+          file: entry.key,
+        }
+      }
+      merged[id] = pEntry
+    }
+    return {
+      key: entry.key,
+      value: merged,
+      source: "merged",
+      provenance: makeMergedProvenance(
+        global!.provenance.canonicalPath,
+        project!.provenance.canonicalPath,
+        entry.composition,
+      ),
     }
   }
 

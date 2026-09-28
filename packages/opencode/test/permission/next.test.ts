@@ -779,7 +779,7 @@ it.instance(
 )
 
 it.instance(
-  "reply - always persists approval and resolves",
+  "reply - always persists session-bound approval and resolves",
   () =>
     Effect.gen(function* () {
       const fiber = yield* ask({
@@ -796,8 +796,9 @@ it.instance(
       yield* reply({ requestID: PermissionV1.ID.make("per_test3"), reply: "always" })
       yield* Fiber.join(fiber)
 
+      // Same session same pattern is allowed within runtime lifetime
       const result = yield* ask({
-        sessionID: SessionID.make("session_test2"),
+        sessionID: SessionID.make("session_test"),
         permission: "bash",
         patterns: ["ls"],
         metadata: {},
@@ -805,6 +806,21 @@ it.instance(
         ruleset: [],
       })
       expect(result).toBeUndefined()
+
+      // Other session must not inherit the grant — stays pending
+      const other = yield* ask({
+        id: PermissionV1.ID.make("per_test3_other"),
+        sessionID: SessionID.make("session_test2"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_test3_other"), reply: "reject" })
+      const exit = yield* Fiber.await(other)
+      expect(Exit.isFailure(exit)).toBe(true)
     }),
   { git: true },
 )
@@ -880,7 +896,7 @@ it.instance(
 )
 
 it.instance(
-  "reply - always resolves matching pending requests from other sessions",
+  "reply - always does not resolve matching pending requests from other sessions",
   () =>
     Effect.gen(function* () {
       const a = yield* ask({
@@ -907,8 +923,11 @@ it.instance(
       yield* reply({ requestID: PermissionV1.ID.make("per_test6a"), reply: "always" })
 
       yield* Fiber.join(a)
-      yield* Fiber.join(b)
-      expect(yield* list()).toHaveLength(0)
+      // Other session stays pending — session-bound grant never leaks across sessions
+      expect(yield* list()).toHaveLength(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_test6b"), reply: "reject" })
+      const exit = yield* Fiber.await(b)
+      expect(Exit.isFailure(exit)).toBe(true)
     }),
   { git: true },
 )

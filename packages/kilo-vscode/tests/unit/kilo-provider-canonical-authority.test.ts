@@ -722,13 +722,16 @@ describe("LOCK-8: Canonical handler typed provider record", () => {
     expect(block).toContain("narrowProviderEntry")
   })
 
-  it("retryCanonicalProviderCleanup uses parseCanonicalProviderRecord for scope config", async () => {
+  it("retryCanonicalProviderCleanup preserves raw scope providers (legacy-safe, no bare erase)", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
     const block =
       source.match(
         /private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/,
       )?.[0] ?? ""
-    expect(block).toContain("parseCanonicalProviderRecord")
+    // Retry restore must base on raw scope providers (preserving legacy-inert
+    // IDs) rather than a strict-only parse that would erase them.
+    expect(block).toContain("getScopeConfig(scope).provider")
+    expect(block).toContain("baseProviders")
   })
 
   it("types.ts exports parseCanonicalProviderRecord and narrowProviderEntry", async () => {

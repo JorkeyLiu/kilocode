@@ -85,6 +85,45 @@ export function resolvePermissionLevel(gRaw: unknown): Evaluator.PermissionLevel
   return undefined
 }
 
+function agentKey(name: string): string {
+  return name === "build" ? "code" : name
+}
+
+// kilocode_change start - authored agent.permission provenance across the four
+// layers (global/project JSONC + global/project markdown). Each authored definition
+// becomes its own evaluator layer (kind agent) so cross-source deny > ask > allow
+// holds while same-document specific/order still settles via winningRule per layer.
+// Absent (no entry) yields no layer (non-applicable); authored empty {} yields an
+// empty applicable ask layer. Built-in defaults stay in the caller merged ruleset
+// and remain customizable per existing merge; they never become an automatic hard
+// limit. Canonical paths are file truth for source attribution; ordinary
+// agent.permission readback keeps the merged effective map.
+export function resolveAuthoredAgentLayers(sources: unknown, agentName: string): Evaluator.LayerInput[] {
+  if (!Array.isArray(sources)) return []
+  if (!agentName || agentName === "unknown") return []
+  const want = agentKey(agentName)
+  const out: Evaluator.LayerInput[] = []
+  for (const item of sources as Array<{ agent?: unknown; source?: unknown; permission?: unknown }>) {
+    if (!item || typeof item !== "object") continue
+    const rawAgent = (item as { agent?: unknown }).agent
+    if (typeof rawAgent !== "string" || agentKey(rawAgent) !== want) continue
+    const perm = (item as { permission?: unknown }).permission
+    if (perm === undefined || perm === null) continue
+    if (typeof perm !== "object" || Array.isArray(perm)) continue
+    const keys = Object.keys(perm as Record<string, unknown>)
+    let rs: Ruleset
+    try {
+      rs = keys.length === 0 ? [] : fromConfig(perm as any)
+    } catch (err) {
+      log.warn("resolveAuthoredAgentLayers: failed to convert permission", { agent: rawAgent, err })
+      continue
+    }
+    const canonical = typeof (item as { source?: unknown }).source === "string" && ((item as { source: string }).source.length ?? 0) > 0 ? (item as { source: string }).source : `agent:${rawAgent}`
+    out.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: canonical, ruleset: rs })
+  }
+  return out
+}
+
 export function effectiveProtectedTargets(request: { patterns: readonly string[]; metadata?: Record<string, unknown>; permission: string }, base: string): string[] {
   void base
   const seen = new Set<string>()
@@ -438,21 +477,30 @@ export const layer = Layer.effect(
             callerFallbackLayer = { kind: "session-restriction", sourceKind: "session-restriction", canonicalPath: "memory:request-ruleset", ruleset: entry.ruleset }
           }
         }
-        let agentLayer: Evaluator.LayerInput | undefined
+        let agentLayers: Evaluator.LayerInput[] = []
         if (reqAgent !== "unknown") {
           if (testAgentOverrides.has(reqAgent)) {
             const ov = testAgentOverrides.get(reqAgent)!
-            agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${reqAgent}`, ruleset: [...ov] }
+            agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${reqAgent}`, ruleset: [...ov] }]
           } else {
             const cfg2 = yield* config.get().pipe(Effect.map((c) => c as any), Effect.catch((err) => {
               log.warn("buildEvaluatorInputForEntry: failed to load config for agent layer", { err, reqAgent })
               return Effect.succeed({} as any)
             }))
-            const aInfo2 = (cfg2 as any).agent?.[reqAgent] as { permission?: Record<string, unknown> } | undefined
-            if (aInfo2 && Object.prototype.hasOwnProperty.call(aInfo2, "permission")) {
-              const perm2 = (aInfo2 as any).permission
-              if (perm2 && typeof perm2 === "object" && !Array.isArray(perm2) && Object.keys(perm2 as object).length > 0) agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${reqAgent}`, ruleset: fromConfig(perm2 as any) }
-              else agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${reqAgent}`, ruleset: [] }
+            const derived = (cfg2 as { agent_permission_sources?: unknown }).agent_permission_sources
+            if (Array.isArray(derived) && derived.length > 0) {
+              agentLayers = resolveAuthoredAgentLayers(derived, reqAgent)
+            } else {
+              const keys = reqAgent === "code" || reqAgent === "build" ? ["code", "build"] : [reqAgent]
+              for (const key of keys) {
+                const aInfo = (cfg2 as any).agent?.[key] as { permission?: Record<string, unknown> } | undefined
+                if (aInfo && Object.prototype.hasOwnProperty.call(aInfo, "permission")) {
+                  const perm = (aInfo as any).permission
+                  if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length > 0)
+                    agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: fromConfig(perm as any) })
+                  else agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: [] })
+                }
+              }
             }
           }
         }
@@ -520,7 +568,7 @@ export const layer = Layer.effect(
         for (const g of globalLayers) layers.push(g)
         if (projLayer) layers.push(projLayer)
         if (callerFallbackLayer) layers.push(callerFallbackLayer)
-        if (agentLayer) layers.push(agentLayer)
+        for (const al of agentLayers) layers.push(al)
         if (sessLayer) layers.push(sessLayer)
         if (protectedDenyLayer) layers.push(protectedDenyLayer)
         const approvals = [...st.r18.approvals, ...syntheticApprovals]
@@ -639,23 +687,36 @@ export const layer = Layer.effect(
           if (!projectFound) log.warn("buildSharedEvaluatorInput: no authored project permission source, using truthful non-file layer for caller ruleset", { workspaceRoot, hasRules: ruleset.length })
           return { kind: "session-restriction" as const, sourceKind: "session-restriction" as const, canonicalPath: "memory:request-ruleset", ruleset }
         })() : undefined
-        let agentLayer: Evaluator.LayerInput | undefined
+        let agentLayers: Evaluator.LayerInput[] = []
         if (agentName) {
           if (testAgentOverrides.has(agentName)) {
             const ov = testAgentOverrides.get(agentName)!
-            agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...ov] }
+            agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...ov] }]
           } else {
             const cfg = yield* config.get().pipe(Effect.map((c) => c as any), Effect.catch((err) => {
               log.warn("buildSharedEvaluatorInput: failed to load config for agent layer", { err, agentName })
               return Effect.succeed({} as any)
             }))
-            const agentInfo = (cfg as any).agent?.[agentName] as { permission?: Record<string, unknown> } | undefined
-            if (agentInfo && Object.prototype.hasOwnProperty.call(agentInfo, "permission")) {
-              const perm = (agentInfo as any).permission
-              if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length > 0) agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: fromConfig(perm as any) }
-              else agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [] }
-            } else if (opts.fallbackAgentRuleset && opts.fallbackAgentRuleset.length > 0) {
-              agentLayer = { kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...opts.fallbackAgentRuleset] }
+            const derived = (cfg as { agent_permission_sources?: unknown }).agent_permission_sources
+            if (Array.isArray(derived) && derived.length > 0) {
+              agentLayers = resolveAuthoredAgentLayers(derived, agentName)
+              if (agentLayers.length === 0 && opts.fallbackAgentRuleset && opts.fallbackAgentRuleset.length > 0) {
+                agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...opts.fallbackAgentRuleset] }]
+              }
+            } else {
+              const keys = agentName === "code" || agentName === "build" ? ["code", "build"] : [agentName]
+              for (const key of keys) {
+                const agentInfo = (cfg as any).agent?.[key] as { permission?: Record<string, unknown> } | undefined
+                if (agentInfo && Object.prototype.hasOwnProperty.call(agentInfo, "permission")) {
+                  const perm = (agentInfo as any).permission
+                  if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length > 0)
+                    agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: fromConfig(perm as any) })
+                  else agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: [] })
+                }
+              }
+              if (agentLayers.length === 0 && opts.fallbackAgentRuleset && opts.fallbackAgentRuleset.length > 0) {
+                agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...opts.fallbackAgentRuleset] }]
+              }
             }
           }
         }
@@ -680,7 +741,7 @@ export const layer = Layer.effect(
         for (const gl of globalLayers) layers.push(gl)
         if (projectLayer) layers.push(projectLayer)
         if (callerFallbackLayer) layers.push(callerFallbackLayer)
-        if (agentLayer) layers.push(agentLayer)
+        for (const al of agentLayers) layers.push(al)
         if (sessionLayer) layers.push(sessionLayer)
         if (protectedDenyLayer) layers.push(protectedDenyLayer)
         const allApprovals = [...st.r18.approvals, ...syntheticApprovals]
@@ -979,8 +1040,9 @@ export const layer = Layer.effect(
         return
       }
 
-      // handle "always" as global in-memory approval (no durable file write)
-      // For R18 ceiling, require exact canonical targets, same session, same agent, same permission; no wildcard session "*"
+      // handle "always" as session-bound in-memory approval (no durable file write, no cross-session leak)
+      // Ordinary + protected both bind exact current sessionID + agent + permission + canonical exact patterns
+      // as r18 kind:session; evaluator exactApprovalCovers enforces the binding. No wildcard session "*"
       const ws2 = ctx.worktree === "/" ? ctx.directory : ctx.worktree
       const canonicalTargetsAlways = (existing as any).canonicalTargets ?? Evaluator.buildCanonicalTargets({ patterns: [...existing.info.patterns], metadata: existing.info.metadata as any, permission: existing.info.permission }, ws2)
       const isProtForR18 = canonicalTargetsAlways.some(
@@ -1008,25 +1070,26 @@ export const layer = Layer.effect(
             if ((skillForAlways && ConfigProtection.hasGlobSyntax(skillForAlways)) || hasLexicalWildcardForAlways || hasGlobForAlways) {
               // Reject any glob syntax for approval identities — exact only
             } else {
-              // Ordinary: add only explicitly selected/validated patterns; no multi-pattern approval widening, exact only
+              // Ordinary: session-bound exact approval only — explicitly selected/validated patterns, no cross-session widening
               const validAlways = new Set(existing.info.always ?? [])
+              const selected: string[] = []
               for (const pat of existing.info.patterns) {
                 if (!validAlways.has(pat)) continue
                 if (ConfigProtection.isLexicalSkillWildcard(pat)) continue
                 if (ConfigProtection.hasGlobSyntax(pat) || ConfigProtection.hasGlobSyntax(existing.info.permission)) continue
-                if (!approved.some((r) => r.permission === existing.info.permission && r.pattern === pat && r.action === "allow")) {
-                  approved.push({ permission: existing.info.permission, pattern: pat, action: "allow" })
-                }
+                selected.push(pat)
               }
               for (const pat of existing.info.always ?? []) {
                 if (!validAlways.has(pat)) continue
                 if (ConfigProtection.isLexicalSkillWildcard(pat)) continue
                 if (ConfigProtection.hasGlobSyntax(pat) || ConfigProtection.hasGlobSyntax(existing.info.permission)) continue
-                if (!existing.info.patterns.includes(pat)) {
-                  if (!approved.some((r) => r.permission === existing.info.permission && r.pattern === pat && r.action === "allow")) {
-                    approved.push({ permission: existing.info.permission, pattern: pat, action: "allow" })
-                  }
-                }
+                if (!existing.info.patterns.includes(pat)) selected.push(pat)
+              }
+              const canonSelected = [...new Set(selected.map((p: string) => Evaluator.canonicalForPermission(p, existing.info.permission, ws2)).filter((c: string) => !ConfigProtection.hasGlobSyntax(c)))].sort()
+              if (canonSelected.length > 0) {
+                const agentForOrdinary = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
+                const existsOrd = r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForOrdinary && a.permission === existing.info.permission && a.patterns.length === canonSelected.length && a.patterns.slice().sort().every((v, i) => v === canonSelected[i]))
+                if (!existsOrd) r18.approvals.push({ kind: "session", patterns: canonSelected, sessionID: String(existing.info.sessionID), agent: agentForOrdinary, permission: existing.info.permission })
               }
             }
         } else if (!existing.saved && !effectiveIsExact && !isProtForR18) {
@@ -1038,13 +1101,13 @@ export const layer = Layer.effect(
           if ((skillBroad && ConfigProtection.hasGlobSyntax(skillBroad)) || hasLexicalWildcardBroad || hasGlobBroad) {
             // Reject any glob syntax for approval identities — exact only, even in broad path
           } else {
-            // For non-exact (broad) patterns on ordinary, still require exact via always — glob rejected
-            for (const pat of existing.info.always ?? []) {
-              if (ConfigProtection.isLexicalSkillWildcard(pat)) continue
-              if (ConfigProtection.hasGlobSyntax(pat) || ConfigProtection.hasGlobSyntax(existing.info.permission)) continue
-              if (!approved.some((r) => r.permission === existing.info.permission && r.pattern === pat && r.action === "allow")) {
-                approved.push({ permission: existing.info.permission, pattern: pat, action: "allow" })
-              }
+            // For non-exact (broad) patterns on ordinary, still require exact via always — glob rejected, session-bound
+            const selectedBroad = (existing.info.always ?? []).filter((pat: string) => !ConfigProtection.isLexicalSkillWildcard(pat) && !ConfigProtection.hasGlobSyntax(pat) && !ConfigProtection.hasGlobSyntax(existing.info.permission))
+            const canonBroad = [...new Set(selectedBroad.map((p: string) => Evaluator.canonicalForPermission(p, existing.info.permission, ws2)).filter((c: string) => !ConfigProtection.hasGlobSyntax(c)))].sort()
+            if (canonBroad.length > 0) {
+              const agentForBroad = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
+              const existsBroad = r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForBroad && a.permission === existing.info.permission && a.patterns.length === canonBroad.length && a.patterns.slice().sort().every((v, i) => v === canonBroad[i]))
+              if (!existsBroad) r18.approvals.push({ kind: "session", patterns: canonBroad, sessionID: String(existing.info.sessionID), agent: agentForBroad, permission: existing.info.permission })
             }
           }
         }
@@ -1175,19 +1238,32 @@ export const layer = Layer.effect(
         )
         const approvedSet = new Set(approvedRaw.filter((p: string) => !ConfigProtection.hasGlobSyntax(p) && !ConfigProtection.hasGlobSyntax(existing.info.permission)))
         const deniedSet = new Set(deniedRaw.filter((p: string) => !ConfigProtection.hasGlobSyntax(p) && !ConfigProtection.hasGlobSyntax(existing.info.permission)))
-        // All approvals filtered to exact only — glob and permission glob already rejected
-        const newRules: Rule[] = []
+        // Ordinary saveAlwaysRules: session-bound only — allows become r18 kind:session approvals,
+        // denies become session-restriction rules for the current sessionID. Never touches global st.approved.
+        const allowSelected: string[] = []
+        const denySelected: string[] = []
         for (const pattern of validRules) {
           if (ConfigProtection.hasGlobSyntax(pattern) || ConfigProtection.hasGlobSyntax(existing.info.permission)) continue
           if (skill && ConfigProtection.hasGlobSyntax(pattern)) continue
-          if (approvedSet.has(pattern)) newRules.push({ permission: existing.info.permission, pattern, action: "allow" })
-          if (deniedSet.has(pattern)) newRules.push({ permission: existing.info.permission, pattern, action: "deny" })
+          if (approvedSet.has(pattern)) allowSelected.push(pattern)
+          if (deniedSet.has(pattern)) denySelected.push(pattern)
         }
-        if (newRules.length === 0) return
-        for (const r of newRules) {
-          if (!s.approved.some((x) => x.permission === r.permission && x.pattern === r.pattern && x.action === r.action)) {
-            s.approved.push(r)
+        if (allowSelected.length === 0 && denySelected.length === 0) return
+        const agentForSave = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
+        if (allowSelected.length > 0) {
+          const canonAllow = [...new Set(allowSelected.map((p: string) => Evaluator.canonicalForPermission(p, existing.info.permission, ws2)).filter((c: string) => !ConfigProtection.hasGlobSyntax(c)))].sort()
+          if (canonAllow.length > 0) {
+            const existsSave = s.r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForSave && a.permission === existing.info.permission && a.patterns.length === canonAllow.length && a.patterns.slice().sort().every((v, i) => v === canonAllow[i]))
+            if (!existsSave) s.r18.approvals.push({ kind: "session", patterns: canonAllow, sessionID: String(existing.info.sessionID), agent: agentForSave, permission: existing.info.permission })
           }
+        }
+        if (denySelected.length > 0) {
+          const cur: Rule[] = [...(s.session[String(existing.info.sessionID)] ?? [])]
+          for (const pat of denySelected) {
+            const canonPat = Evaluator.canonicalForPermission(pat, existing.info.permission, ws2)
+            if (!cur.some((r) => Evaluator.canonicalForPermission(r.pattern, existing.info.permission, ws2) === canonPat && r.permission === existing.info.permission && r.action === "deny")) cur.push({ permission: existing.info.permission, pattern: pat, action: "deny" })
+          }
+          s.session[String(existing.info.sessionID)] = cur as Ruleset
         }
       }
       existing.saved = true
