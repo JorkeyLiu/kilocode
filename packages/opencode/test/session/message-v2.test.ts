@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { APICallError } from "ai"
+import { LLMError, RateLimitReason, ProviderInternalReason, TransportReason } from "@opencode-ai/llm"
+import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
@@ -1550,6 +1552,60 @@ describe("session.message-v2.fromError", () => {
     const result = MessageV2.fromError(zlibError, { providerID, aborted: true })
 
     expect(result.name).toBe("MessageAbortedError")
+  })
+
+  test("maps retryable native RateLimit LLMError to safe retryable APIError", () => {
+    const err = new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: new RateLimitReason({ message: "Provider request failed with HTTP 429: secret-body", retryAfterMs: 1500 }),
+    })
+    const result = MessageV2.fromError(err, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    const data = (result as SessionV1.APIError).data
+    expect(data.isRetryable).toBe(true)
+    expect(data.statusCode).toBe(429)
+    expect(data.responseHeaders).toEqual({ "retry-after-ms": "1500" })
+    expect(data.responseBody).toBeUndefined()
+    expect(data.message).toBe("Provider request failed with HTTP 429")
+    expect(data.message).not.toInclude("secret-body")
+    expect(JSON.stringify(result)).not.toInclude("secret-body")
+    expect(SessionRetry.retryable(result, "openai")).toBeDefined()
+    expect(SessionRetry.delay(1, result as SessionV1.APIError)).toBe(1500)
+  })
+
+  test("maps retryable native ProviderInternal LLMError without leaking body", () => {
+    const err = new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: new ProviderInternalReason({
+        message: "Provider request failed with HTTP 503: sk-secret-value",
+        status: 503,
+      }),
+    })
+    const result = MessageV2.fromError(err, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    const data = (result as SessionV1.APIError).data
+    expect(data.isRetryable).toBe(true)
+    expect(data.statusCode).toBe(503)
+    expect(data.responseBody).toBeUndefined()
+    expect(data.message).toBe("Provider request failed with HTTP 503")
+    expect(JSON.stringify(result)).not.toInclude("sk-secret-value")
+    expect(SessionRetry.retryable(result, "openai")).toBeDefined()
+  })
+
+  test("keeps non-retryable native Transport LLMError non-retryable", () => {
+    const err = new LLMError({
+      module: "RequestExecutor",
+      method: "execute",
+      reason: new TransportReason({ message: "HTTP transport failed" }),
+    })
+    const result = MessageV2.fromError(err, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(false)
+    expect(SessionRetry.retryable(result as never, "openai")).toBeUndefined()
   })
 })
 

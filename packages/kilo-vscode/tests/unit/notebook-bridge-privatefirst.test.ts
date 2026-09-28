@@ -158,7 +158,12 @@ function harness(opts: {
       } as SSEPayload,
       directory,
     )
-  const internals = () => bridge as unknown as { outcomes: Map<string, unknown>; settled: Set<string> }
+  const internals = () =>
+    bridge as unknown as {
+      outcomes: Map<string, unknown>
+      settled: Set<string>
+      unresolved: Map<string, { opId: string; reason: string; requestID: string }>
+    }
   return {
     bridge,
     cancel,
@@ -225,22 +230,23 @@ describe("NotebookBridge private-first", () => {
     test.bridge.dispose()
   })
 
-  it("retries a transport failure without rerunning the adapter", async () => {
+  it("holds an SDK transport failure as unresolved without rerunning the adapter", async () => {
     const test = harness({ pending: [read], sdkReplyError: new Error("offline") })
     test.request()
     await flush()
     expect(test.readMock).toHaveBeenCalledTimes(1)
     expect(test.sdkReplies).toHaveLength(1)
     expect(test.internals().settled.has(RID)).toBe(false)
+    // SDK acceptance is unknown after a transport failure: fail closed as
+    // unresolved instead of silently replaying on recovery.
+    expect(test.internals().unresolved.has(RID)).toBe(true)
     expect(test.internals().outcomes.size).toBe(1)
-    // Recovery via reconnect uses the cached outcome: adapter stays at one
-    // execution while the SDK fallback is attempted exactly once more.
+    // Recovery via reconnect must not reissue the cached semantic action.
     test.handlers.state?.("connected")
     await flush()
     expect(test.readMock).toHaveBeenCalledTimes(1)
-    expect(test.sdkReplies).toHaveLength(2)
-    // The harness SDK keeps failing, so the outcome stays cached for retry.
-    expect(test.internals().outcomes.size).toBe(1)
+    expect(test.sdkReplies).toHaveLength(1)
+    expect(test.internals().unresolved.has(RID)).toBe(true)
     test.bridge.dispose()
   })
 

@@ -59,6 +59,27 @@ const countedResponsesLayer = (attempts: Ref.Ref<number>, responses: ReadonlyArr
     ),
   )
 
+const countedNoRetryLayer = (attempts: Ref.Ref<number>, responses: ReadonlyArray<Response>) =>
+  RequestExecutor.noRetryLayer.pipe(
+    Layer.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const cursor = yield* Ref.make(0)
+          return Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.gen(function* () {
+                yield* Ref.update(attempts, (value) => value + 1)
+                const index = yield* Ref.getAndUpdate(cursor, (value) => value + 1)
+                return HttpClientResponse.fromWeb(request, responses[index] ?? responses[responses.length - 1])
+              }),
+            ),
+          )
+        }),
+      ),
+    ),
+  )
+
 const randomMidpoint = {
   nextDoubleUnsafe: () => 0.5,
   nextIntUnsafe: () => 0,
@@ -413,6 +434,29 @@ describe("RequestExecutor", () => {
       expectLLMError(error)
       expect(error.reason).toMatchObject({ _tag: "InvalidProviderOutput" })
       expect(yield* Ref.get(attempts)).toBe(1)
+    }),
+  )
+
+  it.effect("noRetryLayer surfaces retryable status without inner retries", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const error = yield* executor.execute(request).pipe(Effect.flip)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "ProviderInternal", status: 503 })
+        expect(error.retryable).toBe(true)
+        expect(error.retryAfterMs).toBe(0)
+        expect(yield* Ref.get(attempts)).toBe(1)
+      }).pipe(
+        Effect.provide(
+          countedNoRetryLayer(attempts, [
+            new Response("busy", { status: 503, headers: { "retry-after-ms": "0" } }),
+            new Response("ok", { status: 200 }),
+          ]),
+        ),
+      )
     }),
   )
 })

@@ -45,6 +45,7 @@ import { KiloSessionMessageOrder } from "@/kilocode/session/message-order" // ki
 import * as TextStream from "@/kilocode/text-stream" // kilocode_change
 import { Effect, Schema } from "effect"
 import * as EffectLogger from "@opencode-ai/core/effect/logger"
+import { LLMError } from "@opencode-ai/llm" // kilocode_change - typed native transport mapping
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -637,6 +638,31 @@ export function latest(msgs: WithParts[]) {
   return { user, assistant, finished, tasks }
 }
 
+// kilocode_change - safe typed bridge for pre-exposure native transport failures.
+// Only retryable LLMError (RateLimit 429, ProviderInternal 5xx/529) becomes a
+// retryable APIError with status + retry-after-ms. No body/headers are copied;
+// the message is a generic HTTP status so redacted provider detail and secrets
+// never reach persistence/projection. Non-retryable LLMError stays Unknown.
+function nativeError(e: LLMError) {
+  if (!e.retryable) return undefined
+  const reason = e.reason
+  const status = reason._tag === "RateLimit" ? 429 : reason._tag === "ProviderInternal" ? reason.status : undefined
+  if (status === undefined) return undefined
+  if (!(status === 429 || status >= 500)) return undefined
+  const wait = e.retryAfterMs
+  const headers =
+    wait !== undefined && Number.isFinite(wait) ? { "retry-after-ms": String(Math.max(0, wait)) } : undefined
+  return new APIError(
+    {
+      message: `Provider request failed with HTTP ${status}`,
+      statusCode: status,
+      isRetryable: true,
+      ...(headers ? { responseHeaders: headers } : {}),
+    },
+    { cause: e },
+  ).toObject()
+}
+
 export function fromError(
   e: unknown,
   ctx: { providerID: ProviderV2.ID; aborted?: boolean },
@@ -744,6 +770,11 @@ export function fromError(
         },
         { cause: e },
       ).toObject()
+    case e instanceof LLMError: {
+      const mapped = nativeError(e)
+      if (mapped) return mapped
+      return new NamedError.Unknown({ message: errorMessage(e) }, { cause: e }).toObject()
+    }
     case e instanceof Error:
       return new NamedError.Unknown({ message: errorMessage(e) }, { cause: e }).toObject()
     default:

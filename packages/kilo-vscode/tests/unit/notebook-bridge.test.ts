@@ -191,7 +191,7 @@ describe("NotebookBridge", () => {
     test.bridge.dispose()
   })
 
-  it("retries a failed reply without repeating the adapter operation", async () => {
+  it("holds a failed reply as unresolved instead of silently replaying it", async () => {
     const ctx = context()
     const test = harness(ctx.value)
     test.state.failReply = true
@@ -202,8 +202,12 @@ describe("NotebookBridge", () => {
     test.request()
     await flush()
 
+    // SDK acceptance is unknown after a dispatch failure: the second
+    // observation is suppressed, the adapter ran once, one SDK attempt went out.
     expect(ctx.adapter.read).toHaveBeenCalledTimes(1)
-    expect(test.replies).toHaveLength(2)
+    expect(test.replies).toHaveLength(1)
+    const bridge = test.bridge as unknown as { unresolved: Map<string, unknown> }
+    expect(bridge.unresolved.has("notebook-1")).toBe(true)
     test.bridge.dispose()
   })
 

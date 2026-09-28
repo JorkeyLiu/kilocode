@@ -303,7 +303,7 @@ describe("question private-first", () => {
     expect(messages).toContainEqual({ type: "questionError", requestID: RID })
   })
 
-  test("invalid, ambiguous, transport, closed each take exactly one SDK with same tuple", async () => {
+  test("invalid, ambiguous, transport, closed each surface unresolved with zero SDK and kept identity", async () => {
     const cases: Array<{ label: string; make: (req: Record<string, unknown>) => unknown }> = [
       { label: "invalid", make: (req) => ({ ...terminalReply(req), answers: "broken" }) },
       { label: "ambiguous", make: (req) => vague(req) },
@@ -318,7 +318,7 @@ describe("question private-first", () => {
     for (const entry of cases) {
       const seen: unknown[] = []
       let sdk = 0
-      const params: unknown[] = []
+      let lists = 0
       const conn = {
         isPrivateAvailable: () => true,
         privateQuestionReplyWithHandle: (req: Record<string, unknown>) => {
@@ -326,23 +326,35 @@ describe("question private-first", () => {
           return { id: 1, promise: Promise.resolve(entry.make(req)), cancel: () => true }
         },
       } as unknown as QuestionContext["connection"]
-      const { fake, replies } = base({ origin: DIR, conn })
-      const client = fake.client as unknown as { question: { reply: (a: unknown) => Promise<unknown> } }
-      const orig = client.question.reply
+      const { fake, replies, messages, dirs } = base({ origin: DIR, conn, pending: {} })
+      const client = fake.client as unknown as {
+        question: { reply: (a: unknown) => Promise<unknown>; list: (a: unknown) => Promise<unknown> }
+      }
+      const origReply = client.question.reply
       client.question.reply = async (a: unknown) => {
         sdk += 1
-        params.push(a)
-        return orig(a)
+        return origReply(a)
       }
+      const origList = client.question.list
+      client.question.list = async (a: unknown) => {
+        lists += 1
+        return origList(a)
+      }
+      const spy = spyOn(console, "error").mockImplementation(() => {})
       const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
-      expect([entry.label, ok]).toEqual([entry.label, true])
-      expect([entry.label, sdk]).toEqual([entry.label, 1])
+      spy.mockRestore()
+      expect([entry.label, ok]).toEqual([entry.label, false])
+      expect([entry.label, sdk]).toEqual([entry.label, 0])
       expect([entry.label, seen.length]).toEqual([entry.label, 1])
-      expect(params[0]).toEqual({ requestID: RID, answers: [["Yes"]], directory: DIR })
-      expect(replies).toHaveLength(1)
+      expect([entry.label, replies]).toEqual([entry.label, []])
+      expect(dirs.get(RID)).toBe(DIR)
+      expect(messages).toContainEqual({ type: "questionError", requestID: RID })
+      expect(messages).not.toContainEqual({ type: "questionResolved", requestID: RID })
+      expect(lists).toBe(1)
     }
     for (const label of ["transport", "closed"]) {
       let sdk = 0
+      let lists = 0
       const conn = {
         isPrivateAvailable: () => true,
         privateQuestionReplyWithHandle: () => ({
@@ -351,16 +363,29 @@ describe("question private-first", () => {
           cancel: () => true,
         }),
       } as unknown as QuestionContext["connection"]
-      const { fake } = base({ origin: DIR, conn })
-      const client = fake.client as unknown as { question: { reply: (a: unknown) => Promise<unknown> } }
-      const orig = client.question.reply
+      const { fake, messages, dirs } = base({ origin: DIR, conn, pending: {} })
+      const client = fake.client as unknown as {
+        question: { reply: (a: unknown) => Promise<unknown>; list: (a: unknown) => Promise<unknown> }
+      }
+      const origReply = client.question.reply
       client.question.reply = async (a: unknown) => {
         sdk += 1
-        return orig(a)
+        return origReply(a)
       }
+      const origList = client.question.list
+      client.question.list = async (a: unknown) => {
+        lists += 1
+        return origList(a)
+      }
+      const spy = spyOn(console, "error").mockImplementation(() => {})
       const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
-      expect([label, ok]).toEqual([label, true])
-      expect([label, sdk]).toEqual([label, 1])
+      spy.mockRestore()
+      expect([label, ok]).toEqual([label, false])
+      expect([label, sdk]).toEqual([label, 0])
+      expect(dirs.get(RID)).toBe(DIR)
+      expect(messages).toContainEqual({ type: "questionError", requestID: RID })
+      expect(messages).not.toContainEqual({ type: "questionResolved", requestID: RID })
+      expect(lists).toBe(1)
     }
   })
 
@@ -411,7 +436,7 @@ describe("question private-first", () => {
     expect(messages).toContainEqual({ type: "questionResolved", requestID: RID })
   })
 
-  test("unresolved epoch drift takes exactly one SDK", async () => {
+  test("unresolved epoch drift surfaces unresolved with zero SDK and kept identity", async () => {
     let sdk = 0
     const drift = {
       isPrivateAvailable: () => true,
@@ -421,19 +446,23 @@ describe("question private-first", () => {
         cancel: () => true,
       }),
     } as unknown as QuestionContext["connection"]
-    const { fake } = base({ origin: DIR, conn: drift })
+    const { fake, messages, dirs } = base({ origin: DIR, conn: drift, pending: {} })
     const client = fake.client as unknown as { question: { reply: (a: unknown) => Promise<unknown> } }
     const orig = client.question.reply
     client.question.reply = async (a: unknown) => {
       sdk += 1
       return orig(a)
     }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
-    expect(ok).toBeTrue()
-    expect(sdk).toBe(1)
+    spy.mockRestore()
+    expect(ok).toBeFalse()
+    expect(sdk).toBe(0)
+    expect(dirs.get(RID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "questionError", requestID: RID })
   })
 
-  test("malformed terminal with drift still falls back without fail-open", async () => {
+  test("malformed terminal with drift surfaces unresolved without fail-open", async () => {
     let sdk = 0
     const conn = {
       isPrivateAvailable: () => true,
@@ -443,19 +472,74 @@ describe("question private-first", () => {
         cancel: () => true,
       }),
     } as unknown as QuestionContext["connection"]
-    const { fake } = base({ origin: DIR, conn })
+    const { fake, messages, dirs } = base({ origin: DIR, conn, pending: {} })
     const client = fake.client as unknown as { question: { reply: (a: unknown) => Promise<unknown> } }
     const orig = client.question.reply
     client.question.reply = async (a: unknown) => {
       sdk += 1
       return orig(a)
     }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
-    expect(ok).toBeTrue()
-    expect(sdk).toBe(1)
+    spy.mockRestore()
+    expect(ok).toBeFalse()
+    expect(sdk).toBe(0)
+    expect(dirs.get(RID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "questionError", requestID: RID })
+    expect(messages).not.toContainEqual({ type: "questionResolved", requestID: RID })
   })
 
-  test("timeout cancels exact id and takes exactly one SDK", async () => {
+  test("reject ambiguous surfaces unresolved with zero SDK and kept identity", async () => {
+    let sdk = 0
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateQuestionRejectWithHandle: (req: Record<string, unknown>) => ({
+        id: 1,
+        promise: Promise.resolve(vague(req)),
+        cancel: () => true,
+      }),
+    } as unknown as QuestionContext["connection"]
+    const { fake, messages, dirs } = base({ origin: DIR, conn, pending: {} })
+    const client = fake.client as unknown as { question: { reject: (a: unknown) => Promise<unknown> } }
+    const orig = client.question.reject
+    client.question.reject = async (a: unknown) => {
+      sdk += 1
+      return orig(a)
+    }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
+    const ok = await handleQuestionReject(fake, RID, "ses-root")
+    spy.mockRestore()
+    expect(ok).toBeFalse()
+    expect(sdk).toBe(0)
+    expect(dirs.get(RID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "questionError", requestID: RID })
+  })
+
+  test("sync transport throw after send surfaces unresolved with zero SDK", async () => {
+    let sdk = 0
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateQuestionReplyWithHandle: () => {
+        throw new Error("transport error")
+      },
+    } as unknown as QuestionContext["connection"]
+    const { fake, messages, dirs } = base({ origin: DIR, conn, pending: {} })
+    const client = fake.client as unknown as { question: { reply: (a: unknown) => Promise<unknown> } }
+    const orig = client.question.reply
+    client.question.reply = async (a: unknown) => {
+      sdk += 1
+      return orig(a)
+    }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
+    const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
+    spy.mockRestore()
+    expect(ok).toBeFalse()
+    expect(sdk).toBe(0)
+    expect(dirs.get(RID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "questionError", requestID: RID })
+  })
+
+  test("timeout cancels exact id and surfaces unresolved with zero SDK", async () => {
     let cancelled: number | null = null
     let sdk = 0
     const conn = {
@@ -469,17 +553,22 @@ describe("question private-first", () => {
         },
       }),
     } as unknown as QuestionContext["connection"]
-    const { fake } = base({ origin: DIR, conn })
+    const { fake, messages, dirs } = base({ origin: DIR, conn, pending: {} })
     const client = fake.client as unknown as { question: { reply: (a: unknown) => Promise<unknown> } }
     const orig = client.question.reply
     client.question.reply = async (a: unknown) => {
       sdk += 1
       return orig(a)
     }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
-    expect(ok).toBeTrue()
-    expect(sdk).toBe(1)
+    spy.mockRestore()
+    expect(ok).toBeFalse()
+    expect(sdk).toBe(0)
     expect(cancelled).toBe(42)
+    expect(dirs.get(RID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "questionError", requestID: RID })
+    expect(messages).not.toContainEqual({ type: "questionResolved", requestID: RID })
   })
 
   test("unavailable and missing capability each take exactly one SDK", async () => {
@@ -523,28 +612,24 @@ describe("question private-first", () => {
 
   test("fallback 404 preserves stale and recover semantics", async () => {
     const notFoundErr = new Error("missing", { cause: { status: 404, body: { name: "NotFoundError" } } })
-    const vagueConn = {
-      isPrivateAvailable: () => true,
-      privateQuestionReplyWithHandle: (req: Record<string, unknown>) => ({
-        id: 1,
-        promise: Promise.resolve(vague(req)),
-        cancel: () => true,
-      }),
-      privateQuestionRejectWithHandle: (req: Record<string, unknown>) => ({
-        id: 1,
-        promise: Promise.resolve(vague(req)),
-        cancel: () => true,
-      }),
+    const presendConn = {
+      isPrivateAvailable: () => false,
+      privateQuestionReplyWithHandle: () => {
+        throw new Error("must not be called")
+      },
+      privateQuestionRejectWithHandle: () => {
+        throw new Error("must not be called")
+      },
     } as unknown as QuestionContext["connection"]
     {
-      const { fake, messages, dirs } = base({ origin: DIR, conn: vagueConn, replyError: notFoundErr })
+      const { fake, messages, dirs } = base({ origin: DIR, conn: presendConn, replyError: notFoundErr })
       const ok = await handleQuestionReply(fake, RID, [["Yes"]], "ses-root")
       expect(ok).toBeFalse()
       expect(dirs.has(RID)).toBeFalse()
       expect(messages).toContainEqual({ type: "questionResolved", requestID: RID })
     }
     {
-      const { fake, messages } = base({ conn: vagueConn, rejectError: notFoundErr, pending: {} })
+      const { fake, messages } = base({ conn: presendConn, rejectError: notFoundErr, pending: {} })
       const ok = await handleQuestionReject(fake, RID, "ses-root")
       expect(ok).toBeFalse()
       expect(messages).toContainEqual({ type: "questionResolved", requestID: RID })

@@ -377,6 +377,10 @@ export const layer = Layer.effect(
           const revision = makeRevision(actualSessionRev, currentConfigVer)
           return buildAmbiguous(req, revision)
         }
+        if (existing.outcome === "ambiguous") {
+          const revision = makeRevision(actualSessionRev, currentConfigVer)
+          return buildAmbiguous(req, revision)
+        }
         if (existing.outcome === "succeeded") {
           const cancelled = existing.meta.cancelled ?? false
           const revision = makeRevision(actualSessionRev, currentConfigVer)
@@ -488,6 +492,9 @@ export const layer = Layer.effect(
         const latestCfg = yield* getConfigVerSafe(canonDir)
         const revision = makeRevision(latestRev ?? actualSessionRev, latestCfg ?? effectiveConfigBeforeTx)
         const existingReplay = reserveResult.existing as SessionOperation.CancelQueuedRecord
+        if (existingReplay.outcome === "ambiguous") {
+          return buildAmbiguous(req, revision)
+        }
         if (existingReplay.outcome === "succeeded") {
           const cancelled = existingReplay.meta.cancelled ?? false
           return buildSucceeded(req, !!cancelled, revision)

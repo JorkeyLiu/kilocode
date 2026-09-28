@@ -352,23 +352,30 @@ const retryStatusFailures = <A, R>(
     )
   })
 
-export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const http = yield* HttpClient.HttpClient
-    const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.gen(function* () {
-        const redactedNames = yield* Headers.CurrentRedactedNames
-        return yield* http
-          .execute(request)
-          .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
+const makeLayer = (retries: number): Layer.Layer<Service, never, HttpClient.HttpClient> =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const http = yield* HttpClient.HttpClient
+      const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.gen(function* () {
+          const redactedNames = yield* Headers.CurrentRedactedNames
+          return yield* http
+            .execute(request)
+            .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
+        })
+      return Service.of({
+        execute: (request) => retryStatusFailures(executeOnce(request), retries),
       })
-    return Service.of({
-      execute: (request) => retryStatusFailures(executeOnce(request)),
-    })
-  }),
-)
+    }),
+  )
+
+export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = makeLayer(MAX_RETRIES)
+
+export const noRetryLayer: Layer.Layer<Service, never, HttpClient.HttpClient> = makeLayer(0)
 
 export const defaultLayer = layer.pipe(Layer.provide(FetchHttpClient.layer))
+
+export const noRetryDefaultLayer = noRetryLayer.pipe(Layer.provide(FetchHttpClient.layer))
 
 export * as RequestExecutor from "./executor"

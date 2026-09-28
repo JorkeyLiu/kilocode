@@ -21,7 +21,7 @@ import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
 import { resolveReloadDirectory } from "./reload-directory"
-import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, requestInstanceReload } from "./kilo-provider/instance-reload"
+import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, RELOAD_UNRESOLVED_WARNING, requestInstanceReload } from "./kilo-provider/instance-reload"
 import { CanonicalConfigService } from "./config/service"
 import { PrivateConvergenceAdapter } from "./config/convergence"
 import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
@@ -493,11 +493,18 @@ export function activate(context: vscode.ExtensionContext) {
   const privateSessionReader = {
     isEnabled: () => privateObservation.isEnabled(),
     isStarted: () => privateObservation.isStarted(),
-    list: (input: { directory: string; archived?: boolean; cursor?: string; limit?: number }) =>
+    list: (input: { directory: string; archived?: boolean; cursor?: string; limit?: number; signal?: AbortSignal }) =>
       privateObservation.list(input) as Promise<unknown>,
-    get: (input: { directory: string; sessionId: string }) => privateObservation.get(input) as Promise<unknown>,
-    messages: (input: { directory: string; sessionId: string; limit: number; cursor?: string }) =>
+    get: (input: { directory: string; sessionId: string; signal?: AbortSignal }) =>
+      privateObservation.get(input) as Promise<unknown>,
+    messages: (input: { directory: string; sessionId: string; limit: number; cursor?: string; signal?: AbortSignal }) =>
       privateObservation.messages(input) as Promise<unknown>,
+    operation: (input: { directory: string; sessionId: string; opId: string; signal?: AbortSignal }) =>
+      privateObservation.operation(input) as Promise<unknown>,
+    createOperation: (input: { directory: string; opId: string; signal?: AbortSignal }) =>
+      privateObservation.createOperation(input) as Promise<unknown>,
+    deleteOperation: (input: { directory: string; sessionId: string; opId: string; signal?: AbortSignal }) =>
+      privateObservation.deleteOperation(input) as Promise<unknown>,
   }
   const agentManagerHost = new VscodeHost(
     context.extensionUri,
@@ -691,6 +698,12 @@ export function activate(context: vscode.ExtensionContext) {
         const outcome = await requestInstanceReload({ connection: connectionService as never, client, directory: dir })
         if (outcome.kind === "conflict") {
           vscode.window.showWarningMessage(RELOAD_CONFLICT_WARNING)
+        } else if (outcome.kind === "unresolved") {
+          console.warn("[Kilo New] reload command unresolved, no retry:", {
+            reason: outcome.reason,
+            opId: outcome.opId,
+          })
+          vscode.window.showWarningMessage(`${RELOAD_UNRESOLVED_WARNING} (opId=${outcome.opId})`)
         } else if (outcome.kind === "failed") {
           console.error("[Kilo New] reload command failed:", outcome.cause)
           vscode.window.showErrorMessage(RELOAD_FAILED_ERROR)

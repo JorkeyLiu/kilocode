@@ -1443,7 +1443,7 @@ export class AgentManagerProvider implements Disposable {
             this.connectionService,
           )
           const { createSessionPrivateFirst } = await import("../kilo-provider/session-create")
-          const session = await startSession(
+          const outcome = await startSession(
             root,
             () =>
               createSessionPrivateFirst({
@@ -1453,15 +1453,27 @@ export class AgentManagerProvider implements Disposable {
                 platform: PLATFORM,
                 metadata: metadata as unknown as Record<string, unknown> | undefined,
                 sandboxInheritanceToken: source?.sandboxInheritanceToken,
+                privateReader: this.coordinator?.observationReader() ?? null,
               }),
             (...args) => this.log(...args),
             this.connectionService,
           )
-          const sid = (session as unknown as Session).id ?? (session as unknown as { id: string }).id
+          if (outcome.kind === "pending") {
+            const child = outcome.childId
+            if (typeof child === "string" && child.length > 0) {
+              const prev = this.activeSessionId; this.addSession(child, { recent: true })
+              if (this.activeSessionId !== prev) { this.activeSessionId = prev; this.schedulePersist() }
+              this.push(); this.log(`Create pending adopted known session ${child} (opId=${outcome.opId}); awaiting catalog/detail hydration`)
+            }
+            this.postToWebview({ type: "error", message: `Session create status could not be confirmed (opId=${outcome.opId}). No retry was issued.` })
+            return true
+          }
+          const createdForPanel = outcome.kind === "detail" ? outcome.detail : outcome.session
+          const sid = outcome.kind === "detail" ? outcome.detail.id : (outcome.session as unknown as Session).id
           this.addSession(sid, { recent: true })
           this.push()
           this.postToWebview({ type: "agentManager.sessionAdded", sessionId: sid })
-          this.panel?.sessions.registerSession(session as unknown as Session)
+          this.panel?.sessions.registerSession(createdForPanel as unknown as Session)
           const body = task.prompt?.trim()
           if (body) {
             const { promptSessionPrivateFirst } = await import("../kilo-provider/session-prompt")
@@ -1530,7 +1542,7 @@ export class AgentManagerProvider implements Disposable {
     }
   }
 
-  /** Fork a session via the CLI backend (local-only) — private-first with single same-tuple SDK fallback. */
+  /** Fork a session via the CLI backend (local-only) — accepted-only private-first with exact re-observe on uncertainty. */
   private async onForkSession(sessionId: string, messageId?: string): Promise<void> {
     let client: KiloClient
     try {
@@ -1546,28 +1558,44 @@ export class AgentManagerProvider implements Disposable {
       return
     }
     const { forkSessionPrivateFirst } = await import("../kilo-provider/fork-session")
-    let forked: Session | undefined
     try {
-      forked = await forkSessionPrivateFirst({
+      const outcome = await forkSessionPrivateFirst({
         client,
         connection: this.connectionService,
         sessionId,
         directory,
         messageId,
+        privateReader: this.coordinator?.observationReader() ?? null,
       })
+      if (outcome.kind === "pending") {
+        const child = outcome.childId
+        if (typeof child === "string" && child.length > 0) {
+          const prev = this.activeSessionId
+          this.addSession(child, { recent: true })
+          if (this.activeSessionId !== prev) {
+            this.activeSessionId = prev
+            this.schedulePersist()
+          }
+          this.pushState()
+          this.log(`Fork pending adopted known child ${sessionId} → ${child} (opId=${outcome.opId}); awaiting catalog/detail hydration`)
+          this.postToWebview({ type: "error", message: `Fork status could not be confirmed (opId=${outcome.opId}). No retry was issued.` })
+          return
+        }
+        this.postToWebview({ type: "error", message: `Fork status could not be confirmed (opId=${outcome.opId}). No retry was issued.` })
+        return
+      }
+      const forked = outcome.session
+      this.addSession(forked.id, { recent: true })
+      this.activeSessionId = forked.id
+      this.schedulePersist()
+      this.pushState()
+      this.postToWebview({ type: "agentManager.sessionForked", sessionId: forked.id, forkedFromId: sessionId })
+      this.panel?.sessions.registerSession(forked)
+      this.log(`Forked session ${sessionId} → ${forked.id}`)
     } catch (error) {
       const err = getErrorMessage(error)
       this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
-      return
     }
-    if (!forked) return
-    this.addSession(forked.id, { recent: true })
-    this.activeSessionId = forked.id
-    this.schedulePersist()
-    this.pushState()
-    this.postToWebview({ type: "agentManager.sessionForked", sessionId: forked.id, forkedFromId: sessionId })
-    this.panel?.sessions.registerSession(forked)
-    this.log(`Forked session ${sessionId} → ${forked.id}`)
   }
 
   private sendKeybindings(): void {

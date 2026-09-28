@@ -94,6 +94,40 @@ async function replySdk(
     })
 }
 
+// Accepted-only: after-send uncertainty never redispatches SDK and never
+// issues the second step. Keep the request identity, re-observe pending once
+// via the existing readPermissionsForDir (read-only, absence is not
+// acceptance), then surface the existing failure message with no fabricated
+// approval/rules. Limitation: the public UI message contract
+// (`permissionError` with `permissionID`) cannot distinguish save vs reply
+// uncertainty, so both steps surface the same existing failure message.
+async function surfaceUnresolved(
+  ctx: PermissionContext,
+  permissionId: string,
+  dir: string,
+  opId: string,
+  reason: string,
+  step: "save" | "reply",
+): Promise<void> {
+  console.warn(`[Kilo New] KiloProvider: Private permission ${step} uncertain, re-observe pending once`, {
+    permissionID: permissionId,
+    opId,
+    reason: String(reason).slice(0, 120),
+  })
+  try {
+    if (ctx.client) {
+      await readPermissionsForDir({ connection: ctx.connection ?? null, client: ctx.client, directory: dir })
+    }
+  } catch {
+    // Read-only re-observation must not fail the unresolved surface.
+  }
+  console.error(`[Kilo New] KiloProvider: Failed to ${step === "save" ? "save always-rules" : "respond to permission"}: unresolved`, {
+    permissionID: permissionId,
+    opId,
+  })
+  ctx.postMessage({ type: "permissionError", permissionID: permissionId })
+}
+
 type SaveStep = { done: true } | { done: false; stop: boolean }
 
 async function saveStep(
@@ -115,7 +149,8 @@ async function saveStep(
       deniedAlways,
     })
   } catch (error) {
-    console.error("[Kilo New] KiloProvider: Private save attempt failed, falling back:", error)
+    await surfaceUnresolved(ctx, permissionId, dir, "unknown", String(error).slice(0, 200), "save")
+    return { done: false, stop: true }
   }
   if (priv && priv.outcome.kind === "terminal") return { done: true }
   if (priv && priv.outcome.kind === "terminal-failure") {
@@ -124,6 +159,10 @@ async function saveStep(
       console.error("[Kilo New] KiloProvider: Failed to save always-rules:", priv.outcome.code)
       ctx.postMessage({ type: "permissionError", permissionID: permissionId })
     }
+    return { done: false, stop: true }
+  }
+  if (priv && priv.outcome.kind === "unresolved") {
+    await surfaceUnresolved(ctx, permissionId, dir, priv.outcome.opId, priv.outcome.reason, "save")
     return { done: false, stop: true }
   }
   const saveResult = await saveAlwaysRulesSdk(ctx, permissionId, dir, approvedAlways, deniedAlways)
@@ -142,7 +181,8 @@ async function replyStep(
   try {
     rpriv = await replyPermissionPrivateFirst({ connection: ctx.connection ?? null, directory: dir, requestID: permissionId, reply: response })
   } catch (error) {
-    console.error("[Kilo New] KiloProvider: Private reply attempt failed, falling back:", error)
+    await surfaceUnresolved(ctx, permissionId, dir, "unknown", String(error).slice(0, 200), "reply")
+    return
   }
   if (rpriv && rpriv.outcome.kind === "terminal") return
   if (rpriv && rpriv.outcome.kind === "terminal-failure") {
@@ -153,6 +193,10 @@ async function replyStep(
     }
     return
   }
+  if (rpriv && rpriv.outcome.kind === "unresolved") {
+    await surfaceUnresolved(ctx, permissionId, dir, rpriv.outcome.opId, rpriv.outcome.reason, "reply")
+    return
+  }
   const replyResult = await replySdk(ctx, permissionId, dir, response)
   if (replyResult === "stale") staleCleanup()
 }
@@ -160,7 +204,9 @@ async function replyStep(
 /**
  * Handle permission response from the webview.
  * Calls saveAlwaysRules first (if any), then reply — sequentially to avoid races.
- * Both steps are private-first with exactly one SDK fallback each.
+ * Accepted-only: each step is private-first with exactly one SDK fallback only
+ * on proven pre-send; after-send uncertainty surfaces explicit unresolved with
+ * zero SDK and no second dispatch, and an unresolved save never issues reply.
  */
 export async function handlePermissionResponse(
   ctx: PermissionContext,

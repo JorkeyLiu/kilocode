@@ -7,6 +7,9 @@ export interface PrivateSessionReader {
   get(input: { directory: string; sessionId: string; signal?: AbortSignal }): Promise<unknown>
   messages?(input: { directory: string; sessionId: string; limit: number; cursor?: string; signal?: AbortSignal }): Promise<unknown>
   operations?(input: { directory: string; sessionId: string; limit?: number; signal?: AbortSignal }): Promise<unknown>
+  operation?(input: { directory: string; sessionId: string; opId: string; signal?: AbortSignal }): Promise<unknown>
+  createOperation?(input: { directory: string; opId: string; signal?: AbortSignal }): Promise<unknown>
+  deleteOperation?(input: { directory: string; sessionId: string; opId: string; signal?: AbortSignal }): Promise<unknown>
 }
 
 /** Legacy alias — prefer PrivateSessionReader. */

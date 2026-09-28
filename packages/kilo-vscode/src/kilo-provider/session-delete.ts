@@ -2,6 +2,8 @@ import * as crypto from "crypto"
 import type { KiloConnectionService } from "../services/cli-backend"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { validateDeleteResult } from "../services/cli-backend/serve-private-peer"
+import { tryPrivateDeleteExact } from "./session-operation-private"
+import type { PrivateSessionReader } from "./options"
 
 export function buildDeleteIdentity(sessionId: string): { opId: string; idempotencyKey: string; requestId: string } {
   const token = crypto.randomUUID()
@@ -258,13 +260,55 @@ async function fallbackDurable(
   await durableRawDelete({ connection, sessionId, directory, opId, idempotencyKey, requestId, client } as unknown as never)
 }
 
+function unresolvedDelete(opId: string): Error {
+  const err = new Error("Session delete status could not be confirmed (opId="+opId+"). No retry was issued.") as Error & { code: string; terminal: boolean };
+  err.code = "delete.unresolved";
+  err.terminal = true;
+  return err;
+}
+
+function isTerminalErr(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { terminal?: unknown }).terminal === true;
+}
+
+async function reobserveDelete(
+  reader: PrivateSessionReader | null | undefined,
+  input: { directory: string; sessionId: string; opId: string },
+): Promise<void> {
+  console.warn("[Kilo Delete] private uncertain, re-observe exact tombstone", { opId: input.opId });
+  let seen: Awaited<ReturnType<typeof tryPrivateDeleteExact>>;
+  try {
+    seen = await tryPrivateDeleteExact(reader ?? null, input);
+  } catch {
+    throw unresolvedDelete(input.opId);
+  }
+  if (seen.kind === "found") return;
+  throw unresolvedDelete(input.opId);
+}
+
+// Bounded accepted-only private-first delete: exactly one private mutating
+// attempt with the durable tuple (delete:<sessionId>:<uuid> opId/idempotencyKey
+// + requestId + directory). A valid succeeded+accepted returns with zero SDK;
+// a validated terminal failed (accepted:false, retryable===false) throws with
+// zero SDK; validated pre-accept retryable (accepted:false, retryable===true)
+// and pre-send unavailable take exactly one durable SDK commit with the
+// identical tuple. Transport uncertainty (timeout/ambiguous/transportUnknown/
+// peerClosed/invalid/throw/unavailable-after-send) never dispatches SDK nor a
+// second mutating private dispatch: it re-observes the exact tombstone once
+// via INTERNAL observation/delete-operation (directory+sessionId+opId, exact PK
+// or (session_id, hash) with opId equality, same-physical stored dir, only
+// closed {v,status} found/not_found/scope_mismatch, no raw code/message/hash,
+// no side effects). Found returns for caller prune; not_found/unavailable/
+// invalid throw explicit delete.unresolved with stable opId identity and no
+// prune, no retry, no fabricated success.
 export async function deleteSessionPrivateFirst(opts: {
   client: KiloClient
   connection: KiloConnectionService
   sessionId: string
   directory: string
+  privateReader?: PrivateSessionReader | null
 }): Promise<void> {
-  const { client, connection, sessionId, directory } = opts
+  const { client, connection, sessionId, directory, privateReader } = opts
   const { opId, idempotencyKey, requestId } = buildDeleteIdentity(sessionId)
   const privateReq: PrivateReq = {
     v: 1 as const,
@@ -276,30 +320,35 @@ export async function deleteSessionPrivateFirst(opts: {
     payload: {} as Record<string, never>,
   }
 
-  if (!connection.isPrivateAvailable()) {
+  const sdkOnce = async (): Promise<void> => {
     await fallbackDurable(connection, client, sessionId, directory, opId, idempotencyKey, requestId)
+  }
+
+  if (!connection.isPrivateAvailable()) {
+    await sdkOnce()
+    return
+  }
+  const peer = connection as unknown as {
+    privateDeleteWithHandle?: (r: PrivateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+    privateDelete?: (r: unknown) => Promise<unknown>
+  }
+  if (typeof peer.privateDeleteWithHandle !== "function" && typeof peer.privateDelete !== "function") {
+    await sdkOnce()
     return
   }
 
-  const first = await attemptPrivateDelete(connection, privateReq)
-  if (first.kind === "succeeded") return
-  if (first.kind === "terminal") throw deleteTerminal(first.code, first.message)
-  if (first.kind === "retryable" || first.kind === "unavailable") {
-    console.warn("[Kilo Delete] private fallback to durable", { opId, reason: first.kind })
-    await fallbackDurable(connection, client, sessionId, directory, opId, idempotencyKey, requestId)
-    return
+  try {
+    const first = await attemptPrivateDelete(connection, privateReq)
+    if (first.kind === "succeeded") return
+    if (first.kind === "terminal") throw deleteTerminal(first.code, first.message)
+    if (first.kind === "retryable") {
+      console.warn("[Kilo Delete] private fallback to durable", { opId, reason: first.kind })
+      await sdkOnce()
+      return
+    }
+    return reobserveDelete(privateReader ?? null, { directory, sessionId, opId })
+  } catch (e) {
+    if (isTerminalErr(e)) throw e
+    return reobserveDelete(privateReader ?? null, { directory, sessionId, opId })
   }
-  const firstDetail = (first as { kind: "unknown"; detail: string }).detail
-  console.warn("[Kilo Delete] private unknown, reconciling", { opId, detail: firstDetail.slice(0, 120) })
-  if (!connection.isPrivateAvailable()) throw deleteTerminal("unknown", `private delete result unknown after reconcile unavailable: ${firstDetail.slice(0, 120)}`)
-  const second = await attemptPrivateDelete(connection, privateReq)
-  if (second.kind === "succeeded") return
-  if (second.kind === "terminal") throw deleteTerminal(second.code, second.message)
-  if (second.kind === "retryable" || second.kind === "unavailable") {
-    console.warn("[Kilo Delete] reconcile retryable fallback", { opId, reason: second.kind })
-    await fallbackDurable(connection, client, sessionId, directory, opId, idempotencyKey, requestId)
-    return
-  }
-  const secondDetail = (second as { kind: "unknown"; detail: string }).detail
-  throw deleteTerminal("unknown", `private delete result unknown after reconcile: ${secondDetail.slice(0, 120)}`)
 }

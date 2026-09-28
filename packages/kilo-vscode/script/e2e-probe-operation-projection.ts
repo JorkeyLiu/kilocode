@@ -57,6 +57,15 @@ function expectedStatusForOutcome(op: Record<string, unknown>): { text: string |
   if (outcome === "succeeded") return { text: undefined, tone: "neutral" }
   if (outcome === "failed") return { text: `Failed · ${String(op.code)}: ${String(op.message)}`, tone: "error" }
   if (outcome === "abandoned") {
+    // Exact known runtime-restart crash only (scope-limited): fixed
+    // discriminants from packages/core/src/session/operation.ts. All other
+    // abandoned (user cancel, scope shutdown, legacy) stay Cancelled/cancelled.
+    if (
+      (op.code === "prompt.abandoned" && op.message === "prompt abandoned due to runtime restart") ||
+      (op.code === "provider.abandoned" && op.message === "Provider attempt abandoned after runtime restart")
+    ) {
+      return { text: "Stopped after runtime restart", tone: "neutral" }
+    }
     const cancel = op.cancel as Record<string, unknown> | undefined
     const src = cancel?.source ? ` · ${String(cancel.source)}` : ""
     return { text: `Cancelled${src}`, tone: "cancelled" }

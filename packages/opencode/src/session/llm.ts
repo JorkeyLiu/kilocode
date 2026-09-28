@@ -598,7 +598,11 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(
-      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
+      // kilocode_change - V1 native transport must not retry inside RequestExecutor;
+      // pre-exposure 429/5xx reach outer SessionRetry.policy as typed APIError and
+      // charge the owning generation budget exactly once per retry. V2 keeps
+      // RequestExecutor.defaultLayer via location-layer; AI SDK path ignores this client.
+      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.noRetryDefaultLayer, WebSocketExecutor.layer))),
     ),
     Layer.provide(RuntimeFlags.defaultLayer),
   ),

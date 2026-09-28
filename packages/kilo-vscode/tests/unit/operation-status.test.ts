@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { operationRecoveryText, operationStatusText, operationStatusTone } from "../../webview-ui/agent-manager/operation-status-helpers"
+import { isRuntimeRestartAbandoned, operationRecoveryText, operationStatusText, operationStatusTone, RUNTIME_RESTART_TEXT } from "../../webview-ui/agent-manager/operation-status-helpers"
 import type { PanelOperation } from "../../src/types/messages/agent-manager"
 
 function op(over: Partial<PanelOperation> & Pick<PanelOperation, "outcome" | "code" | "message" | "opId">): PanelOperation {
@@ -114,5 +114,65 @@ describe("OperationStatus mapping", () => {
     expect(txt).not.toContain("broker")
     expect(txt).not.toContain("555")
     expect(txt).not.toContain("444")
+  })
+
+  it("runtime-restart crash abandoned shows fixed restart text with neutral tone", () => {
+    const prompt = op({ opId: "prompt:msg_a", outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned due to runtime restart" })
+    expect(isRuntimeRestartAbandoned(prompt)).toBe(true)
+    expect(operationStatusText(prompt)).toBe(RUNTIME_RESTART_TEXT)
+    expect(operationStatusText(prompt)).toBe("Stopped after runtime restart")
+    expect(operationStatusTone(prompt)).toBe("neutral")
+    const provider = op({ opId: "provider:msg_a:0", outcome: "abandoned", code: "provider.abandoned", message: "Provider attempt abandoned after runtime restart" })
+    expect(isRuntimeRestartAbandoned(provider)).toBe(true)
+    expect(operationStatusText(provider)).toBe("Stopped after runtime restart")
+    expect(operationStatusTone(provider)).toBe("neutral")
+  })
+
+  it("generic cancellation and scope shutdown stay Cancelled with cancelled tone", () => {
+    const user = op({ opId: "o1", outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned", cancel: { source: "user_stop" } })
+    expect(isRuntimeRestartAbandoned(user)).toBe(false)
+    expect(operationStatusText(user)).toBe("Cancelled · user_stop")
+    expect(operationStatusTone(user)).toBe("cancelled")
+    const shutdown = op({ opId: "o2", outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned due to scope shutdown" })
+    expect(isRuntimeRestartAbandoned(shutdown)).toBe(false)
+    expect(operationStatusText(shutdown)).toBe("Cancelled")
+    expect(operationStatusTone(shutdown)).toBe("cancelled")
+    const live = op({ opId: "provider:m:0", outcome: "abandoned", code: "provider.abandoned", message: "provider request abandoned", cancel: { source: "user_stop" } })
+    expect(isRuntimeRestartAbandoned(live)).toBe(false)
+    expect(operationStatusText(live)).toBe("Cancelled · user_stop")
+    expect(operationStatusTone(live)).toBe("cancelled")
+  })
+
+  it("crash decision ignores recovery absence and never implies owner; malicious near-miss stays Cancelled", () => {
+    const crashNoRecovery = op({ opId: "prompt:msg_a", outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned due to runtime restart" })
+    expect(operationRecoveryText(crashNoRecovery)).toBeUndefined()
+    expect(operationStatusText(crashNoRecovery)).toBe("Stopped after runtime restart")
+    const manualNoRecovery = op({ opId: "prompt:msg_b", outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned" })
+    expect(operationRecoveryText(manualNoRecovery)).toBeUndefined()
+    expect(operationStatusText(manualNoRecovery)).toBe("Cancelled")
+    const evil = [
+      "prompt abandoned due to runtime restart ",
+      " prompt abandoned due to runtime restart",
+      "PROMPT ABANDONED DUE TO RUNTIME RESTART",
+      "prompt abandoned due to runtime restart\ninjected",
+      "Provider attempt abandoned after runtime restart!",
+    ]
+    for (const message of evil) {
+      const code = message.startsWith("Provider") ? "provider.abandoned" : "prompt.abandoned"
+      const o = op({ opId: "o9", outcome: "abandoned", code, message })
+      expect(isRuntimeRestartAbandoned(o)).toBe(false)
+      expect(operationStatusText(o)).toBe("Cancelled")
+      expect(operationStatusTone(o)).toBe("cancelled")
+    }
+    const swapped = op({ opId: "o10", outcome: "abandoned", code: "prompt.abandoned", message: "Provider attempt abandoned after runtime restart" })
+    expect(isRuntimeRestartAbandoned(swapped)).toBe(false)
+    expect(operationStatusText(swapped)).toBe("Cancelled")
+  })
+
+  it("crash text is closed and crash cancel source never leaks into title", () => {
+    const crashWithCancel = op({ opId: "prompt:msg_a", outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned due to runtime restart", cancel: { source: "user_stop" } })
+    expect(operationStatusText(crashWithCancel)).toBe("Stopped after runtime restart")
+    expect(operationStatusText(crashWithCancel)).not.toContain("user_stop")
+    expect(operationStatusText(crashWithCancel)).not.toContain("prompt abandoned due to")
   })
 })

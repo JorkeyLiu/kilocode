@@ -57,12 +57,34 @@ function ambiguous(request: Record<string, unknown>) {
   }
 }
 
-describe("session-submit shared retry", () => {
-  const REQ = { requestId: "r1", opId: "prompt:msg_1", op: "session/prompt", idempotencyKey: "prompt:msg_1", context: { directory: "/tmp/ws", sessionId: "ses_1" }, payload: { messageId: "msg_1", parts: [] } }
+const REQ = { requestId: "r1", opId: "prompt:msg_1", op: "session/prompt", idempotencyKey: "prompt:msg_1", context: { directory: "/tmp/ws", sessionId: "ses_1" }, payload: { messageId: "msg_1", parts: [] } }
 
-  test("first success uses one private zero SDK", async () => {
+function baseInput(over: Record<string, unknown>) {
+  return {
+    available: () => true,
+    opId: (REQ.opId as string),
+    scope: "Prompt" as const,
+    request: REQ,
+    dispatch: {
+      factory: null,
+      direct: null,
+      cancel: null,
+      invalidate: null,
+      peek: null,
+    },
+    validate: () => {},
+    fallback: async () => ({}),
+    messageId: "msg_1",
+    ...over,
+  } as unknown as Parameters<typeof submitPrivateFirst>[0]
+}
+
+describe("session-submit accepted-only private-first", () => {
+
+  test("first success uses one private zero SDK zero observe", async () => {
     let priv = 0
     let sdk = 0
+    let obs = 0
     const res = await submitPrivateFirst({
       available: () => true,
       opId: REQ.opId as string,
@@ -77,16 +99,20 @@ describe("session-submit shared retry", () => {
       },
       validate: () => {},
       fallback: async () => { sdk += 1; return {} },
+      messageId: "msg_1",
+      observeExact: async () => { obs += 1; return { kind: "unavailable" as const } },
     })
     expect(res).toEqual({})
     expect(priv).toBe(1)
     expect(sdk).toBe(0)
+    expect(obs).toBe(0)
   })
 
-  test("first terminal throws zero retry zero SDK", async () => {
+  test("first terminal throws zero observe zero SDK", async () => {
     for (const code of ["session.not_found", "scope_mismatch", "validation.failed"]) {
       let priv = 0
       let sdk = 0
+      let obs = 0
       let thrown: unknown = null
       try {
         await submitPrivateFirst({
@@ -103,33 +129,58 @@ describe("session-submit shared retry", () => {
           },
           validate: () => {},
           fallback: async () => { sdk += 1; return {} },
+          messageId: "msg_1",
+          observeExact: async () => { obs += 1; return { kind: "unavailable" as const } },
         })
       } catch (e) { thrown = e }
       expect((thrown as { code?: string }).code).toBe(code)
       expect(priv).toBe(1)
       expect(sdk).toBe(0)
+      expect(obs).toBe(0)
     }
   })
 
-  test("first timeout then private success uses two privates zero SDK and same tuple", async () => {
-    const seen: unknown[] = []
+  test("ambiguous re-observes in-flight and returns accepted with one private zero SDK", async () => {
+    let priv = 0
     let sdk = 0
-    let attempt = 0
+    let obs = 0
     const res = await submitPrivateFirst({
       available: () => true,
       opId: REQ.opId as string,
       scope: "Prompt",
       request: REQ,
       dispatch: {
-        factory: (req: unknown) => {
-          seen.push(req)
-          attempt += 1
-          if (attempt === 1) {
-            // never resolves -> timeout
-            return mockHandle(1, new Promise(() => {}), () => true)
-          }
-          return mockHandle(2, Promise.resolve(succeeded(req as Record<string, unknown>)))
-        },
+        factory: () => { priv += 1; return mockHandle(1, Promise.resolve(ambiguous(REQ as never))) },
+        direct: null,
+        cancel: null,
+        invalidate: null,
+        peek: null,
+      },
+      validate: () => {},
+      fallback: async () => { sdk += 1; return {} },
+      messageId: "msg_1",
+      observeExact: async () => {
+        obs += 1
+        return { kind: "found" as const, operation: { opId: REQ.opId as string, outcome: "in-flight", code: "prompt.inflight", message: "prompt accepted" } }
+      },
+    })
+    expect(res).toEqual({})
+    expect(priv).toBe(1)
+    expect(sdk).toBe(0)
+    expect(obs).toBe(1)
+  })
+
+  test("timeout re-observes succeeded and returns accepted with one private zero SDK", async () => {
+    let priv = 0
+    let sdk = 0
+    let obs = 0
+    const res = await submitPrivateFirst({
+      available: () => true,
+      opId: REQ.opId as string,
+      scope: "Command",
+      request: REQ,
+      dispatch: {
+        factory: () => { priv += 1; return mockHandle(1, new Promise(() => {}), () => true) },
         direct: null,
         cancel: () => true,
         invalidate: null,
@@ -137,106 +188,190 @@ describe("session-submit shared retry", () => {
       },
       validate: () => {},
       fallback: async () => { sdk += 1; return {} },
-    })
-    expect(res).toEqual({})
-    expect(sdk).toBe(0)
-    expect(seen).toHaveLength(2)
-    expect(seen[0]).toBe(seen[1])
-    expect((seen[0] as Record<string, unknown>).requestId).toBe((seen[1] as Record<string, unknown>).requestId)
-    expect((seen[0] as Record<string, unknown>).opId).toBe((seen[1] as Record<string, unknown>).opId)
-    expect((seen[0] as Record<string, unknown>).idempotencyKey).toBe((seen[1] as Record<string, unknown>).idempotencyKey)
-  })
-
-  test("first ambiguous then private success uses two privates zero SDK tuple same", async () => {
-    const seen: unknown[] = []
-    let sdk = 0
-    let attempt = 0
-    const res = await submitPrivateFirst({
-      available: () => true,
-      opId: REQ.opId as string,
-      scope: "Command",
-      request: REQ,
-      dispatch: {
-        factory: (req: unknown) => {
-          seen.push(req)
-          attempt += 1
-          if (attempt === 1) return mockHandle(1, Promise.resolve(ambiguous(req as Record<string, unknown>)))
-          return mockHandle(2, Promise.resolve(succeeded(req as Record<string, unknown>)))
-        },
-        direct: null,
-        cancel: null,
-        invalidate: null,
-        peek: null,
+      messageId: "msg_1",
+      observeExact: async () => {
+        obs += 1
+        return { kind: "found" as const, operation: { opId: REQ.opId as string, outcome: "succeeded", code: "ok", message: "ok" } }
       },
-      validate: () => {},
-      fallback: async () => { sdk += 1; return {} },
     })
     expect(res).toEqual({})
+    expect(priv).toBe(1)
     expect(sdk).toBe(0)
-    expect(seen).toHaveLength(2)
-    expect(seen[0]).toBe(seen[1])
+    expect(obs).toBe(1)
   })
 
-  test("first peerClosed then private success zero SDK", async () => {
+  test("peerClosed re-observes failed and surfaces runtime-owned failure with zero SDK", async () => {
+    let priv = 0
     let sdk = 0
-    let attempt = 0
-    let factoryCalls = 0
+    let obs = 0
+    let thrown: unknown = null
+    try {
+      await submitPrivateFirst({
+        available: () => true,
+        opId: REQ.opId as string,
+        scope: "Prompt",
+        request: REQ,
+        dispatch: {
+          factory: () => { priv += 1; throw new Error("Peer closed") },
+          direct: null,
+          cancel: null,
+          invalidate: null,
+          peek: null,
+        },
+        validate: () => {},
+        fallback: async () => { sdk += 1; return {} },
+        messageId: "msg_1",
+        observeExact: async () => {
+          obs += 1
+          return { kind: "found" as const, operation: { opId: REQ.opId as string, outcome: "failed", code: "E_RUNTIME", message: "runtime boom" } }
+        },
+      })
+    } catch (e) { thrown = e }
+    expect((thrown as { code?: string }).code).toBe("E_RUNTIME")
+    expect((thrown as Error).message).toBe("runtime boom")
+    expect(priv).toBe(1)
+    expect(sdk).toBe(0)
+    expect(obs).toBe(1)
+  })
+
+  test("abandoned re-observation surfaces terminal with zero SDK", async () => {
+    let sdk = 0
+    let thrown: unknown = null
+    try {
+      await submitPrivateFirst(baseInput({
+        scope: "Command",
+        dispatch: {
+          factory: () => mockHandle(1, Promise.resolve(ambiguous(REQ as never))),
+          direct: null,
+          cancel: null,
+          invalidate: null,
+          peek: null,
+        },
+        fallback: async () => { sdk += 1; return {} },
+        observeExact: async () => ({ kind: "found" as const, operation: { opId: REQ.opId as string, outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned due to runtime restart" } }),
+      }))
+    } catch (e) { thrown = e }
+    expect((thrown as { code?: string }).code).toBe("prompt.abandoned")
+    expect(sdk).toBe(0)
+  })
+
+  test("uncertain with absent op returns unresolved with stable messageId zero SDK one private", async () => {
+    let priv = 0
+    let sdk = 0
+    let obs = 0
+    let thrown: unknown = null
+    try {
+      await submitPrivateFirst({
+        available: () => true,
+        opId: REQ.opId as string,
+        scope: "Prompt",
+        request: REQ,
+        dispatch: {
+          factory: () => { priv += 1; return mockHandle(1, Promise.resolve(ambiguous(REQ as never))) },
+          direct: null,
+          cancel: null,
+          invalidate: null,
+          peek: null,
+        },
+        validate: () => {},
+        fallback: async () => { sdk += 1; return {} },
+        messageId: "msg_1",
+        observeExact: async () => { obs += 1; return { kind: "terminal" as const, error: new Error("not_found") } },
+      })
+    } catch (e) { thrown = e }
+    expect((thrown as { code?: string }).code).toBe("prompt.unresolved")
+    expect((thrown as Error).message).toContain("msg_1")
+    expect((thrown as Error).message).toContain("No retry was issued")
+    expect(priv).toBe(1)
+    expect(sdk).toBe(0)
+    expect(obs).toBe(1)
+  })
+
+  test("uncertain with unavailable observer returns unresolved zero SDK", async () => {
+    let priv = 0
+    let sdk = 0
+    let thrown: unknown = null
+    try {
+      await submitPrivateFirst({
+        available: () => true,
+        opId: REQ.opId as string,
+        scope: "Command",
+        request: REQ,
+        dispatch: {
+          factory: () => { priv += 1; return mockHandle(1, Promise.reject(new Error("Peer closed"))) },
+          direct: null,
+          cancel: null,
+          invalidate: null,
+          peek: null,
+        },
+        validate: () => {},
+        fallback: async () => { sdk += 1; return {} },
+        messageId: "msg_9",
+      })
+    } catch (e) { thrown = e }
+    expect((thrown as { code?: string }).code).toBe("command.unresolved")
+    expect((thrown as Error).message).toContain("msg_9")
+    expect(priv).toBe(1)
+    expect(sdk).toBe(0)
+  })
+
+  test("invalid wire re-observes once and returns accepted on match", async () => {
+    let priv = 0
+    let sdk = 0
+    let obs = 0
     const res = await submitPrivateFirst({
       available: () => true,
       opId: REQ.opId as string,
       scope: "Prompt",
       request: REQ,
       dispatch: {
-        factory: (req: unknown) => {
-          factoryCalls += 1
-          attempt += 1
-          if (attempt === 1) throw new Error("Peer closed")
-          return mockHandle(2, Promise.resolve(succeeded(req as Record<string, unknown>)))
-        },
+        factory: () => { priv += 1; return mockHandle(1, Promise.resolve({ bogus: true })) },
         direct: null,
         cancel: null,
         invalidate: null,
         peek: null,
       },
-      validate: () => {},
+      validate: (r: unknown) => {
+        const typed = r as Record<string, unknown>
+        if ((typed as { bogus?: boolean }).bogus) throw new Error("bad")
+      },
       fallback: async () => { sdk += 1; return {} },
+      messageId: "msg_1",
+      observeExact: async () => {
+        obs += 1
+        return { kind: "found" as const, operation: { opId: REQ.opId as string, outcome: "succeeded", code: "ok", message: "ok" } }
+      },
     })
     expect(res).toEqual({})
+    expect(priv).toBe(1)
     expect(sdk).toBe(0)
-    expect(factoryCalls).toBe(2)
+    expect(obs).toBe(1)
   })
 
-  test("two transport uncertainties then one SDK fallback and tuple same", async () => {
-    const seen: unknown[] = []
+  test("opId mismatch in re-observation returns unresolved without fabricating accepted", async () => {
     let sdk = 0
-    const sdkSeen: unknown[] = []
-    await submitPrivateFirst({
-      available: () => true,
-      opId: REQ.opId as string,
-      scope: "Prompt",
-      request: REQ,
-      dispatch: {
-        factory: (req: unknown) => {
-          seen.push(req)
-          return mockHandle(1, Promise.resolve(ambiguous(req as Record<string, unknown>)))
+    let thrown: unknown = null
+    try {
+      await submitPrivateFirst(baseInput({
+        dispatch: {
+          factory: () => mockHandle(1, Promise.resolve(ambiguous(REQ as never))),
+          direct: null,
+          cancel: null,
+          invalidate: null,
+          peek: null,
         },
-        direct: null,
-        cancel: null,
-        invalidate: null,
-        peek: null,
-      },
-      validate: () => {},
-      fallback: async () => { sdk += 1; sdkSeen.push(REQ); return { data: null } },
-    })
-    expect(sdk).toBe(1)
-    expect(seen).toHaveLength(2)
-    expect(seen[0]).toBe(seen[1])
-    expect(sdkSeen).toHaveLength(1)
+        fallback: async () => { sdk += 1; return {} },
+        observeExact: async () => ({ kind: "found" as const, operation: { opId: "prompt:msg_other", outcome: "succeeded", code: "ok", message: "ok" } }),
+      }))
+    } catch (e) { thrown = e }
+    expect((thrown as { code?: string }).code).toBe("prompt.unresolved")
+    expect(sdk).toBe(0)
   })
 
-  test("retryable failed takes exactly one SDK no private retry", async () => {
+  test("retryable failed takes exactly one SDK no re-observe", async () => {
     const seen: unknown[] = []
     let sdk = 0
+    let obs = 0
     await submitPrivateFirst({
       available: () => true,
       opId: REQ.opId as string,
@@ -254,100 +389,29 @@ describe("session-submit shared retry", () => {
       },
       validate: () => {},
       fallback: async () => { sdk += 1; return { data: null } },
+      messageId: "msg_1",
+      observeExact: async () => { obs += 1; return { kind: "unavailable" as const } },
     })
     expect(seen).toHaveLength(1)
     expect(sdk).toBe(1)
+    expect(obs).toBe(0)
   })
 
-  test("second terminal after retry throws zero SDK", async () => {
+  test("pre-send no-private-available takes one SDK", async () => {
+    let priv = 0
     let sdk = 0
-    let attempt = 0
-    let thrown: unknown = null
-    try {
-      await submitPrivateFirst({
-        available: () => true,
-        opId: REQ.opId as string,
-        scope: "Prompt",
-        request: REQ,
-        dispatch: {
-          factory: (req: unknown) => {
-            attempt += 1
-            if (attempt === 1) return mockHandle(1, Promise.resolve(ambiguous(req as Record<string, unknown>)))
-            return mockHandle(2, Promise.resolve(terminalFailed(req as Record<string, unknown>, "validation.failed")))
-          },
-          direct: null,
-          cancel: null,
-          invalidate: null,
-          peek: null,
-        },
-        validate: () => {},
-        fallback: async () => { sdk += 1; return { data: null } },
-      })
-    } catch (e) { thrown = e }
-    expect((thrown as { code?: string }).code).toBe("validation.failed")
-    expect(sdk).toBe(0)
-    expect(attempt).toBe(2)
-  })
-
-  test("fallback still exactly once with never new tuple", async () => {
-    const seen: unknown[] = []
-    let sdk = 0
-    const fallbackReqs: unknown[] = []
-    await submitPrivateFirst({
-      available: () => true,
-      opId: REQ.opId as string,
-      scope: "Prompt",
-      request: REQ,
+    await submitPrivateFirst(baseInput({
+      available: () => false,
       dispatch: {
-        factory: (req: unknown) => {
-          seen.push(req)
-          return mockHandle(1, Promise.reject(new Error("Peer closed")))
-        },
-        direct: null,
-        cancel: () => true,
-        invalidate: null,
-        peek: null,
-      },
-      validate: () => {},
-      fallback: async () => { sdk += 1; fallbackReqs.push(REQ); return { data: null } },
-    })
-    expect(sdk).toBe(1)
-    expect(seen).toHaveLength(2)
-    expect(seen[0]).toBe(REQ)
-    expect(seen[1]).toBe(REQ)
-    expect(fallbackReqs).toHaveLength(1)
-  })
-
-  test("invalid wire on first then success still zero SDK tuple same", async () => {
-    const seen: unknown[] = []
-    let sdk = 0
-    let attempt = 0
-    const res = await submitPrivateFirst({
-      available: () => true,
-      opId: REQ.opId as string,
-      scope: "Prompt",
-      request: REQ,
-      dispatch: {
-        factory: (req: unknown) => {
-          seen.push(req)
-          attempt += 1
-          if (attempt === 1) return mockHandle(1, Promise.resolve({ bogus: true, requestId: (req as Record<string, unknown>).requestId, opId: (req as Record<string, unknown>).opId, op: (req as Record<string, unknown>).op, idempotencyKey: (req as Record<string, unknown>).idempotencyKey }))
-          return mockHandle(2, Promise.resolve(succeeded(req as Record<string, unknown>)))
-        },
+        factory: () => { priv += 1; return mockHandle(1, Promise.resolve(succeeded(REQ as never))) },
         direct: null,
         cancel: null,
         invalidate: null,
         peek: null,
       },
-      validate: (r: unknown) => {
-        const typed = r as Record<string, unknown>
-        if ((typed as { bogus?: boolean }).bogus) throw new Error("bad")
-      },
-      fallback: async () => { sdk += 1; return {} },
-    })
-    expect(res).toEqual({})
-    expect(sdk).toBe(0)
-    expect(seen).toHaveLength(2)
-    expect(seen[0]).toBe(seen[1])
+      fallback: async () => { sdk += 1; return { data: null } },
+    }))
+    expect(priv).toBe(0)
+    expect(sdk).toBe(1)
   })
 })

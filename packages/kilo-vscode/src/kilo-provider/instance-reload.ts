@@ -9,25 +9,39 @@
  * and the shared user-facing copy. Callers keep their own directory
  * selection and their existing success projection.
  *
- * One private `instance/reload` attempt (`instance-reload:<token>` for
- * `opId`/`idempotencyKey` + `requestId` + canonical `directory`/`workspace?`,
+ * Accepted-only: one private `instance/reload` attempt (`instance-reload:<token>`
+ * for `opId`/`idempotencyKey` + `requestId` + canonical `directory`/`workspace?`,
  * empty payload, 3 s exact-cancel/settled-first epoch) plus at most one
- * same-directory SDK `client.instance.reload` fallback per call, never
- * retried. Valid private `succeeded`+`accepted` returns `succeeded` with zero
- * SDK; validated terminal `failed` (`retryable === false`, including
- * `conflict` for the existing active-session guard) closes with zero SDK and
- * the existing conflict/failed shape; retryable fence plus
- * unavailable/invalid/ambiguous/transport/closed/timeout takes exactly one
- * same-directory SDK fallback with no retry inside the helper. An ambiguous
- * fallback can produce at most two underlying reloads and two disposed
- * events (merged by the existing `LifecycleRefreshCoordinator`); this unit
- * promises no exactly-once boots and no new dedup/singleflight owner.
+ * same-directory SDK `client.instance.reload` fallback only on proven
+ * pre-send (`unavailable`/`missing-capability` before any private request
+ * leaves the extension) or the strictly validated pre-accept retryable fence
+ * (`failed` `retryable === true` with `accepted === false` and exact identity,
+ * proven never accepted before reload), never retried. Valid private
+ * `succeeded`+`accepted` returns `succeeded` with zero SDK; validated terminal
+ * `failed` (`retryable === false`, including `conflict` for the existing
+ * active-session guard) closes with zero SDK and the existing conflict/failed
+ * shape. Every after-send uncertainty (`ambiguous`/`timeout`/`closed`/
+ * `invalid`/`transportUnknown`/throw, including a retryable-shaped but
+ * unproven result) returns explicit `unresolved` carrying the stable `opId`
+ * with zero SDK and zero second dispatch. The disposed events stay the final
+ * convergence owner for accepted reloads. Provider `unresolved` warns (never
+ * asserts success, never runs a second reload, never clears the commands
+ * cache) then requests one read-only reconciliation through the existing
+ * per-provider `LifecycleRefreshCoordinator`, guarded by current
+ * client/generation, dispose, and directory; the round re-reads authoritative
+ * config/agents/skills/commands and keeps fail-soft behavior, so a lost
+ * disposed SSE event cannot leave state stale across reconnection. The
+ * `kilo-code.new.reload` command has no provider instance and no existing
+ * shared read-only refresh path, so it keeps warn-only and converges via the
+ * disposed events plus the next provider round. No polling, no scheduler, no
+ * new dedup/singleflight owner, no new lifecycle owner/protocol.
  *
  * Success semantics: the private result or HTTP response is only an ack that
  * the reload was accepted/completed. Runtime projection converges through
  * `server.instance.disposed` / `global.disposed` plus the per-provider
  * `LifecycleRefreshCoordinator`. This helper owns no refresh, no new
- * dedup/singleflight owner, and no UI copy change.
+ * dedup/singleflight owner, and no UI copy change beyond the unresolved
+ * warning.
  */
 
 import {
@@ -46,11 +60,15 @@ export type InstanceReloadOutcome =
   | { kind: "succeeded" }
   | { kind: "conflict"; cause: unknown }
   | { kind: "failed"; cause: unknown }
+  | { kind: "unresolved"; reason: string; opId: string }
 
 export const RELOAD_CONFLICT_WARNING =
   "Cannot reload while a session is running. Wait for it to finish or abort it first."
 
 export const RELOAD_FAILED_ERROR = "Reload failed. See extension logs for details."
+
+export const RELOAD_UNRESOLVED_WARNING =
+  "Reload status could not be confirmed. No retry was issued. It will converge automatically if the reload was accepted."
 
 export function isReloadConflictError(err: unknown): boolean {
   if (!err || typeof err !== "object" || !("response" in err)) return false
@@ -70,6 +88,10 @@ export async function requestInstanceReload(opts: {
     if (attempt.kind === "terminal") {
       if (attempt.code === "conflict") return { kind: "conflict", cause: { code: "conflict" } }
       return { kind: "failed", cause: { code: attempt.code ?? "terminal" } }
+    }
+    if (attempt.kind === "unresolved") {
+      console.warn("[Kilo New] instance reload unresolved:", { reason: attempt.reason, opId: attempt.opId })
+      return { kind: "unresolved", reason: attempt.reason, opId: attempt.opId }
     }
   }
   try {

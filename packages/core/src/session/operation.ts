@@ -2124,39 +2124,45 @@ export function putProviderInFlight(
 
 // ---------------------------------------------------------------------------
 // Crash convergence — pre-bind fail-closed sweep for orphaned prompt +
-// provider in-flight rows
+// provider + cancelQueued in-flight rows
 //
 // A dead private runtime process (worker crash = the private `kilo-serve`
 // process itself, not an independent provider scheduler/worker) leaves
-// accepted `prompt:<messageId>` and `provider:<assistant>:<attempt>` rows in
-// `in-flight` with no live owner (fibers, Runner epochs, and dispatch
-// inflight maps die with the process). The fresh boot owns no volatile
-// provider or generation state by construction, so converging each durable
-// row releases the last ownership: each orphaned prompt row CASes once via
-// `tryTransitionPromptTerminal` to terminal `abandoned` through the same
-// `normalizeRecord` scrub/cap boundary and the same revision + `changed` +
-// `generation` changefeed accounting as live terminalization, while each
-// orphaned provider row CASes once via the provider-only
-// `tryTransitionProviderTerminal` to terminal `abandoned`
+// accepted `prompt:<messageId>`, `provider:<assistant>:<attempt>`, and
+// `cancelQueued:<session>:<message>` rows in `in-flight` with no live owner
+// (fibers, Runner epochs, and dispatch inflight maps die with the process).
+// The fresh boot owns no volatile provider or generation state by
+// construction, so converging each durable row releases the last ownership:
+// each orphaned prompt row CASes once via `tryTransitionPromptTerminal` to
+// terminal `abandoned` through the same `normalizeRecord` scrub/cap boundary
+// and the same revision + `changed` + `generation` changefeed accounting as
+// live terminalization, while each orphaned provider row CASes once via the
+// provider-only `tryTransitionProviderTerminal` to terminal `abandoned`
 // (`provider.abandoned`, fixed receipt-time message) with exactly one
 // revision + one `changed` feed row — never a `generation` entry, never
-// recovery fields. No new ledger, no scheduler, no retry, no replay: a
-// converged row replays as terminal through the existing dispatch replay
-// path and never restarts generation or triggers a provider retry. A
-// concurrent live terminal win races safely — the loser observes
-// `applied: false` and emits nothing (reported as `raced`, which is
-// success, not failure).
+// recovery fields. Each orphaned cancelQueued row CASes once via
+// `tryTransitionCancelQueuedAmbiguous` to terminal `ambiguous`
+// (`cancelQueued.ambiguous`, result unknown, `cancelled` NULL, never
+// `succeeded` or a fabricated `cancelled` flag) with exactly one revision +
+// one `changed` row — never a `generation` entry, never recovery fields,
+// never a repeated `cancelOne`/`removeMessage` side effect. No new ledger,
+// no scheduler, no retry, no replay: a converged row replays as terminal
+// through the existing dispatch replay path and never restarts generation
+// or triggers a provider retry. A concurrent live terminal win races safely
+// — the loser observes `applied: false` and emits nothing (reported as
+// `raced`, which is success, not failure).
 //
 // Fail-closed: a single invalid in-flight row (rowToValidatedRecord failure,
-// missing session, DB error) never fabricates a terminal. Valid rows still
-// CAS idempotently in row order, then the sweep fails with a typed
+// missing session, cancelQueued opId/session/message binding mismatch or
+// missing durable meta, DB error) never fabricates a terminal. Valid rows
+// still CAS idempotently in row order, then the sweep fails with a typed
 // `ConvergeOrphanedFailure` carrying only safe opIds + counts (no
 // detail/stack/secret). The caller must refuse listener startup on that
 // failure. `skipped` is retained for compatibility and is always `[]` on
 // success; non-empty poison is never returned as success. Only
-// `op_kind=prompt|provider` rows are swept; other kinds stay untouched.
-// Cross-process concurrency is serialized by the canonical DB exclusive
-// lease (second process fails lease acquisition before the sweep).
+// `op_kind=prompt|provider|cancelQueued` rows are swept; other kinds stay
+// untouched. Cross-process concurrency is serialized by the canonical DB
+// exclusive lease (second process fails lease acquisition before the sweep).
 // Terminal `time` is the runtime-owned convergence (receipt) time; the
 // superseded accept (occurrence) time is not retained and no occurrence
 // crash timestamp is fabricated, matching live terminalization which also
@@ -2386,13 +2392,229 @@ export function convergeOrphanedProviderInFlight(
 }
 
 // ---------------------------------------------------------------------------
-// Combined pre-bind sweep — prompt + provider in-flight rows under one gate.
+// CancelQueued crash terminal — fixed safe record for an orphaned
+// cancelQueued `in-flight` row after private-runtime process death.
 //
-// Scans both kinds on the same canonical DB (same lease+marker gate as the
-// listener) in `op_id` order: prompt rows converge with revision + `changed`
-// + `generation` and terminal recovery columns; provider rows converge with
-// exactly one revision + one `changed` row, never `generation`, never
-// recovery fields. Rerun after convergence is a no-op (0 new feeds).
+// The dispatch reserves durable `in-flight` before `cancelOne` and before
+// the terminal write in separate transactions, so a crash between reserve
+// and terminal leaves the queue side effect unknown: volatile dropped state
+// and any `MessageRemoved` projector step died with the process. The result
+// cannot be asserted `cancelled:true/false`, so the orphan converges to
+// terminal `ambiguous` (result unknown), never `succeeded` and never a
+// fabricated `cancelled` flag (`cancelled` stays NULL). No cancellation side
+// effect repeats, no scheduler follows. Same-key idempotency replays the
+// stored ambiguous row as an explicit dispatch `ambiguous` (`accepted:false`,
+// never success); terminal replay never calls `cancelOne`/`removeMessage`
+// and never advances revision.
+// ---------------------------------------------------------------------------
+export const CANCEL_QUEUED_CRASH_CONVERGE_CODE = "cancelQueued.ambiguous"
+export const CANCEL_QUEUED_CRASH_CONVERGE_MESSAGE = "cancelQueued result unknown after runtime restart"
+
+export function cancelQueuedAmbiguousTerminal(input: { opId: string; time?: number }): FailureRecord {
+  if (typeof input.opId !== "string" || input.opId.length === 0) throw new TypeError("opId must be non-empty string")
+  const parsed = parseOpId(input.opId)
+  if (parsed.kind !== "cancelQueued") throw new TypeError(`cancelQueued terminal opId kind must be cancelQueued, got ${parsed.kind}`)
+  const time = input.time ?? Date.now()
+  if (typeof time !== "number" || !Number.isFinite(time)) throw new TypeError("time must be finite number")
+  return normalizeRecord({
+    opId: input.opId,
+    opKind: "cancelQueued",
+    outcome: "ambiguous",
+    code: CANCEL_QUEUED_CRASH_CONVERGE_CODE,
+    message: CANCEL_QUEUED_CRASH_CONVERGE_MESSAGE,
+    time,
+  })
+}
+
+function assertCancelQueuedCrashRecord(record: FailureRecord) {
+  if (record.opKind !== "cancelQueued") throw new TypeError(`cancelQueued terminal opKind must be cancelQueued, got ${record.opKind}`)
+  if (record.outcome !== "ambiguous") throw new TypeError(`cancelQueued terminal outcome must be ambiguous, got ${record.outcome}`)
+  if (record.code !== CANCEL_QUEUED_CRASH_CONVERGE_CODE) throw new TypeError(`cancelQueued terminal code must be ${CANCEL_QUEUED_CRASH_CONVERGE_CODE}`)
+  if (record.message !== CANCEL_QUEUED_CRASH_CONVERGE_MESSAGE) throw new TypeError(`cancelQueued terminal message mismatch`)
+  if (record.cancel !== undefined) throw new TypeError(`cancelQueued terminal must not carry cancel`)
+  if (record.detail !== undefined) throw new TypeError(`cancelQueued terminal must not carry detail`)
+  if (record.stack !== undefined) throw new TypeError(`cancelQueued terminal must not carry stack`)
+  assertOpIdMatchesKind(record.opId, "cancelQueued")
+}
+
+export type TryTransitionCancelQueuedAmbiguousResult =
+  | { applied: true; record: CancelQueuedRecord; entry: Changefeed.Entry }
+  | { applied: false; record: CancelQueuedRecord | undefined; entry?: undefined }
+
+export function tryTransitionCancelQueuedAmbiguousTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<TryTransitionCancelQueuedAmbiguousResult, unknown, never> {
+  return Effect.gen(function* () {
+    try {
+      validateRecord(record)
+      assertCancelQueuedCrashRecord(record)
+    } catch (e) {
+      yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    const sid = sessionID as unknown as string
+    try {
+      const parsed = parseOpId(record.opId)
+      if (parsed.parts[0] !== sid) yield* Effect.die(new Error(`cross-identity opId ${record.opId} already owned by session ${sid}`))
+    } catch (e) {
+      yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
+    if (!existingRow) {
+      yield* Effect.die(new Error(`cancelQueued terminal requires existing in-flight row for ${record.opId}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    const typed = existingRow as typeof SessionOperationTable.$inferSelect
+    if ((typed.session_id as unknown as string) !== sid) {
+      yield* Effect.die(new Error(`cross-identity opId ${record.opId} already owned by session ${typed.session_id}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    let existing: FailureRecord
+    try {
+      existing = rowToValidatedRecord(typed)
+    } catch (e) {
+      yield* Effect.die(new TypeError(`invalid persisted operation row ${record.opId}: ${e instanceof Error ? e.message : String(e)}`))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    if (existing.opKind !== "cancelQueued" || existing.outcome !== "in-flight")
+      return { applied: false as const, record: rowToCancelQueuedRecord(typed) }
+    try {
+      const parsed = parseOpId(existing.opId)
+      if (parsed.parts[0] !== sid) yield* Effect.die(new Error(`cross-identity opId ${record.opId} already owned by session ${typed.session_id}`))
+      const msgPart = parsed.parts[1]!
+      const storedMsg = (typed as unknown as { message_id?: string | null }).message_id
+      if (typeof storedMsg !== "string" || storedMsg.length === 0 || storedMsg !== msgPart)
+        yield* Effect.die(new Error(`cancelQueued opId/message binding mismatch for ${record.opId}`))
+    } catch (e) {
+      yield* Effect.die(e instanceof Error ? e : new TypeError(String(e)))
+      return { applied: false as const, record: undefined, entry: undefined }
+    }
+    const entry = yield* SessionRevision.advanceTx(sessionID, tx)
+    const nextRev = entry.revision
+    yield* tx
+      .update(SessionOperationTable)
+      .set({
+        outcome: record.outcome,
+        code: record.code,
+        message: record.message,
+        time: record.time,
+        revision: nextRev,
+        cancelled: null,
+      })
+      .where(eq(SessionOperationTable.op_id, record.opId))
+      .run()
+      .pipe(Effect.orDie)
+    const updated = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
+    if (!updated) yield* Effect.die(new Error(`operation row missing after update ${record.opId}`))
+    return { applied: true as const, record: rowToCancelQueuedRecord(updated as typeof SessionOperationTable.$inferSelect), entry }
+  })
+}
+
+export function tryTransitionCancelQueuedAmbiguous(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<TryTransitionCancelQueuedAmbiguousResult, unknown, never> {
+  return db
+    .transaction((tx) => tryTransitionCancelQueuedAmbiguousTx(tx as DbOrTx, sessionID, record), { behavior: "immediate" })
+    .pipe(Effect.orDie) as Effect.Effect<TryTransitionCancelQueuedAmbiguousResult, unknown, never>
+}
+
+function convergeOrphanedCancelQueuedRow(
+  db: Database.Interface["db"],
+  row: typeof SessionOperationTable.$inferSelect,
+  now: number,
+): Effect.Effect<ConvergeVerdict, { opId: string }> {
+  const rawOpId = safeOpId((row as { op_id?: unknown }).op_id)
+  const fail = { opId: rawOpId }
+  return Effect.gen(function* () {
+    let rec: FailureRecord
+    try {
+      rec = rowToValidatedRecord(row)
+    } catch {
+      return yield* Effect.fail(fail)
+    }
+    if (rec.opKind !== "cancelQueued" || rec.outcome !== "in-flight") return yield* Effect.fail(fail)
+    const sid = row.session_id as unknown as SessionSchema.ID
+    const sidStr = sid as unknown as string
+    try {
+      const parsed = parseOpId(rec.opId)
+      if (parsed.kind !== "cancelQueued" || parsed.parts[0] !== sidStr) return yield* Effect.fail(fail)
+      const msgPart = parsed.parts[1]!
+      const storedMsg = (row as unknown as { message_id?: unknown }).message_id
+      if (typeof storedMsg !== "string" || storedMsg.length === 0 || storedMsg !== msgPart) return yield* Effect.fail(fail)
+      const dir = (row as unknown as { directory?: unknown }).directory
+      if (typeof dir !== "string" || dir.length === 0) return yield* Effect.fail(fail)
+      const hash = (row as unknown as { idempotency_hash?: unknown }).idempotency_hash
+      if (typeof hash !== "string" || hash.length === 0) return yield* Effect.fail(fail)
+    } catch {
+      return yield* Effect.fail(fail)
+    }
+    const session = yield* db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sid))
+      .get()
+      .pipe(
+        Effect.mapError(() => fail),
+        Effect.catchDefect(() => Effect.fail(fail)),
+      )
+    if (!session) return yield* Effect.fail(fail)
+    const opId = rec.opId
+    let terminal: FailureRecord
+    try {
+      terminal = cancelQueuedAmbiguousTerminal({ opId, time: now })
+    } catch {
+      return yield* Effect.fail(fail)
+    }
+    const res = yield* tryTransitionCancelQueuedAmbiguous(db, sid, terminal).pipe(
+      Effect.mapError(() => fail),
+      Effect.catchDefect(() => Effect.fail(fail)),
+    )
+    if (res.applied) return { tag: "converged" as const, opId }
+    return { tag: "raced" as const, opId }
+  })
+}
+
+export function convergeOrphanedCancelQueuedInFlight(
+  db: Database.Interface["db"],
+): Effect.Effect<ConvergeOrphanedSummary, ConvergeOrphanedFailure> {
+  return Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.op_kind, "cancelQueued"), eq(SessionOperationTable.outcome, "in-flight")))
+      .orderBy(asc(SessionOperationTable.op_id))
+      .all()
+      .pipe(
+        Effect.mapError(
+          () => new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] }),
+        ),
+        Effect.catchDefect(
+          () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
+        ),
+      )
+    return yield* runConvergeLoop(db, rows as (typeof SessionOperationTable.$inferSelect)[], Date.now(), convergeOrphanedCancelQueuedRow)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Combined pre-bind sweep — prompt + provider + cancelQueued in-flight rows
+// under one gate.
+//
+// Scans all three kinds on the same canonical DB (same lease+marker gate as
+// the listener) in `op_id` order: prompt rows converge with revision +
+// `changed` + `generation` and terminal recovery columns; provider rows
+// converge with exactly one revision + one `changed` row, never
+// `generation`, never recovery fields; cancelQueued rows converge to terminal
+// `ambiguous` (result unknown, `cancelled` NULL, never `succeeded` or a
+// fabricated `cancelled` flag) with exactly one revision + one `changed`
+// row — never a `generation` entry, never recovery fields, never a repeated
+// `cancelOne`/`removeMessage` side effect. Rerun after convergence is a
+// no-op (0 new feeds).
 // ---------------------------------------------------------------------------
 export function convergeOrphanedInFlight(
   db: Database.Interface["db"],
@@ -2426,14 +2648,29 @@ export function convergeOrphanedInFlight(
           () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
         ),
       )
+    const cancelRows = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.op_kind, "cancelQueued"), eq(SessionOperationTable.outcome, "in-flight")))
+      .orderBy(asc(SessionOperationTable.op_id))
+      .all()
+      .pipe(
+        Effect.mapError(
+          () => new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] }),
+        ),
+        Effect.catchDefect(
+          () => Effect.fail(new ConvergeOrphanedFailure({ opIds: [], count: 0, converged: [], raced: [] })),
+        ),
+      )
     const now = Date.now()
-    const rows = [...(promptRows as (typeof SessionOperationTable.$inferSelect)[]), ...(providerRows as (typeof SessionOperationTable.$inferSelect)[])]
+    const rows = [...(promptRows as (typeof SessionOperationTable.$inferSelect)[]), ...(providerRows as (typeof SessionOperationTable.$inferSelect)[]), ...(cancelRows as (typeof SessionOperationTable.$inferSelect)[])]
     const converge = (
       inner: Database.Interface["db"],
       row: typeof SessionOperationTable.$inferSelect,
       at: number,
     ): Effect.Effect<ConvergeVerdict, { opId: string }> => {
       if ((row as { op_kind?: unknown }).op_kind === "provider") return convergeOrphanedProviderRow(inner, row, at)
+      if ((row as { op_kind?: unknown }).op_kind === "cancelQueued") return convergeOrphanedCancelQueuedRow(inner, row, at)
       return convergeOrphanedRow(inner, row, at)
     }
     return yield* runConvergeLoop(db, rows, now, converge)

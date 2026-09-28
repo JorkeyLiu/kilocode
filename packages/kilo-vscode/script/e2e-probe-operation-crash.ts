@@ -2,7 +2,7 @@
  * Operation-crash E2E (hard crash): accepted in-flight prompt/provider ->
  * exact owned private backend SIGKILL -> restart same DB -> pre-bind
  * convergence prompt/provider abandoned + receipt, owner crash + no provider
- * replay + Agent Manager recentOperations/DOM Cancelled exactly once, panel
+ * replay + Agent Manager recentOperations/DOM Stopped after runtime restart exactly once, panel
  * reopen/read-ack observation cursor convergence.
  *
  * Harness only (Node, never bundled). Reuses the hang-server shape from
@@ -450,7 +450,10 @@ export async function assertOperationCrashLifecycle(
     const { clickTab } = await import("./e2e-probe-dom")
     await clickTab(frame, sid, remain)
   }
-  // Hard-crash abandoned => OperationStatus visible Cancelled exactly once.
+  // Hard-crash runtime-restart abandoned => OperationStatus visible
+  // "Stopped after runtime restart" exactly once (neutral). Scoped to this
+  // probe's exact crash discriminants (prompt.abandoned / provider.abandoned
+  // with fixed restart messages); generic cancellations stay Cancelled elsewhere.
   const cancelledDeadline = Date.now() + 15_000
   let cancelledText = ""
   for (;;) {
@@ -461,21 +464,21 @@ export async function assertOperationCrashLifecycle(
     const count = await frame.locator(scoped).count().catch(() => 0)
     if (count === 1) {
       cancelledText = (await frame.locator(textSel).first().textContent().catch(() => "")) ?? ""
-      if (cancelledText.startsWith("Cancelled")) break
+      if (cancelledText === "Stopped after runtime restart") break
     }
     if (Date.now() > cancelledDeadline) {
       const text = (await frame.locator(textSel).first().textContent().catch(() => "")) ?? ""
-      throw new Error(`operation-crash: OperationStatus must show Cancelled exactly once, got count=${count} text=${text.slice(0, 120)}`)
+      throw new Error(`operation-crash: OperationStatus must show Stopped after runtime restart exactly once, got count=${count} text=${text.slice(0, 120)}`)
     }
     await sleep(250)
   }
   {
     const count = await frame.locator(scoped).count().catch(() => 0)
-    if (count !== 1) throw new Error(`operation-crash: Cancelled must appear exactly once, got count=${count}`)
+    if (count !== 1) throw new Error(`operation-crash: Stopped after runtime restart must appear exactly once, got count=${count}`)
     const outcome = await frame.locator(scoped).first().getAttribute("data-outcome").catch(() => null)
     if (outcome !== "abandoned") throw new Error(`operation-crash: DOM outcome must be abandoned, got ${outcome}`)
     const tone = await frame.locator(scoped).first().getAttribute("data-tone").catch(() => null)
-    if (tone !== "cancelled") throw new Error(`operation-crash: DOM tone must be cancelled, got ${tone}`)
+    if (tone !== "neutral") throw new Error(`operation-crash: DOM tone must be neutral, got ${tone}`)
   }
   writeFileSync(
     join(scratch, "operation-crash-dom-evidence"),
@@ -508,8 +511,9 @@ export async function assertOperationCrashLifecycle(
   // existing agentManagerOpen route and re-projects the same crash sid via
   // the existing production fixture loopback (sessionAdded/sessionCreated +
   // SETTLE/READY/CONTENT_READY, no new durable state). The reopened same-sid
-  // tab must show the scoped OperationStatus Cancelled exactly once
-  // (outcome abandoned, tone cancelled). Tab-less is a failure — no
+  // tab must show the scoped OperationStatus "Stopped after runtime restart"
+  // exactly once (outcome abandoned, tone neutral) for this exact
+  // runtime-restart crash. Tab-less is a failure — no
   // best-effort pass. When the tab is not yet visible but the existing
   // sidebar row is, recover via the existing openSidebarSession route and
   // observe (production unchanged).
@@ -581,7 +585,7 @@ export async function assertOperationCrashLifecycle(
       const count = await frame.locator(scoped).count().catch(() => 0)
       if (count === 1) {
         const text = (await frame.locator(textSel).first().textContent().catch(() => "")) ?? ""
-        if (text.startsWith("Cancelled")) {
+        if (text === "Stopped after runtime restart") {
           reopenDom = text
           break
         }
@@ -589,16 +593,16 @@ export async function assertOperationCrashLifecycle(
       if (Date.now() > deadline) {
         const text = (await frame.locator(textSel).first().textContent().catch(() => "")) ?? ""
         const count = await frame.locator(scoped).count().catch(() => 0)
-        throw new Error(`operation-crash: reopened DOM must show Cancelled exactly once, got count=${count} text=${text.slice(0, 120)}`)
+        throw new Error(`operation-crash: reopened DOM must show Stopped after runtime restart exactly once, got count=${count} text=${text.slice(0, 120)}`)
       }
       await sleep(250)
     }
     const count = await frame.locator(scoped).count().catch(() => 0)
-    if (count !== 1) throw new Error(`operation-crash: reopened Cancelled must appear exactly once, got count=${count}`)
+    if (count !== 1) throw new Error(`operation-crash: reopened Stopped after runtime restart must appear exactly once, got count=${count}`)
     const outcome = await frame.locator(scoped).first().getAttribute("data-outcome").catch(() => null)
     if (outcome !== "abandoned") throw new Error(`operation-crash: reopened DOM outcome must be abandoned, got ${outcome}`)
     const tone = await frame.locator(scoped).first().getAttribute("data-tone").catch(() => null)
-    if (tone !== "cancelled") throw new Error(`operation-crash: reopened DOM tone must be cancelled, got ${tone}`)
+    if (tone !== "neutral") throw new Error(`operation-crash: reopened DOM tone must be neutral, got ${tone}`)
     writeFileSync(
       join(scratch, "operation-crash-reopen-dom"),
       JSON.stringify({ sid, opId, domText: reopenDom, outcome, tone, url: frame.url() }, null, 2),

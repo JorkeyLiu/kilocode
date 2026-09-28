@@ -331,24 +331,61 @@ function failureOf(result: unknown): { code: string; message: string } {
   return { code, message }
 }
 
+function unresolvedAbort(opId: string, reason: string): Error {
+  const err = abortTerminal(
+    "abort.unresolved",
+    `Abort status could not be confirmed (opId=${opId}). No retry was issued.${reason ? ` ${reason}` : ""}`,
+  ) as Error & { code: string; terminal: boolean; opId: string }
+  err.opId = opId
+  return err
+}
+
+// Validated pre-accept retryable fence: only a strictly validated
+// terminal-failure the backend proves was never accepted (accepted === false)
+// with retryable true and exact request identity may take the single
+// pre-send-equivalent SDK path. The abort backend only emits retryable false
+// (session.not_found/scope_mismatch) today, so strict validation never yields
+// retryable true and this predicate stays false; every other after-send
+// outcome maps to unresolved. A raw retryable-shaped but strictly invalid
+// result (unknown code, retryable true) is not backend proof and maps to
+// unresolved, never SDK.
+function isPreAcceptRetryable(result: unknown, req: AbortContractRequest): boolean {
+  try {
+    const validated = validateAbortResult(result, req)
+    if (validated.kind !== "terminal-failure") return false
+    return validated.failure.retryable === true && validated.accepted === false
+  } catch {
+    return false
+  }
+}
+
 async function settle(input: FallbackInput & { req: AbortContractRequest; result: unknown }): Promise<boolean> {
   const kind = (input.result as { kind?: unknown }).kind
-  if (kind !== "terminal" && kind !== "terminal-failure") return fallback(input)
+  if (kind !== "terminal" && kind !== "terminal-failure") throw unresolvedAbort(input.req.opId, "ambiguous private result.")
+  if (isPreAcceptRetryable(input.result, input.req)) return fallback(input)
   try {
     validateAbortResult(input.result, input.req)
   } catch {
-    return fallback(input)
+    throw unresolvedAbort(input.req.opId, "invalid private result.")
   }
   if (kind === "terminal") return true
   const { code, message } = failureOf(input.result)
   throw abortTerminal(code, message)
 }
 
-// Private-first abort: single-directory `session/abort` returning only after
-// runtime terminal convergence. Valid `terminal` returns with zero SDK;
-// `terminal-failure` with retryable false (session.not_found/scope_mismatch)
-// closes terminally with zero SDK; unavailable/invalid/ambiguous/transport/
-// timeout takes exactly one legacy SDK `session.abort` fallback, never retried.
+// Private-first accepted-only abort: single-directory `session/abort`
+// returning only after runtime terminal convergence. Valid `terminal` returns
+// with zero SDK; validated `terminal-failure` (session.not_found/
+// scope_mismatch, retryable false) closes terminally with zero SDK. Pre-send
+// only — invalid request, unavailable peer, or missing capability proven
+// before any private request left the extension — takes exactly one legacy
+// SDK `session.abort`, never retried. Every after-send uncertainty
+// (ambiguous/timeout/transport/peer-close/invalid wire, including a validated
+// retryable-shaped failure the backend never proves pre-accept) throws an
+// explicit `abort.unresolved` failure carrying the stable opId for diagnosis,
+// with zero SDK, zero status fabrication, and zero second private dispatch.
+// A validated pre-accept retryable (accepted === false, retryable === true,
+// exact identity) remains the sole after-send SDK-eligible shape.
 export async function abortSessionPrivateFirst(opts: {
   client: KiloClient
   connection: KiloConnectionService
@@ -365,9 +402,11 @@ export async function abortSessionPrivateFirst(opts: {
   let result: unknown
   try {
     result = await withPrivateTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return fallback(input)
+    const msg = String(err)
+    if (msg.includes("private parity timeout")) throw unresolvedAbort(req.opId, "private timeout uncertain.")
+    throw unresolvedAbort(req.opId, "private transport uncertain.")
   }
   return settle({ ...input, req, result })
 }

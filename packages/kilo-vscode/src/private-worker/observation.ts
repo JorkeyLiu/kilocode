@@ -37,6 +37,9 @@ export const OBSERVATION_METHODS = {
   GET: "observation/get",
   MESSAGES: "observation/messages",
   OPERATIONS: "observation/operations",
+  OPERATION: "observation/operation",
+  CREATE_OPERATION: "observation/create-operation",
+  DELETE_OPERATION: "observation/delete-operation",
 } as const
 
 export const OBSERVATION_NOTIFICATION = "observation/changed" as const
@@ -50,6 +53,7 @@ export const OBSERVATION_REQUIRED_CAPABILITIES = [
   "observation/get",
   "observation/messages",
   "observation/operations",
+  "observation/operation",
 ] as const
 
 type ObservationRequiredCapability = (typeof OBSERVATION_REQUIRED_CAPABILITIES)[number]
@@ -243,10 +247,26 @@ export interface ObservationOperationsPanelEntry {
   time: number
   cancel?: { source: string }
   recovery?: ObservationOperationsRecovery
+  forkedSessionId?: string
 }
 
 export type ObservationOperationsResult =
   | { v: typeof OBSERVATION_VERSION; status: "found"; operations: ObservationOperationsPanelEntry[] }
+  | { v: typeof OBSERVATION_VERSION; status: "not_found" }
+  | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
+
+export type ObservationOperationResult =
+  | { v: typeof OBSERVATION_VERSION; status: "found"; operation: ObservationOperationsPanelEntry }
+  | { v: typeof OBSERVATION_VERSION; status: "not_found" }
+  | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
+
+export type ObservationCreateOperationResult =
+  | { v: typeof OBSERVATION_VERSION; status: "found"; createdSessionId: string }
+  | { v: typeof OBSERVATION_VERSION; status: "not_found" }
+  | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
+
+export type ObservationDeleteOperationResult =
+  | { v: typeof OBSERVATION_VERSION; status: "found" }
   | { v: typeof OBSERVATION_VERSION; status: "not_found" }
   | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
 
@@ -268,6 +288,9 @@ export interface ObservationDeps {
     cursor?: string
   }) => Promise<ObservationMessagesResult>
   operations?: (input: { directory: string; sessionId: string; limit?: number }) => Promise<ObservationOperationsResult>
+  operation?: (input: { directory: string; sessionId: string; opId: string }) => Promise<ObservationOperationResult>
+  createOperation?: (input: { directory: string; opId: string }) => Promise<ObservationCreateOperationResult>
+  deleteOperation?: (input: { directory: string; sessionId: string; opId: string }) => Promise<ObservationDeleteOperationResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -336,6 +359,58 @@ function parseSessionId(raw: unknown): string {
     throw invalidParams("sessionId must be non-empty session id")
   if (!isValidSessionId(raw)) throw invalidParams("sessionId must be non-empty session id")
   return raw as string
+}
+
+function parseCheckpointOpId(raw: string, kind: "revert" | "unrevert" | "sessionUpdate" | "fork"): string {
+  const prefix = `${kind}:`
+  const rest = raw.slice(prefix.length)
+  const sep = rest.indexOf(":")
+  if (sep <= 0 || sep === rest.length - 1) throw invalidParams(`opId must be canonical ${kind}:<sessionId>:<token>`)
+  const sid = rest.slice(0, sep)
+  const token = rest.slice(sep + 1)
+  if (!isValidSessionId(sid)) throw invalidParams(`opId must be canonical ${kind}:<sessionId>:<token>`)
+  if (token.length === 0 || token.includes(":") || token.includes("\0")) throw invalidParams(`opId must be canonical ${kind}:<sessionId>:<token>`)
+  return raw
+}
+
+function parseOperationOpId(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("opId must be non-empty op id")
+  if (raw.startsWith("prompt:")) {
+    const suffix = raw.slice("prompt:".length)
+    if (suffix.length === 0 || !suffix.startsWith("msg") || suffix.includes(":")) throw invalidParams("opId must be canonical prompt:<messageId>")
+    return raw
+  }
+  if (raw.startsWith("revert:")) return parseCheckpointOpId(raw, "revert")
+  if (raw.startsWith("unrevert:")) return parseCheckpointOpId(raw, "unrevert")
+  if (raw.startsWith("sessionUpdate:")) return parseCheckpointOpId(raw, "sessionUpdate")
+  if (raw.startsWith("fork:")) return parseCheckpointOpId(raw, "fork")
+  throw invalidParams("opId must be canonical prompt:<messageId> or revert:<sessionId>:<token> or unrevert:<sessionId>:<token> or sessionUpdate:<sessionId>:<token> or fork:<sessionId>:<token>")
+}
+
+const CREATE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function parseCreateOpId(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("opId must be non-empty op id")
+  if (!raw.startsWith("create:")) throw invalidParams("opId must be canonical create:<uuid>")
+  const token = raw.slice("create:".length)
+  if (!CREATE_UUID.test(token)) throw invalidParams("opId must be canonical create:<uuid>")
+  return raw
+}
+
+const DELETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function parseDeleteOpId(raw: unknown, sessionId?: string): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("opId must be canonical delete:<sessionId>:<uuid>")
+  if (!raw.startsWith("delete:")) throw invalidParams("opId must be canonical delete:<sessionId>:<uuid>")
+  const rest = raw.slice("delete:".length)
+  const sep = rest.indexOf(":")
+  if (sep <= 0 || sep === rest.length - 1) throw invalidParams("opId must be canonical delete:<sessionId>:<uuid>")
+  const sid = rest.slice(0, sep)
+  const token = rest.slice(sep + 1)
+  if (!isValidSessionId(sid)) throw invalidParams("opId must be canonical delete:<sessionId>:<uuid>")
+  if (!DELETE_UUID.test(token)) throw invalidParams("opId must be canonical delete:<sessionId>:<uuid>")
+  if (sessionId !== undefined && sid !== sessionId) throw invalidParams("opId session binding mismatch")
+  return raw
 }
 
 // eslint-disable-next-line complexity
@@ -522,6 +597,59 @@ function validateMessagesResult(res: unknown, limit: number): asserts res is Obs
 }
 
 // eslint-disable-next-line complexity
+function validatePanelEntry(op: unknown): void {
+  if (op === null || typeof op !== "object" || Array.isArray(op)) throw internalError("operations returned invalid operation shape")
+  const rec = op as Record<string, unknown>
+  const allowedOp = new Set(["opId", "outcome", "code", "message", "time", "cancel", "recovery", "forkedSessionId"])
+  for (const k of Object.keys(rec)) if (!allowedOp.has(k)) throw internalError("operations returned invalid operation shape")
+  if (typeof rec.opId !== "string" || rec.opId.length === 0) throw internalError("operations returned invalid operation shape")
+  if (typeof rec.outcome !== "string" || !["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"].includes(rec.outcome as string)) throw internalError("operations returned invalid operation shape")
+  if (typeof rec.code !== "string" || rec.code.length === 0) throw internalError("operations returned invalid operation shape")
+  if (typeof rec.message !== "string") throw internalError("operations returned invalid operation shape")
+  if (typeof rec.time !== "number" || !Number.isFinite(rec.time)) throw internalError("operations returned invalid operation shape")
+  if ("cancel" in rec && rec.cancel !== undefined) {
+    if (rec.cancel === null || typeof rec.cancel !== "object" || Array.isArray(rec.cancel)) throw internalError("operations returned invalid operation shape")
+    const c = rec.cancel as Record<string, unknown>
+    if (typeof c.source !== "string" || !["user_stop", "steering", "timeout", "network_disconnect", "unknown"].includes(c.source as string)) throw internalError("operations returned invalid operation shape")
+    const extra = Object.keys(c).filter((k) => k !== "source")
+    if (extra.length > 0) throw internalError("operations returned invalid operation shape")
+  }
+  if ("recovery" in rec && rec.recovery !== undefined) {
+    if (rec.recovery === null || typeof rec.recovery !== "object" || Array.isArray(rec.recovery)) throw internalError("operations returned invalid operation shape")
+    const rv = rec.recovery as Record<string, unknown>
+    const allowedRec = new Set(["v", "owner", "scope", "used", "limit", "terminated", "nextAt", "retryOccurrence", "layer", "closeReason", "replay"])
+    for (const k of Object.keys(rv)) if (!allowedRec.has(k)) throw internalError("operations returned invalid operation shape")
+    if (rv.v !== 1) throw internalError("operations returned invalid operation shape")
+    if (rv.owner !== "generation") throw internalError("operations returned invalid operation shape")
+    if (typeof rv.scope !== "string" || rv.scope.length === 0 || (rv.scope as string).includes("\0")) throw internalError("operations returned invalid operation shape")
+    const isSafeInt = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && (x as number) >= 0
+    if (!isSafeInt(rv.used) || !isSafeInt(rv.limit)) throw internalError("operations returned invalid operation shape")
+    if ((rv.used as number) > (rv.limit as number)) throw internalError("operations returned invalid operation shape")
+    if (typeof rv.terminated !== "boolean") throw internalError("operations returned invalid operation shape")
+    if (rv.nextAt !== null && !isSafeInt(rv.nextAt)) throw internalError("operations returned invalid operation shape")
+    if (rv.retryOccurrence !== null && !isSafeInt(rv.retryOccurrence)) throw internalError("operations returned invalid operation shape")
+    const layers = new Set(["provider", "incomplete", "broker", "task", "restart"])
+    const closes = new Set(["completed", "interrupted", "error", "crash"])
+    if (rv.layer !== null && (typeof rv.layer !== "string" || !layers.has(rv.layer as string))) throw internalError("operations returned invalid operation shape")
+    if (rv.closeReason !== null && (typeof rv.closeReason !== "string" || !closes.has(rv.closeReason as string))) throw internalError("operations returned invalid operation shape")
+    if (rv.replay !== false) throw internalError("operations returned invalid operation shape")
+    if ((rv.terminated as boolean) !== (rv.closeReason !== null)) throw internalError("operations returned invalid operation shape")
+    if (rv.closeReason !== null && rv.nextAt !== null) throw internalError("operations returned invalid operation shape")
+    if (rv.closeReason === null && ((rv.layer === null) !== (rv.nextAt === null))) throw internalError("operations returned invalid operation shape")
+    if (rv.retryOccurrence !== null && rv.layer === null) throw internalError("operations returned invalid operation shape")
+    if (rv.retryOccurrence !== null && rv.closeReason === null && rv.nextAt === null) throw internalError("operations returned invalid operation shape")
+    if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("operations returned invalid operation shape")
+  }
+  if ("forkedSessionId" in rec && rec.forkedSessionId !== undefined) {
+    if (typeof rec.opId !== "string" || !rec.opId.startsWith("fork:")) throw internalError("operations returned invalid operation shape")
+    if (rec.outcome !== "succeeded") throw internalError("operations returned invalid operation shape")
+    if (typeof rec.forkedSessionId !== "string" || rec.forkedSessionId.length === 0 || (rec.forkedSessionId as string).includes("\0") || !(rec.forkedSessionId as string).startsWith("ses")) throw internalError("operations returned invalid operation shape")
+    if ("recovery" in rec && rec.recovery !== undefined) throw internalError("operations returned invalid operation shape")
+  }
+  // Ensure no diagnostic fields leak
+  if ("detail" in rec || "stack" in rec || "idempotencyHash" in rec || "requestId" in rec || "revision" in rec || "opKind" in rec) throw internalError("operations returned invalid operation shape")
+}
+
 function validateOperationsResult(res: unknown): asserts res is ObservationOperationsResult {
   if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("operations returned invalid shape")
   const r = res as Record<string, unknown>
@@ -537,54 +665,63 @@ function validateOperationsResult(res: unknown): asserts res is ObservationOpera
   const allowedFound = new Set(["v", "status", "operations"])
   for (const k of Object.keys(r)) if (!allowedFound.has(k)) throw internalError("operations returned invalid shape")
   if (!Array.isArray(r.operations)) throw internalError("operations returned invalid operations")
-  const ops = r.operations as unknown[]
-  for (const op of ops) {
-    if (op === null || typeof op !== "object" || Array.isArray(op)) throw internalError("operations returned invalid operation shape")
-    const rec = op as Record<string, unknown>
-    const allowedOp = new Set(["opId", "outcome", "code", "message", "time", "cancel", "recovery"])
-    for (const k of Object.keys(rec)) if (!allowedOp.has(k)) throw internalError("operations returned invalid operation shape")
-    if (typeof rec.opId !== "string" || rec.opId.length === 0) throw internalError("operations returned invalid operation shape")
-    if (typeof rec.outcome !== "string" || !["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"].includes(rec.outcome as string)) throw internalError("operations returned invalid operation shape")
-    if (typeof rec.code !== "string" || rec.code.length === 0) throw internalError("operations returned invalid operation shape")
-    if (typeof rec.message !== "string") throw internalError("operations returned invalid operation shape")
-    if (typeof rec.time !== "number" || !Number.isFinite(rec.time)) throw internalError("operations returned invalid operation shape")
-    if ("cancel" in rec && rec.cancel !== undefined) {
-      if (rec.cancel === null || typeof rec.cancel !== "object" || Array.isArray(rec.cancel)) throw internalError("operations returned invalid operation shape")
-      const c = rec.cancel as Record<string, unknown>
-      if (typeof c.source !== "string" || !["user_stop", "steering", "timeout", "network_disconnect", "unknown"].includes(c.source as string)) throw internalError("operations returned invalid operation shape")
-      const extra = Object.keys(c).filter((k) => k !== "source")
-      if (extra.length > 0) throw internalError("operations returned invalid operation shape")
-    }
-     if ("recovery" in rec && rec.recovery !== undefined) {
-      if (rec.recovery === null || typeof rec.recovery !== "object" || Array.isArray(rec.recovery)) throw internalError("operations returned invalid operation shape")
-      const rv = rec.recovery as Record<string, unknown>
-      const allowedRec = new Set(["v", "owner", "scope", "used", "limit", "terminated", "nextAt", "retryOccurrence", "layer", "closeReason", "replay"])
-      for (const k of Object.keys(rv)) if (!allowedRec.has(k)) throw internalError("operations returned invalid operation shape")
-      if (rv.v !== 1) throw internalError("operations returned invalid operation shape")
-      if (rv.owner !== "generation") throw internalError("operations returned invalid operation shape")
-      if (typeof rv.scope !== "string" || rv.scope.length === 0 || (rv.scope as string).includes("\0")) throw internalError("operations returned invalid operation shape")
-      const isSafeInt = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && (x as number) >= 0
-      if (!isSafeInt(rv.used) || !isSafeInt(rv.limit)) throw internalError("operations returned invalid operation shape")
-      if ((rv.used as number) > (rv.limit as number)) throw internalError("operations returned invalid operation shape")
-      if (typeof rv.terminated !== "boolean") throw internalError("operations returned invalid operation shape")
-      if (rv.nextAt !== null && !isSafeInt(rv.nextAt)) throw internalError("operations returned invalid operation shape")
-      if (rv.retryOccurrence !== null && !isSafeInt(rv.retryOccurrence)) throw internalError("operations returned invalid operation shape")
-      const layers = new Set(["provider", "incomplete", "broker", "task", "restart"])
-      const closes = new Set(["completed", "interrupted", "error", "crash"])
-      if (rv.layer !== null && (typeof rv.layer !== "string" || !layers.has(rv.layer as string))) throw internalError("operations returned invalid operation shape")
-      if (rv.closeReason !== null && (typeof rv.closeReason !== "string" || !closes.has(rv.closeReason as string))) throw internalError("operations returned invalid operation shape")
-      if (rv.replay !== false) throw internalError("operations returned invalid operation shape")
-      if ((rv.terminated as boolean) !== (rv.closeReason !== null)) throw internalError("operations returned invalid operation shape")
-      if (rv.closeReason !== null && rv.nextAt !== null) throw internalError("operations returned invalid operation shape")
-      if (rv.closeReason === null && ((rv.layer === null) !== (rv.nextAt === null))) throw internalError("operations returned invalid operation shape")
-      if (rv.retryOccurrence !== null && rv.layer === null) throw internalError("operations returned invalid operation shape")
-      if (rv.retryOccurrence !== null && rv.closeReason === null && rv.nextAt === null) throw internalError("operations returned invalid operation shape")
-      if (rec.outcome !== "failed" && rec.outcome !== "abandoned") throw internalError("operations returned invalid operation shape")
-    }
-    // Ensure no diagnostic fields leak
-    if ("detail" in rec || "stack" in rec || "idempotencyHash" in rec || "requestId" in rec || "revision" in rec) throw internalError("operations returned invalid operation shape")
-  }
+  for (const op of r.operations as unknown[]) validatePanelEntry(op)
 }
+
+function validateOperationResult(res: unknown): asserts res is ObservationOperationResult {
+  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("operation returned invalid shape")
+  const r = res as Record<string, unknown>
+  if (r.v !== OBSERVATION_VERSION) throw internalError("operation returned invalid version")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string)) throw internalError("operation returned invalid status")
+  const status = r.status as string
+  if (status === "not_found" || status === "scope_mismatch") {
+    const allowed = new Set(["v", "status"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("operation returned invalid shape")
+    if ("operation" in r) throw internalError("operation returned invalid shape")
+    return
+  }
+  const allowedFound = new Set(["v", "status", "operation"])
+  for (const k of Object.keys(r)) if (!allowedFound.has(k)) throw internalError("operation returned invalid shape")
+  if (!("operation" in r)) throw internalError("operation returned invalid operation")
+  validatePanelEntry(r.operation)
+}
+
+// eslint-disable-next-line complexity
+function validateCreateOperationResult(res: unknown): asserts res is ObservationCreateOperationResult {
+  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("create-operation returned invalid shape")
+  const r = res as Record<string, unknown>
+  if (r.v !== OBSERVATION_VERSION) throw internalError("create-operation returned invalid version")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string))
+    throw internalError("create-operation returned invalid status")
+  const status = r.status as string
+  if (status === "not_found" || status === "scope_mismatch") {
+    const allowed = new Set(["v", "status"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("create-operation returned invalid shape")
+    if ("createdSessionId" in r) throw internalError("create-operation returned invalid shape")
+    return
+  }
+  const allowedFound = new Set(["v", "status", "createdSessionId"])
+  for (const k of Object.keys(r)) if (!allowedFound.has(k)) throw internalError("create-operation returned invalid shape")
+  if (!isValidSessionId(r.createdSessionId)) throw internalError("create-operation returned invalid session shape")
+  if ("operation" in r || "session" in r || "snapshot" in r || "token" in r || "sandbox" in r || "detail" in r || "stack" in r || "requestId" in r || "revision" in r || "opKind" in r)
+    throw internalError("create-operation returned invalid shape")
+}
+
+// eslint-disable-next-line complexity
+function validateDeleteOperationResult(res: unknown): asserts res is ObservationDeleteOperationResult {
+  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("delete-operation returned invalid shape")
+  const r = res as Record<string, unknown>
+  if (r.v !== OBSERVATION_VERSION) throw internalError("delete-operation returned invalid version")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string))
+    throw internalError("delete-operation returned invalid status")
+  const allowed = new Set(["v", "status"])
+  for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("delete-operation returned invalid shape")
+  if ("operation" in r || "session" in r || "snapshot" in r || "token" in r || "sandbox" in r || "detail" in r || "stack" in r || "requestId" in r || "revision" in r || "opKind" in r || "code" in r || "message" in r || "hash" in r || "createdSessionId" in r)
+    throw internalError("delete-operation returned invalid shape")
+}
+
+
+
 
 export class ObservationController {
   constructor(private readonly deps: ObservationDeps) {}
@@ -607,6 +744,12 @@ export class ObservationController {
         return this.handleMessages(params)
       case OBSERVATION_METHODS.OPERATIONS:
         return this.handleOperations(params)
+      case OBSERVATION_METHODS.OPERATION:
+        return this.handleOperation(params)
+      case OBSERVATION_METHODS.CREATE_OPERATION:
+        return this.handleCreateOperation(params)
+      case OBSERVATION_METHODS.DELETE_OPERATION:
+        return this.handleDeleteOperation(params)
       default:
         throw notFound(`Method not found: ${method}`)
     }
@@ -852,6 +995,80 @@ export class ObservationController {
       }
     })()
     validateOperationsResult(res)
+    return res
+  }
+
+  private async handleOperation(params: unknown): Promise<ObservationOperationResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "directory", "sessionId", "opId"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    if (!("directory" in o)) throw invalidParams("directory is required")
+    if (!("sessionId" in o)) throw invalidParams("sessionId is required")
+    if (!("opId" in o)) throw invalidParams("opId is required")
+    const directory = parseDirectory(o.directory)
+    const sessionId = parseSessionId(o.sessionId)
+    const opId = parseOperationOpId(o.opId)
+    if (!this.deps.operation) throw notFound(`Method not found: ${OBSERVATION_METHODS.OPERATION}`)
+    const res = await (async () => {
+      try {
+        return await this.deps.operation!({ directory, sessionId, opId })
+      } catch (e) {
+        if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+        throw internalError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    validateOperationResult(res)
+    if (res.status === "found" && res.operation.opId !== opId) throw internalError("operation returned opId mismatch")
+    return res
+  }
+
+  private async handleCreateOperation(params: unknown): Promise<ObservationCreateOperationResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "directory", "opId"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    if (!("directory" in o)) throw invalidParams("directory is required")
+    if (!("opId" in o)) throw invalidParams("opId is required")
+    const directory = parseDirectory(o.directory)
+    const opId = parseCreateOpId(o.opId)
+    if (!this.deps.createOperation) throw notFound(`Method not found: ${OBSERVATION_METHODS.CREATE_OPERATION}`)
+    const res = await (async () => {
+      try {
+        return await this.deps.createOperation!({ directory, opId })
+      } catch (e) {
+        if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+        throw internalError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    validateCreateOperationResult(res)
+    return res
+  }
+
+  private async handleDeleteOperation(params: unknown): Promise<ObservationDeleteOperationResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "directory", "sessionId", "opId"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    if (!("directory" in o)) throw invalidParams("directory is required")
+    if (!("sessionId" in o)) throw invalidParams("sessionId is required")
+    if (!("opId" in o)) throw invalidParams("opId is required")
+    const directory = parseDirectory(o.directory)
+    const sessionId = parseSessionId(o.sessionId)
+    const opId = parseDeleteOpId(o.opId, sessionId)
+    if (!this.deps.deleteOperation) throw notFound(`Method not found: ${OBSERVATION_METHODS.DELETE_OPERATION}`)
+    const res = await (async () => {
+      try {
+        return await this.deps.deleteOperation!({ directory, sessionId, opId })
+      } catch (e) {
+        if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+        throw internalError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    validateDeleteOperationResult(res)
     return res
   }
 

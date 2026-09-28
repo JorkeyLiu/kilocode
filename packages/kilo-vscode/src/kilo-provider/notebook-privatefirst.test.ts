@@ -218,7 +218,7 @@ describe("notebook private-first", () => {
     }
   })
 
-  test("ambiguous private reply takes exactly one same-identity SDK call", async () => {
+  test("ambiguous private reply yields unresolved with zero SDK", async () => {
     const conn = {
       isPrivateAvailable: () => true,
       privateNotebookReplyWithHandle: (req: Record<string, unknown>) => ({
@@ -228,20 +228,20 @@ describe("notebook private-first", () => {
       }),
     } as never
     const { client, calls } = clientStub()
-    const { outcome } = await replyNotebookPrivateFirst({
+    const { outcome, req } = await replyNotebookPrivateFirst({
       connection: conn,
       client: client as never,
       directory: DIR,
       requestID: RID,
       result: RESULT,
     })
-    expect(outcome).toEqual({ kind: "settled", stale: false })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]!.kind).toBe("reply")
-    const args = calls[0]!.args as Record<string, unknown>
-    expect(args.requestID).toBe(RID)
-    expect(args.directory).toBe(DIR)
-    expect(args.result).toBe(RESULT)
+    expect(outcome.kind).toBe("unresolved")
+    if (outcome.kind === "unresolved") {
+      expect(outcome.requestID).toBe(RID)
+      expect(outcome.opId).toBe(req.opId)
+      expect(outcome.reason.length).toBeGreaterThan(0)
+    }
+    expect(calls).toHaveLength(0)
   })
 
   test("unavailable private takes the SDK path; SDK failure retries without private retry", async () => {
@@ -291,7 +291,7 @@ describe("notebook private-first", () => {
     expect(calls.filter((c) => c.kind === "reject")).toHaveLength(1)
   })
 
-  test("timeout cancels the private handle and falls back once", async () => {
+  test("timeout cancels the private handle and yields unresolved with zero SDK", async () => {
     let cancelled = 0
     const conn = {
       isPrivateAvailable: () => true,
@@ -305,16 +305,21 @@ describe("notebook private-first", () => {
       }),
     } as never
     const { client, calls } = clientStub()
-    const { outcome } = await replyNotebookPrivateFirst({
+    const { outcome, req } = await replyNotebookPrivateFirst({
       connection: conn,
       client: client as never,
       directory: DIR,
       requestID: RID,
       result: RESULT,
     })
-    expect(outcome).toEqual({ kind: "settled", stale: false })
+    expect(outcome.kind).toBe("unresolved")
+    if (outcome.kind === "unresolved") {
+      expect(outcome.requestID).toBe(RID)
+      expect(outcome.opId).toBe(req.opId)
+      expect(outcome.reason).toBe("timeout")
+    }
     expect(cancelled).toBe(1)
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(0)
   })
 
   test("list returns private items per directory with zero SDK", async () => {

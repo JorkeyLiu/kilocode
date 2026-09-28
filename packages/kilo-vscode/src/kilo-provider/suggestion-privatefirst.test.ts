@@ -240,7 +240,7 @@ describe("suggestion private-first", () => {
     expect(messages).toContainEqual({ type: "suggestionError", requestID: RID })
   })
 
-  test("invalid, ambiguous each take exactly one SDK with same tuple", async () => {
+  test("invalid, ambiguous each surface unresolved with zero SDK and one reobserve", async () => {
     const cases: Array<{ label: string; make: (req: Record<string, unknown>) => unknown }> = [
       { label: "invalid", make: (req) => ({ ...terminalAccept(req), index: 9 }) },
       { label: "ambiguous", make: (req) => vague(req) },
@@ -248,7 +248,7 @@ describe("suggestion private-first", () => {
     for (const entry of cases) {
       const seen: unknown[] = []
       let sdk = 0
-      const params: unknown[] = []
+      let lists = 0
       const conn = {
         isPrivateAvailable: () => true,
         privateSuggestionAcceptWithHandle: (req: Record<string, unknown>) => {
@@ -256,19 +256,85 @@ describe("suggestion private-first", () => {
           return { id: 1, promise: Promise.resolve(entry.make(req)), cancel: () => true }
         },
       } as unknown as SuggestionContext["connection"]
-      const { fake, accepts } = base({ conn })
-      const client = fake.client as unknown as { suggestion: { accept: (a: unknown) => Promise<unknown> } }
+      const { fake, accepts, messages } = base({ conn })
+      const client = fake.client as unknown as {
+        suggestion: { accept: (a: unknown) => Promise<unknown>; list: (a: unknown) => Promise<unknown> }
+      }
       const orig = client.suggestion.accept
       client.suggestion.accept = async (a: unknown) => {
         sdk += 1
-        params.push(a)
         return orig(a)
       }
+      const origList = client.suggestion.list
+      client.suggestion.list = async (a: unknown) => {
+        lists += 1
+        return origList(a)
+      }
+      const spy = spyOn(console, "error").mockImplementation(() => {})
       await handleSuggestionAccept(fake, RID, 0, "ses-root")
-      expect([entry.label, sdk]).toEqual([entry.label, 1])
+      spy.mockRestore()
+      expect([entry.label, sdk]).toEqual([entry.label, 0])
       expect([entry.label, seen.length]).toEqual([entry.label, 1])
-      expect(params[0]).toEqual({ requestID: RID, index: 0, directory: DIR })
-      expect(accepts).toHaveLength(1)
+      expect([entry.label, accepts]).toEqual([entry.label, []])
+      expect([entry.label, lists]).toEqual([entry.label, 1])
+      expect(messages).toContainEqual({ type: "suggestionError", requestID: RID })
+      expect(messages).not.toContainEqual({ type: "suggestionResolved", requestID: RID })
+    }
+  })
+
+  test("transport and closed each surface unresolved with zero SDK and kept identity", async () => {
+    for (const label of ["transport", "closed"] as const) {
+      let sdk = 0
+      let lists = 0
+      const conn = {
+        isPrivateAvailable: () => true,
+        privateSuggestionAcceptWithHandle: () => ({
+          id: 1,
+          promise: Promise.reject(new Error(label === "closed" ? "Peer closed" : "transport error")),
+          cancel: () => true,
+        }),
+      } as unknown as SuggestionContext["connection"]
+      const { fake, messages, accepts } = base({ conn })
+      const client = fake.client as unknown as {
+        suggestion: { accept: (a: unknown) => Promise<unknown>; list: (a: unknown) => Promise<unknown> }
+      }
+      const orig = client.suggestion.accept
+      client.suggestion.accept = async (a: unknown) => {
+        sdk += 1
+        return orig(a)
+      }
+      const origList = client.suggestion.list
+      client.suggestion.list = async (a: unknown) => {
+        lists += 1
+        return origList(a)
+      }
+      const spy = spyOn(console, "error").mockImplementation(() => {})
+      await handleSuggestionAccept(fake, RID, 0, "ses-root")
+      spy.mockRestore()
+      expect([label, sdk]).toEqual([label, 0])
+      expect([label, accepts]).toEqual([label, []])
+      expect([label, lists]).toEqual([label, 1])
+      expect(messages).toContainEqual({ type: "suggestionError", requestID: RID })
+      expect(messages).not.toContainEqual({ type: "suggestionResolved", requestID: RID })
+    }
+  })
+
+  test("unresolved carries stable opId and requestID", async () => {
+    const { acceptSuggestionPrivateFirst } = await import("./suggestion-privatefirst")
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateSuggestionAcceptWithHandle: (req: Record<string, unknown>) => ({
+        id: 1,
+        promise: Promise.resolve(vague(req)),
+        cancel: () => true,
+      }),
+    } as unknown as SuggestionContext["connection"]
+    const out = await acceptSuggestionPrivateFirst({ connection: conn, directory: DIR, requestID: RID, index: 0 })
+    expect(out.outcome.kind).toBe("unresolved")
+    if (out.outcome.kind === "unresolved") {
+      expect(out.outcome.opId.startsWith(`suggestion:${RID}:`)).toBeTrue()
+      expect(out.outcome.requestID).toBe(RID)
+      expect(out.outcome.opId).toBe(out.req.opId)
     }
   })
 
@@ -311,9 +377,10 @@ describe("suggestion private-first", () => {
     }
   })
 
-  test("timeout cancels exact id and takes exactly one SDK", async () => {
+  test("timeout cancels exact id and surfaces unresolved with zero SDK", async () => {
     let cancelled: number | null = null
     let sdk = 0
+    let lists = 0
     const conn = {
       isPrivateAvailable: () => true,
       privateSuggestionDismissWithHandle: () => ({
@@ -325,37 +392,54 @@ describe("suggestion private-first", () => {
         },
       }),
     } as unknown as SuggestionContext["connection"]
-    const { fake } = base({ conn })
-    const client = fake.client as unknown as { suggestion: { dismiss: (a: unknown) => Promise<unknown> } }
+    const { fake, messages, dismisses } = base({ conn })
+    const client = fake.client as unknown as {
+      suggestion: { dismiss: (a: unknown) => Promise<unknown>; list: (a: unknown) => Promise<unknown> }
+    }
     const orig = client.suggestion.dismiss
     client.suggestion.dismiss = async (a: unknown) => {
       sdk += 1
       return orig(a)
     }
+    const origList = client.suggestion.list
+    client.suggestion.list = async (a: unknown) => {
+      lists += 1
+      return origList(a)
+    }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     await handleSuggestionDismiss(fake, RID, "ses-root")
-    expect(sdk).toBe(1)
+    spy.mockRestore()
+    expect(sdk).toBe(0)
+    expect(dismisses).toHaveLength(0)
+    expect(lists).toBe(1)
     expect(cancelled).toBe(42)
+    expect(messages).toContainEqual({ type: "suggestionError", requestID: RID })
+    expect(messages).not.toContainEqual({ type: "suggestionResolved", requestID: RID })
   })
 
-  test("fallback 404 preserves stale resolved semantics", async () => {
+  test("fallback 404 preserves stale resolved semantics on proven pre-send", async () => {
     const notFoundErr = new Error("missing", { cause: { status: 404, body: { name: "NotFoundError" } } })
-    const vagueConn = {
-      isPrivateAvailable: () => true,
-      privateSuggestionAcceptWithHandle: (req: Record<string, unknown>) => ({
-        id: 1,
-        promise: Promise.resolve(vague(req)),
-        cancel: () => true,
-      }),
-    } as unknown as SuggestionContext["connection"]
-    const { fake, messages } = base({ conn: vagueConn, acceptError: notFoundErr })
+    const unavailable = { isPrivateAvailable: () => false } as unknown as SuggestionContext["connection"]
+    const { fake, messages } = base({ conn: unavailable, acceptError: notFoundErr })
     const spy = spyOn(console, "error").mockImplementation(() => {})
     await handleSuggestionAccept(fake, RID, 0, "ses-root")
     spy.mockRestore()
     expect(messages).toContainEqual({ type: "suggestionResolved", requestID: RID })
   })
 
-  test("fallback non-404 posts error", async () => {
-    const vagueConn = {
+  test("fallback non-404 posts error on proven pre-send", async () => {
+    const unavailable = { isPrivateAvailable: () => false } as unknown as SuggestionContext["connection"]
+    const { fake, messages } = base({ conn: unavailable, dismissError: new Error("boom") })
+    const spy = spyOn(console, "error").mockImplementation(() => {})
+    await handleSuggestionDismiss(fake, RID, "ses-root")
+    spy.mockRestore()
+    expect(messages).toContainEqual({ type: "suggestionError", requestID: RID })
+  })
+
+  test("unresolved re-observes pending once with absence never treated as acceptance", async () => {
+    let lists = 0
+    let sdk = 0
+    const conn = {
       isPrivateAvailable: () => true,
       privateSuggestionDismissWithHandle: (req: Record<string, unknown>) => ({
         id: 1,
@@ -363,10 +447,27 @@ describe("suggestion private-first", () => {
         cancel: () => true,
       }),
     } as unknown as SuggestionContext["connection"]
-    const { fake, messages } = base({ conn: vagueConn, dismissError: new Error("boom") })
+    const { fake, messages, dismisses } = base({ conn })
+    const client = fake.client as unknown as {
+      suggestion: { dismiss: (a: unknown) => Promise<unknown>; list: (a: unknown) => Promise<unknown> }
+    }
+    const origDismiss = client.suggestion.dismiss
+    client.suggestion.dismiss = async (a: unknown) => {
+      sdk += 1
+      return origDismiss(a)
+    }
+    const origList = client.suggestion.list
+    client.suggestion.list = async (a: unknown) => {
+      lists += 1
+      return origList(a)
+    }
     const spy = spyOn(console, "error").mockImplementation(() => {})
     await handleSuggestionDismiss(fake, RID, "ses-root")
     spy.mockRestore()
+    expect(sdk).toBe(0)
+    expect(dismisses).toHaveLength(0)
+    expect(lists).toBe(1)
     expect(messages).toContainEqual({ type: "suggestionError", requestID: RID })
+    expect(messages).not.toContainEqual({ type: "suggestionResolved", requestID: RID })
   })
 })

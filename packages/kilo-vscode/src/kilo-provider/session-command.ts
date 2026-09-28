@@ -4,6 +4,8 @@ import type { KiloConnectionService } from "../services/cli-backend/connection-s
 import { canonicalCommandOpId, validateCommandResult } from "../services/cli-backend/serve-private-command-contract"
 import type { CommandContractRequest } from "../services/cli-backend/serve-private-command-contract"
 import { submitPrivateFirst } from "./session-submit"
+import { tryPrivateOperationExact } from "./session-operation-private"
+import type { PrivateSessionReader } from "./options"
 
 export function buildCommandIdentity(messageId: string): { opId: string; idempotencyKey: string; requestId: string } {
   const opId = canonicalCommandOpId(messageId)
@@ -28,16 +30,18 @@ export interface CommandPrivateFirstInput {
   variant?: string
   parts?: Array<Record<string, unknown>>
   snapshotInitialization?: "wait"
+  privateReader?: PrivateSessionReader | null
 }
 
 type SdkResult = { data?: unknown; error?: unknown; response?: Response }
 
 // Single-attempt command boundary used by KiloProvider.handleSendCommand.
-// Calls commandSessionPrivateFirst exactly once (at most one private attempt
-// plus at most one same-identity SDK fallback) and never retries on
-// retryable SDK status. SDK error is thrown as-is so the caller posts
-// sendMessageFailed; generation status stays owned by CLI runtime
-// `session.status`/`session.error` — this seam never posts local status.
+// Accepted-only private-first: exactly one private attempt; validated
+// retryable fence and pre-send no-private-available take exactly one SDK
+// fallback; transport uncertainty re-observes the exact op once with zero SDK.
+// SDK error is thrown as-is so the caller posts sendMessageFailed; generation
+// status stays owned by CLI runtime `session.status`/`session.error` — this
+// seam never posts local status.
 export async function sendCommandOnce(opts: CommandPrivateFirstInput): Promise<void> {
   const res = (await commandSessionPrivateFirst(opts)) as SdkResult
   if (res?.error) throw res.error
@@ -111,5 +115,16 @@ export async function commandSessionPrivateFirst(opts: CommandPrivateFirstInput)
     },
     validate: (result: unknown) => validateCommandResult(result, privateReq),
     fallback: sdkFallback,
+    messageId: messageID,
+    observeExact: async () => {
+      const attempt = await tryPrivateOperationExact(opts.privateReader ?? null, {
+        directory: opts.directory,
+        sessionId: opts.sessionId,
+        opId,
+      })
+      if (attempt.kind === "found") return { kind: "found" as const, operation: { opId: attempt.operation.opId, outcome: attempt.operation.outcome, code: attempt.operation.code, message: attempt.operation.message } }
+      if (attempt.kind === "terminal") return { kind: "terminal" as const, error: attempt.error }
+      return { kind: "unavailable" as const }
+    },
   })
 }

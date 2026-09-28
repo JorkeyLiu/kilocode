@@ -77,7 +77,7 @@ function forkCtx(overrides: Partial<ForkContext> = {}): ForkContext {
   } as unknown as ForkContext
 }
 
-describe("forkSessionPrivateFirst private-first with single SDK fallback", () => {
+describe("forkSessionPrivateFirst accepted-only with exact re-observe", () => {
   it("private succeeded returns without SDK mutation", async () => {
     const sdk = mock(async () => ({ data: makeSdkSession(), error: undefined }))
     const client = { session: { fork: sdk } } as unknown as KiloClient
@@ -92,8 +92,10 @@ describe("forkSessionPrivateFirst private-first with single SDK fallback", () =>
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    const sess = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
-    expect((sess as unknown as { id: string }).id).toBe("ses_forked")
+    const out = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+    expect(out.kind).toBe("session")
+    if (out.kind !== "session") throw new Error("expected session")
+    expect((out.session as unknown as { id: string }).id).toBe("ses_forked")
     expect(sdk).toHaveBeenCalledTimes(0)
     expect(capturedReq).toBeTruthy()
     const req = capturedReq as Record<string, unknown>
@@ -110,14 +112,13 @@ describe("forkSessionPrivateFirst private-first with single SDK fallback", () =>
     ["throw", () => { throw new Error("transport") }],
     ["capability absence", () => { throw new Error("Private peer missing session/fork capability") }],
     ["closed drift", () => { throw Object.assign(new Error("Peer closed"), { code: -32603 }) }],
-  ])("fallback class %s calls SDK once with same tuple", async (_, maker) => {
+  ])("uncertain class %s re-observes once with zero SDK and explicit unresolved", async (_, maker) => {
     const sdk = mock(async () => ({ data: makeSdkSession(), error: undefined }))
     const client = { session: { fork: sdk } } as unknown as KiloClient
-    let privateReq: Record<string, unknown> | null = null
+    let operationCalls = 0
     const conn = {
       isPrivateAvailable: () => true,
       privateForkWithHandle: (req: unknown) => {
-        privateReq = req as Record<string, unknown>
         try {
           const res = (maker as (r: never) => unknown)(req as never)
           return { id: 2, promise: Promise.resolve(res), cancel: () => true }
@@ -129,42 +130,57 @@ describe("forkSessionPrivateFirst private-first with single SDK fallback", () =>
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    const sess = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", messageId: "msg_abc123" })
-    expect((sess as unknown as { id: string }).id).toBe("ses_sdk_fork")
-    expect(sdk).toHaveBeenCalledTimes(1)
-    const sdkInput = sdk.mock.calls[0]![0] as Record<string, unknown>
-    expect(sdkInput.opId).toBe(privateReq?.opId)
-    expect(sdkInput.idempotencyKey).toBe(privateReq?.idempotencyKey)
-    expect(sdkInput.requestId).toBe(privateReq?.requestId)
-    expect(String(sdkInput.opId).startsWith("fork:ses_src:")).toBeTrue()
-    expect(sdkInput.opId).toBe(sdkInput.idempotencyKey)
-    expect((sdkInput.context as Record<string, unknown>).directory).toBe("/repo")
-    expect((sdkInput.context as Record<string, unknown>).sessionId).toBe("ses_src")
-    expect((sdkInput.context as Record<string, unknown>).parentSessionId).toBeNull()
-    expect(sdkInput.context).toEqual((privateReq as Record<string, unknown>).context)
+    const reader = {
+      isEnabled: () => true,
+      isStarted: () => true,
+      list: async () => ({}),
+      get: async () => ({ v: "1.0", status: "not_found" }),
+      operation: async () => {
+        operationCalls += 1
+        return { v: "1.0", status: "not_found" }
+      },
+    } as unknown as never
+    let code = ""
+    try {
+      await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", messageId: "msg_abc123", privateReader: reader })
+    } catch (e) {
+      code = (e as { code?: string }).code ?? ""
+    }
+    expect(code).toBe("fork.unresolved")
+    expect(sdk).toHaveBeenCalledTimes(0)
+    expect(operationCalls).toBe(1)
   })
 
-  it("timeout fallback calls SDK once with same tuple", async () => {
+  it("uncertain succeeded re-observed with child reference returns pending with zero SDK", async () => {
     const sdk = mock(async () => ({ data: makeSdkSession(), error: undefined }))
     const client = { session: { fork: sdk } } as unknown as KiloClient
-    let privateReq: Record<string, unknown> | null = null
     const conn = {
       isPrivateAvailable: () => true,
-      privateForkWithHandle: (req: unknown) => {
-        privateReq = req as Record<string, unknown>
-        return { id: 3, promise: new Promise(() => {}), cancel: () => true }
-      },
+      privateForkWithHandle: () => ({ id: 3, promise: Promise.reject(new Error("peer closed")), cancel: () => true }),
       peekPrivatePeerNextId: () => 3,
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    const sess = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
-    expect((sess as unknown as { id: string }).id).toBe("ses_sdk_fork")
-    expect(sdk).toHaveBeenCalledTimes(1)
-    const sdkInput = sdk.mock.calls[0]![0] as Record<string, unknown>
-    expect(sdkInput.opId).toBe(privateReq?.opId)
-    expect(sdkInput.idempotencyKey).toBe(privateReq?.idempotencyKey)
-    expect(sdkInput.requestId).toBe(privateReq?.requestId)
+    const reader = {
+      isEnabled: () => true,
+      isStarted: () => true,
+      list: async () => ({}),
+      get: async (input: { directory: string; sessionId: string }) => ({
+        v: "1.0",
+        status: "found",
+        session: { id: input.sessionId, title: "t", parentID: "ses_src", directory: "/repo", projectID: "p", createdAt: 1, updatedAt: 2 },
+      }),
+      operation: async (input: { directory: string; sessionId: string; opId: string }) => ({
+        v: "1.0",
+        status: "found",
+        operation: { opId: input.opId, outcome: "succeeded", code: "fork.succeeded", message: "fork succeeded", time: 1, forkedSessionId: "ses_fork_child1" },
+      }),
+    } as unknown as never
+    const out = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: reader })
+    expect(out.kind).toBe("pending")
+    if (out.kind !== "pending") throw new Error("expected pending")
+    expect(out.childId).toBe("ses_fork_child1")
+    expect(sdk).toHaveBeenCalledTimes(0)
   })
 
   it("private unavailable falls back to exactly one SDK with durable tuple", async () => {
@@ -174,8 +190,10 @@ describe("forkSessionPrivateFirst private-first with single SDK fallback", () =>
       isPrivateAvailable: () => false,
       privateForkWithHandle: mock(() => { throw new Error("unavailable") }),
     } as unknown as never
-    const sess = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
-    expect((sess as unknown as { id: string }).id).toBe("ses_sdk_fork")
+    const out = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+    expect(out.kind).toBe("session")
+    if (out.kind !== "session") throw new Error("expected session")
+    expect((out.session as unknown as { id: string }).id).toBe("ses_sdk_fork")
     expect(sdk).toHaveBeenCalledTimes(1)
     const sdkInput = sdk.mock.calls[0]![0] as Record<string, unknown>
     expect(String(sdkInput.opId).startsWith("fork:ses_src:")).toBeTrue()
@@ -199,8 +217,10 @@ describe("forkSessionPrivateFirst private-first with single SDK fallback", () =>
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    const sess = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
-    expect((sess as unknown as { id: string }).id).toBe("ses_sdk_fork")
+    const out = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+    expect(out.kind).toBe("session")
+    if (out.kind !== "session") throw new Error("expected session")
+    expect((out.session as unknown as { id: string }).id).toBe("ses_sdk_fork")
     expect(sdk).toHaveBeenCalledTimes(1)
     const sdkInput = sdk.mock.calls[0]![0] as Record<string, unknown>
     expect(sdkInput.opId).toBe(privateReq?.opId)

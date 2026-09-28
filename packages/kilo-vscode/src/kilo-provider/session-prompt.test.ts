@@ -201,147 +201,153 @@ describe("prompt private-first", () => {
     expect(sdk.agent).toBe("build")
   })
 
-  test("unavailable/invalid/ambiguous/closed/timeout each fallback exactly once same message with recoverable private retry", async () => {
-    const cases: Array<{ name: string; conn: unknown; privateCalls?: () => number }> = []
-    const mkSdk = () => {
-      let n = 0
-      const seen: unknown[] = []
-      const client = {
-        session: {
-          promptAsync: async (input: Record<string, unknown>) => {
-            n += 1
-            seen.push(input)
-            return { data: null }
-          },
-        },
-      }
-      return { client, count: () => n, seen }
-    }
+  test("unavailable falls back once; uncertain re-observes exact with zero SDK", async () => {
+    // pre-send unavailable -> exactly one SDK fallback
     {
-      const s = mkSdk()
+      let n = 0
+      const client = { session: { promptAsync: async (input: Record<string, unknown>) => { n += 1; return { data: null } } } }
       const conn = { isPrivateAvailable: () => false }
       await promptSessionPrivateFirst({
-        client: s.client as never,
+        client: client as never,
         connection: conn as unknown as KiloConnectionService,
         sessionId: SID,
         directory: DIR,
         messageID: MID,
         parts: PARTS as unknown as Array<Record<string, unknown>>,
       })
-      expect(s.count()).toBe(1)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "unavailable", conn })
+      expect(n).toBe(1)
     }
+    // invalid wire -> re-observe in-flight returns accepted with zero SDK
     {
-      const s = mkSdk()
-      let privCalls = 0
+      let sdk = 0
+      let obs = 0
+      const client = { session: { promptAsync: async () => { sdk += 1; return { data: null } } } }
       const conn = {
         isPrivateAvailable: () => true,
-        privatePromptWithHandle: (req: Record<string, unknown>) => {
-          privCalls += 1
-          return {
-            id: privCalls,
-            promise: Promise.resolve({ bogus: true, requestId: req.requestId, opId: req.opId, op: "session/prompt", idempotencyKey: req.idempotencyKey }),
-            cancel: () => true,
-          }
-        },
+        privatePromptWithHandle: (req: Record<string, unknown>) => ({
+          id: 1,
+          promise: Promise.resolve({ bogus: true, requestId: req.requestId, opId: req.opId, op: "session/prompt", idempotencyKey: req.idempotencyKey }),
+          cancel: () => true,
+        }),
       }
-      await promptSessionPrivateFirst({
-        client: s.client as never,
+      const out = await promptSessionPrivateFirst({
+        client: client as never,
         connection: conn as unknown as KiloConnectionService,
         sessionId: SID,
         directory: DIR,
         messageID: MID,
         parts: PARTS as unknown as Array<Record<string, unknown>>,
+        privateReader: {
+          isEnabled: () => true,
+          isStarted: () => true,
+          list: async () => ({}),
+          get: async () => ({}),
+          operation: async () => { obs += 1; return { v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "in-flight", code: "prompt.inflight", message: "prompt accepted", time: 1 } } },
+        },
       })
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      cases.push({ name: "invalid", conn })
+      expect(out.error).toBeUndefined()
+      expect(sdk).toBe(0)
+      expect(obs).toBe(1)
     }
+    // ambiguous -> re-observe absent returns unresolved with stable messageId and zero SDK
     {
-      const s = mkSdk()
-      let privCalls = 0
+      let sdk = 0
+      const client = { session: { promptAsync: async () => { sdk += 1; return { data: null } } } }
       const conn = {
         isPrivateAvailable: () => true,
-        privatePromptWithHandle: (req: Record<string, unknown>) => {
-          privCalls += 1
-          return { id: privCalls, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
-        },
+        privatePromptWithHandle: (req: Record<string, unknown>) => ({ id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }),
       }
-      await promptSessionPrivateFirst({
-        client: s.client as never,
-        connection: conn as unknown as KiloConnectionService,
-        sessionId: SID,
-        directory: DIR,
-        messageID: MID,
-        parts: PARTS as unknown as Array<Record<string, unknown>>,
-      })
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      cases.push({ name: "ambiguous", conn })
+      let thrown: unknown = null
+      try {
+        await promptSessionPrivateFirst({
+          client: client as never,
+          connection: conn as unknown as KiloConnectionService,
+          sessionId: SID,
+          directory: DIR,
+          messageID: MID,
+          parts: PARTS as unknown as Array<Record<string, unknown>>,
+          privateReader: {
+            isEnabled: () => true,
+            isStarted: () => true,
+            list: async () => ({}),
+            get: async () => ({}),
+            operation: async () => ({ v: "1.0", status: "not_found" }),
+          },
+        })
+      } catch (e) { thrown = e }
+      expect((thrown as { code?: string }).code).toBe("prompt.unresolved")
+      expect((thrown as Error).message).toContain(MID)
+      expect(sdk).toBe(0)
     }
+    // peer-closed -> re-observe failed surfaces runtime-owned failure with zero SDK
     {
-      const s = mkSdk()
-      let privCalls = 0
+      let sdk = 0
+      const client = { session: { promptAsync: async () => { sdk += 1; return { data: null } } } }
       const conn = {
         isPrivateAvailable: () => true,
-        privatePromptWithHandle: () => {
-          privCalls += 1
-          throw new Error("Peer closed")
-        },
+        privatePromptWithHandle: () => { throw new Error("Peer closed") },
       }
-      await promptSessionPrivateFirst({
-        client: s.client as never,
-        connection: conn as unknown as KiloConnectionService,
-        sessionId: SID,
-        directory: DIR,
-        messageID: MID,
-        parts: PARTS as unknown as Array<Record<string, unknown>>,
-      })
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      cases.push({ name: "closed", conn })
+      let thrown: unknown = null
+      try {
+        await promptSessionPrivateFirst({
+          client: client as never,
+          connection: conn as unknown as KiloConnectionService,
+          sessionId: SID,
+          directory: DIR,
+          messageID: MID,
+          parts: PARTS as unknown as Array<Record<string, unknown>>,
+          privateReader: {
+            isEnabled: () => true,
+            isStarted: () => true,
+            list: async () => ({}),
+            get: async () => ({}),
+            operation: async () => ({ v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "failed", code: "E_RT", message: "rt boom", time: 1 } }),
+          },
+        })
+      } catch (e) { thrown = e }
+      expect((thrown as { code?: string }).code).toBe("E_RT")
+      expect(sdk).toBe(0)
     }
+    // timeout -> re-observe succeeded returns accepted with exact-cancel and zero SDK
     {
-      const s = mkSdk()
+      let sdk = 0
       let cancelled = 0
-      let privCalls = 0
+      const client = { session: { promptAsync: async () => { sdk += 1; return { data: null } } } }
       const conn = {
         isPrivateAvailable: () => true,
-        privatePromptWithHandle: () => {
-          privCalls += 1
-          return { id: 9 + privCalls, promise: new Promise(() => {}), cancel: () => { cancelled += 1; return true } }
-        },
+        privatePromptWithHandle: () => ({ id: 10, promise: new Promise(() => {}), cancel: () => { cancelled += 1; return true } }),
       }
-      await promptSessionPrivateFirst({
-        client: s.client as never,
+      const out = await promptSessionPrivateFirst({
+        client: client as never,
         connection: conn as unknown as KiloConnectionService,
         sessionId: SID,
         directory: DIR,
         messageID: MID,
         parts: PARTS as unknown as Array<Record<string, unknown>>,
+        privateReader: {
+          isEnabled: () => true,
+          isStarted: () => true,
+          list: async () => ({}),
+          get: async () => ({}),
+          operation: async () => ({ v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "succeeded", code: "ok", message: "ok", time: 1 } }),
+        },
       })
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      expect(cancelled).toBe(2)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "timeout", conn })
+      expect(out.error).toBeUndefined()
+      expect(sdk).toBe(0)
+      expect(cancelled).toBe(1)
     }
-    expect(cases.map((c) => c.name)).toEqual(["unavailable", "invalid", "ambiguous", "closed", "timeout"])
   }, 10000)
 
-  test("recoverable first failure then private success uses same tuple zero SDK", async () => {
-    const seenPrivate: unknown[] = []
+  test("ambiguous then exact in-flight returns accepted with one private zero SDK", async () => {
+    let priv = 0
     let sdk = 0
-    let attempt = 0
+    let obs = 0
     const client = { session: { promptAsync: async () => { sdk += 1; return { data: null } } } }
     const connection = {
       isPrivateAvailable: () => true,
       privatePromptWithHandle: (req: Record<string, unknown>) => {
-        seenPrivate.push(req)
-        attempt += 1
-        if (attempt === 1) return { id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
-        return { id: 2, promise: Promise.resolve(succeededFor(req)), cancel: () => true }
+        priv += 1
+        return { id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
       },
     }
     const out = await promptSessionPrivateFirst({
@@ -351,25 +357,27 @@ describe("prompt private-first", () => {
       directory: DIR,
       messageID: MID,
       parts: PARTS as unknown as Array<Record<string, unknown>>,
+      privateReader: {
+        isEnabled: () => true,
+        isStarted: () => true,
+        list: async () => ({}),
+        get: async () => ({}),
+        operation: async () => { obs += 1; return { v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "in-flight", code: "prompt.inflight", message: "prompt accepted", time: 1 } } },
+      },
     })
     expect(out.error).toBeUndefined()
     expect(sdk).toBe(0)
-    expect(seenPrivate).toHaveLength(2)
-    expect(seenPrivate[0]).toBe(seenPrivate[1])
-    expect((seenPrivate[0] as Record<string, unknown>).opId).toBe(`prompt:${MID}`)
+    expect(priv).toBe(1)
+    expect(obs).toBe(1)
   })
 
-  test("second terminal after recoverable retry throws zero SDK", async () => {
+  test("ambiguous then exact failed surfaces runtime failure with zero SDK", async () => {
     let sdk = 0
-    let attempt = 0
+    let obs = 0
     const client = { session: { promptAsync: async () => { sdk += 1; return { data: null } } } }
     const connection = {
       isPrivateAvailable: () => true,
-      privatePromptWithHandle: (req: Record<string, unknown>) => {
-        attempt += 1
-        if (attempt === 1) return { id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
-        return { id: 2, promise: Promise.resolve(terminalFor(req, "validation.failed")), cancel: () => true }
-      },
+      privatePromptWithHandle: (req: Record<string, unknown>) => ({ id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }),
     }
     let thrown: unknown = null
     try {
@@ -380,11 +388,18 @@ describe("prompt private-first", () => {
         directory: DIR,
         messageID: MID,
         parts: PARTS as unknown as Array<Record<string, unknown>>,
+        privateReader: {
+          isEnabled: () => true,
+          isStarted: () => true,
+          list: async () => ({}),
+          get: async () => ({}),
+          operation: async () => { obs += 1; return { v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "failed", code: "E_X", message: "x boom", time: 1 } } },
+        },
       })
     } catch (e) { thrown = e }
-    expect((thrown as { code?: string }).code).toBe("validation.failed")
+    expect((thrown as { code?: string }).code).toBe("E_X")
     expect(sdk).toBe(0)
-    expect(attempt).toBe(2)
+    expect(obs).toBe(1)
   })
 
   test("concurrent same messageID reuses prompt:<messageId> tuple", async () => {

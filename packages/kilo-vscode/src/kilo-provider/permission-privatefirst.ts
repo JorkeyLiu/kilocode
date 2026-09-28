@@ -30,6 +30,7 @@ export type PermissionPrivateOutcome =
   | { kind: "terminal" }
   | { kind: "terminal-failure"; code: PermissionFailureCode }
   | { kind: "fallback"; reason: string }
+  | { kind: "unresolved"; reason: string; opId: string; requestID: string }
 
 type Handle = { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
 
@@ -186,14 +187,40 @@ function expired(handle: Handle | null, opId: string): void {
   }
 }
 
+// Accepted-only: fallback is strictly proven pre-send (no private request was
+// dispatched). Any after-send uncertainty (ambiguous/timeout/closed/invalid
+// wire) is unresolved with the stable opId/requestID — never SDK fallback.
+function provenPreSend(reason: string): boolean {
+  if (reason === "missing-capability" || reason === "unavailable") return true
+  const low = reason.toLowerCase()
+  if (low.includes("missing") && low.includes("capability")) return true
+  if (low.includes("private peer missing")) return true
+  if (low.includes("private peer unavailable")) return true
+  return false
+}
+
+function unresolvedOf(opId: string, requestID: string, reason: string): PermissionPrivateOutcome {
+  return { kind: "unresolved", reason: reason.slice(0, 200), opId, requestID }
+}
+
+function unresolvedFromSendError(opId: string, requestID: string, err: unknown): PermissionPrivateOutcome {
+  const msg = err instanceof Error ? err.message : String(err)
+  const low = msg.toLowerCase()
+  if (low.includes("peer closed") || low.includes("peer disposed") || msg.includes("-32603")) {
+    return unresolvedOf(opId, requestID, `closed: ${msg.slice(0, 120)}`)
+  }
+  if (msg.includes("private permission timeout")) return unresolvedOf(opId, requestID, "timeout")
+  return unresolvedOf(opId, requestID, msg.slice(0, 200))
+}
+
 function settleSave(req: PermissionSaveContractRequest, result: unknown): PermissionPrivateOutcome {
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, req.context.requestID, "ambiguous")
   if (kind === "terminal") {
     try {
       validatePermissionSaveResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "terminal" }
   }
@@ -201,21 +228,21 @@ function settleSave(req: PermissionSaveContractRequest, result: unknown): Permis
     try {
       const out = validatePermissionTerminalFailure(result, req)
       return { kind: "terminal-failure", code: out.failure.code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, req.context.requestID, "invalid")
 }
 
 function settleReply(req: PermissionReplyContractRequest, result: unknown): PermissionPrivateOutcome {
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, req.context.requestID, "ambiguous")
   if (kind === "terminal") {
     try {
       validatePermissionReplyResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "terminal" }
   }
@@ -223,11 +250,11 @@ function settleReply(req: PermissionReplyContractRequest, result: unknown): Perm
     try {
       const out = validatePermissionTerminalFailure(result, req)
       return { kind: "terminal-failure", code: out.failure.code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, req.context.requestID, "invalid")
 }
 
 export function buildPermissionListIdentity(): { opId: string; idempotencyKey: string; requestId: string } {
@@ -403,13 +430,16 @@ export async function savePermissionPrivateFirst(opts: {
     return { outcome: { kind: "fallback", reason: "unavailable" }, req }
   }
   const acq = acquireSave(conn, req)
-  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { outcome: { kind: "fallback", reason: acq.reason }, req }
+    return { outcome: unresolvedOf(req.opId, req.context.requestID, acq.reason), req }
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+    return { outcome: unresolvedFromSendError(req.opId, req.context.requestID, err), req }
   }
   return { outcome: settleSave(req, result), req }
 }
@@ -445,13 +475,16 @@ export async function replyPermissionPrivateFirst(opts: {
     return { outcome: { kind: "fallback", reason: "unavailable" }, req }
   }
   const acq = acquireReply(conn, req)
-  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { outcome: { kind: "fallback", reason: acq.reason }, req }
+    return { outcome: unresolvedOf(req.opId, req.context.requestID, acq.reason), req }
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+    return { outcome: unresolvedFromSendError(req.opId, req.context.requestID, err), req }
   }
   return { outcome: settleReply(req, result), req }
 }

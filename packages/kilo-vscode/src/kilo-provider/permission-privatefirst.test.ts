@@ -189,7 +189,7 @@ describe("permission private-first", () => {
     expect(messages).not.toContainEqual({ type: "permissionError", permissionID: PID })
   })
 
-  test("save ambiguous falls back to exactly one SDK save then private reply", async () => {
+  test("save ambiguous surfaces unresolved with zero SDK and no reply", async () => {
     const order: string[] = []
     const conn = {
       isPrivateAvailable: () => true,
@@ -197,20 +197,24 @@ describe("permission private-first", () => {
         order.push("private-save")
         return { id: 1, promise: Promise.resolve(vague(req)), cancel: () => true }
       },
-      privatePermissionReplyWithHandle: (req: Record<string, unknown>) => {
+      privatePermissionReplyWithHandle: () => {
         order.push("private-reply")
-        return { id: 2, promise: Promise.resolve(terminalReply(req, "once")), cancel: () => true }
+        throw new Error("reply must not execute after unresolved save")
       },
     } as unknown as PermissionContext["connection"]
-    const { fake, saves, replies } = base({ origin: DIR, conn })
+    const { fake, messages, saves, replies, dirs } = base({ origin: DIR, conn, pending: {} })
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     await handlePermissionResponse(fake, PID, "ses-root", "once", ["npm install lodash"], [])
-    expect(order).toEqual(["private-save", "private-reply"])
-    expect(saves).toHaveLength(1)
+    spy.mockRestore()
+    expect(order).toEqual(["private-save"])
+    expect(saves).toHaveLength(0)
     expect(replies).toHaveLength(0)
-    expect(saves[0]).toEqual({ requestID: PID, directory: DIR, approvedAlways: ["npm install lodash"], deniedAlways: [] })
+    expect(dirs.get(PID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
+    expect(messages).not.toContainEqual({ type: "permissionError", permissionID: PID, stale: true })
   })
 
-  test("reply ambiguous falls back to exactly one SDK reply", async () => {
+  test("reply ambiguous surfaces unresolved with zero SDK", async () => {
     const conn = {
       isPrivateAvailable: () => true,
       privatePermissionReplyWithHandle: (req: Record<string, unknown>) => ({
@@ -219,11 +223,14 @@ describe("permission private-first", () => {
         cancel: () => true,
       }),
     } as unknown as PermissionContext["connection"]
-    const { fake, saves, replies } = base({ origin: DIR, conn })
+    const { fake, messages, saves, replies, dirs } = base({ origin: DIR, conn, pending: {} })
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     await handlePermissionResponse(fake, PID, "ses-root", "once", [], [])
+    spy.mockRestore()
     expect(saves).toHaveLength(0)
-    expect(replies).toHaveLength(1)
-    expect(replies[0]).toEqual({ requestID: PID, reply: "once", directory: DIR })
+    expect(replies).toHaveLength(0)
+    expect(dirs.get(PID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
   })
 
   test("save terminal not_found short-circuits reply with stale recovery and zero SDK", async () => {
@@ -293,7 +300,7 @@ describe("permission private-first", () => {
     expect(messages).toContainEqual({ type: "permissionError", permissionID: PID, stale: true })
   })
 
-  test("timeout cancels the exact pending and falls back once", async () => {
+  test("timeout cancels the exact pending and surfaces unresolved with zero SDK", async () => {
     let cancelled: string[] = []
     const conn = {
       isPrivateAvailable: () => true,
@@ -306,10 +313,15 @@ describe("permission private-first", () => {
         },
       }),
     } as unknown as PermissionContext["connection"]
-    const { fake, replies } = base({ origin: DIR, conn })
+    const { fake, messages, replies, dirs } = base({ origin: DIR, conn, pending: {} })
+    const spy = spyOn(console, "error").mockImplementation(() => {})
     await handlePermissionResponse(fake, PID, "ses-root", "once", [], [])
-    expect(replies).toHaveLength(1)
+    spy.mockRestore()
+    expect(replies).toHaveLength(0)
     expect(cancelled).toHaveLength(1)
+    expect(cancelled[0]!.includes("permission:")).toBeTrue()
+    expect(dirs.get(PID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
   })
 
   test("toggle once path uses private-first reply with zero SDK on terminal", async () => {
@@ -331,9 +343,8 @@ describe("permission private-first", () => {
     expect((req.payload as Record<string, unknown>).reply).toBe("once")
   })
 
-  test("toggle drain preserves once semantics across mixed terminal and fallback", async () => {
+  test("toggle drain preserves once semantics across terminal, failure, and unresolved", async () => {
     const calls: string[] = []
-    let sdk = 0
     const mkConn = (mode: "terminal" | "not_found" | "ambiguous") =>
       ({
         isPrivateAvailable: () => true,
@@ -349,11 +360,143 @@ describe("permission private-first", () => {
       if (mode === "terminal") expect(out.outcome).toEqual({ kind: "terminal" })
       if (mode === "not_found") expect(out.outcome).toEqual({ kind: "terminal-failure", code: "permission.not_found" })
       if (mode === "ambiguous") {
-        expect(out.outcome.kind).toBe("fallback")
-        sdk += 1
+        expect(out.outcome.kind).toBe("unresolved")
+        if (out.outcome.kind === "unresolved") {
+          expect(out.outcome.opId.startsWith(`permission:${PID}:`)).toBeTrue()
+          expect(out.outcome.requestID).toBe(PID)
+        }
       }
     }
     expect(calls).toEqual(["terminal", "not_found", "ambiguous"])
-    expect(sdk).toBe(1)
+  })
+
+  test("invalid, closed, and transport each surface unresolved with zero SDK and kept identity", async () => {
+    const cases: Array<{ label: string; make: (req: Record<string, unknown>) => unknown }> = [
+      { label: "invalid", make: (req) => ({ ...terminalReply(req), reply: "broken" }) },
+      { label: "ambiguous", make: (req) => vague(req) },
+    ]
+    for (const entry of cases) {
+      let sdk = 0
+      const conn = {
+        isPrivateAvailable: () => true,
+        privatePermissionReplyWithHandle: (req: Record<string, unknown>) => ({
+          id: 1,
+          promise: Promise.resolve(entry.make(req)),
+          cancel: () => true,
+        }),
+      } as unknown as PermissionContext["connection"]
+      const { fake, saves, replies, messages, dirs } = base({ origin: DIR, conn, pending: {} })
+      const client = fake.client as unknown as { permission: { reply: (a: unknown) => Promise<unknown> } }
+      void client
+      const origSave = (fake.client as unknown as { permission: { saveAlwaysRules: (a: unknown) => Promise<unknown> } }).permission
+        .saveAlwaysRules
+      void origSave
+      void sdk
+      const spy = spyOn(console, "error").mockImplementation(() => {})
+      await handlePermissionResponse(fake, PID, "ses-root", "once", [], [])
+      spy.mockRestore()
+      expect([entry.label, saves]).toEqual([entry.label, []])
+      expect([entry.label, replies]).toEqual([entry.label, []])
+      expect(dirs.get(PID)).toBe(DIR)
+      expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
+    }
+    for (const label of ["transport", "closed", "timeout"]) {
+      const conn = {
+        isPrivateAvailable: () => true,
+        privatePermissionReplyWithHandle: () => ({
+          id: 1,
+          promise: Promise.reject(
+            new Error(label === "closed" ? "Peer closed" : label === "timeout" ? "private permission timeout after 3000ms" : "transport error"),
+          ),
+          cancel: () => true,
+        }),
+      } as unknown as PermissionContext["connection"]
+      const { fake, messages, saves, replies, dirs } = base({ origin: DIR, conn, pending: {} })
+      const spy = spyOn(console, "error").mockImplementation(() => {})
+      await handlePermissionResponse(fake, PID, "ses-root", "once", [], [])
+      spy.mockRestore()
+      expect([label, saves]).toEqual([label, []])
+      expect([label, replies]).toEqual([label, []])
+      expect(dirs.get(PID)).toBe(DIR)
+      expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
+    }
+  })
+
+  test("save succeeded then reply unresolved issues zero SDK reply", async () => {
+    const order: string[] = []
+    const conn = {
+      isPrivateAvailable: () => true,
+      privatePermissionSaveWithHandle: (req: Record<string, unknown>) => {
+        order.push("private-save")
+        return { id: 1, promise: Promise.resolve(terminalSave(req)), cancel: () => true }
+      },
+      privatePermissionReplyWithHandle: (req: Record<string, unknown>) => {
+        order.push("private-reply")
+        return { id: 2, promise: Promise.resolve(vague(req)), cancel: () => true }
+      },
+    } as unknown as PermissionContext["connection"]
+    const { fake, messages, saves, replies, dirs } = base({ origin: DIR, conn, pending: {} })
+    const spy = spyOn(console, "error").mockImplementation(() => {})
+    await handlePermissionResponse(fake, PID, "ses-root", "once", ["x"], [])
+    spy.mockRestore()
+    expect(order).toEqual(["private-save", "private-reply"])
+    expect(saves).toHaveLength(0)
+    expect(replies).toHaveLength(0)
+    expect(dirs.get(PID)).toBe(DIR)
+    expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
+  })
+
+  test("unavailable and missing capability each take exactly one SDK per step", async () => {
+    {
+      const conn = { isPrivateAvailable: () => false } as unknown as PermissionContext["connection"]
+      const { fake, saves, replies } = base({ origin: DIR, conn })
+      await handlePermissionResponse(fake, PID, "ses-root", "once", ["x"], [])
+      expect(saves).toHaveLength(1)
+      expect(replies).toHaveLength(1)
+    }
+    {
+      const conn = {
+        isPrivateAvailable: () => true,
+        privatePermissionSaveWithHandle: () => {
+          throw new Error("Private peer missing permission/save-always-rules capability")
+        },
+        privatePermissionReplyWithHandle: (req: Record<string, unknown>) => ({
+          id: 2,
+          promise: Promise.resolve(terminalReply(req, "once")),
+          cancel: () => true,
+        }),
+      } as unknown as PermissionContext["connection"]
+      const { fake, saves, replies } = base({ origin: DIR, conn })
+      await handlePermissionResponse(fake, PID, "ses-root", "once", ["x"], [])
+      expect(saves).toHaveLength(1)
+      expect(replies).toHaveLength(0)
+    }
+  })
+
+  test("unresolved re-observes pending once with absence never treated as acceptance", async () => {
+    let lists = 0
+    const conn = {
+      isPrivateAvailable: () => true,
+      privatePermissionReplyWithHandle: (req: Record<string, unknown>) => ({
+        id: 1,
+        promise: Promise.resolve(vague(req)),
+        cancel: () => true,
+      }),
+    } as unknown as PermissionContext["connection"]
+    const { fake, messages, saves, replies } = base({ origin: DIR, conn, pending: {} })
+    const client = fake.client as unknown as { permission: { list: (a: unknown) => Promise<unknown> } }
+    const origList = client.permission.list
+    client.permission.list = async (a: unknown) => {
+      lists += 1
+      return origList(a)
+    }
+    const spy = spyOn(console, "error").mockImplementation(() => {})
+    await handlePermissionResponse(fake, PID, "ses-root", "once", [], [])
+    spy.mockRestore()
+    expect(saves).toHaveLength(0)
+    expect(replies).toHaveLength(0)
+    expect(lists).toBe(1)
+    expect(messages).toContainEqual({ type: "permissionError", permissionID: PID })
+    expect(messages).not.toContainEqual({ type: "permissionError", permissionID: PID, stale: true })
   })
 })

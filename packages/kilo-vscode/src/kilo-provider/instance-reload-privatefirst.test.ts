@@ -110,30 +110,72 @@ describe("instance-reload private-first attempt", () => {
     }
   })
 
-  test("retryable fence parses to fallback", async () => {
+  test("retryable fence parses to fallback for the single strict SDK path", async () => {
     const req = buildInstanceReloadReq(DIR)
-    expect(parseInstanceReloadResult(retryableFor(req), req).kind).toBe("fallback")
+    expect(parseInstanceReloadResult(retryableFor(req), req)).toEqual({
+      kind: "fallback",
+      reason: "InstanceUnavailableDuringConfigRebuild",
+    })
   })
 
-  for (const reason of ["unavailable", "invalid", "ambiguous", "retryable", "closed"] as const) {
-    test(`${reason} parses to fallback`, async () => {
+  test("accepted retryable fence with accepted true is unresolved, never SDK", async () => {
+    const req = buildInstanceReloadReq(DIR)
+    const raw = { ...retryableFor(req), accepted: true }
+    const out = parseInstanceReloadResult(raw, req)
+    expect(out.kind).toBe("unresolved")
+    if (out.kind === "unresolved") expect(out.opId).toBe(req.opId)
+  })
+
+  for (const reason of ["unavailable", "retryable"] as const) {
+    test(`${reason} stays pre-send/strict fallback`, async () => {
       const req = buildInstanceReloadReq(DIR)
       let conn: unknown
       if (reason === "unavailable") conn = { isPrivateAvailable: () => false }
-      else if (reason === "invalid") conn = connWith((q) => ({ garbled: true, requestId: q.requestId }))
-      else if (reason === "ambiguous") conn = connWith((q) => ambiguousFor(q))
-      else if (reason === "retryable") conn = connWith((q) => retryableFor(q))
-      else
-        conn = {
-          isPrivateAvailable: () => true,
-          privateInstanceReloadOutcomeWithHandle: () => {
-            throw new Error("Private peer unavailable")
-          },
-        }
+      else conn = connWith((q) => retryableFor(q))
       const out = await attemptInstanceReloadPrivate(conn as never, req)
       expect(out.kind).toBe("fallback")
     })
   }
+
+  for (const reason of ["invalid", "ambiguous", "closed", "transportUnknown", "throw"] as const) {
+    test(`${reason} returns unresolved with zero second dispatch`, async () => {
+      const req = buildInstanceReloadReq(DIR)
+      let conn: unknown
+      if (reason === "invalid") conn = connWith((q) => ({ garbled: true, requestId: q.requestId }))
+      else if (reason === "ambiguous") conn = connWith((q) => ambiguousFor(q))
+      else if (reason === "transportUnknown")
+        conn = connWith((q) => ({ ...ambiguousFor(q), transportUnknown: true, status: "succeeded" }))
+      else if (reason === "throw")
+        conn = {
+          isPrivateAvailable: () => true,
+          privateInstanceReloadOutcomeWithHandle: () => {
+            throw new Error("transport error")
+          },
+        }
+      else
+        conn = {
+          isPrivateAvailable: () => true,
+          privateInstanceReloadOutcomeWithHandle: () => {
+            throw new Error("Peer closed")
+          },
+        }
+      const out = await attemptInstanceReloadPrivate(conn as never, req)
+      expect(out.kind).toBe("unresolved")
+      if (out.kind === "unresolved") expect(out.opId).toBe(req.opId)
+    })
+  }
+
+  test("missing-capability pre-send stays fallback with zero private send", async () => {
+    const req = buildInstanceReloadReq(DIR)
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateInstanceReloadOutcomeWithHandle: () => {
+        throw new Error("Private peer missing instance/reload capability")
+      },
+    }
+    const out = await attemptInstanceReloadPrivate(conn as never, req)
+    expect(out.kind).toBe("fallback")
+  })
 
   test("timeout exact-cancels the pending by id", async () => {
     const req = buildInstanceReloadReq(DIR)
@@ -150,7 +192,8 @@ describe("instance-reload private-first attempt", () => {
       }),
     }
     const out = await attemptInstanceReloadPrivate(conn as never, req, 20)
-    expect(out).toEqual({ kind: "fallback", reason: "timeout" })
+    expect(out.kind).toBe("unresolved")
+    if (out.kind === "unresolved") expect(out.opId).toBe(req.opId)
     expect(cancelled ?? "").toContain("instance-reload timeout")
     expect(cancelled ?? "").toContain(req.opId)
   })
@@ -193,7 +236,7 @@ describe("instance-reload private-first attempt", () => {
     }
   })
 
-  test("unsettled drift remains ambiguous for fallback", async () => {
+  test("unsettled drift remains ambiguous for unresolved", async () => {
     const { wrapInstanceReloadOutcomeForOwner } = await import("../services/cli-backend/serve-private-instance-reload")
     for (const build of [
       (req: ReturnType<typeof buildInstanceReloadReq>) => ambiguousFor(req),
@@ -220,7 +263,9 @@ describe("instance-reload private-first attempt", () => {
       expect(outcome.kind).toBe("valid")
       if (outcome.kind === "valid") {
         expect(outcome.result.status).toBe("ambiguous")
-        expect(parseInstanceReloadResult(outcome.result, req).kind).toBe("fallback")
+        const parsed = parseInstanceReloadResult(outcome.result, req)
+        expect(parsed.kind).toBe("unresolved")
+        if (parsed.kind === "unresolved") expect(parsed.opId).toBe(req.opId)
       }
     }
   })

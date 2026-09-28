@@ -116,7 +116,7 @@ import { canonicalDirectory } from "./private-worker/canonical-directory"
 import { decodeGlobalListCursor } from "./private-worker/session-cursor"
 import { hasGit } from "./kilo-provider/git-status"
 import { LifecycleRefreshCoordinator } from "./kilo-provider/lifecycle-refresh-coordinator"
-import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, requestInstanceReload } from "./kilo-provider/instance-reload"
+import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, RELOAD_UNRESOLVED_WARNING, requestInstanceReload } from "./kilo-provider/instance-reload"
 import {
   handlePermissionResponse,
   fetchAndSendPendingPermissions,
@@ -1619,6 +1619,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.postMessage({ type: "sessionForked", sessionID: session.id, forkedFromID: sourceID }),
       status: (sessionID: string) => this.sessionStatusMap.get(sessionID),
       directory: (sessionID: string) => this.getWorkspaceDirectory(sessionID),
+      privateReader: this.privateSessionReader,
     }
   }
 
@@ -2815,14 +2816,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       metadata = undefined
     }
     try {
-      const session = await createSessionPrivateFirst({
+      const outcome = await createSessionPrivateFirst({
         client: this.client!,
         connection: this.connectionService,
         directory: workspaceDir,
         platform: this.opts.platform,
         metadata: metadata as unknown as Record<string, unknown> | undefined,
+        privateReader: this.privateSessionReader,
       })
-      const detail = sdkSessionToDetail(session as Session)
+      if (outcome.kind === "pending") {
+        if (outcome.childId) {
+          this.trackDirectory(outcome.childId, workspaceDir)
+          this.trackedSessionIds.add(outcome.childId)
+        }
+        this.postMessage({ type: "error", message: `Session create status could not be confirmed (opId=${outcome.opId}). No retry was issued.` })
+        return
+      }
+      const detail = outcome.kind === "detail" ? outcome.detail : sdkSessionToDetail(outcome.session as Session)
       this.stopCurrentSessionProcesses(detail.id)
       this.setCurrentSession(detail)
       this.contextSessionID = detail.id
@@ -3631,11 +3641,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Handle deleting a session — private-first with exactly-one SDK fallback.
-   * `deleteSessionPrivateFirst` attempts private delete first; a valid private
-   * `succeeded` + `accepted` returns with zero SDK mutation, otherwise exactly
-   * one SDK `session.delete` runs with the identical durable tuple. Background
-   * stop and local pruning remain unchanged.
+   * Handle deleting a session — bounded accepted-only private-first with exact tombstone re-observation.
+   * `deleteSessionPrivateFirst` attempts one private delete with the durable tuple;
+   * valid `succeeded`+`accepted` returns with zero SDK, validated terminal `failed`
+   * closes with zero SDK, validated pre-accept retryable plus pre-send unavailable
+   * take exactly one durable SDK commit with the identical tuple. Transport
+   * uncertainty re-observes the exact tombstone once via INTERNAL
+   * `observation/delete-operation` (found prunes, not_found/unavailable/invalid
+   * surface explicit `delete.unresolved` with no prune and no retry).
    */
   private async handleDeleteSession(sessionID: string): Promise<void> {
     if (!this.client) {
@@ -3654,6 +3667,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         connection: this.connectionService,
         sessionId: sessionID,
         directory: workspaceDir,
+        privateReader: this.privateSessionReader,
       })
       this.pruneDeletedSession(sessionID)
       if (this.currentSession?.id === sessionID) {
@@ -3672,12 +3686,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Handle renaming a session — private-first with exactly-one SDK fallback.
-   * `renameSessionPrivateFirst` attempts the private title-only update first;
-   * a valid private `succeeded` + `accepted` session/title returns with zero
-   * SDK mutation, otherwise exactly one SDK `session.update` runs with the
-   * identical durable tuple. Title validation stays first; private fallback
-   * is logged redacted.
+   * Handle renaming a session — accepted-only private-first with exact re-observation.
+   * `renameSessionPrivateFirst` attempts one private title-only update with the
+   * durable tuple; valid `succeeded` + `accepted` returns with zero SDK,
+   * validated terminal `failed` throws with zero SDK, validated pre-accept
+   * retryable and pre-send unavailable take exactly one SDK commit with the
+   * identical tuple. Transport uncertainty re-observes the exact
+   * `sessionUpdate:<sessionId>:<token>` op once via the injected reader:
+   * found `succeeded` maps the authoritative detail, refresh-needed triggers
+   * the existing guarded `refreshSessionDetails`, absent/unavailable/invalid
+   * surfaces explicit unresolved with no fabricated update and no retry.
    */
   private async handleRenameSession(sessionID: string, title: string): Promise<void> {
     if (!this.client) {
@@ -3694,14 +3712,21 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return
     }
     try {
-      const data = await renameSessionPrivateFirst({
+      const outcome = await renameSessionPrivateFirst({
         client: this.client,
         connection: this.connectionService,
         sessionID,
         title: parsed.value,
         directory: dir,
+        privateReader: this.privateSessionReader,
       })
-      const updated = sdkSessionToDetail(data as Session)
+      if (outcome.kind === "refreshNeeded") {
+        console.warn("[Kilo New] KiloProvider: rename completed, refresh needed", { opId: outcome.opId })
+        this.refreshSessionDetails(sessionID, dir)
+        return
+      }
+      this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
+      const updated = outcome.kind === "session" ? sdkSessionToDetail(outcome.session as Session) : outcome.detail
       if (this.currentSession?.id === sessionID) this.setCurrentSession(updated)
       this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
     } catch (error) {
@@ -5222,31 +5247,42 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           dir,
           this.connectionService,
         )
-        const session = await createSessionPrivateFirst({
+        const outcome = await createSessionPrivateFirst({
           client: this.client!,
           connection: this.connectionService,
           directory: dir,
           platform: this.opts.platform,
           metadata: metadata as unknown as Record<string, unknown> | undefined,
+          privateReader: this.privateSessionReader,
         })
+        if (outcome.kind === "pending") {
+          if (outcome.childId) {
+            this.trackDirectory(outcome.childId, dir)
+            this.trackedSessionIds.add(outcome.childId)
+            return { sid: outcome.childId, dir }
+          }
+          throw new Error(`Session create status could not be confirmed (opId=${outcome.opId}). No retry was issued.`)
+        }
+        const sidForDraft = outcome.kind === "detail" ? outcome.detail.id : outcome.session.id
         if (draftID && this.closedDrafts.delete(draftID)) {
           try {
             await deleteSessionPrivateFirst({
               client: this.client!,
               connection: this.connectionService,
-              sessionId: session.id,
+              sessionId: sidForDraft,
               directory: dir,
+              privateReader: this.privateSessionReader,
             })
           } catch (error) {
             console.error("[Kilo New] KiloProvider: Failed to delete orphaned draft session:", {
-              sessionId: session.id,
+              sessionId: sidForDraft,
               directory: dir,
               error,
             })
           }
           return undefined
         }
-        const detail = sdkSessionToDetail(session as Session)
+        const detail = outcome.kind === "detail" ? outcome.detail : sdkSessionToDetail(outcome.session as Session)
         this.stopCurrentSessionProcesses(detail.id)
         this.setCurrentSession(detail)
         this.contextSessionID = detail.id
@@ -5258,7 +5294,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           session: this.sessionToWebview(detail),
           draftID,
         })
-        const resolved = { sid: session.id, dir }
+        const resolved = { sid: detail.id, dir }
         if (draftID) this.draftSessions.set(key, { ...resolved, expires: Date.now() + 60_000 })
         return resolved
       })().finally(() => {
@@ -5428,6 +5464,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           variant,
           editorContext: editorContext as unknown as Record<string, unknown> | undefined,
           snapshotInitialization: this.opts.snapshotInitialization,
+          privateReader: this.privateSessionReader,
         }),
       )
     } catch (error) {
@@ -5528,6 +5565,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           variant,
           parts: parts as unknown as Array<Record<string, unknown>> | undefined,
           snapshotInitialization: this.opts.snapshotInitialization,
+          privateReader: this.privateSessionReader,
         }),
       )
     } catch (error) {
@@ -5601,23 +5639,29 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async handleRevertSession(sessionID: string, messageID: string, partID?: string): Promise<void> {
     if (!this.client) return
     const dir = this.getWorkspaceDirectory(sessionID)
-    let data: Session
+    let outcome: import("./kilo-provider/session-revert").RevertOutcome
     try {
-      data = await revertSessionPrivateFirst({
+      outcome = await revertSessionPrivateFirst({
         client: this.client,
         connection: this.connectionService,
         sessionId: sessionID,
         directory: dir,
         messageId: messageID,
         partId: partID,
+        privateReader: this.privateSessionReader,
       })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to revert session:", error)
       this.postMessage({ type: "error", message: "Failed to revert session", sessionID })
       throw error
     }
+    if (outcome.kind === "refreshNeeded") {
+      console.warn("[Kilo New] KiloProvider: revert completed, refresh needed", { opId: outcome.opId })
+      this.refreshSessionDetails(sessionID, dir)
+      return
+    }
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
-    const detail = sdkSessionToDetail(data as Session)
+    const detail = outcome.kind === "session" ? sdkSessionToDetail(outcome.session as Session) : outcome.detail
     if (this.currentSession?.id === sessionID) this.setCurrentSession(detail)
     this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
   }
@@ -5625,21 +5669,27 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async handleUnrevertSession(sessionID: string): Promise<void> {
     if (!this.client) return
     const dir = this.getWorkspaceDirectory(sessionID)
-    let data: Session
+    let outcome: import("./kilo-provider/session-revert").UnrevertOutcome
     try {
-      data = await unrevertSessionPrivateFirst({
+      outcome = await unrevertSessionPrivateFirst({
         client: this.client,
         connection: this.connectionService,
         sessionId: sessionID,
         directory: dir,
+        privateReader: this.privateSessionReader,
       })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to unrevert session:", error)
       this.postMessage({ type: "error", message: "Failed to redo session", sessionID })
       throw error
     }
+    if (outcome.kind === "refreshNeeded") {
+      console.warn("[Kilo New] KiloProvider: unrevert completed, refresh needed", { opId: outcome.opId })
+      this.refreshSessionDetails(sessionID, dir)
+      return
+    }
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
-    const detail = sdkSessionToDetail(data as Session)
+    const detail = outcome.kind === "session" ? sdkSessionToDetail(outcome.session as Session) : outcome.detail
     if (this.currentSession?.id === sessionID) this.setCurrentSession(detail)
     this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
   }
@@ -6027,14 +6077,38 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       console.warn("[Kilo New] handleReload: no client connection")
       return
     }
+    const client = this.client
+    const gen = this.connectionGeneration
     const dir = this.getWorkspaceDirectory(this.currentSession?.id)
     const outcome = await requestInstanceReload({
       connection: this.connectionService as never,
-      client: this.client,
+      client,
       directory: dir,
     })
     if (outcome.kind === "conflict") {
       vscode.window.showWarningMessage(RELOAD_CONFLICT_WARNING)
+      return
+    }
+    if (outcome.kind === "unresolved") {
+      console.warn("[Kilo New] handleReload: reload unresolved, no retry:", {
+        reason: outcome.reason,
+        opId: outcome.opId,
+      })
+      vscode.window.showWarningMessage(`${RELOAD_UNRESOLVED_WARNING} (opId=${outcome.opId})`)
+      // Lost disposed-event convergence: one read-only reconciliation through
+      // the existing coordinator. No success asserted, no second reload, no
+      // commands-cache clear; the round re-reads authoritative state and
+      // keeps fail-soft behavior. Guards mirror existing current/dir/dispose
+      // patterns so a replaced client, generation, session directory, or
+      // disposed provider never refreshes stale context.
+      if (
+        !this.disposed &&
+        this.client === client &&
+        this.connectionGeneration === gen &&
+        sameDirectory(dir, this.getWorkspaceDirectory(this.currentSession?.id))
+      ) {
+        void this.reloadAfterAuthChange()
+      }
       return
     }
     if (outcome.kind === "failed") {

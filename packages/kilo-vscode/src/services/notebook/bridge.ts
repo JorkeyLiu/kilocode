@@ -16,6 +16,7 @@ import {
   listNotebooksPrivateFirst,
   rejectNotebookPrivateFirst,
   replyNotebookPrivateFirst,
+  type NotebookSettleOutcome,
 } from "../../kilo-provider/notebook-privatefirst"
 
 const RETAINED_REQUESTS = 1_000
@@ -66,6 +67,14 @@ interface RequestOrigin {
 
 type NotebookOutcome = { result: NotebookResult } | { error: NotebookFailure }
 
+interface UnresolvedGuard {
+  opId: string
+  reason: string
+  requestID: string
+  sessionID: string
+  directory: string
+}
+
 async function createContext(directory: string): Promise<NotebookBridgeContext> {
   const controller = new FileIgnoreController(directory)
   await controller.initialize()
@@ -98,6 +107,13 @@ export class NotebookBridge {
   private readonly origins = new Map<string, RequestOrigin>()
   private readonly outcomes = new Map<string, NotebookOutcome>()
   private readonly settled = new Set<string>()
+  private readonly unresolved = new Map<string, UnresolvedGuard>()
+  // Bounded overflow observability: scalar counters only, never identity lists.
+  // unresolvedEvictions counts guards moved to the settled tombstone; when the
+  // settled tombstone itself overflows (settledEvictions > 0) an evicted guard
+  // is forgotten and reconnect replay becomes possible again (see residual).
+  private unresolvedEvictions = 0
+  private settledEvictions = 0
   private readonly unsubscribeEvent: () => void
   private readonly unsubscribeState: () => void
   private readonly create: (directory: string) => Promise<NotebookBridgeContext>
@@ -146,6 +162,7 @@ export class NotebookBridge {
     this.origins.clear()
     this.outcomes.clear()
     this.settled.clear()
+    this.unresolved.clear()
   }
 
   private reset(): void {
@@ -158,6 +175,7 @@ export class NotebookBridge {
     this.origins.clear()
     this.outcomes.clear()
     this.settled.clear()
+    this.unresolved.clear()
   }
 
   private event(event: SSEPayload, directory?: string): void {
@@ -172,6 +190,19 @@ export class NotebookBridge {
 
   private request(event: EventKilocodeNotebookRequested, directory?: string): void {
     const request = event.properties
+    // Accepted-only: an unresolved semantic op is never silently replayed.
+    // The guard discriminates ID+session/directory like origins, but a same-ID
+    // collision is never treated as safely retryable: same origin suppresses
+    // reconnect replay, different origin suppresses a colliding execution.
+    const guard = this.unresolved.get(request.id)
+    if (guard) {
+      if (guard.sessionID !== request.sessionID || (directory && guard.directory !== directory)) {
+        console.warn("[Kilo New] NotebookBridge: notebook unresolved ID collision suppressed:", {
+          requestID: request.id,
+        })
+      }
+      return
+    }
     const origin = this.origins.get(request.id)
     if (origin) {
       if (origin.sessionID !== request.sessionID || (directory && origin.directory !== directory)) return
@@ -185,13 +216,23 @@ export class NotebookBridge {
 
   private async admit(request: NotebookRequest, directory: string): Promise<void> {
     const root = await this.allowed(directory)
-    if (this.disposed || this.settled.has(request.id)) return
+    if (this.disposed || this.settled.has(request.id) || this.unresolved.has(request.id)) return
     if (!root) {
-      const accepted = await this.reject(request.id, directory, {
+      const outcome = await this.reject(request.id, directory, {
         code: "invalid_path",
         message: "Notebook request directory is not an active VS Code workspace",
       })
-      if (accepted) this.remember(this.settled, request.id)
+      if (outcome.kind === "settled") this.remember(this.settled, request.id)
+      else if (outcome.kind === "unresolved")
+        this.rememberUnresolved(
+          request.id,
+          {
+            opId: outcome.opId,
+            reason: outcome.reason,
+            requestID: outcome.requestID,
+          },
+          { sessionID: request.sessionID, directory },
+        )
       return
     }
     const origin = { directory, root, sessionID: request.sessionID }
@@ -201,6 +242,7 @@ export class NotebookBridge {
 
   private start(request: NotebookRequest, origin: RequestOrigin): void {
     if (this.disposed || this.active.has(request.id) || this.settled.has(request.id)) return
+    if (this.unresolved.has(request.id)) return
     const active = { controller: new AbortController(), cancelled: false }
     this.active.set(request.id, active)
     void this.run(request, origin, active).catch((error: unknown) => {
@@ -210,11 +252,25 @@ export class NotebookBridge {
 
   private cancel(event: EventKilocodeNotebookCancelled, directory?: string): void {
     const id = event.properties.requestID
+    // Fail closed: a cancel only clears the guard when its origin matches the
+    // recorded origin (or the unresolved guard's origin when origins evicted).
+    // Cross-origin or unknown-origin cancels never clear the guard and never
+    // settle; absence handling stays read-only.
     const origin = this.origins.get(id)
-    if (origin && (origin.sessionID !== event.properties.sessionID || (directory && origin.directory !== directory)))
-      return
-    this.remember(this.settled, id)
+    const guard = this.unresolved.get(id)
+    const known = origin ?? (guard ? { sessionID: guard.sessionID, directory: guard.directory } : undefined)
     const active = this.active.get(id)
+    if (!known) {
+      // No verifiable origin: never clear the guard, never settle. Still abort
+      // a matching in-flight run so it cannot post a late completion.
+      if (!active) return
+      active.cancelled = true
+      active.controller.abort()
+      return
+    }
+    if (known.sessionID !== event.properties.sessionID || (directory && known.directory !== directory)) return
+    this.unresolved.delete(id)
+    this.remember(this.settled, id)
     if (!active) return
     active.cancelled = true
     active.controller.abort()
@@ -222,17 +278,47 @@ export class NotebookBridge {
 
   private async run(request: NotebookRequest, origin: RequestOrigin, active: ActiveRequest): Promise<void> {
     try {
+      if (this.unresolved.has(request.id)) return
       const outcome = this.outcomes.get(request.id) ?? (await this.execute(request, origin.root, active))
       if (!outcome || this.disposed || active.cancelled) return
       this.rememberOutcome(request.id, outcome)
-      const accepted =
+      const result: NotebookSettleOutcome =
         "result" in outcome
           ? await this.reply(request.id, origin.directory, outcome.result)
           : await this.reject(request.id, origin.directory, outcome.error)
-      if (accepted) {
+      if (result.kind === "settled") {
         this.outcomes.delete(request.id)
+        this.unresolved.delete(request.id)
         this.remember(this.settled, request.id)
+        return
       }
+      if (result.kind === "unresolved") {
+        // Accepted-only: retain the cached adapter result for diagnostics and
+        // keep list re-observation read-only. Never automatically reissue the
+        // same semantic op; absence in a later list is not acceptance.
+        this.rememberUnresolved(
+          request.id,
+          { opId: result.opId, reason: result.reason, requestID: result.requestID },
+          { sessionID: origin.sessionID, directory: origin.directory },
+        )
+        return
+      }
+      if (result.kind === "retry" && result.code === undefined) {
+        // SDK-dispatch failure (or missing client) whose acceptance is unknown:
+        // fail closed as unresolved instead of silently replaying the cached
+        // semantic action on reconnect. Only terminal invalid_reply /
+        // scope_mismatch (proven not accepted, carrying code) stays retryable.
+        this.rememberUnresolved(
+          request.id,
+          { opId: "", reason: "retry-unknown", requestID: request.id },
+          { sessionID: origin.sessionID, directory: origin.directory },
+        )
+        return
+      }
+      // Terminal retry with code (invalid_reply/scope_mismatch, proven not
+      // accepted with pending intact): keep the cached outcome for reconnect
+      // replay without rerunning the adapter. Unresolved never replays.
+      this.unresolved.delete(request.id)
     } finally {
       if (this.active.get(request.id) === active) this.active.delete(request.id)
     }
@@ -303,7 +389,7 @@ export class NotebookBridge {
     return context
   }
 
-  private async reply(requestID: string, directory: string, result: NotebookResult): Promise<boolean> {
+  private async reply(requestID: string, directory: string, result: NotebookResult): Promise<NotebookSettleOutcome> {
     try {
       const { outcome } = await replyNotebookPrivateFirst({
         connection: this.connection as never,
@@ -312,14 +398,18 @@ export class NotebookBridge {
         requestID,
         result,
       })
-      return outcome.kind === "settled"
+      return outcome
     } catch (error) {
       console.error(`[Kilo New] NotebookBridge: reply ${requestID} failed:`, error)
-      return false
+      return { kind: "retry" }
     }
   }
 
-  private async reject(requestID: string, directory: string, error: NotebookFailure): Promise<boolean> {
+  private async reject(
+    requestID: string,
+    directory: string,
+    error: NotebookFailure,
+  ): Promise<NotebookSettleOutcome> {
     try {
       const { outcome } = await rejectNotebookPrivateFirst({
         connection: this.connection as never,
@@ -328,10 +418,10 @@ export class NotebookBridge {
         requestID,
         error,
       })
-      return outcome.kind === "settled"
+      return outcome
     } catch (cause) {
       console.error(`[Kilo New] NotebookBridge: rejection ${requestID} failed:`, cause)
-      return false
+      return { kind: "retry" }
     }
   }
 
@@ -371,11 +461,44 @@ export class NotebookBridge {
     if (oldest !== undefined) this.origins.delete(oldest)
   }
 
+  private rememberUnresolved(
+    id: string,
+    detail: { opId: string; reason: string; requestID: string },
+    origin: { sessionID: string; directory: string },
+  ): void {
+    this.unresolved.set(id, { ...detail, sessionID: origin.sessionID, directory: origin.directory })
+    if (this.unresolved.size <= RETAINED_REQUESTS) return
+    // Fail closed on overflow: the evicted guard cannot be forgotten, or a
+    // later reconnect would silently replay its cached semantic action. Move
+    // it to the bounded settled tombstone so the ID stays suppressed instead
+    // of replaying. Genuinely new IDs (never seen) are unaffected.
+    const oldest = this.unresolved.keys().next().value
+    if (oldest !== undefined) {
+      this.unresolved.delete(oldest)
+      this.unresolvedEvictions += 1
+      console.warn("[Kilo New] NotebookBridge: notebook unresolved guard overflow, suppressing evicted ID:", {
+        evictions: this.unresolvedEvictions,
+      })
+      this.remember(this.settled, oldest)
+    }
+  }
+
   private remember(set: Set<string>, id: string): void {
     set.add(id)
     if (set.size <= RETAINED_REQUESTS) return
+    // Bounded tombstone overflow: the forgotten ID may replay on reconnect.
+    // Counted (scalar) for observability; see residual: clearing this requires
+    // unbounded identity retention or a runtime-owned receipt.
     const oldest = set.keys().next().value
-    if (oldest !== undefined) set.delete(oldest)
+    if (oldest !== undefined) {
+      set.delete(oldest)
+      if (set === this.settled) {
+        this.settledEvictions += 1
+        console.warn("[Kilo New] NotebookBridge: notebook settled tombstone overflow, guard forgotten:", {
+          evictions: this.settledEvictions,
+        })
+      }
+    }
   }
 }
 

@@ -136,7 +136,7 @@ describe("fork private normalization closes failure classification", () => {
     if (retryable.status === "failed") expect(retryable.failure.retryable).toBeTrue()
   })
 
-  it("real normalized ambiguous falls back to exactly one SDK with same tuple", async () => {
+  it("real normalized ambiguous re-observes once with zero SDK and explicit unresolved", async () => {
     const peer = await makePeer(async (method) => {
       if (method === "initialize") {
         return { protocol: { name: "kilo-private", major: 1, minor: 0 }, serverInfo: { name: "kilo", version: "1" }, capabilities: ["session/fork"] }
@@ -153,24 +153,42 @@ describe("fork private normalization closes failure classification", () => {
 
     const sdk = mock(async () => ({ data: makeSdkSession(), error: undefined }))
     const client = { session: { fork: sdk } } as unknown as KiloClient
-    let req: Record<string, unknown> | null = null
+    let operationCalls = 0
     const conn = {
       isPrivateAvailable: () => true,
       privateForkWithHandle: (r: unknown) => {
-        req = r as Record<string, unknown>
-        return { id: 1, promise: Promise.resolve(normalized), cancel: () => true }
+        const req = r as Record<string, unknown>
+        const ambiguous = {
+          ...(normalized as Record<string, unknown>),
+          requestId: req.requestId,
+          opId: req.opId,
+          idempotencyKey: req.idempotencyKey,
+        }
+        return { id: 1, promise: Promise.resolve(ambiguous), cancel: () => true }
       },
       peekPrivatePeerNextId: () => 1,
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    const sess = await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
-    expect((sess as unknown as { id: string }).id).toBe("ses_sdk_fork")
-    expect(sdk).toHaveBeenCalledTimes(1)
-    const input = sdk.mock.calls[0]![0] as Record<string, unknown>
-    expect(input.opId).toBe(req?.opId)
-    expect(input.idempotencyKey).toBe(req?.idempotencyKey)
-    expect(input.requestId).toBe(req?.requestId)
+    const reader = {
+      isEnabled: () => true,
+      isStarted: () => true,
+      list: async () => ({}),
+      get: async () => ({ v: "1.0", status: "not_found" }),
+      operation: async () => {
+        operationCalls += 1
+        return { v: "1.0", status: "not_found" }
+      },
+    } as unknown as never
+    let code = ""
+    try {
+      await forkSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: reader })
+    } catch (e) {
+      code = (e as { code?: string }).code ?? ""
+    }
+    expect(code).toBe("fork.unresolved")
+    expect(sdk).toHaveBeenCalledTimes(0)
+    expect(operationCalls).toBe(1)
   })
 
   it("real normalized terminal failed closes with zero SDK", async () => {

@@ -682,6 +682,47 @@ export class PrivateObservationService implements Disposable {
     return this.host.request(OBSERVATION_METHODS.OPERATIONS, payload)
   }
 
+  /** Delegate observation/operation — exact opId panel-safe projection, no InstanceRef/drain-control. Signal is transport-only. */
+  async operation(input: { directory: string; sessionId: string; opId: string; signal?: AbortSignal }): Promise<unknown> {
+    if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
+    const payload: Record<string, unknown> = {
+      v: OBSERVATION_VERSION,
+      directory: input.directory,
+      sessionId: input.sessionId,
+      opId: input.opId,
+    }
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.OPERATION, payload, { signal })
+    return this.host.request(OBSERVATION_METHODS.OPERATION, payload)
+  }
+
+  /** Delegate INTERNAL observation/create-operation — exact create:<uuid> minimal ID projection, no sessionId. Signal is transport-only. */
+  async createOperation(input: { directory: string; opId: string; signal?: AbortSignal }): Promise<unknown> {
+    if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
+    const payload: Record<string, unknown> = {
+      v: OBSERVATION_VERSION,
+      directory: input.directory,
+      opId: input.opId,
+    }
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.CREATE_OPERATION, payload, { signal })
+    return this.host.request(OBSERVATION_METHODS.CREATE_OPERATION, payload)
+  }
+
+  /** Delegate INTERNAL observation/delete-operation — exact delete:<sessionId>:<uuid> tombstone projection, read-only, no SessionTable. Signal is transport-only. */
+  async deleteOperation(input: { directory: string; sessionId: string; opId: string; signal?: AbortSignal }): Promise<unknown> {
+    if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
+    const payload: Record<string, unknown> = {
+      v: OBSERVATION_VERSION,
+      directory: input.directory,
+      sessionId: input.sessionId,
+      opId: input.opId,
+    }
+    const signal = input.signal
+    if (signal) return this.host.request(OBSERVATION_METHODS.DELETE_OPERATION, payload, { signal })
+    return this.host.request(OBSERVATION_METHODS.DELETE_OPERATION, payload)
+  }
+
   /** Generic request delegation (e.g., test/mutateChangefeed when testBridge enabled). */
   async request(method: string, params?: unknown): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")

@@ -44,9 +44,10 @@ describe("draft create/close race orphan cleanup is private-first", () => {
     expect(source).toContain('import { deleteSessionPrivateFirst } from "./kilo-provider/session-delete"')
     expect(branch).toContain("deleteSessionPrivateFirst({")
     expect(branch).toContain("connection: this.connectionService")
-    expect(branch).toContain("sessionId: session.id")
+    expect(branch).toContain("sessionId: sidForDraft")
     expect(branch).toContain("directory: dir")
     expect(branch).toContain("client: this.client!")
+    expect(branch).toContain("privateReader: this.privateSessionReader")
   })
 
   it("has no direct SDK delete bypass in the race branch", () => {
@@ -58,7 +59,7 @@ describe("draft create/close race orphan cleanup is private-first", () => {
     expect(branch).toContain("try {")
     expect(branch).toContain("} catch (error) {")
     expect(branch).toContain("Failed to delete orphaned draft session")
-    expect(branch).toContain("sessionId: session.id")
+    expect(branch).toContain("sessionId: sidForDraft")
     expect(branch).toContain("directory: dir")
     expect(branch).toContain("return undefined")
     expect(branch).not.toContain("postMessage")
@@ -74,6 +75,7 @@ describe("draft create/close race orphan cleanup is private-first", () => {
     const handle = sliceBlock(source, source.indexOf("private async handleDeleteSession"))
     expect(handle).toContain("deleteSessionPrivateFirst({")
     expect(handle).toContain("pruneDeletedSession(sessionID)")
+    expect(handle).toContain("privateReader: this.privateSessionReader")
   })
 
   it("wires the executable private-first helper (behavior covered by helper tests)", async () => {
@@ -82,5 +84,8 @@ describe("draft create/close race orphan cleanup is private-first", () => {
     const helper = fs.readFileSync(HELPER, "utf-8")
     expect(helper).toContain("durableRawDelete")
     expect(helper).toContain("transportUnknown")
+    expect(helper).toContain("tryPrivateDeleteExact")
+    expect(helper).toContain("delete.unresolved")
+    expect(helper).not.toContain("const second = await attemptPrivateDelete")
   })
 })

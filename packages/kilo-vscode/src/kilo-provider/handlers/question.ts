@@ -58,6 +58,38 @@ async function recover(ctx: QuestionContext, requestID: string): Promise<boolean
   return true
 }
 
+// Accepted-only: after-send uncertainty never redispatches SDK. Keep the
+// request identity, re-observe pending once via the existing
+// readQuestionsForDir (read-only, absence is not acceptance), then surface
+// explicit unresolved with no fabricated answer/terminal.
+async function surfaceUnresolved(
+  ctx: QuestionContext,
+  requestID: string,
+  dir: string,
+  opId: string,
+  reason: string,
+  op: "reply" | "reject",
+): Promise<boolean> {
+  console.warn(`[Kilo New] KiloProvider: Private question ${op} uncertain, re-observe pending once`, {
+    requestID,
+    opId,
+    reason: String(reason).slice(0, 120),
+  })
+  try {
+    if (ctx.client) {
+      await readQuestionsForDir({ connection: ctx.connection ?? null, client: ctx.client, directory: dir })
+    }
+  } catch {
+    // Read-only re-observation must not fail the unresolved surface.
+  }
+  console.error(`[Kilo New] KiloProvider: Failed to ${op === "reply" ? "reply to" : "reject"} question: unresolved`, {
+    requestID,
+    opId,
+  })
+  ctx.postMessage({ type: "questionError", requestID })
+  return false
+}
+
 /**
  * Fetch all pending questions from the backend and forward any that belong
  * to tracked sessions to the webview. Mirrors fetchAndSendPendingPermissions —
@@ -163,8 +195,11 @@ export async function handleQuestionReply(
       ctx.postMessage({ type: "questionError", requestID })
       return false
     }
+    if (priv.outcome.kind === "unresolved") {
+      return surfaceUnresolved(ctx, requestID, dir, priv.outcome.opId, priv.outcome.reason, "reply")
+    }
   } catch (error) {
-    console.error("[Kilo New] KiloProvider: Private reply attempt failed, falling back:", error)
+    return surfaceUnresolved(ctx, requestID, dir, "unknown", String(error).slice(0, 200), "reply")
   }
 
   try {
@@ -219,8 +254,11 @@ export async function handleQuestionReject(
       ctx.postMessage({ type: "questionError", requestID })
       return false
     }
+    if (priv.outcome.kind === "unresolved") {
+      return surfaceUnresolved(ctx, requestID, dir, priv.outcome.opId, priv.outcome.reason, "reject")
+    }
   } catch (error) {
-    console.error("[Kilo New] KiloProvider: Private reject attempt failed, falling back:", error)
+    return surfaceUnresolved(ctx, requestID, dir, "unknown", String(error).slice(0, 200), "reject")
   }
 
   try {

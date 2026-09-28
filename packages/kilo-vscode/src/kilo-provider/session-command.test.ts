@@ -296,164 +296,159 @@ describe("command private-first", () => {
     expect(legacy).toBe(0)
   })
 
-  test("unavailable/invalid/ambiguous/closed/timeout each fallback exactly once same message with recoverable private retry", async () => {
-    const cases: Array<{ name: string }> = []
-    const mkSdk = () => {
+  test("unavailable falls back once; uncertain re-observes exact with zero SDK", async () => {
+    {
       let n = 0
       let legacy = 0
-      const seen: unknown[] = []
       const client = {
         session: {
-          commandAsync: async (input: Record<string, unknown>) => {
-            n += 1
-            seen.push(input)
-            return { data: null }
-          },
-          command: async () => {
-            legacy += 1
-            return { data: null }
-          },
+          commandAsync: async (input: Record<string, unknown>) => { n += 1; return { data: null } },
+          command: async () => { legacy += 1; return { data: null } },
         },
       }
-      return { client, count: () => n, seen, legacy: () => legacy }
-    }
-    {
-      const s = mkSdk()
       const conn = { isPrivateAvailable: () => false }
-      await commandSessionPrivateFirst(baseOpts(s.client, conn))
-      expect(s.count()).toBe(1)
-      expect(s.legacy()).toBe(0)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "unavailable" })
+      await commandSessionPrivateFirst(baseOpts(client, conn))
+      expect(n).toBe(1)
+      expect(legacy).toBe(0)
     }
     {
-      const s = mkSdk()
-      let privCalls = 0
+      let sdk = 0
+      let obs = 0
+      const client = { session: { commandAsync: async () => { sdk += 1; return { data: null } }, command: async () => ({ data: null }) } }
       const conn = {
         isPrivateAvailable: () => true,
-        privateCommandWithHandle: (req: Record<string, unknown>) => {
-          privCalls += 1
-          return {
-            id: privCalls,
-            promise: Promise.resolve({ bogus: true, requestId: req.requestId, opId: req.opId, op: "session/command", idempotencyKey: req.idempotencyKey }),
-            cancel: () => true,
-          }
-        },
+        privateCommandWithHandle: (req: Record<string, unknown>) => ({
+          id: 1,
+          promise: Promise.resolve({ bogus: true, requestId: req.requestId, opId: req.opId, op: "session/command", idempotencyKey: req.idempotencyKey }),
+          cancel: () => true,
+        }),
       }
-      await commandSessionPrivateFirst(baseOpts(s.client, conn))
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      expect(s.legacy()).toBe(0)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "invalid" })
+      const out = await commandSessionPrivateFirst(baseOpts(client, conn, {
+        privateReader: {
+          isEnabled: () => true,
+          isStarted: () => true,
+          list: async () => ({}),
+          get: async () => ({}),
+          operation: async () => { obs += 1; return { v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "succeeded", code: "ok", message: "ok", time: 1 } } },
+        },
+      }))
+      expect((out as { error?: unknown }).error).toBeUndefined()
+      expect(sdk).toBe(0)
+      expect(obs).toBe(1)
     }
     {
-      const s = mkSdk()
-      let privCalls = 0
+      let sdk = 0
+      const client = { session: { commandAsync: async () => { sdk += 1; return { data: null } }, command: async () => ({ data: null }) } }
       const conn = {
         isPrivateAvailable: () => true,
-        privateCommandWithHandle: (req: Record<string, unknown>) => {
-          privCalls += 1
-          return { id: privCalls, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
-        },
+        privateCommandWithHandle: (req: Record<string, unknown>) => ({ id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }),
       }
-      await commandSessionPrivateFirst(baseOpts(s.client, conn))
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      expect(s.legacy()).toBe(0)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "ambiguous" })
+      let thrown: unknown = null
+      try {
+        await commandSessionPrivateFirst(baseOpts(client, conn, {
+          privateReader: {
+            isEnabled: () => true,
+            isStarted: () => true,
+            list: async () => ({}),
+            get: async () => ({}),
+            operation: async () => ({ v: "1.0", status: "not_found" }),
+          },
+        }))
+      } catch (e) { thrown = e }
+      expect((thrown as { code?: string }).code).toBe("command.unresolved")
+      expect((thrown as Error).message).toContain(MID)
+      expect(sdk).toBe(0)
     }
     {
-      const s = mkSdk()
-      let privCalls = 0
+      let sdk = 0
+      const client = { session: { commandAsync: async () => { sdk += 1; return { data: null } }, command: async () => ({ data: null }) } }
       const conn = {
         isPrivateAvailable: () => true,
-        privateCommandWithHandle: () => {
-          privCalls += 1
-          throw new Error("Peer closed")
-        },
+        privateCommandWithHandle: () => { throw new Error("Peer closed") },
       }
-      await commandSessionPrivateFirst(baseOpts(s.client, conn))
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      expect(s.legacy()).toBe(0)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "closed" })
+      let thrown: unknown = null
+      try {
+        await commandSessionPrivateFirst(baseOpts(client, conn, {
+          privateReader: {
+            isEnabled: () => true,
+            isStarted: () => true,
+            list: async () => ({}),
+            get: async () => ({}),
+            operation: async () => ({ v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "abandoned", code: "prompt.abandoned", message: "prompt abandoned due to runtime restart", time: 1 } }),
+          },
+        }))
+      } catch (e) { thrown = e }
+      expect((thrown as { code?: string }).code).toBe("prompt.abandoned")
+      expect(sdk).toBe(0)
     }
     {
-      const s = mkSdk()
+      let sdk = 0
       let cancelled = 0
-      let privCalls = 0
+      const client = { session: { commandAsync: async () => { sdk += 1; return { data: null } }, command: async () => ({ data: null }) } }
       const conn = {
         isPrivateAvailable: () => true,
-        privateCommandWithHandle: () => {
-          privCalls += 1
-          return { id: 9 + privCalls, promise: new Promise(() => {}), cancel: () => { cancelled += 1; return true } }
-        },
+        privateCommandWithHandle: () => ({ id: 10, promise: new Promise(() => {}), cancel: () => { cancelled += 1; return true } }),
       }
-      await commandSessionPrivateFirst(baseOpts(s.client, conn))
-      expect(s.count()).toBe(1)
-      expect(privCalls).toBe(2)
-      expect(s.legacy()).toBe(0)
-      expect(cancelled).toBe(2)
-      expect((s.seen[0] as Record<string, unknown>).messageID).toBe(MID)
-      cases.push({ name: "timeout" })
+      const out = await commandSessionPrivateFirst(baseOpts(client, conn, {
+        privateReader: {
+          isEnabled: () => true,
+          isStarted: () => true,
+          list: async () => ({}),
+          get: async () => ({}),
+          operation: async () => ({ v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "in-flight", code: "prompt.inflight", message: "prompt accepted", time: 1 } }),
+        },
+      }))
+      expect((out as { error?: unknown }).error).toBeUndefined()
+      expect(sdk).toBe(0)
+      expect(cancelled).toBe(1)
     }
-    expect(cases.map((c) => c.name)).toEqual(["unavailable", "invalid", "ambiguous", "closed", "timeout"])
   }, 10000)
 
-  test("recoverable first failure then private success uses same tuple zero SDK", async () => {
-    const seenPrivate: unknown[] = []
+  test("ambiguous then exact in-flight returns accepted with one private zero SDK", async () => {
+    let priv = 0
     let sdk = 0
-    let attempt = 0
-    const client = {
-      session: {
-        commandAsync: async () => { sdk += 1; return { data: null } },
-        command: async () => ({ data: null }),
-      },
-    }
+    let obs = 0
+    const client = { session: { commandAsync: async () => { sdk += 1; return { data: null } }, command: async () => ({ data: null }) } }
     const connection = {
       isPrivateAvailable: () => true,
-      privateCommandWithHandle: (req: Record<string, unknown>) => {
-        seenPrivate.push(req)
-        attempt += 1
-        if (attempt === 1) return { id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
-        return { id: 2, promise: Promise.resolve(succeededFor(req)), cancel: () => true }
-      },
+      privateCommandWithHandle: (req: Record<string, unknown>) => { priv += 1; return { id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true } },
     }
-    const out = await commandSessionPrivateFirst(baseOpts(client, connection))
+    const out = await commandSessionPrivateFirst(baseOpts(client, connection, {
+      privateReader: {
+        isEnabled: () => true,
+        isStarted: () => true,
+        list: async () => ({}),
+        get: async () => ({}),
+        operation: async () => { obs += 1; return { v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "in-flight", code: "prompt.inflight", message: "prompt accepted", time: 1 } } },
+      },
+    }))
     expect((out as { error?: unknown }).error).toBeUndefined()
     expect(sdk).toBe(0)
-    expect(seenPrivate).toHaveLength(2)
-    expect(seenPrivate[0]).toBe(seenPrivate[1])
-    expect((seenPrivate[0] as Record<string, unknown>).opId).toBe(`prompt:${MID}`)
+    expect(priv).toBe(1)
+    expect(obs).toBe(1)
   })
 
-  test("second terminal after recoverable retry throws zero SDK", async () => {
+  test("ambiguous then exact failed surfaces runtime failure with zero SDK", async () => {
     let sdk = 0
-    let attempt = 0
-    const client = {
-      session: {
-        commandAsync: async () => { sdk += 1; return { data: null } },
-        command: async () => ({ data: null }),
-      },
-    }
+    const client = { session: { commandAsync: async () => { sdk += 1; return { data: null } }, command: async () => ({ data: null }) } }
     const connection = {
       isPrivateAvailable: () => true,
-      privateCommandWithHandle: (req: Record<string, unknown>) => {
-        attempt += 1
-        if (attempt === 1) return { id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }
-        return { id: 2, promise: Promise.resolve(terminalFor(req, "command.not_found")), cancel: () => true }
-      },
+      privateCommandWithHandle: (req: Record<string, unknown>) => ({ id: 1, promise: Promise.resolve(ambiguousFor(req)), cancel: () => true }),
     }
     let thrown: unknown = null
     try {
-      await commandSessionPrivateFirst(baseOpts(client, connection))
+      await commandSessionPrivateFirst(baseOpts(client, connection, {
+        privateReader: {
+          isEnabled: () => true,
+          isStarted: () => true,
+          list: async () => ({}),
+          get: async () => ({}),
+          operation: async () => ({ v: "1.0", status: "found", operation: { opId: `prompt:${MID}`, outcome: "failed", code: "E_C", message: "c boom", time: 1 } }),
+        },
+      }))
     } catch (e) { thrown = e }
-    expect((thrown as { code?: string }).code).toBe("command.not_found")
+    expect((thrown as { code?: string }).code).toBe("E_C")
     expect(sdk).toBe(0)
-    expect(attempt).toBe(2)
   })
 
   test("missing messageID stays stable across private and SDK fallback", async () => {

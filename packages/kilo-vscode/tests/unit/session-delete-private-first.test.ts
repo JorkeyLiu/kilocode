@@ -45,8 +45,39 @@ function makeAmbiguous(req: { requestId: string; opId: string; idempotencyKey: s
   }
 }
 
+function connWith(maker: (req: never) => unknown, onCall?: () => void) {
+  return {
+    isPrivateAvailable: () => true,
+    privateDeleteWithHandle: (req: unknown) => {
+      onCall?.()
+      try {
+        const res = (maker as (r: never) => unknown)(req as never)
+        return { id: 2, promise: Promise.resolve(res), cancel: () => true }
+      } catch (e) {
+        return { id: 2, promise: Promise.reject(e), cancel: () => true }
+      }
+    },
+    peekPrivatePeerNextId: () => 2,
+    tryCancelPrivatePending: () => true,
+    invalidatePrivatePeerOnObserverTimeout: () => {},
+  } as unknown as never
+}
+
+function tombstoneReader(status: "found" | "not_found" | "scope_mismatch", calls?: { n: number }) {
+  return {
+    isEnabled: () => true,
+    isStarted: () => true,
+    list: async () => ({}) as unknown,
+    get: async () => ({}) as unknown,
+    deleteOperation: async () => {
+      if (calls) calls.n += 1
+      return { v: "1.0", status }
+    },
+  } as unknown as never
+}
+
 describe("ServePrivatePeer validateDeleteResult failed envelope coherence", () => {
-  it("failed with accepted true is invalid and triggers unknown path (no SDK fallback)", async () => {
+  it("failed with accepted true is invalid and triggers unresolved path (no SDK, single mutation + single observation)", async () => {
     const makeReq = (r: { requestId: string; opId: string; idempotencyKey: string }) => ({ v: 1 as const, requestId: r.requestId, opId: r.opId, op: "session/delete" as const, idempotencyKey: r.idempotencyKey, context: { directory: "/repo", sessionId: "ses_bad", parentSessionId: null as string | null }, payload: {} as Record<string, never> })
     const base = { requestId: "req1", opId: "delete:ses_bad:tok1", idempotencyKey: "delete:ses_bad:tok1" }
     const req = makeReq(base)
@@ -62,35 +93,29 @@ describe("ServePrivatePeer validateDeleteResult failed envelope coherence", () =
       failure: { code: "internal", message: "x", retryable: false },
     }
     expect(() => validateDeleteResult(malformedAcceptedTrue as unknown, req as never)).toThrow()
-    // ensure provider treats malformed failed with accepted:true as unknown, not retryable fallback
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
-    const conn = {
-      isPrivateAvailable: () => true,
-      privateDeleteWithHandle: (r: unknown) => {
-        const rr = r as { requestId: string; opId: string; idempotencyKey: string }
-        const malformed = {
-          v: 1,
-          requestId: rr.requestId,
-          opId: rr.opId,
-          op: "session/delete",
-          idempotencyKey: rr.idempotencyKey,
-          status: "failed",
-          outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "x", retryable: true } },
-          accepted: true,
-          failure: { code: "internal", message: "x", retryable: true },
-        }
-        return { id: 9, promise: Promise.resolve(malformed), cancel: () => true }
-      },
-      peekPrivatePeerNextId: () => 9,
-      tryCancelPrivatePending: () => true,
-      invalidatePrivatePeerOnObserverTimeout: () => {},
-    } as unknown as never
+    let privateCalls = 0
+    const conn = connWith((rr: unknown) => {
+      const r = rr as { requestId: string; opId: string; idempotencyKey: string }
+      return {
+        v: 1,
+        requestId: r.requestId,
+        opId: r.opId,
+        op: "session/delete",
+        idempotencyKey: r.idempotencyKey,
+        status: "failed",
+        outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "x", retryable: true } },
+        accepted: true,
+        failure: { code: "internal", message: "x", retryable: true },
+      }
+    }, () => { privateCalls += 1 })
     let caught: unknown
-    try { await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_bad", directory: "/repo" }) } catch (e) { caught = e }
+    try { await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_bad", directory: "/repo", privateReader: null }) } catch (e) { caught = e }
     expect((caught as { terminal?: boolean; code?: string }).terminal).toBeTrue()
-    expect((caught as { code?: string }).code).toBe("unknown")
+    expect((caught as { code?: string }).code).toBe("delete.unresolved")
     expect(sdk).toHaveBeenCalledTimes(0)
+    expect(privateCalls).toBe(1)
   })
 
   it("failed with mismatched failure code is invalid (unknown, no fallback)", async () => {
@@ -127,7 +152,7 @@ describe("ServePrivatePeer validateDeleteResult failed envelope coherence", () =
   })
 })
 
-describe("deleteSessionPrivateFirst private-first with single SDK fallback", () => {
+describe("deleteSessionPrivateFirst accepted-only with exact tombstone re-observe", () => {
   it("private succeeded returns without SDK mutation", async () => {
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
@@ -142,7 +167,7 @@ describe("deleteSessionPrivateFirst private-first with single SDK fallback", () 
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: null })
     expect(sdk).toHaveBeenCalledTimes(0)
     expect(capturedReq).toBeTruthy()
     const req = capturedReq as Record<string, unknown>
@@ -153,23 +178,12 @@ describe("deleteSessionPrivateFirst private-first with single SDK fallback", () 
   it("private terminal failed does not call SDK", async () => {
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
-    const conn = {
-      isPrivateAvailable: () => true,
-      privateDeleteWithHandle: (req: unknown) => {
-        return { id: 2, promise: Promise.resolve(makeFailed(req as never, "session.not_found", "session not found", false)), cancel: () => true }
-      },
-      peekPrivatePeerNextId: () => 2,
-      tryCancelPrivatePending: () => true,
-      invalidatePrivatePeerOnObserverTimeout: () => {},
-    } as unknown as never
-    await expect(deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })).rejects.toBeTruthy()
+    const conn = connWith((req: unknown) => makeFailed(req as never, "session.not_found", "session not found", false))
+    await expect(deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: null })).rejects.toBeTruthy()
     expect(sdk).toHaveBeenCalledTimes(0)
   })
 
-  it.each([
-    ["retryable-failed", (req: never) => makeFailed(req, "internal", "internal", true)],
-    ["capability absence", () => { throw new Error("Private peer missing session/delete capability") }],
-  ])("fallback class %s calls durable SDK once with same tuple", async (_, maker) => {
+  it("validated pre-accept retryable calls durable SDK once with same tuple", async () => {
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
     let privateReq: Record<string, unknown> | null = null
@@ -177,18 +191,13 @@ describe("deleteSessionPrivateFirst private-first with single SDK fallback", () 
       isPrivateAvailable: () => true,
       privateDeleteWithHandle: (req: unknown) => {
         privateReq = req as Record<string, unknown>
-        try {
-          const res = (maker as (r: never) => unknown)(req as never)
-          return { id: 2, promise: Promise.resolve(res), cancel: () => true }
-        } catch (e) {
-          return { id: 2, promise: Promise.reject(e), cancel: () => true }
-        }
+        return { id: 2, promise: Promise.resolve(makeFailed(req as never, "internal", "internal", true)), cancel: () => true }
       },
       peekPrivatePeerNextId: () => 2,
       tryCancelPrivatePending: () => true,
       invalidatePrivatePeerOnObserverTimeout: () => {},
     } as unknown as never
-    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: null })
     expect(sdk).toHaveBeenCalledTimes(1)
     const sdkArg = (sdk.mock.calls[0] as unknown[])[0] as Record<string, unknown>
     expect(sdkArg.sessionID).toBe("ses_src")
@@ -210,70 +219,110 @@ describe("deleteSessionPrivateFirst private-first with single SDK fallback", () 
     ["failed-missing-failure", (req: never) => { const r = makeFailed(req as unknown as never, "internal", "x", true); delete (r as Record<string, unknown>).failure; return r }],
     ["failed-transport-unknown", (req: never) => ({ ...makeFailed(req as unknown as never, "internal", "x", false), transportUnknown: true })],
     ["throw", () => { throw new Error("transport") }],
+    ["capability absence after send", () => { throw new Error("Private peer missing session/delete capability") }],
     ["closed drift", () => { throw Object.assign(new Error("Peer closed"), { code: -32603 }) }],
-  ])("unknown class %s does not call SDK and throws terminal unknown", async (_, maker) => {
+  ])("unknown class %s single mutation + single observation, zero SDK, throws delete.unresolved", async (_, maker) => {
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
-    let calls = 0
-    const conn = {
-      isPrivateAvailable: () => true,
-      privateDeleteWithHandle: (req: unknown) => {
-        calls += 1
-        try {
-          const res = (maker as (r: never) => unknown)(req as never)
-          return { id: 2, promise: Promise.resolve(res), cancel: () => true }
-        } catch (e) {
-          return { id: 2, promise: Promise.reject(e), cancel: () => true }
-        }
-      },
-      peekPrivatePeerNextId: () => 2,
-      tryCancelPrivatePending: () => true,
-      invalidatePrivatePeerOnObserverTimeout: () => {},
-    } as unknown as never
+    let privateCalls = 0
+    const obsCalls = { n: 0 }
+    const conn = connWith(maker as (r: never) => unknown, () => { privateCalls += 1 })
+    const reader = tombstoneReader("not_found", obsCalls)
     let caught: unknown
     try {
-      await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+      await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: reader as never })
     } catch (e) {
       caught = e
     }
     expect(caught).toBeTruthy()
-    const e = caught as { terminal?: boolean; code?: string }
+    const e = caught as { terminal?: boolean; code?: string; message?: string }
     expect(e.terminal).toBeTrue()
-    expect(e.code).toBe("unknown")
+    expect(e.code).toBe("delete.unresolved")
+    expect(String(e.message)).toContain("opId=delete:ses_src:")
     expect(sdk).toHaveBeenCalledTimes(0)
-    expect(calls).toBe(2)
+    expect(privateCalls).toBe(1)
+    expect(obsCalls.n).toBe(1)
   })
 
-  it("private unavailable calls SDK once", async () => {
+  it("unknown with tombstone found returns for caller prune with zero SDK", async () => {
+    const sdk = mock(async () => ({ data: true, error: undefined }))
+    const client = { session: { delete: sdk } } as unknown as KiloClient
+    let privateCalls = 0
+    const obsCalls = { n: 0 }
+    const conn = connWith((req: never) => makeAmbiguous(req), () => { privateCalls += 1 })
+    const reader = tombstoneReader("found", obsCalls)
+    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: reader as never })
+    expect(sdk).toHaveBeenCalledTimes(0)
+    expect(privateCalls).toBe(1)
+    expect(obsCalls.n).toBe(1)
+  })
+
+  it.each([["not_found"], ["scope_mismatch"]] as Array<["not_found" | "scope_mismatch"]>)("unknown with tombstone %s throws unresolved with no prune", async (status) => {
+    const sdk = mock(async () => ({ data: true, error: undefined }))
+    const client = { session: { delete: sdk } } as unknown as KiloClient
+    const conn = connWith((req: never) => makeAmbiguous(req))
+    const reader = tombstoneReader(status)
+    let caught: unknown
+    try {
+      await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: reader as never })
+    } catch (e) {
+      caught = e
+    }
+    expect((caught as { code?: string }).code).toBe("delete.unresolved")
+    expect((caught as { terminal?: boolean }).terminal).toBeTrue()
+    expect(sdk).toHaveBeenCalledTimes(0)
+  })
+
+  it("unknown with unavailable reader throws unresolved with stable identity, zero SDK", async () => {
+    const sdk = mock(async () => ({ data: true, error: undefined }))
+    const client = { session: { delete: sdk } } as unknown as KiloClient
+    let privateCalls = 0
+    const conn = connWith((req: never) => makeAmbiguous(req), () => { privateCalls += 1 })
+    let caught: unknown
+    try {
+      await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: null })
+    } catch (e) {
+      caught = e
+    }
+    expect((caught as { code?: string }).code).toBe("delete.unresolved")
+    expect(sdk).toHaveBeenCalledTimes(0)
+    expect(privateCalls).toBe(1)
+  })
+
+  it("private unavailable pre-send calls SDK once", async () => {
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
     const conn = {
       isPrivateAvailable: () => false,
     } as unknown as never
-    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" })
+    await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: null })
     expect(sdk).toHaveBeenCalledTimes(1)
   })
 
-  it("private malformed failed with accepted:true does not fallback to SDK (unknown)", async () => {
+  it("private malformed failed with accepted:true resolves via observation, no SDK second mutation", async () => {
     const sdk = mock(async () => ({ data: true, error: undefined }))
     const client = { session: { delete: sdk } } as unknown as KiloClient
-    let calls = 0
-    const conn = {
-      isPrivateAvailable: () => true,
-      privateDeleteWithHandle: (req: unknown) => {
-        calls += 1
-        const malformed = { ...makeFailed(req as never, "internal", "x", true), accepted: true }
-        return { id: 2, promise: Promise.resolve(malformed), cancel: () => true }
-      },
-      peekPrivatePeerNextId: () => 2,
-      tryCancelPrivatePending: () => true,
-      invalidatePrivatePeerOnObserverTimeout: () => {},
-    } as unknown as never
+    let privateCalls = 0
+    const obsCalls = { n: 0 }
+    const conn = connWith((req: unknown) => {
+      const malformed = { ...makeFailed(req as never, "internal", "x", true), accepted: true }
+      return malformed
+    }, () => { privateCalls += 1 })
+    const reader = tombstoneReader("not_found", obsCalls)
     let caught: unknown
-    try { await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo" }) } catch (e) { caught = e }
+    try { await deleteSessionPrivateFirst({ client, connection: conn as never, sessionId: "ses_src", directory: "/repo", privateReader: reader as never }) } catch (e) { caught = e }
     expect((caught as { terminal?: boolean; code?: string }).terminal).toBeTrue()
-    expect((caught as { code?: string }).code).toBe("unknown")
+    expect((caught as { code?: string }).code).toBe("delete.unresolved")
     expect(sdk).toHaveBeenCalledTimes(0)
-    expect(calls).toBe(2)
+    expect(privateCalls).toBe(1)
+    expect(obsCalls.n).toBe(1)
+  })
+
+  it("buildDeleteIdentity is strict delete:<sessionId>:<uuid>", async () => {
+    const { opId, idempotencyKey } = buildDeleteIdentity("ses_src")
+    expect(opId.startsWith("delete:ses_src:")).toBeTrue()
+    expect(opId).toBe(idempotencyKey)
+    const token = opId.slice("delete:ses_src:".length)
+    expect(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)).toBeTrue()
   })
 })

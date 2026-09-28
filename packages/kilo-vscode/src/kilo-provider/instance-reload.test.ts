@@ -3,6 +3,7 @@ import {
   isReloadConflictError,
   RELOAD_CONFLICT_WARNING,
   RELOAD_FAILED_ERROR,
+  RELOAD_UNRESOLVED_WARNING,
   requestInstanceReload,
 } from "./instance-reload"
 import { buildInstanceReloadReq } from "./instance-reload-privatefirst"
@@ -154,9 +155,19 @@ describe("requestInstanceReload private-first", () => {
     expect(calls[0]).toEqual([{ directory: "/workspace/wt-s1" }, { throwOnError: true }])
   })
 
-  it("unavailable/invalid/ambiguous/transport/timeout takes exactly one SDK fallback", async () => {
+  it("unavailable pre-send takes exactly one same-directory SDK fallback with no retry", async () => {
+    const calls: unknown[] = []
+    const outcome = await requestInstanceReload({
+      connection: { isPrivateAvailable: () => false } as never,
+      client: sdkClient(calls) as never,
+      directory: "/workspace",
+    })
+    expect(outcome).toEqual({ kind: "succeeded" })
+    expect(calls.length).toBe(1)
+  })
+
+  it("after-send ambiguous/timeout/closed/invalid/transportUnknown/throw return unresolved with zero SDK", async () => {
     const cases: Array<{ name: string; conn: unknown }> = [
-      { name: "unavailable", conn: { isPrivateAvailable: () => false } },
       {
         name: "invalid",
         conn: {
@@ -197,7 +208,16 @@ describe("requestInstanceReload private-first", () => {
         conn: {
           isPrivateAvailable: () => true,
           privateInstanceReloadOutcomeWithHandle: () => {
-            throw new Error("Private peer unavailable")
+            throw new Error("transport error")
+          },
+        },
+      },
+      {
+        name: "closed",
+        conn: {
+          isPrivateAvailable: () => true,
+          privateInstanceReloadOutcomeWithHandle: () => {
+            throw new Error("Peer closed")
           },
         },
       },
@@ -212,6 +232,31 @@ describe("requestInstanceReload private-first", () => {
           }),
         },
       },
+      {
+        name: "transportUnknown",
+        conn: {
+          isPrivateAvailable: () => true,
+          privateInstanceReloadOutcomeWithHandle: (q: ReturnType<typeof buildInstanceReloadReq>) => ({
+            id: 8,
+            promise: Promise.resolve({
+              kind: "valid",
+              result: {
+                v: 1,
+                requestId: q.requestId,
+                opId: q.opId,
+                op: q.op,
+                idempotencyKey: q.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: 1 },
+                accepted: true,
+                data: { reloaded: true },
+                transportUnknown: true,
+              },
+            }),
+            cancel: () => true,
+          }),
+        },
+      },
     ]
     for (const c of cases) {
       const calls: unknown[] = []
@@ -220,10 +265,67 @@ describe("requestInstanceReload private-first", () => {
         client: sdkClient(calls) as never,
         directory: "/workspace",
       })
-      expect(outcome).toEqual({ kind: "succeeded" })
-      expect(calls.length).toBe(1)
+      expect(outcome.kind).toBe("unresolved")
+      if (outcome.kind === "unresolved") {
+        expect(outcome.opId.startsWith("instance-reload:")).toBeTrue()
+        expect(outcome.reason.length).toBeGreaterThan(0)
+      }
+      expect(calls.length).toBe(0)
     }
   }, 15000)
+
+  it("strict retryable fence with accepted true is unresolved, never SDK", async () => {
+    const calls: unknown[] = []
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateInstanceReloadOutcomeWithHandle: (q: ReturnType<typeof buildInstanceReloadReq>) => ({
+        id: 9,
+        promise: Promise.resolve({
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: q.requestId,
+            opId: q.opId,
+            op: q.op,
+            idempotencyKey: q.idempotencyKey,
+            status: "failed",
+            outcome: {
+              type: "failed",
+              time: 1,
+              failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "busy", retryable: true },
+            },
+            accepted: true,
+            failure: { code: "InstanceUnavailableDuringConfigRebuild", message: "busy", retryable: true },
+          },
+        }),
+        cancel: () => true,
+      }),
+    }
+    const outcome = await requestInstanceReload({
+      connection: conn as never,
+      client: sdkClient(calls) as never,
+      directory: "/workspace",
+    })
+    expect(outcome.kind).toBe("unresolved")
+    expect(calls.length).toBe(0)
+  })
+
+  it("missing-capability pre-send takes exactly one SDK fallback", async () => {
+    const calls: unknown[] = []
+    const conn = {
+      isPrivateAvailable: () => true,
+      privateInstanceReloadOutcomeWithHandle: () => {
+        throw new Error("Private peer missing instance/reload capability")
+      },
+    }
+    const outcome = await requestInstanceReload({
+      connection: conn as never,
+      client: sdkClient(calls) as never,
+      directory: "/workspace/wt-s1",
+    })
+    expect(outcome).toEqual({ kind: "succeeded" })
+    expect(calls.length).toBe(1)
+  })
 
   it("SDK fallback maps a 409 throw to conflict and retains the cause", async () => {
     const cause = conflictError()
@@ -301,5 +403,8 @@ describe("requestInstanceReload private-first", () => {
       "Cannot reload while a session is running. Wait for it to finish or abort it first.",
     )
     expect(RELOAD_FAILED_ERROR).toBe("Reload failed. See extension logs for details.")
+    expect(RELOAD_UNRESOLVED_WARNING).toBe(
+      "Reload status could not be confirmed. No retry was issued. It will converge automatically if the reload was accepted.",
+    )
   })
 })

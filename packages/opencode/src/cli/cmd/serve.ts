@@ -14,11 +14,14 @@ import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 ins
 // Runs BEFORE Server.listen bind on the canonical Database.Service (same
 // memoMap lease+marker gate as the listener). A single invalid in-flight row
 // never fabricates a terminal; the gate refuses listener startup with a safe
-// opId/count message (no detail/stack/secret). Scans prompt + provider
-// in-flight rows under the one gate: prompt rows converge with revision +
-// `changed` + `generation`, provider rows with exactly one revision +
-// `changed` (never `generation`, never recovery fields). Extracted so tests
-// can inject listener creation and prove no bind until the sweep completes.
+// opId/count message (no detail/stack/secret). Scans prompt + provider +
+// cancelQueued in-flight rows under the one gate: prompt rows converge with
+// revision + `changed` + `generation`, provider rows with exactly one
+// revision + `changed` (never `generation`, never recovery fields),
+// cancelQueued rows converge to terminal `ambiguous` (result unknown, never
+// `succeeded`) with exactly one revision + `changed` and no repeated side
+// effect. Extracted so tests can inject listener creation and prove no bind
+// until the sweep completes.
 export const runCrashConvergenceGate = (
   db: Database.Interface["db"],
 ): Effect.Effect<SessionOperation.ConvergeOrphanedSummary, CliError> =>
@@ -109,11 +112,13 @@ export const ServeCommand = effectCmd({
     const opts = yield* resolveNetworkOptions(args)
     netTimer.end()
     // kilocode_change start - crash convergence pre-bind gate: a dead runtime
-    // leaves accepted prompt + provider in-flight rows with no live owner. The fresh boot
+    // leaves accepted prompt + provider + cancelQueued in-flight rows with no live owner. The fresh boot
     // owns no volatile generation or provider state by construction, so converge the
     // durable rows once via the same CAS terminalization (prompt: abandoned with
     // revision + changed + generation; provider: abandoned with exactly one
-    // revision + changed, never generation, never recovery) BEFORE Server.listen bind on the canonical
+    // revision + changed, never generation, never recovery; cancelQueued:
+    // ambiguous with exactly one revision + changed, never generation, never
+    // recovery, never repeated side effect) BEFORE Server.listen bind on the canonical
     // Database.Service (same memoMap lease+marker gate as the listener).
     // Fail-closed: invalid rows refuse listener startup; never post-bind
     // re-sweep (a post-bind sweep could misjudge a newly accepted prompt as

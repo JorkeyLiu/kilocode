@@ -70,6 +70,34 @@ function stale(ctx: SuggestionContext, requestID: string): void {
   ctx.postMessage({ type: "suggestionResolved", requestID })
 }
 
+// Accepted-only: after-send uncertainty never redispatches SDK accept/dismiss
+// and never fabricates accepted/dismissed. Keep the request identity,
+// re-observe pending once via the existing readSuggestionsForDir (read-only,
+// absence is not acceptance), then surface the existing suggestionError.
+async function surfaceUnresolved(
+  ctx: SuggestionContext,
+  requestID: string,
+  dir: string,
+  opId: string,
+  reason: string,
+  op: "accept" | "dismiss",
+): Promise<void> {
+  console.warn(`[Kilo New] KiloProvider: Private suggestion ${op} uncertain, re-observe pending once`, {
+    requestID,
+    opId,
+    reason: String(reason).slice(0, 120),
+  })
+  try {
+    if (ctx.client) {
+      await readSuggestionsForDir({ connection: ctx.connection ?? null, client: ctx.client, directory: dir })
+    }
+  } catch {
+    // Read-only re-observation must not fail the unresolved surface.
+  }
+  console.error(`[Kilo New] KiloProvider: Failed to ${op} suggestion: unresolved`, { requestID, opId })
+  ctx.postMessage({ type: "suggestionError", requestID })
+}
+
 export async function handleSuggestionAccept(
   ctx: SuggestionContext,
   requestID: string,
@@ -100,8 +128,13 @@ export async function handleSuggestionAccept(
       ctx.postMessage({ type: "suggestionError", requestID })
       return
     }
+    if (priv.outcome.kind === "unresolved") {
+      await surfaceUnresolved(ctx, requestID, dir, priv.outcome.opId, priv.outcome.reason, "accept")
+      return
+    }
   } catch (error) {
-    console.error("[Kilo New] KiloProvider: Private accept attempt failed, falling back:", error)
+    await surfaceUnresolved(ctx, requestID, dir, "unknown", String(error).slice(0, 200), "accept")
+    return
   }
 
   try {
@@ -140,8 +173,13 @@ export async function handleSuggestionDismiss(
       ctx.postMessage({ type: "suggestionError", requestID })
       return
     }
+    if (priv.outcome.kind === "unresolved") {
+      await surfaceUnresolved(ctx, requestID, dir, priv.outcome.opId, priv.outcome.reason, "dismiss")
+      return
+    }
   } catch (error) {
-    console.error("[Kilo New] KiloProvider: Private dismiss attempt failed, falling back:", error)
+    await surfaceUnresolved(ctx, requestID, dir, "unknown", String(error).slice(0, 200), "dismiss")
+    return
   }
 
   try {

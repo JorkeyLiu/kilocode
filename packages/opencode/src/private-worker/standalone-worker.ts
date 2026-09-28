@@ -61,6 +61,9 @@ export async function createStandaloneDeps(): Promise<{
     get: get.get,
     messages: messages.messages,
     operations: ops.operations,
+    operation: ops.operation,
+    createOperation: ops.createOperation,
+    deleteOperation: ops.deleteOperation,
   }
   const dispose = async () => {
     try {

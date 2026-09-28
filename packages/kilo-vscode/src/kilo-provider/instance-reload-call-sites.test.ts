@@ -1,23 +1,39 @@
 import { describe, expect, it } from "bun:test"
-import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR } from "./instance-reload"
+import { RELOAD_CONFLICT_WARNING, RELOAD_FAILED_ERROR, RELOAD_UNRESOLVED_WARNING } from "./instance-reload"
 
-// Structural proof that both reload entries share one private-first owner.
+// Structural proof that both reload entries share one accepted-only owner.
 // The helper (`instance-reload.ts`) owns the only `client.instance.reload`
 // SDK fallback plus the private `instance/reload` attempt; the attempt helper
 // (`instance-reload-privatefirst.ts`) owns zero SDK calls. `KiloProvider.handleReload`
 // and the `kilo-code.new.reload` command resolve their own directory, share
-// the 409/generic copy, pass the private connection, and keep their existing
-// success projection (provider clears commands + cross-directory lifecycle
-// refresh; the command adds no second refresh owner and converges via the
-// disposed events like every other provider). Ambiguous fallback can produce
-// at most two underlying reloads (merged by the coordinator); this unit
-// promises no exactly-once boots and no new dedup/singleflight owner.
+// the 409/generic/unresolved copy, pass the private connection, and keep their
+// existing success projection (provider clears commands + cross-directory
+// lifecycle refresh only on settled success). Provider `unresolved` warns with
+// no cache-clear and no second reload, then requests one guarded read-only
+// reconciliation through the existing `LifecycleRefreshCoordinator` so a lost
+// disposed SSE event cannot leave state stale; the command has no provider
+// instance and no existing shared read-only path, so it keeps warn-only and
+// converges via the disposed events plus the next provider round. No second
+// reload on after-send uncertainty; this unit promises no exactly-once boots,
+// no new dedup/singleflight owner, no new lifecycle owner/protocol, and no
+// polling.
 async function src(rel: string): Promise<string> {
   return Bun.file(new URL(rel, import.meta.url)).text()
 }
 
 function directReloadCalls(text: string): number {
   return text.match(/\.instance\.reload\s*\(/g)?.length ?? 0
+}
+
+function handleReloadBlock(text: string): string {
+  return text.match(/private async handleReload\(\)[\s\S]*?^\s{2}\}/m)?.[0] ?? ""
+}
+
+function unresolvedSlice(block: string): string {
+  const at = block.indexOf('outcome.kind === "unresolved"')
+  if (at < 0) return ""
+  const ret = block.indexOf("return", at)
+  return ret < 0 ? block.slice(at) : block.slice(at, ret)
 }
 
 describe("instance reload production call sites", () => {
@@ -30,17 +46,28 @@ describe("instance reload production call sites", () => {
     expect(helper).toContain("instance/reload")
     expect(helper).toContain("RELOAD_CONFLICT_WARNING")
     expect(helper).toContain("RELOAD_FAILED_ERROR")
-    // The SDK call lives only in the fallback: private ok/terminal return
-    // before it. Exactly one fallback path, never retried.
+    expect(helper).toContain("RELOAD_UNRESOLVED_WARNING")
+    expect(helper).toContain("unresolved")
+    // The SDK call lives only in the proven pre-send/strict-fence fallback:
+    // private ok/terminal/unresolved return before it. Exactly one fallback
+    // path, never retried, never a second reload on after-send uncertainty.
     expect(helper.match(/\.instance\.reload\s*\(/g)?.length ?? 0).toBe(1)
+    // Helper owns no refresh: reconciliation lives in the existing provider
+    // coordinator call sites only.
+    expect(helper).not.toContain("lifecycleRefresh")
+    expect(helper).not.toContain("reloadAfterAuthChange")
+    expect(helper).not.toContain("fetchAndSendCommands")
+    expect(helper).not.toContain("clearCommandsCache")
   })
 
-  it("attempt helper owns zero SDK calls", async () => {
+  it("attempt helper owns zero SDK calls and explicit unresolved", async () => {
     const attempt = await src("./instance-reload-privatefirst.ts")
     expect(directReloadCalls(attempt)).toBe(0)
     expect(attempt).toContain("instance/reload")
     expect(attempt).toContain("canonicalInstanceReloadOpId")
     expect(attempt).toContain("attemptInstanceReloadPrivate")
+    expect(attempt).toContain("unresolved")
+    expect(attempt).toContain("provenPreSend")
   })
 
   it("KiloProvider reload goes through the shared helper with zero direct SDK calls", async () => {
@@ -49,6 +76,7 @@ describe("instance reload production call sites", () => {
     expect(text).toContain("requestInstanceReload")
     expect(text).toContain("RELOAD_CONFLICT_WARNING")
     expect(text).toContain("RELOAD_FAILED_ERROR")
+    expect(text).toContain("RELOAD_UNRESOLVED_WARNING")
     expect(text).toContain('from "./kilo-provider/instance-reload"')
     expect(text).toContain("connection: this.connectionService")
   })
@@ -59,6 +87,7 @@ describe("instance reload production call sites", () => {
     expect(text).toContain("requestInstanceReload")
     expect(text).toContain("RELOAD_CONFLICT_WARNING")
     expect(text).toContain("RELOAD_FAILED_ERROR")
+    expect(text).toContain("RELOAD_UNRESOLVED_WARNING")
     expect(text).toContain('from "./kilo-provider/instance-reload"')
     expect(text).toContain("connection: connectionService")
   })
@@ -74,23 +103,68 @@ describe("instance reload production call sites", () => {
 
   it("provider keeps its success projection: clear commands plus cross-directory lifecycle refresh", async () => {
     const text = await src("../KiloProvider.ts")
-    const block = text.match(/private async handleReload\(\)[\s\S]*?^\s{2}\}/m)?.[0] ?? ""
+    const block = handleReloadBlock(text)
     expect(block.length).toBeGreaterThan(0)
     expect(block).toContain("requestInstanceReload")
     expect(block).toContain("this.clearCommandsCache()")
     expect(block).toContain("sameDirectory(dir, this.getWorkspaceDirectory())")
     expect(block).toContain("await this.reloadAfterAuthChange()")
+    expect(block).toContain('outcome.kind === "unresolved"')
+    expect(block).toContain("RELOAD_UNRESOLVED_WARNING")
+    expect(block).toContain("showWarningMessage")
   })
 
-  it("command adds no second refresh owner: success converges via disposed events", async () => {
+  it("unresolved never clears cache or redispatches reload: warning returns before success projection", async () => {
+    const text = await src("../KiloProvider.ts")
+    const block = handleReloadBlock(text)
+    const slice = unresolvedSlice(block)
+    expect(slice.length).toBeGreaterThan(0)
+    expect(slice).toContain("RELOAD_UNRESOLVED_WARNING")
+    expect(slice).toContain("showWarningMessage")
+    expect(slice).not.toContain("this.clearCommandsCache()")
+    expect(slice).not.toContain("requestInstanceReload")
+    expect(directReloadCalls(slice)).toBe(0)
+    const unresolvedAt = block.indexOf('outcome.kind === "unresolved"')
+    const clearAt = block.indexOf("this.clearCommandsCache()")
+    expect(unresolvedAt).toBeGreaterThan(-1)
+    expect(clearAt).toBeGreaterThan(-1)
+    expect(unresolvedAt).toBeLessThan(clearAt)
+  })
+
+  it("unresolved lost-event reconciliation requests one read-only round with current guards", async () => {
+    const text = await src("../KiloProvider.ts")
+    const block = handleReloadBlock(text)
+    const slice = unresolvedSlice(block)
+    // Same existing coordinator as the disposed handlers, fire-and-forget
+    // read-only; no success asserted, no second reload, no cache clear.
+    expect(slice).toContain("void this.reloadAfterAuthChange()")
+    expect(slice).not.toContain("await this.reloadAfterAuthChange()")
+    expect(slice).not.toContain("this.clearCommandsCache()")
+    // Guards mirror existing current/dispose/dir patterns.
+    expect(slice).toContain("!this.disposed")
+    expect(slice).toContain("this.client === client")
+    expect(slice).toContain("this.connectionGeneration === gen")
+    expect(slice).toContain("sameDirectory(dir, this.getWorkspaceDirectory(this.currentSession?.id))")
+    // Exactly one shared helper call per handleReload: no second dispatch.
+    expect(block.match(/requestInstanceReload/g)?.length ?? 0).toBe(1)
+  })
+
+  it("command has no provider instance so keeps warn-only: precise limitation, no second owner", async () => {
     const text = await src("../extension.ts")
     const start = text.indexOf("kilo-code.new.reload")
     expect(start).toBeGreaterThan(-1)
-    const block = text.slice(start, start + 2000)
+    const block = text.slice(start, start + 2500)
     expect(block).toContain("requestInstanceReload")
+    expect(block).toContain("RELOAD_UNRESOLVED_WARNING")
+    expect(block).toContain("showWarningMessage")
+    // No existing shared read-only path is reachable from the command (no
+    // provider instance); adding one would require a new lifecycle owner, so
+    // the command converges via the disposed events plus the next provider
+    // round like every other non-provider entry.
     expect(block).not.toContain("reloadAfterAuthChange")
     expect(block).not.toContain("clearCommandsCache")
     expect(block).not.toContain("lifecycleRefresh")
+    expect(directReloadCalls(block)).toBe(0)
   })
 
   it("disposed events stay the final convergence owner for both entries", async () => {
@@ -106,5 +180,8 @@ describe("instance reload production call sites", () => {
       "Cannot reload while a session is running. Wait for it to finish or abort it first.",
     )
     expect(RELOAD_FAILED_ERROR).toBe("Reload failed. See extension logs for details.")
+    expect(RELOAD_UNRESOLVED_WARNING).toBe(
+      "Reload status could not be confirmed. No retry was issued. It will converge automatically if the reload was accepted.",
+    )
   })
 })

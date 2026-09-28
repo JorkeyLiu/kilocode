@@ -28,6 +28,7 @@ export type QuestionPrivateOutcome =
   | { kind: "terminal" }
   | { kind: "terminal-failure"; code: "question.not_found" | "scope_mismatch" }
   | { kind: "fallback"; reason: string }
+  | { kind: "unresolved"; reason: string; opId: string }
 
 export type QuestionListPrivateOutcome =
   | { kind: "ok"; items: QuestionListEntry[] }
@@ -161,14 +162,30 @@ function expired(handle: Handle | null, opId: string): void {
   }
 }
 
+// Accepted-only: fallback is strictly pre-send (no private request was
+// dispatched). Any after-send uncertainty (ambiguous/timeout/closed/invalid
+// wire) is unresolved with the stable opId — never SDK fallback.
+function provenPreSend(reason: string): boolean {
+  if (reason === "missing-capability" || reason === "unavailable") return true
+  const low = reason.toLowerCase()
+  if (low.includes("missing") && low.includes("capability")) return true
+  if (low.includes("private peer missing")) return true
+  if (low.includes("private peer unavailable")) return true
+  return false
+}
+
+function unresolvedOf(opId: string, reason: string): QuestionPrivateOutcome {
+  return { kind: "unresolved", reason: reason.slice(0, 200), opId }
+}
+
 function settleReply(req: QuestionReplyContractRequest, result: unknown): QuestionPrivateOutcome {
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, "ambiguous")
   if (kind === "terminal") {
     try {
       validateQuestionReplyResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "terminal" }
   }
@@ -177,22 +194,22 @@ function settleReply(req: QuestionReplyContractRequest, result: unknown): Questi
       const out = validateQuestionTerminalFailure(result, req)
       const code = out.failure.code
       if (code === "question.not_found" || code === "scope_mismatch") return { kind: "terminal-failure", code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, `invalid: ${String(err).slice(0, 120)}`)
     }
-    return { kind: "fallback", reason: "failure" }
+    return unresolvedOf(req.opId, "failure")
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, "invalid")
 }
 
 function settleReject(req: QuestionRejectContractRequest, result: unknown): QuestionPrivateOutcome {
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, "ambiguous")
   if (kind === "terminal") {
     try {
       validateQuestionRejectResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "terminal" }
   }
@@ -201,12 +218,22 @@ function settleReject(req: QuestionRejectContractRequest, result: unknown): Ques
       const out = validateQuestionTerminalFailure(result, req)
       const code = out.failure.code
       if (code === "question.not_found" || code === "scope_mismatch") return { kind: "terminal-failure", code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, `invalid: ${String(err).slice(0, 120)}`)
     }
-    return { kind: "fallback", reason: "failure" }
+    return unresolvedOf(req.opId, "failure")
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, "invalid")
+}
+
+function unresolvedFromSendError(opId: string, err: unknown): QuestionPrivateOutcome {
+  const msg = err instanceof Error ? err.message : String(err)
+  const low = msg.toLowerCase()
+  if (low.includes("peer closed") || low.includes("peer disposed") || msg.includes("-32603")) {
+    return unresolvedOf(opId, `closed: ${msg.slice(0, 120)}`)
+  }
+  if (msg.includes("private question timeout")) return unresolvedOf(opId, "timeout")
+  return unresolvedOf(opId, msg.slice(0, 200))
 }
 
 export async function replyQuestionPrivateFirst(opts: {
@@ -240,13 +267,16 @@ export async function replyQuestionPrivateFirst(opts: {
     return { outcome: { kind: "fallback", reason: "unavailable" }, req }
   }
   const acq = acquireReply(conn, req)
-  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { outcome: { kind: "fallback", reason: acq.reason }, req }
+    return { outcome: unresolvedOf(req.opId, acq.reason), req }
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+    return { outcome: unresolvedFromSendError(req.opId, err), req }
   }
   return { outcome: settleReply(req, result), req }
 }
@@ -281,13 +311,16 @@ export async function rejectQuestionPrivateFirst(opts: {
     return { outcome: { kind: "fallback", reason: "unavailable" }, req }
   }
   const acq = acquireReject(conn, req)
-  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { outcome: { kind: "fallback", reason: acq.reason }, req }
+    return { outcome: unresolvedOf(req.opId, acq.reason), req }
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+    return { outcome: unresolvedFromSendError(req.opId, err), req }
   }
   return { outcome: settleReject(req, result), req }
 }

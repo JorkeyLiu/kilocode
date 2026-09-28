@@ -26,6 +26,7 @@ export type SuggestionPrivateOutcome =
   | { kind: "terminal" }
   | { kind: "terminal-failure"; code: "suggestion.not_found" | "scope_mismatch" }
   | { kind: "fallback"; reason: string }
+  | { kind: "unresolved"; reason: string; opId: string; requestID: string }
 
 export type SuggestionListPrivateOutcome =
   | { kind: "ok"; items: SuggestionListEntry[] }
@@ -201,14 +202,40 @@ function expired(handle: Handle | null, opId: string): void {
   }
 }
 
+// Accepted-only: fallback is strictly proven pre-send (no private request was
+// dispatched). Any after-send uncertainty (ambiguous/timeout/closed/invalid
+// wire) is unresolved with the stable opId/requestID — never SDK fallback.
+function provenPreSend(reason: string): boolean {
+  if (reason === "missing-capability" || reason === "unavailable") return true
+  const low = reason.toLowerCase()
+  if (low.includes("missing") && low.includes("capability")) return true
+  if (low.includes("private peer missing")) return true
+  if (low.includes("private peer unavailable")) return true
+  return false
+}
+
+function unresolvedOf(opId: string, requestID: string, reason: string): SuggestionPrivateOutcome {
+  return { kind: "unresolved", reason: reason.slice(0, 200), opId, requestID }
+}
+
+function unresolvedFromSendError(opId: string, requestID: string, err: unknown): SuggestionPrivateOutcome {
+  const msg = err instanceof Error ? err.message : String(err)
+  const low = msg.toLowerCase()
+  if (low.includes("peer closed") || low.includes("peer disposed") || msg.includes("-32603")) {
+    return unresolvedOf(opId, requestID, `closed: ${msg.slice(0, 120)}`)
+  }
+  if (msg.includes("private suggestion timeout")) return unresolvedOf(opId, requestID, "timeout")
+  return unresolvedOf(opId, requestID, msg.slice(0, 200))
+}
+
 function settleAccept(req: SuggestionAcceptContractRequest, result: unknown): SuggestionPrivateOutcome {
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, req.context.requestID, "ambiguous")
   if (kind === "terminal") {
     try {
       validateSuggestionAcceptResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "terminal" }
   }
@@ -218,22 +245,22 @@ function settleAccept(req: SuggestionAcceptContractRequest, result: unknown): Su
       const code = out.failure.code
       if (code === "suggestion.not_found" || code === "scope_mismatch")
         return { kind: "terminal-failure", code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
-    return { kind: "fallback", reason: "failure" }
+    return unresolvedOf(req.opId, req.context.requestID, "failure")
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, req.context.requestID, "invalid")
 }
 
 function settleDismiss(req: SuggestionDismissContractRequest, result: unknown): SuggestionPrivateOutcome {
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, req.context.requestID, "ambiguous")
   if (kind === "terminal") {
     try {
       validateSuggestionDismissResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "terminal" }
   }
@@ -243,12 +270,12 @@ function settleDismiss(req: SuggestionDismissContractRequest, result: unknown): 
       const code = out.failure.code
       if (code === "suggestion.not_found" || code === "scope_mismatch")
         return { kind: "terminal-failure", code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, req.context.requestID, `invalid: ${String(err).slice(0, 120)}`)
     }
-    return { kind: "fallback", reason: "failure" }
+    return unresolvedOf(req.opId, req.context.requestID, "failure")
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, req.context.requestID, "invalid")
 }
 
 export async function acceptSuggestionPrivateFirst(opts: {
@@ -282,13 +309,16 @@ export async function acceptSuggestionPrivateFirst(opts: {
     return { outcome: { kind: "fallback", reason: "unavailable" }, req }
   }
   const acq = acquireAccept(conn, req)
-  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { outcome: { kind: "fallback", reason: acq.reason }, req }
+    return { outcome: unresolvedOf(req.opId, req.context.requestID, acq.reason), req }
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+    return { outcome: unresolvedFromSendError(req.opId, req.context.requestID, err), req }
   }
   return { outcome: settleAccept(req, result), req }
 }
@@ -323,13 +353,16 @@ export async function dismissSuggestionPrivateFirst(opts: {
     return { outcome: { kind: "fallback", reason: "unavailable" }, req }
   }
   const acq = acquireDismiss(conn, req)
-  if (!acq.ok) return { outcome: { kind: "fallback", reason: "missing-capability" }, req }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { outcome: { kind: "fallback", reason: acq.reason }, req }
+    return { outcome: unresolvedOf(req.opId, req.context.requestID, acq.reason), req }
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { outcome: { kind: "fallback", reason: "timeout" }, req }
+    return { outcome: unresolvedFromSendError(req.opId, req.context.requestID, err), req }
   }
   return { outcome: settleDismiss(req, result), req }
 }

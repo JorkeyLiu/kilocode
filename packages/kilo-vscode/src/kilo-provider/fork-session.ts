@@ -5,6 +5,9 @@ import { getErrorMessage } from "../kilo-provider-utils"
 import { TelemetryProxy, TelemetryEventName } from "../services/telemetry"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { validateForkResult } from "../services/cli-backend/serve-private-peer"
+import { tryPrivateOperationExact } from "./session-operation-private"
+import { validatePrivateGetResult } from "./session-detail"
+import type { PrivateSessionReader } from "./options"
 
 export interface ForkContext {
   connection: KiloConnectionService
@@ -13,6 +16,8 @@ export interface ForkContext {
   forked: (session: Session, sourceID: string) => void
   status: (sessionID: string) => SessionStatus["type"] | undefined
   directory: (sessionID: string) => string
+  privateReader?: PrivateSessionReader | null
+  pending?: (opId: string, childId?: string) => void
 }
 
 export function buildForkIdentity(sessionId: string): { opId: string; idempotencyKey: string; requestId: string } {
@@ -261,15 +266,189 @@ function forkTerminal(code: string, message: string): Error {
   return err
 }
 
+export type ForkOutcome = { kind: "session"; session: Session } | { kind: "pending"; opId: string; childId?: string }
+
+function unresolvedFork(opId: string): Error {
+  return forkTerminal("fork.unresolved", `Fork status could not be confirmed (opId=${opId}). No retry was issued.`)
+}
+
+type ForkAttempt = { kind: "ok"; session: Session } | { kind: "terminal"; code: string; message: string } | { kind: "retryable"; reason: string } | { kind: "uncertain"; reason: string }
+
 // eslint-disable-next-line complexity
+function parseForkPrivateResult(result: unknown, req: unknown, sessionId: string, directory: string): ForkAttempt {
+  const typed = result as { status?: string; accepted?: boolean; transportUnknown?: unknown }
+  if (typed.transportUnknown === true) return { kind: "uncertain", reason: "transportUnknown" }
+  if (typed.status === "succeeded" && typed.accepted === true) {
+    try {
+      validateForkResult(result as never, req as never)
+    } catch (e) {
+      return { kind: "uncertain", reason: `invalid: ${String(e).slice(0, 120)}` }
+    }
+    const sess = resolveForkSession(result, sessionId, directory)
+    if (!sess) return { kind: "uncertain", reason: "invalid private session" }
+    return { kind: "ok", session: sess }
+  }
+  if (typed.status === "failed") {
+    try {
+      validateForkResult(result as never, req as never)
+    } catch (e) {
+      return { kind: "uncertain", reason: `invalid: ${String(e).slice(0, 120)}` }
+    }
+    const failure = (result as { failure?: { code?: unknown; message?: unknown; retryable?: unknown } }).failure
+    const accepted = (result as { accepted?: unknown }).accepted
+    if (failure?.retryable === true && accepted === false) {
+      return { kind: "retryable", reason: String(typeof failure?.code === "string" ? failure.code : "retryable") }
+    }
+    if (failure?.retryable === false) {
+      const code = typeof failure?.code === "string" && failure.code ? failure.code : "failed"
+      const message = typeof failure?.message === "string" && failure.message ? failure.message : code
+      return { kind: "terminal", code, message }
+    }
+    return { kind: "uncertain", reason: "failed without single-SDK retryable" }
+  }
+  return { kind: "uncertain", reason: `private not succeeded: ${String(typed.status)}` }
+}
+
+async function attemptFork(
+  factory: () => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean },
+  canceller: { tryCancel?: (id: number, msg?: string) => boolean; invalidate?: (r: string) => void } | null,
+  opId: string,
+  ms = 3000,
+): Promise<unknown> {
+  let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
+  let promise: Promise<unknown>
+  try {
+    handle = factory()
+    promise = handle.promise
+  } catch (e) {
+    throw e
+  }
+  try {
+    return await withTimeout(promise, ms)
+  } catch (e) {
+    const msg = String(e)
+    if (msg.includes("private parity timeout") && handle) {
+      if (handle.cancel) {
+        try {
+          handle.cancel(`private parity timeout opId=${opId}`)
+        } catch {}
+      } else if (canceller?.tryCancel) {
+        let cleaned = false
+        try {
+          cleaned = canceller.tryCancel(handle.id, `private parity timeout opId=${opId}`)
+        } catch {}
+        if (!cleaned && canceller.invalidate) {
+          try {
+            canceller.invalidate(`fork observer timeout opId=${opId}`)
+          } catch {}
+        }
+      } else if (canceller?.invalidate) {
+        try {
+          canceller.invalidate(`fork observer timeout opId=${opId}`)
+        } catch {}
+      }
+    }
+    throw e
+  }
+}
+
+function forkCancellerOf(connection: KiloConnectionService): {
+  tryCancel?: (id: number, msg?: string) => boolean
+  invalidate?: (r: string) => void
+} | null {
+  const c = connection as unknown as {
+    tryCancelPrivatePending?: (id: number, msg?: string) => boolean
+    invalidatePrivatePeerOnObserverTimeout?: (r: string) => void
+  }
+  if (!c.tryCancelPrivatePending && !c.invalidatePrivatePeerOnObserverTimeout) return null
+  return { tryCancel: c.tryCancelPrivatePending?.bind(connection), invalidate: c.invalidatePrivatePeerOnObserverTimeout?.bind(connection) }
+}
+
+async function getForkChildDetail(
+  reader: PrivateSessionReader | null | undefined,
+  directory: string,
+  childId: string,
+  sourceId: string,
+): Promise<string | undefined> {
+  if (!reader || typeof reader.get !== "function" || !reader.isEnabled() || !reader.isStarted()) return undefined
+  let raw: unknown
+  try {
+    raw = await reader.get({ directory, sessionId: childId })
+  } catch {
+    return undefined
+  }
+  let validated: ReturnType<typeof validatePrivateGetResult>
+  try {
+    validated = validatePrivateGetResult(raw, directory, childId)
+  } catch {
+    return undefined
+  }
+  if (validated.status !== "found") return undefined
+  try {
+    if (validated.session.parentID !== sourceId) return undefined
+    if (validated.session.directory !== directory) return undefined
+  } catch {
+    return undefined
+  }
+  return childId
+}
+
+async function reobserveFork(
+  reader: PrivateSessionReader | null | undefined,
+  input: { directory: string; sessionId: string; opId: string },
+): Promise<ForkOutcome> {
+  console.warn("[Kilo Fork] private uncertain, re-observe exact op", { opId: input.opId })
+  let seen: Awaited<ReturnType<typeof tryPrivateOperationExact>>
+  try {
+    seen = await tryPrivateOperationExact(reader ?? null, input)
+  } catch {
+    throw unresolvedFork(input.opId)
+  }
+  if (seen.kind === "found") {
+    const entry = seen.operation as { opId: string; outcome: string; code: string; message: string; forkedSessionId?: unknown }
+    if (entry.opId !== input.opId) throw unresolvedFork(input.opId)
+    if (entry.outcome === "succeeded") {
+      const childRaw = entry.forkedSessionId
+      if (typeof childRaw === "string" && childRaw.length > 0) {
+        const child = await getForkChildDetail(reader, input.directory, childRaw, input.sessionId)
+        if (child) return { kind: "pending", opId: input.opId, childId: child }
+        return { kind: "pending", opId: input.opId, childId: childRaw }
+      }
+      return { kind: "pending", opId: input.opId }
+    }
+    if (entry.outcome === "failed" || entry.outcome === "abandoned") {
+      const code = typeof entry.code === "string" && entry.code ? entry.code : "failed"
+      const message = typeof entry.message === "string" && entry.message ? entry.message : code
+      throw forkTerminal(code, message)
+    }
+    throw unresolvedFork(input.opId)
+  }
+  throw unresolvedFork(input.opId)
+}
+
+// Accepted-only private-first fork: exactly one private attempt with the
+// durable tuple (opId/idempotencyKey/requestId/directory). A valid
+// `succeeded` + `accepted` private session returns with zero SDK mutation; a
+// validated terminal `failed` (`retryable === false`) throws with zero SDK;
+// a validated pre-accept retryable fence (`accepted === false`,
+// `retryable === true`) takes exactly one SDK commit with the identical
+// tuple; pre-send unavailable also takes exactly one SDK commit. Transport
+// uncertainty (timeout/ambiguous/transportUnknown/peerClosed/invalid/throw)
+// never dispatches SDK: it re-observes the exact `fork:<sessionId>:<token>`
+// op once via the injected `privateReader.operation` (panel-safe, zero SDK).
+// Found `succeeded` resolves the optional strictly validated minimal
+// `forkedSessionId` through `reader.get(childId)`; absent/unavailable/invalid
+// maps to explicit `fork.unresolved` pending with no retry and no fabricated
+// child. No second fork is ever issued.
 export async function forkSessionPrivateFirst(opts: {
   client: KiloClient
   connection: KiloConnectionService
   sessionId: string
   directory: string
   messageId?: string
-}): Promise<Session> {
-  const { client, connection, sessionId, directory } = opts
+  privateReader?: PrivateSessionReader | null
+}): Promise<ForkOutcome> {
+  const { client, connection, sessionId, directory, privateReader } = opts
   const { opId, idempotencyKey, requestId } = buildForkIdentity(sessionId)
   const privateReq = {
     v: 1 as const,
@@ -280,99 +459,40 @@ export async function forkSessionPrivateFirst(opts: {
     context: { directory, sessionId, parentSessionId: null as string | null },
     payload: { ...(opts.messageId ? { messageId: opts.messageId } : {}) },
   }
-
-  if (connection.isPrivateAvailable()) {
-    try {
-      const handleFactory = (connection as unknown as { privateForkWithHandle?: (r: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } })?.privateForkWithHandle?.bind(connection) ?? null
-      const tryCancel = (connection as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean })?.tryCancelPrivatePending?.bind(connection) ?? null
-      const invalidate = (connection as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void })?.invalidatePrivatePeerOnObserverTimeout?.bind(connection) ?? null
-      const peekNextId = (connection as unknown as { peekPrivatePeerNextId?: () => number | null })?.peekPrivatePeerNextId?.bind(connection) ?? null
-      let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
-      let exactId: number | null = null
-      let promise: Promise<unknown>
-      if (handleFactory) {
-        try {
-          const h = handleFactory(privateReq as unknown as never)
-          handle = h
-          exactId = h.id
-          promise = h.promise
-        } catch (e) {
-          promise = Promise.reject(e)
-        }
-      } else {
-        exactId = peekNextId ? peekNextId() : null
-        promise = (connection as unknown as { privateFork: (r: unknown) => Promise<unknown> }).privateFork(privateReq as unknown as never)
-      }
-
-      let result: unknown
-      try {
-        result = await withTimeout(promise, 3000)
-      } catch (e) {
-        const msg = String(e)
-        if (msg.includes("private parity timeout")) {
-          if (handle?.cancel) {
-            try {
-              handle.cancel(`private parity timeout opId=${opId}`)
-            } catch {}
-          } else if (exactId !== null && tryCancel) {
-            let cleaned = false
-            try {
-              cleaned = tryCancel(exactId, `private parity timeout opId=${opId}`)
-            } catch {}
-            if (!cleaned && invalidate) {
-              try {
-                invalidate(`fork observer timeout opId=${opId}`)
-              } catch {}
-            }
-          } else if (invalidate) {
-            try {
-              invalidate(`fork observer timeout opId=${opId}`)
-            } catch {}
-          }
-        }
-        throw e
-      }
-
-      const typed = result as { status?: string; accepted?: boolean; transportUnknown?: unknown }
-      if (typed.status === "succeeded" && typed.accepted === true) {
-        if (typed.transportUnknown === true) throw new Error("invalid private result")
-        try {
-          validateForkResult(result as unknown, privateReq as unknown as never)
-        } catch {
-          throw new Error("invalid private result")
-        }
-        const sess = resolveForkSession(result, sessionId, directory)
-        if (!sess) throw new Error("invalid private result")
-        return sess
-      }
-      if (typed.status === "failed") {
-        try {
-          validateForkResult(result as unknown, privateReq as unknown as never)
-        } catch {
-          throw new Error("invalid private result")
-        }
-        const failure = (result as { failure?: { code?: unknown; message?: unknown; retryable?: unknown } }).failure
-        if (failure?.retryable !== false) {
-          throw new Error(`private failed retryable: ${String(typeof failure?.code === "string" && failure.code ? failure.code : "failed")}`)
-        }
-        const code = typeof failure?.code === "string" && failure.code ? failure.code : "failed"
-        const message = typeof failure?.message === "string" && failure.message ? failure.message : code
-        throw forkTerminal(code, message)
-      }
-      throw new Error(`private not succeeded: ${String(typed.status)}`)
-    } catch (e) {
-      if (isForkTerminal(e)) throw e
-      const msg = e instanceof Error ? e.message : String(e)
-      const reason = msg.includes("private parity timeout") ? "private timeout" : msg.slice(0, 120)
-      console.warn("[Kilo Fork] private fallback", { opId, reason: reason.slice(0, 120) })
-    }
+  const sdkOnce = async (): Promise<ForkOutcome> => {
+    const params: DurableForkParams = { sessionId, directory, messageId: opts.messageId, opId, idempotencyKey, requestId }
+    const res = await executeDurableFork(client, params)
+    if (res.error) throw res.error
+    if (!res.data) throw new Error("SDK fork returned no data")
+    return { kind: "session", session: res.data as Session }
   }
 
-  const params: DurableForkParams = { sessionId, directory, messageId: opts.messageId, opId, idempotencyKey, requestId }
-  const res = await executeDurableFork(client, params)
-  if (res.error) throw res.error
-  if (!res.data) throw new Error("SDK fork returned no data")
-  return res.data as Session
+  if (!connection.isPrivateAvailable()) return sdkOnce()
+  const peer = connection as unknown as {
+    privateForkWithHandle?: (r: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+    privateFork?: (r: unknown) => Promise<unknown>
+    peekPrivatePeerNextId?: () => number | null
+  }
+  if (typeof peer.privateForkWithHandle !== "function" && typeof peer.privateFork !== "function") return sdkOnce()
+  try {
+    const canceller = forkCancellerOf(connection)
+    const factory = () => {
+      if (peer.privateForkWithHandle) return peer.privateForkWithHandle(privateReq as never)
+      return { id: peer.peekPrivatePeerNextId?.() ?? -1, promise: peer.privateFork!(privateReq as never) }
+    }
+    const result = await attemptFork(factory, canceller, opId)
+    const parsed = parseForkPrivateResult(result, privateReq, sessionId, directory)
+    if (parsed.kind === "ok") return { kind: "session", session: parsed.session }
+    if (parsed.kind === "terminal") throw forkTerminal(parsed.code, parsed.message)
+    if (parsed.kind === "retryable") {
+      console.warn("[Kilo Fork] private fallback", { opId, reason: parsed.reason.slice(0, 120) })
+      return sdkOnce()
+    }
+    return reobserveFork(privateReader ?? null, { directory, sessionId, opId })
+  } catch (e) {
+    if (isForkTerminal(e)) throw e
+    return reobserveFork(privateReader ?? null, { directory, sessionId, opId })
+  }
 }
 
 export async function handleForkSession(ctx: ForkContext, sessionId: string, messageId?: string): Promise<void> {
@@ -408,9 +528,17 @@ export async function handleForkSession(ctx: ForkContext, sessionId: string, mes
   const client = ctx.connection.getClient()
   const directory = ctx.directory(sessionId)
   try {
-    const forked = await forkSessionPrivateFirst({ client, connection: ctx.connection, sessionId, directory, messageId })
-    ctx.register(forked)
-    ctx.forked(forked, sessionId)
+    const outcome = await forkSessionPrivateFirst({ client, connection: ctx.connection, sessionId, directory, messageId, privateReader: ctx.privateReader ?? null })
+    if (outcome.kind === "session") {
+      ctx.register(outcome.session)
+      ctx.forked(outcome.session, sessionId)
+      return
+    }
+    if (ctx.pending) {
+      ctx.pending(outcome.opId, outcome.childId)
+      return
+    }
+    ctx.post({ type: "error", message: `Fork status could not be confirmed (opId=${outcome.opId}). No retry was issued.` })
   } catch (error) {
     const errMsg = getErrorMessage(error)
     ctx.post({ type: "error", message: `Failed to fork session: ${errMsg}` })

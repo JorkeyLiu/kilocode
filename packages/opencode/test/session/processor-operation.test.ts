@@ -983,8 +983,10 @@ itNative.live("native path retry uses distinct ops at final seam", () =>
         const session = yield* Session.Service
         const provider = yield* Provider.Service
         const database = yield* Database.Service
-        // 429 is retryable by both inner RequestExecutor and outer SessionRetry.
-        // Outer retry creates 2 distinct operations; inner retry adds extra http hits without extra ops.
+        // Bounded correction: V1 native uses no-inner-retry transport, so a
+        // pre-exposure 429 reaches outer SessionRetry.policy as a typed retryable
+        // APIError and charges the owning generation exactly once. Two HTTP hits
+        // must equal two distinct provider operations (no uncharged inner hits).
         yield* llm.error(429, { type: "error", error: { type: "too_many_requests" } })
         yield* llm.text("after native retry")
         const chat = yield* session.create({})
@@ -1011,10 +1013,10 @@ itNative.live("native path retry uses distinct ops at final seam", () =>
         })
         expect(value).toBe("continue")
         const calls = yield* llm.calls
-        expect(calls).toBeGreaterThanOrEqual(2)
+        expect(calls).toBe(2)
         const listed: SessionOperation.FailureRecord[] = yield* SessionOperation.list(database.db, toSessionId(chat.id))
         expect(listed.length).toBe(2)
-        expect(listed.length).toBeLessThanOrEqual(calls)
+        expect(listed.length).toBe(calls)
         for (const r of listed) expect(r.outcome).not.toBe("in-flight")
         expect(listed[0]!.outcome).toBe("failed")
         expect(listed[0]!.code).toBe("provider.failed")

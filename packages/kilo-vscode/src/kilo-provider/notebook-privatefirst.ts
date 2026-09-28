@@ -24,7 +24,10 @@ import type { ServePrivatePeer } from "../services/cli-backend/serve-private-pee
 import type { KiloConnectionService } from "../services/cli-backend"
 import type { NotebookFailure, NotebookResult } from "@kilocode/sdk/v2/client"
 
-export type NotebookSettleOutcome = { kind: "settled"; stale: boolean } | { kind: "retry"; code?: string }
+export type NotebookSettleOutcome =
+  | { kind: "settled"; stale: boolean }
+  | { kind: "retry"; code?: string }
+  | { kind: "unresolved"; reason: string; opId: string; requestID: string }
 
 export type NotebookListPrivateOutcome = { kind: "ok"; items: NotebookListEntry[] } | { kind: "unknown" }
 
@@ -254,15 +257,43 @@ type PrivateSettle =
   | { kind: "settled"; stale: boolean }
   | { kind: "terminal"; code: string }
   | { kind: "fallback"; reason: string }
+  | { kind: "unresolved"; reason: string; opId: string; requestID: string }
+
+// Accepted-only: fallback is strictly proven pre-send (no private request was
+// dispatched). Any after-send uncertainty (ambiguous/timeout/closed/invalid
+// wire) is unresolved with the stable opId/requestID — never SDK fallback.
+function provenPreSend(reason: string): boolean {
+  if (reason === "missing-capability" || reason === "unavailable") return true
+  const low = reason.toLowerCase()
+  if (low.includes("missing") && low.includes("capability")) return true
+  if (low.includes("private peer missing")) return true
+  if (low.includes("private peer unavailable")) return true
+  return false
+}
+
+function unresolvedOf(opId: string, requestID: string, reason: string): PrivateSettle {
+  return { kind: "unresolved", reason: reason.slice(0, 200), opId, requestID }
+}
+
+function unresolvedFromSendError(opId: string, requestID: string, err: unknown): PrivateSettle {
+  const msg = err instanceof Error ? err.message : String(err)
+  const low = msg.toLowerCase()
+  if (low.includes("peer closed") || low.includes("peer disposed") || msg.includes("-32603")) {
+    return unresolvedOf(opId, requestID, `closed: ${msg.slice(0, 120)}`)
+  }
+  if (msg.includes("private notebook timeout")) return unresolvedOf(opId, requestID, "timeout")
+  return unresolvedOf(opId, requestID, msg.slice(0, 200))
+}
 
 function settleReply(req: NotebookReplyContractRequest, result: unknown): PrivateSettle {
+  const id = req.context.requestID
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, id, "ambiguous")
   if (kind === "terminal") {
     try {
       validateNotebookReplyResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, id, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "settled", stale: false }
   }
@@ -272,22 +303,23 @@ function settleReply(req: NotebookReplyContractRequest, result: unknown): Privat
       const code = out.failure.code
       if (code === "notebook.not_found") return { kind: "settled", stale: true }
       if (code === "notebook.invalid_reply" || code === "scope_mismatch") return { kind: "terminal", code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, id, `invalid: ${String(err).slice(0, 120)}`)
     }
-    return { kind: "fallback", reason: "failure" }
+    return unresolvedOf(req.opId, id, "failure")
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, id, "invalid")
 }
 
 function settleReject(req: NotebookRejectContractRequest, result: unknown): PrivateSettle {
+  const id = req.context.requestID
   const kind = (result as { kind?: unknown }).kind
-  if (kind === "ambiguous") return { kind: "fallback", reason: "ambiguous" }
+  if (kind === "ambiguous") return unresolvedOf(req.opId, id, "ambiguous")
   if (kind === "terminal") {
     try {
       validateNotebookRejectResult(result, req)
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, id, `invalid: ${String(err).slice(0, 120)}`)
     }
     return { kind: "settled", stale: false }
   }
@@ -297,15 +329,16 @@ function settleReject(req: NotebookRejectContractRequest, result: unknown): Priv
       const code = out.failure.code
       if (code === "notebook.not_found") return { kind: "settled", stale: true }
       if (code === "notebook.invalid_reply" || code === "scope_mismatch") return { kind: "terminal", code }
-    } catch {
-      return { kind: "fallback", reason: "invalid" }
+    } catch (err) {
+      return unresolvedOf(req.opId, id, `invalid: ${String(err).slice(0, 120)}`)
     }
-    return { kind: "fallback", reason: "failure" }
+    return unresolvedOf(req.opId, id, "failure")
   }
-  return { kind: "fallback", reason: "invalid" }
+  return unresolvedOf(req.opId, id, "invalid")
 }
 
 async function attemptReply(conn: Conn | null, req: NotebookReplyContractRequest): Promise<PrivateSettle> {
+  const id = req.context.requestID
   if (!conn) return { kind: "fallback", reason: "unavailable" }
   try {
     if (!conn.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
@@ -313,18 +346,22 @@ async function attemptReply(conn: Conn | null, req: NotebookReplyContractRequest
     return { kind: "fallback", reason: "unavailable" }
   }
   const acq = acquireReply(conn, req)
-  if (!acq.ok) return { kind: "fallback", reason: "missing-capability" }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { kind: "fallback", reason: acq.reason }
+    return unresolvedOf(req.opId, id, acq.reason)
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { kind: "fallback", reason: "timeout" }
+    return unresolvedFromSendError(req.opId, id, err)
   }
   return settleReply(req, result)
 }
 
 async function attemptReject(conn: Conn | null, req: NotebookRejectContractRequest): Promise<PrivateSettle> {
+  const id = req.context.requestID
   if (!conn) return { kind: "fallback", reason: "unavailable" }
   try {
     if (!conn.isPrivateAvailable()) return { kind: "fallback", reason: "unavailable" }
@@ -332,13 +369,16 @@ async function attemptReject(conn: Conn | null, req: NotebookRejectContractReque
     return { kind: "fallback", reason: "unavailable" }
   }
   const acq = acquireReject(conn, req)
-  if (!acq.ok) return { kind: "fallback", reason: "missing-capability" }
+  if (!acq.ok) {
+    if (provenPreSend(acq.reason)) return { kind: "fallback", reason: acq.reason }
+    return unresolvedOf(req.opId, id, acq.reason)
+  }
   let result: unknown
   try {
     result = await withTimeout(acq.promise, 3000)
-  } catch {
+  } catch (err) {
     expired(acq.handle, req.opId)
-    return { kind: "fallback", reason: "timeout" }
+    return unresolvedFromSendError(req.opId, id, err)
   }
   return settleReject(req, result)
 }
@@ -356,13 +396,16 @@ function fallbackReqId(requestID: string): NotebookReplyContractRequest {
   }
 }
 
-// Private-first notebook reply: one private attempt plus at most one
-// same-directory/request SDK `kilocode.notebook.reply` fallback, never a
+// Private-first accepted-only notebook reply: one private attempt plus at most
+// one same-directory/request SDK `kilocode.notebook.reply` fallback only on
+// proven pre-send (unavailable/missing-capability, request invalid), never a
 // private retry. Valid private success closes with zero SDK;
 // `notebook.not_found` returns stale accepted success; `notebook.
 // invalid_reply`/scope mismatch closes with zero SDK as a retryable
-// failure (pending stays intact server-side); SDK 404 also returns stale
-// accepted success. Logs use fixed categories with opaque op IDs only.
+// failure (pending stays intact server-side); every after-send uncertainty
+// (ambiguous/timeout/closed/invalid wire) returns explicit unresolved carrying
+// requestID/opId with zero SDK and zero second dispatch. SDK 404 also returns
+// stale accepted success. Logs use fixed categories with opaque op IDs only.
 export async function replyNotebookPrivateFirst(opts: {
   connection?: Conn | null
   client: SdkNotebookClient | null | undefined
@@ -384,6 +427,17 @@ export async function replyNotebookPrivateFirst(opts: {
   if (attempt.kind === "terminal") {
     console.warn("[Kilo New] NotebookBridge: notebook reply private terminal:", { code: attempt.code, opId: req.opId })
     return { outcome: { kind: "retry", code: attempt.code }, req }
+  }
+  if (attempt.kind === "unresolved") {
+    console.warn("[Kilo New] NotebookBridge: notebook reply unresolved:", {
+      reason: attempt.reason,
+      opId: attempt.opId,
+      requestID: attempt.requestID,
+    })
+    return {
+      outcome: { kind: "unresolved", reason: attempt.reason, opId: attempt.opId, requestID: attempt.requestID },
+      req,
+    }
   }
   if (attempt.reason !== "unavailable") {
     console.warn("[Kilo New] NotebookBridge: notebook reply private fallback:", {
@@ -409,7 +463,8 @@ export async function replyNotebookPrivateFirst(opts: {
   }
 }
 
-// Private-first notebook reject: same exactly-one-fallback shape as reply.
+// Private-first accepted-only notebook reject: same exactly-one-pre-send-fallback
+// shape as reply; after-send uncertainty is explicit unresolved, never SDK.
 export async function rejectNotebookPrivateFirst(opts: {
   connection?: Conn | null
   client: SdkNotebookClient | null | undefined
@@ -440,6 +495,17 @@ export async function rejectNotebookPrivateFirst(opts: {
   if (attempt.kind === "terminal") {
     console.warn("[Kilo New] NotebookBridge: notebook reject private terminal:", { code: attempt.code, opId: req.opId })
     return { outcome: { kind: "retry", code: attempt.code }, req }
+  }
+  if (attempt.kind === "unresolved") {
+    console.warn("[Kilo New] NotebookBridge: notebook reject unresolved:", {
+      reason: attempt.reason,
+      opId: attempt.opId,
+      requestID: attempt.requestID,
+    })
+    return {
+      outcome: { kind: "unresolved", reason: attempt.reason, opId: attempt.opId, requestID: attempt.requestID },
+      req,
+    }
   }
   if (attempt.reason !== "unavailable") {
     console.warn("[Kilo New] NotebookBridge: notebook reject private fallback:", {
