@@ -1,5 +1,5 @@
 /**
- * LOCK-004: generation-scoped Config.get snapshots.
+ * Generation-scoped Config.get snapshots.
  *
  * A config PATCH persists immediately and invalidates the shared per-directory
  * config cache. Work already generating on a pre-patch instance must keep
@@ -58,7 +58,7 @@ function request(dir: string | undefined, input: string, init?: RequestInit) {
 const withInstance = (dir: string) => <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(effect as Effect.Effect<A, E, never>)))
 
-describe("Config.get generation snapshot (LOCK-004)", () => {
+describe("Config.get generation snapshot", () => {
   it.live("an open generation keeps its startup Config.get while the next request sees the new config", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer

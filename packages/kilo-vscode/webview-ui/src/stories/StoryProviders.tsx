@@ -30,6 +30,7 @@ import { Diff } from "@kilocode/kilo-ui/diff"
 import { Code } from "@kilocode/kilo-ui/code"
 import { File } from "@kilocode/kilo-ui/file"
 import { SessionContext } from "../context/session"
+import { WorkStyleContext } from "../context/work-style"
 import { AgentRequirementsContext, type AgentRequirementsContextValue } from "../context/agent-requirements"
 import { LanguageContext } from "../context/language"
 import { TranscriptSearchProvider } from "../context/transcript-search"
@@ -299,6 +300,12 @@ interface StoryProvidersProps {
   canonical?: boolean
   onMessage?: (message: unknown) => void
   diagnostics?: Array<{ path: string[]; message: string }>
+  /** Override the mock work-style level (default "review"). */
+  workStyleLevel?: "review" | "autonomous" | "custom" | "unset" | "skipped"
+  /** When true, the mock work-style reports loading (default false). */
+  workStyleLoading?: boolean
+  /** When true, the mock work-style reports onboarding visible (default false). */
+  workStyleOnboarding?: boolean
 }
 
 /** Wraps children with either a mock ConfigContext (when config prop is given) or the real ConfigProvider. */
@@ -417,6 +424,19 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
     },
     visible,
   }
+  // Fixture work-style: mirrors the real WorkStyleProvider value shape with a
+  // settled (non-loading, non-onboarding) default so chat stories render the
+  // terminal-free controls instead of throwing missing-provider errors.
+  // Stories that need onboarding/loading pass the explicit overrides above;
+  // prompt-input stories keep their own inner WorkStyleContext.Provider.
+  const work = {
+    style: () => "unset" as const,
+    level: () => props.workStyleLevel ?? ("review" as const),
+    loading: () => props.workStyleLoading ?? false,
+    applying: () => false,
+    shouldShowOnboarding: () => props.workStyleOnboarding ?? false,
+    apply: noop,
+  }
 
   return (
     <VSCodeProvider>
@@ -452,6 +472,7 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
                     <I18nProvider value={{ locale: () => "en", t }}>
                       <SessionContext.Provider value={session as any}>
                         <AgentRequirementsContext.Provider value={requirements}>
+                          <WorkStyleContext.Provider value={work as any}>
                           <DataProvider
                             data={data()}
                             directory="/project/"
@@ -474,6 +495,7 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
                               </CodeComponentProvider>
                             </DiffComponentProvider>
                           </DataProvider>
+                          </WorkStyleContext.Provider>
                         </AgentRequirementsContext.Provider>
                       </SessionContext.Provider>
                     </I18nProvider>

@@ -15,14 +15,7 @@ function fill(template: string, params: Params): string {
   })
 }
 
-type PromptType =
-  | "EXPLAIN"
-  | "FIX"
-  | "IMPROVE"
-  | "ADD_TO_CONTEXT"
-  | "TERMINAL_ADD_TO_CONTEXT"
-  | "TERMINAL_FIX"
-  | "TERMINAL_EXPLAIN"
+type PromptType = "EXPLAIN" | "FIX" | "IMPROVE" | "ADD_TO_CONTEXT"
 
 const templates: Record<PromptType, string> = {
   EXPLAIN: `Explain the following code from file path \${filePath}:\${startLine}-\${endLine}
@@ -70,34 +63,6 @@ Provide the improved code along with explanations for each enhancement.`,
 \`\`\`
 \${selectedText}
 \`\`\``,
-
-  TERMINAL_ADD_TO_CONTEXT: `\${userInput}
-Terminal output:
-\`\`\`
-\${terminalContent}
-\`\`\``,
-
-  TERMINAL_FIX: `\${userInput}
-Fix this terminal command:
-\`\`\`
-\${terminalContent}
-\`\`\`
-
-Please:
-1. Identify any issues in the command
-2. Provide the corrected command
-3. Explain what was fixed and why`,
-
-  TERMINAL_EXPLAIN: `\${userInput}
-Explain this terminal command:
-\`\`\`
-\${terminalContent}
-\`\`\`
-
-Please provide:
-1. What the command does
-2. Explanation of each part/flag
-3. Expected output and behavior`,
 }
 
 export function createPrompt(type: PromptType, params: Params): string {

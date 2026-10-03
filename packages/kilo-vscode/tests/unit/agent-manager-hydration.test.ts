@@ -4,7 +4,6 @@ import {
   deriveDurableIds,
   durableFilteredOrder,
   isPending,
-  isTerminal,
   pruneIds,
   pruneOrder,
   reconcile,
@@ -189,13 +188,13 @@ describe("hydration — deferred pending + order independent", () => {
     expect(out.nextActive).toBe("a")
   })
 
-  it("pending/terminal retained UI, filtered durable order", () => {
+  it("pending retained UI, filtered durable order", () => {
     const pending = "pending:xyz"
     const local = ["a", pending, "b"]
     const catalog = catalogOf("a")
     const out = reconcile({
       localIds: local,
-      tabOrder: ["a", pending, "b", "terminal:1"],
+      tabOrder: ["a", pending, "b"],
       active: pending,
       durable: { sessions: [{ id: "a" }] },
       catalog,
@@ -205,9 +204,9 @@ describe("hydration — deferred pending + order independent", () => {
       durableHydrated: true,
     })
     expect(out.nextIds).toEqual(["a", pending])
-    expect(out.nextOrder).toEqual(["a", pending, "terminal:1"])
-    // durableFilteredOrder strips pending/terminal
-    const filtered = durableFilteredOrder(["a", pending, "terminal:1"])
+    expect(out.nextOrder).toEqual(["a", pending])
+    // durableFilteredOrder strips pending
+    const filtered = durableFilteredOrder(["a", pending])
     expect(filtered).toEqual(["a"])
     const mgr = createSessionTabManager()
     mgr.seed(LOCAL, out.nextIds!, pending)
@@ -274,11 +273,11 @@ describe("hydration — deferred pending + order independent", () => {
     expect(p2.nextIds).toBeUndefined()
   })
 
-  it("pruneOrder keeps terminal and pending but removes missing real ids", () => {
-    const order = ["a", "pending:1", "terminal:abc", "missing"]
+  it("pruneOrder keeps pending but removes missing real ids", () => {
+    const order = ["a", "pending:1", "missing"]
     const catalog = catalogOf("a")
     const next = pruneOrder(order, catalog)
-    expect(next).toEqual(["a", "pending:1", "terminal:abc"])
+    expect(next).toEqual(["a", "pending:1"])
   })
 
   it("deriveDurableIds respects activeSessionId not in tabOrder", () => {
@@ -301,12 +300,11 @@ describe("hydration — deferred pending + order independent", () => {
     expect(reset).toEqual(catalogOf("c"))
   })
 
-  it("durable setTabOrder excludes pending and terminal IDs", () => {
+  it("durable setTabOrder excludes pending IDs", () => {
     const persisted: { key: string; order: string[] }[] = []
     const state = {
       order: {} as Record<string, string[]>,
       localIds: ["a", "pending:1", "b"],
-      terminals: { [LOCAL]: ["terminal:1"] },
     }
     const sync = createTabOrderSync({
       LOCAL,
@@ -315,18 +313,15 @@ describe("hydration — deferred pending + order independent", () => {
         state.order = u(state.order)
       },
       persist: (key, order) => {
-        const clean = order.filter((id) => !isPending(id) && !isTerminal(id))
+        const clean = order.filter((id) => !isPending(id))
         persisted.push({ key, order: clean })
       },
       localSessionIDs: () => state.localIds,
-      terminalIdsFor: (key) => state.terminals[key] ?? [],
     })
     sync.append(LOCAL, "pending:1")
     expect(state.order[LOCAL]).toContain("pending:1")
-    expect(state.order[LOCAL]).toContain("terminal:1")
     const last = persisted.at(-1)!
     expect(last.order.includes("pending:1")).toBe(false)
-    expect(last.order.includes("terminal:1")).toBe(false)
     expect(last.order).toEqual(["a", "b"])
   })
 

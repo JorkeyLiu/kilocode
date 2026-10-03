@@ -1,22 +1,5 @@
 import { describe, expect, it, mock } from "bun:test"
 
-mock.module("../../src/agent-manager/terminal-host", () => ({
-  createTerminalHost: () => ({
-    createTerminal: () => ({ show: () => {}, dispose: () => {}, exitStatus: undefined }),
-    activeTerminal: () => undefined,
-    repoPath: () => "/tmp",
-    showWarning: () => {},
-    setContext: () => {},
-    onTerminalClosed: () => ({ dispose: () => {} }),
-    onActiveTerminalChanged: () => ({ dispose: () => {} }),
-    registerCommand: () => ({ dispose: () => {} }),
-    executeCommand: async () => {},
-  }),
-}))
-mock.module("../../src/agent-manager/terminal-font", () => ({
-  readTerminalFont: () => undefined,
-  watchTerminalFont: () => () => {},
-}))
 mock.module("../../src/shared/sandbox-session", () => ({
   sandboxSessionMetadata: async () => ({}),
   sandboxMetadata: (enabled: boolean, metadata?: Record<string, unknown>) => ({ ...(metadata ?? {}) }),

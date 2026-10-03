@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import type { SessionInfo } from "../../webview-ui/src/types/messages"
 import { buildSidebarSearch } from "../../webview-ui/agent-manager/sidebar-search"
+import { deriveTopics } from "../../webview-ui/agent-manager/topics"
 import { buildShortcutCategories } from "../../webview-ui/agent-manager/shortcuts"
 
 const session = (id: string, title: string, updatedAt: string, parentID?: string): SessionInfo => ({
@@ -30,41 +31,59 @@ const build = (overrides?: Partial<Parameters<typeof buildSidebarSearch>[0]>) =>
   })
 
 describe("buildSidebarSearch", () => {
-  it("indexes local root sessions and excludes child and pending tabs", () => {
+  it("derives Topics (including orphans) and excludes pending tabs; child members stay searchable via their Topic", () => {
     const items = build({
       local: [
         session("session", "Build grouped search", "2026-06-02T00:00:00.000Z"),
         session("pending:1", "New Session", "2026-06-03T00:00:00.000Z"),
         session("child", "Subagent", "2026-06-04T00:00:00.000Z", "session"),
+        session("orphan", "Lost child", "2026-06-01T00:00:00.000Z", "missing"),
       ],
     })
 
-    expect(items).toHaveLength(2)
+    // Two Topics (session+child, orphan) plus the local context.
+    expect(items).toHaveLength(3)
+    const topics = deriveTopics([
+      session("session", "Build grouped search", "2026-06-02T00:00:00.000Z"),
+      session("child", "Subagent", "2026-06-04T00:00:00.000Z", "session"),
+      session("orphan", "Lost child", "2026-06-01T00:00:00.000Z", "missing"),
+    ])
+    // Topic activity is max member updatedAt: session Topic (06-04) before orphan (06-01).
+    expect(topics.map((t) => t.id)).toEqual(["session", "orphan"])
     expect(items[0]).toMatchObject({
       kind: "session",
       sessionId: "session",
       location: "local",
       meta: ["local"],
+      updatedAt: "2026-06-04T00:00:00.000Z",
     })
-    expect(items[0]?.search).toContain("Build grouped search local")
-    expect(items[1]).toMatchObject({ kind: "local", title: "local", meta: ["main"], count: 1 })
-    expect(items.find((item) => item.kind === "session")).toBeDefined()
-    expect(items.find((item) => item.sessionId === "pending:1")).toBeUndefined()
-    expect(items.find((item) => item.sessionId === "child")).toBeUndefined()
+    // Child title and IDs are visible through the parent Topic search text.
+    expect(items[0]?.search).toContain("Build grouped search")
+    expect(items[0]?.search).toContain("Subagent")
+    expect(items[0]?.search).toContain("child")
+    expect(items[1]).toMatchObject({ kind: "session", sessionId: "orphan" })
+    expect(items[2]).toMatchObject({ kind: "local", title: "local", meta: ["main"], count: 2 })
+    expect(items.find((item) => item.kind === "session" && "sessionId" in item && item.sessionId === "pending:1")).toBeUndefined()
+    // Children never become their own search items.
+    expect(items.filter((item) => item.kind === "session")).toHaveLength(2)
   })
 
-  it("ranks attention and progress before recency within each result group", () => {
+  it("orders Topics by activity descending with deterministic ID tie-break; attention state is display-only", () => {
     const items = build()
 
     expect(items.map((item) => item.key)).toEqual([
-      "session:busy-session",
       "session:local-session",
       "session:other-session",
       "session:recent-session",
+      "session:busy-session",
       "local",
     ])
-    expect(items[0]).toMatchObject({ state: "busy", updatedAt: "2026-06-02T00:00:00.000Z" })
-    expect(items[1]).toMatchObject({ location: "local", meta: ["local"] })
+    // Busy attention is preserved for display but never reorders Topics.
+    expect(items.find((item) => item.key === "session:busy-session")).toMatchObject({
+      state: "busy",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+    })
+    expect(items[0]).toMatchObject({ location: "local", meta: ["local"] })
     expect(items[4]).toMatchObject({ kind: "local", title: "local", count: 4 })
   })
 
@@ -84,6 +103,18 @@ describe("buildSidebarSearch", () => {
     })
 
     expect(items[0]).toMatchObject({ kind: "session", title: "local", meta: ["local"] })
+  })
+
+  it("normalizes malformed timestamps safely without throwing or NaN sort", () => {
+    const items = build({
+      local: [
+        session("good", "Good", "2026-06-05T00:00:00.000Z"),
+        { ...session("bad", "Bad", "not-a-date"), createdAt: "also-bad" },
+      ],
+      status: () => "idle",
+    })
+    expect(items.map((item) => item.key)).toEqual(["session:good", "session:bad", "local"])
+    expect(items.find((item) => item.key === "session:bad")).toMatchObject({ state: "idle" })
   })
 })
 

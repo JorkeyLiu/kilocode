@@ -16,7 +16,7 @@ import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { Cause, Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
-import { ConfigSnapshotRef, CanonicalProviderSnapshotRef } from "@/kilocode/session/config-snapshot" // kilocode_change
+import { ConfigSnapshotRef, CanonicalProviderSnapshotRef, PolicySnapshotRef } from "@/kilocode/session/config-snapshot" // kilocode_change
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { isCanonicalOnlyProviderV1, isCanonicalProviderCandidate } from "@opencode-ai/core/kilocode/canonical-provider" // kilocode_change - canonical provenance
 import { isValidCanonicalProviderEntry, isValidModelsMap } from "@opencode-ai/core/kilocode/canonical-record" // kilocode_change - shared validation
@@ -250,13 +250,39 @@ export type Info = ConfigV1.Info & {
 export const Info = ConfigV1.Info
 
 // kilocode_change start - prepared mutation artifact shared by the canonical
-// transaction coordinator and the single-scope update APIs (LOCK-002)
+// transaction coordinator and the single-scope update APIs
 export type PreparedConfig = KilocodeConfig.PreparedConfig
 // kilocode_change end
+
+export type RawPermissionPresence = {
+  readonly present: boolean
+  readonly raw: unknown
+}
+
+export type PolicySnapshot = {
+  readonly version: string
+  readonly info: Info
+  readonly canonical: CanonicalProvenance
+  readonly global: Info
+  readonly globalSource: string
+  readonly globalPermission: RawPermissionPresence
+  readonly projectSource: string
+  readonly projectFound: boolean
+  readonly projectPermission: RawPermissionPresence
+}
 
 type State = {
   config: Info
   canonical: CanonicalProvenance // kilocode_change - scope-aware canonical provenance
+  global: Info
+  globalSource: string
+  globalPermission: RawPermissionPresence
+  project: Info
+  projectSource: string
+  projectFound: boolean
+  projectPermission: RawPermissionPresence
+  version: string
+  snapshot: PolicySnapshot
   directories: string[]
   deps: Fiber.Fiber<void>[]
   warnings: Warning[] // kilocode_change
@@ -267,19 +293,21 @@ export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
+  readonly getPolicySnapshot: () => Effect.Effect<PolicySnapshot>
+  readonly captureFreshPolicySnapshot: () => Effect.Effect<PolicySnapshot>
   readonly update: (config: Info, options?: { emit?: boolean }) => Effect.Effect<{ config: Info; changed: boolean }> // kilocode_change
   // kilocode_change start
   readonly updateGlobal: (
     config: Info,
     options?: { dispose?: boolean; emit?: boolean },
   ) => Effect.Effect<{ info: Info; changed: boolean }>
-  // Prepared mutation split (LOCK-002/003): prepare validates in memory
+  // Prepared mutation split : prepare validates in memory
   // without writing/invalidating/disposing/emitting; commit writes the
   // prepared target atomically and invalidates caches; emitUpdated publishes
   // the ConfigUpdated event only after every target committed. The combined
   // transaction coordinator uses prepare/commit/emitUpdated under one shared
   // cross-process lock instead of nesting update/updateGlobal (which would
-  // re-acquire the lock and deadlock). The optional resolved `file` (LOCK-002)
+  // re-acquire the lock and deadlock). The optional resolved `file`
   // lets a caller that already resolved + locked the target prepare/commit that
   // exact path instead of rediscovering it under a different lock.
   readonly prepareGlobal: (config: Info, options?: { file?: string }) => Effect.Effect<PreparedConfig>
@@ -304,7 +332,7 @@ export interface Interface {
   readonly invalidateProjectStrict: () => Effect.Effect<void>
   readonly emitUpdatedStrict: (directory: string, transaction?: string) => Effect.Effect<void>
   /**
-   * Acquire the shared cross-process config lock for a target file (LOCK-001).
+   * Acquire the shared cross-process config lock for a target file .
    * Every global/project write path serializes through this key space. Lock
    * acquisition failures are mapped to defects so the lock never leaks into
    * an endpoint's declared error channel.
@@ -457,6 +485,84 @@ function parseRawAgentPermissions(
   } catch {
     return Object.create(null) as Record<string, { present: boolean; raw: unknown }>
   }
+}
+
+function parseRawPermissionPresence(
+  text: string | undefined,
+  source: string,
+): RawPermissionPresence {
+  if (!text) return { present: false, raw: undefined }
+  try {
+    const data = ConfigParse.jsonc(text, source) as Record<string, unknown>
+    if (!isRecord(data)) return { present: false, raw: undefined }
+    // eslint-disable-next-line no-prototype-builtins
+    if (!Object.prototype.hasOwnProperty.call(data, "permission")) return { present: false, raw: undefined }
+    return { present: true, raw: (data as Record<string, unknown>).permission }
+  } catch {
+    return { present: false, raw: undefined }
+  }
+}
+
+function hashPolicyVersion(input: string): string {
+  let first = 0x811c9dc5
+  let second = 0x01000193
+  for (let idx = 0; idx < input.length; idx++) {
+    const code = input.charCodeAt(idx)
+    first ^= code
+    first = Math.imul(first, 0x01000193) >>> 0
+    second ^= code + 0x9e3779b9
+    second = Math.imul(second, 0x85ebca6b) >>> 0
+  }
+  const left = first.toString(16).padStart(8, "0")
+  const right = second.toString(16).padStart(8, "0")
+  return `${left}${right}`
+}
+
+function policyVersionFor(parts: { config: Info; global: Info; project: Info; canonical: CanonicalProvenance }): string {
+  return hashPolicyVersion(stable({ config: parts.config, global: parts.global, project: parts.project, canonical: parts.canonical }))
+}
+
+// kilocode_change start - immutable per-version policy snapshot materialization.
+// PolicySnapshot shares no mutable refs with live State: the authoritative
+// materialization deep-clones once per State generation and deep-freezes, then
+// the frozen instance is cached on State and returned by identity (no per-read
+// duplication). Generation consumers only read, so frozen reads stay compatible
+// while concurrent/admitted mutations cannot pollute siblings or the cache.
+function cloneSnapshotValue<T>(value: T, seen = new WeakMap<object, unknown>()): T {
+  if (value === null || typeof value !== "object") return value
+  if (value instanceof Date) return new Date(value.getTime()) as unknown as T
+  if (Array.isArray(value)) {
+    const known = seen.get(value)
+    if (known !== undefined) return known as T
+    const out: unknown[] = []
+    seen.set(value, out)
+    for (const item of value) out.push(cloneSnapshotValue(item, seen))
+    return out as unknown as T
+  }
+  const known = seen.get(value as object)
+  if (known !== undefined) return known as T
+  const out: Record<string, unknown> = Object.create(Object.getPrototypeOf(value))
+  seen.set(value as object, out)
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    const next = cloneSnapshotValue((value as Record<string, unknown>)[key], seen)
+    Object.defineProperty(out, key, { value: next, enumerable: true, writable: true, configurable: true })
+  }
+  return out as unknown as T
+}
+
+function freezeSnapshotValue(value: unknown, seen = new WeakSet<object>()): void {
+  if (value === null || typeof value !== "object") return
+  if (Object.isFrozen(value)) return
+  if (seen.has(value as object)) return
+  seen.add(value as object)
+  if (Array.isArray(value)) {
+    for (const item of value) freezeSnapshotValue(item, seen)
+  } else {
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      freezeSnapshotValue((value as Record<string, unknown>)[key], seen)
+    }
+  }
+  Object.freeze(value)
 }
 
 function buildCanonicalProvenance(
@@ -745,15 +851,17 @@ export const layer = Layer.effect(
           info: {} as Info,
           rawMap: Object.create(null) as Record<string, unknown>,
           rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
+          rawPermission: { present: false, raw: undefined } as RawPermissionPresence,
         }
       const rawMap = parseRawProviderMap(text, filepath)
       const rawAgentMap = parseRawAgentPermissions(text, filepath)
+      const rawPermission = parseRawPermissionPresence(text, filepath)
       const exit = yield* Effect.exit(loadConfig(text, { path: filepath }, env, trusted, fileScope))
-      if (exit._tag === "Success") return { info: exit.value as Info, rawMap, rawAgentMap }
+      if (exit._tag === "Success") return { info: exit.value as Info, rawMap, rawAgentMap, rawPermission }
       // Squash Cause to the original Config Json/Invalid error so existing
       // recoverable warning behavior (toWarning/caught) recognizes it.
       const failure = Cause.squash(exit.cause)
-      return { info: {} as Info, rawMap, rawAgentMap, error: failure }
+      return { info: {} as Info, rawMap, rawAgentMap, rawPermission, error: failure }
     })
 
     const loadFile = Effect.fnUntraced(function* (
@@ -779,7 +887,13 @@ export const layer = Layer.effect(
         log.error("failed to load global config, using defaults", { error: String(single.error) })
       }
       globalStamp = yield* KilocodeGlobalConfigStamp.read(fs, Global.Path.config)
-      return { info: single.info, rawMap: single.rawMap, rawAgentMap: single.rawAgentMap, error: single.error }
+      return {
+        info: single.info,
+        rawMap: single.rawMap,
+        rawAgentMap: single.rawAgentMap,
+        rawPermission: single.rawPermission,
+        error: single.error,
+      }
     })
 
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
@@ -788,18 +902,27 @@ export const layer = Layer.effect(
           Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
         ),
         Effect.orElseSucceed(
-          (): { info: Info; rawMap: Record<string, unknown>; rawAgentMap: Record<string, { present: boolean; raw: unknown }>; error?: unknown } => ({
+          (): {
+            info: Info
+            rawMap: Record<string, unknown>
+            rawAgentMap: Record<string, { present: boolean; raw: unknown }>
+            rawPermission: RawPermissionPresence
+            error?: unknown
+          } => ({
             info: {} as Info,
             rawMap: Object.create(null) as Record<string, unknown>,
             rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
+            rawPermission: { present: false, raw: undefined },
           }),
         ),
       ),
       Duration.infinity,
     )
 
-    // kilocode_change start - detect global config edits made by other Kilo processes
-    const refreshGlobal = Effect.fnUntraced(function* () {
+    // kilocode_change start - detect global config edits made by other Kilo processes.
+    // Cache-only refresh for the instance load path: invalidates the shared
+    // global cache but never touches instance state (the loader is building it).
+    const refreshGlobalCache = Effect.fnUntraced(function* () {
       const stamp = yield* KilocodeGlobalConfigStamp.read(fs, Global.Path.config)
       if (!globalStamp || stamp === globalStamp) return false
       globalStamp = stamp
@@ -808,14 +931,8 @@ export const layer = Layer.effect(
     })
     // kilocode_change end
 
-    const getGlobal = Effect.fn("Config.getGlobal")(function* () {
-      yield* refreshGlobal() // kilocode_change
-      const cached = yield* cachedGlobal
-      return cached.info
-    })
-
     const getGlobalWithRaw = Effect.fn("Config.getGlobalWithRaw")(function* () {
-      yield* refreshGlobal()
+      yield* refreshGlobalCache()
       return yield* cachedGlobal
     })
 
@@ -911,6 +1028,7 @@ export const layer = Layer.effect(
               info: {} as Info,
               rawMap: Object.create(null) as Record<string, unknown>,
               rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
+              rawPermission: { present: false, raw: undefined } as RawPermissionPresence,
               error: undefined as unknown,
             })
           }),
@@ -932,6 +1050,7 @@ export const layer = Layer.effect(
               info: {} as Info,
               rawMap: Object.create(null) as Record<string, unknown>,
               rawAgentMap: Object.create(null) as Record<string, { present: boolean; raw: unknown }>,
+              rawPermission: { present: false, raw: undefined } as RawPermissionPresence,
               error: undefined as unknown,
             })
           }),
@@ -1070,10 +1189,50 @@ export const layer = Layer.effect(
         }
         // kilocode_change end
 
+        const globalPermission = (globalWithRaw as { rawPermission?: RawPermissionPresence }).rawPermission ?? {
+          present: false,
+          raw: undefined,
+        }
+        const projectPermission = (projectSingle as { rawPermission?: RawPermissionPresence }).rawPermission ?? {
+          present: false,
+          raw: undefined,
+        }
+        const version = policyVersionFor({
+          config: result,
+          global: globalWithRaw.info,
+          project: projectSingle.info,
+          canonical,
+        })
+        // kilocode_change start - authoritative frozen materialization cached once
+        // per State generation. Deep-cloned so admitted mutations cannot pollute
+        // the live cache or siblings; deep-frozen so pinned reads stay stable.
+        const snapshot: PolicySnapshot = {
+          version,
+          info: cloneSnapshotValue(result),
+          canonical: cloneSnapshotValue(canonical),
+          global: cloneSnapshotValue(globalWithRaw.info),
+          globalSource: globalFilePath,
+          globalPermission: cloneSnapshotValue(globalPermission),
+          projectSource: projectFile,
+          projectFound: projectPermission.present,
+          projectPermission: cloneSnapshotValue(projectPermission),
+        }
+        freezeSnapshotValue(snapshot)
+        // kilocode_change end
+
         timer.end() // kilocode_change - P0 instrumentation
         return {
           config: result,
           canonical,
+          global: globalWithRaw.info,
+          globalSource: globalFilePath,
+          globalPermission,
+          project: projectSingle.info,
+          projectSource: projectFile,
+          projectFound: projectPermission.present,
+          projectPermission,
+          version,
+          snapshot,
           directories,
           deps,
           warnings, // kilocode_change
@@ -1093,16 +1252,32 @@ export const layer = Layer.effect(
       }),
     )
 
+    // kilocode_change start - single authoritative refresh boundary. An external
+    // global edit consumed by getGlobal must not leave the instance cache stale
+    // for a later getPolicySnapshot: the first reader to observe the stamp
+    // invalidates both the shared global cache and the current instance, so the
+    // exact order getGlobal then getPolicySnapshot still materializes the latest
+    // version and floors. No background invalidation job or second owner.
+    const ensureFresh = Effect.fnUntraced(function* () {
+      const changed = yield* refreshGlobalCache()
+      if (!changed) return false
+      yield* Effect.ignore(InstanceState.invalidate(state))
+      return true
+    })
+    // kilocode_change end
+
+    const getGlobal = Effect.fn("Config.getGlobal")(function* () {
+      yield* ensureFresh() // kilocode_change
+      const cached = yield* cachedGlobal
+      return cached.info
+    })
+
     const get = Effect.fn("Config.get")(function* () {
       // kilocode_change start - pin Config.get for admitted generations
       const snapshot = yield* ConfigSnapshotRef
       if (snapshot) return snapshot
       // kilocode_change end
-      // kilocode_change start - reload instance config when global config changed elsewhere
-      if (yield* refreshGlobal()) {
-        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
-      }
-      // kilocode_change end
+      yield* ensureFresh() // kilocode_change - single boundary owns instance invalidation
       return yield* InstanceState.use(state, (s) => s.config)
     })
 
@@ -1110,9 +1285,7 @@ export const layer = Layer.effect(
     const getCanonicalProvenance = Effect.fn("Config.getCanonicalProvenance")(function* () {
       const snap = yield* CanonicalProviderSnapshotRef
       if (snap) return snap
-      if (yield* refreshGlobal()) {
-        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
-      }
+      yield* ensureFresh()
       return yield* InstanceState.use(state, (s) => s.canonical)
     })
 
@@ -1124,18 +1297,32 @@ export const layer = Layer.effect(
       if (snapInfo !== undefined && snapProv !== undefined) {
         return { info: snapInfo, canonical: snapProv }
       }
-      if (yield* refreshGlobal()) {
-        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
-      }
+      yield* ensureFresh()
       return yield* InstanceState.use(state, (s) => ({ info: s.config, canonical: s.canonical }))
+    })
+
+    const toPolicySnapshot = (s: State): PolicySnapshot => s.snapshot
+
+    const getPolicySnapshot = Effect.fn("Config.getPolicySnapshot")(function* () {
+      const pinned = yield* PolicySnapshotRef
+      if (pinned) return pinned
+      yield* ensureFresh()
+      return yield* InstanceState.use(state, toPolicySnapshot)
+    })
+
+    const captureFreshPolicySnapshot = Effect.fn("Config.captureFreshPolicySnapshot")(function* () {
+      yield* ensureFresh()
+      return yield* InstanceState.use(state, toPolicySnapshot)
     })
     // kilocode_change end
 
     const directories = Effect.fn("Config.directories")(function* () {
+      yield* ensureFresh() // kilocode_change - single boundary keeps floors fresh
       return yield* InstanceState.use(state, (s) => s.directories)
     })
 
     const getConsoleState = Effect.fn("Config.getConsoleState")(function* () {
+      yield* ensureFresh() // kilocode_change - single boundary keeps floors fresh
       return yield* InstanceState.use(state, (s) => s.consoleState)
     })
 
@@ -1159,7 +1346,7 @@ export const layer = Layer.effect(
         }),
       ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("config update listener failed", { cause }))))
 
-    /** Prepare a project-scope mutation in memory (LOCK-002) — no writes/events. */
+    /** Prepare a project-scope mutation in memory  — no writes/events. */
     const prepare = Effect.fn("Config.prepare")(function* (config: Info, options?: { file?: string }) {
       const ctx = yield* InstanceState.context
       return yield* KilocodeConfig.prepareProjectConfig({
@@ -1167,7 +1354,7 @@ export const layer = Layer.effect(
         directory: ctx.directory,
         worktree: ctx.worktree,
         config,
-        file: options?.file, // kilocode_change - LOCK-002: resolved target wins over rediscovery
+        file: options?.file, // kilocode_change - resolved target wins over rediscovery
         read: readConfigFile,
         parse: (input, file) => ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(input, file), file),
         patch: (input, patch) => patchJsonc(input, patch),
@@ -1179,7 +1366,7 @@ export const layer = Layer.effect(
      * Commit a prepared project artifact: atomically persist, then invalidate
      * the instance config cache. Event emission is deferred to emitUpdated so
      * multi-target transactions publish only after every target committed
-     * (LOCK-004). No lock is taken here — the caller holds the shared lock.
+     * . No lock is taken here — the caller holds the shared lock.
      */
     const commit = Effect.fn("Config.commit")(function* (prepared: PreparedConfig, options?: { emit?: boolean }) {
       if (prepared.changed) yield* KilocodeAtomicWrite.write(fs, prepared.path, prepared.next)
@@ -1194,7 +1381,7 @@ export const layer = Layer.effect(
 
     const update = Effect.fn("Config.update")(function* (config: Info, options?: { emit?: boolean }) {
       const ctx = yield* InstanceState.context
-      // kilocode_change - LOCK-001: the project-domain discovery lock is
+      // kilocode_change - the project-domain discovery lock is
       // acquired BEFORE target resolution so discovery and the write are one
       // stable cross-process decision; a concurrent higher-precedence file
       // creation can never land this save in a shadowed target.
@@ -1206,13 +1393,13 @@ export const layer = Layer.effect(
             directory: ctx.directory,
             worktree: ctx.worktree,
           })
-          // kilocode_change - LOCK-001: prepare uses the exact resolved target
+          // kilocode_change - prepare uses the exact resolved target
           // resolved under the discovery lock — never rediscovered, so the
           // locked key is always the written path.
           const prepared = yield* prepare(config, { file: target })
           if (!prepared.changed) return { config: prepared.info, changed: false }
           // kilocode_change - emit:false defers the ConfigUpdated publish to
-          // the caller's deferred final event (LOCK-002); the default emits
+          // the caller's deferred final event ; the default emits
           // immediately (hot semantics).
           yield* commit(prepared, options)
           return { config: prepared.info, changed: true }
@@ -1249,9 +1436,9 @@ export const layer = Layer.effect(
       )
     })
 
-    /** Prepare a global-scope mutation in memory (LOCK-002) — no writes/events. */
+    /** Prepare a global-scope mutation in memory  — no writes/events. */
     const prepareGlobal = Effect.fn("Config.prepareGlobal")(function* (config: Info, options?: { file?: string }) {
-      const file = options?.file ?? globalConfigFile() // kilocode_change - LOCK-002: resolved target wins
+      const file = options?.file ?? globalConfigFile() // kilocode_change - resolved target wins
       const source = yield* readConfigFile(file)
       const before = source ?? "{}"
       const patch = writableGlobal(config)
@@ -1260,7 +1447,7 @@ export const layer = Layer.effect(
         const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
         const next = KilocodeConfig.mergeConfig(writable(existing), patch)
         const serialized = JSON.stringify(next, null, 2)
-        // Validate the merged result before persisting (LOCK-007): an invalid
+        // Validate the merged result before persisting : an invalid
         // patch surfaces as a typed ConfigInvalidError defect and writes
         // nothing instead of persisting bad values.
         ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(serialized, file), file)
@@ -1284,7 +1471,7 @@ export const layer = Layer.effect(
     /**
      * Commit a prepared global artifact: atomically persist, invalidate the
      * global and instance caches. Event emission is deferred to emitUpdated
-     * (LOCK-004). No lock is taken here — the caller holds the shared lock.
+     * . No lock is taken here — the caller holds the shared lock.
      */
     const commitGlobal = Effect.fn("Config.commitGlobal")(function* (
       prepared: PreparedConfig,
@@ -1305,23 +1492,23 @@ export const layer = Layer.effect(
       options?: { dispose?: boolean; emit?: boolean },
     ) {
       // The dispose flag is preserved for API compatibility; instance disposal
-      // is owned by the caller's rebuild registration (LOCK-003), and both
+      // is owned by the caller's rebuild registration , and both
       // flag values invalidate + emit identically after a successful commit.
       void options?.dispose
-      // kilocode_change - LOCK-001: the global-domain discovery lock is
+      // kilocode_change - the global-domain discovery lock is
       // acquired BEFORE target resolution so discovery and the write are one
       // stable cross-process decision.
       return yield* withConfigLock(
         KilocodeConfig.configDiscoveryGlobalKey(),
         Effect.gen(function* () {
           const file = globalConfigFile()
-          // kilocode_change - LOCK-001: prepareGlobal uses the exact resolved
+          // kilocode_change - prepareGlobal uses the exact resolved
           // target resolved under the discovery lock — never rediscovered, so
           // the locked key is always the written path.
           const prepared = yield* prepareGlobal(config, { file })
           if (!prepared.changed) return { info: prepared.info, changed: false }
           // kilocode_change - emit:false defers the ConfigUpdated publish to
-          // the caller's deferred final event (LOCK-002); the default emits
+          // the caller's deferred final event ; the default emits
           // immediately (hot semantics).
           yield* commitGlobal(prepared, options)
           return { info: prepared.info, changed: true }
@@ -1330,6 +1517,7 @@ export const layer = Layer.effect(
     })
 
     const warnings = Effect.fn("Config.warnings")(function* () {
+      yield* ensureFresh() // kilocode_change - single boundary keeps floors fresh
       return yield* InstanceState.use(state, (s) => s.warnings)
     })
 
@@ -1352,6 +1540,8 @@ export const layer = Layer.effect(
       get,
       getGlobal,
       getConsoleState,
+      getPolicySnapshot,
+      captureFreshPolicySnapshot,
       update,
       updateGlobal,
       prepareGlobal, // kilocode_change
@@ -1360,9 +1550,9 @@ export const layer = Layer.effect(
       commit, // kilocode_change
       emitUpdated, // kilocode_change
       invalidateProject, // kilocode_change
-      invalidateStrict, // kilocode_change - F-03 strict hot-path variant
-      invalidateProjectStrict, // kilocode_change - F-03 strict hot-path variant
-      emitUpdatedStrict, // kilocode_change - F-03 strict hot-path variant
+      invalidateStrict, // kilocode_change - strict hot-path variant
+      invalidateProjectStrict, // kilocode_change - strict hot-path variant
+      emitUpdatedStrict, // kilocode_change - strict hot-path variant
       withLock: withConfigLock, // kilocode_change
       getCanonicalProvenance, // kilocode_change
       getCanonicalProviders, // kilocode_change

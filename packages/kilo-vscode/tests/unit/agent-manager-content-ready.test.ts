@@ -2,23 +2,6 @@ import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-mock.module("../../src/agent-manager/terminal-host", () => ({
-  createTerminalHost: () => ({
-    createTerminal: () => ({ show: () => {}, dispose: () => {}, exitStatus: undefined }),
-    activeTerminal: () => undefined,
-    repoPath: () => "/tmp",
-    showWarning: () => {},
-    setContext: () => {},
-    onTerminalClosed: () => ({ dispose: () => {} }),
-    onActiveTerminalChanged: () => ({ dispose: () => {} }),
-    registerCommand: () => ({ dispose: () => {} }),
-    executeCommand: async () => {},
-  }),
-}))
-mock.module("../../src/agent-manager/terminal-font", () => ({
-  readTerminalFont: () => undefined,
-  watchTerminalFont: () => () => {},
-}))
 
 const { AgentManagerProvider } = await import("../../src/agent-manager/AgentManagerProvider")
 
@@ -261,7 +244,6 @@ describe("agent manager content-ready handshake", () => {
     for (const needle of [
       'msg.type !== "sessionCreated"',
       'msg.type === "sessionsLoaded"',
-      "terminalDispatch(msg)",
       'msg.type === "agentManager.state"',
       'msg.type === "agentManager.sessionAdded"',
       'msg.type === "sessionDeleted"',
@@ -474,7 +456,6 @@ describe("agent manager fixture barrier (per-seed delivery)", () => {
     for (const needle of [
       'msg.type !== "sessionCreated"',
       'msg.type === "sessionsLoaded"',
-      "terminalDispatch(msg)",
       'msg.type === "agentManager.state"',
       'msg.type === "agentManager.sessionAdded"',
       'msg.type === "sessionDeleted"',

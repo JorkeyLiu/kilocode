@@ -85,6 +85,119 @@ export function resolvePermissionLevel(gRaw: unknown): Evaluator.PermissionLevel
   return undefined
 }
 
+function rulesetFromRawPermission(raw: unknown): Ruleset {
+  if (raw && typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const keys = Object.keys(raw as Record<string, unknown>)
+    if (keys.length === 0) return []
+    return fromConfig(raw as any)
+  }
+  return []
+}
+
+export function globalLayersFromPolicy(policy: Config.PolicySnapshot): Evaluator.LayerInput[] {
+  if (policy.globalPermission.present) {
+    return [
+      {
+        kind: "global",
+        sourceKind: "global-file",
+        canonicalPath: policy.globalSource,
+        ruleset: rulesetFromRawPermission(policy.globalPermission.raw),
+      },
+    ]
+  }
+  const gPerm = (policy.global as unknown as { permission?: unknown }).permission
+  if (gPerm && typeof gPerm === "object" && gPerm !== null && !Array.isArray(gPerm)) {
+    const keys = Object.keys(gPerm as Record<string, unknown>)
+    if (keys.length > 0) {
+      return [
+        {
+          kind: "global",
+          sourceKind: "global-override",
+          canonicalPath: "memory:global-override",
+          ruleset: fromConfig(gPerm as any),
+        },
+      ]
+    }
+  }
+  return []
+}
+
+export function projectLayerFromPolicy(policy: Config.PolicySnapshot): Evaluator.LayerInput | undefined {
+  if (!policy.projectPermission.present && !policy.projectFound) return undefined
+  if (!policy.projectPermission.present) return undefined
+  return {
+    kind: "project",
+    sourceKind: "project-file",
+    canonicalPath: policy.projectSource,
+    ruleset: rulesetFromRawPermission(policy.projectPermission.raw),
+  }
+}
+
+export function agentLayersFromPolicy(
+  policy: Config.PolicySnapshot,
+  agentName: string | undefined,
+  testOverrides: Map<string, Ruleset>,
+  fallbackAgentRuleset?: Ruleset,
+): Evaluator.LayerInput[] {
+  if (!agentName || agentName === "unknown") return []
+  if (testOverrides.has(agentName)) {
+    const ov = testOverrides.get(agentName)!
+    return [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...ov] }]
+  }
+  const derived = (policy.info as { agent_permission_sources?: unknown }).agent_permission_sources
+  if (Array.isArray(derived) && derived.length > 0) {
+    const layers = resolveAuthoredAgentLayers(derived, agentName)
+    if (layers.length === 0 && fallbackAgentRuleset && fallbackAgentRuleset.length > 0) {
+      return [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...fallbackAgentRuleset] }]
+    }
+    return layers
+  }
+  const keys = agentName === "code" || agentName === "build" ? ["code", "build"] : [agentName]
+  const out: Evaluator.LayerInput[] = []
+  for (const key of keys) {
+    const agentInfo = (policy.info as any).agent?.[key] as { permission?: Record<string, unknown> } | undefined
+    if (agentInfo && Object.prototype.hasOwnProperty.call(agentInfo, "permission")) {
+      const perm = (agentInfo as any).permission
+      if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length > 0)
+        out.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: fromConfig(perm as any) })
+      else out.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: [] })
+    }
+  }
+  if (out.length === 0 && fallbackAgentRuleset && fallbackAgentRuleset.length > 0) {
+    return [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...fallbackAgentRuleset] }]
+  }
+  return out
+}
+
+export function levelFromPolicy(policy: Config.PolicySnapshot): Evaluator.PermissionLevel | undefined {
+  return resolvePermissionLevel(policy.global as unknown)
+}
+
+export function protectedRulesFromPolicy(policy: Config.PolicySnapshot, agent: string): ProtectedFiles.Rules {
+  return ProtectedFiles.rules(policy.global as any, agent)
+}
+
+export function trustedSkillFromPolicy(policy: Config.PolicySnapshot, skill: string, permission: string): boolean {
+  if (!skill) return false
+  try {
+    const rules = fromConfig(((policy.global as any).permission ?? {}) as any)
+    return ExternalDirectoryPermission.isTrustedSkill(skill, permission, rules)
+  } catch {
+    return false
+  }
+}
+
+function withPolicyVersion<T extends { provenance: Evaluator.Provenance }>(
+  out: T,
+  policy: Config.PolicySnapshot,
+): T {
+  const prov = out.provenance as Evaluator.Provenance & { policyVersion?: string }
+  if (prov && typeof prov === "object" && prov.policyVersion === undefined) {
+    prov.policyVersion = policy.version
+  }
+  return out
+}
+
 function agentKey(name: string): string {
   return name === "build" ? "code" : name
 }
@@ -279,8 +392,8 @@ export interface Interface {
   readonly pending: (id: string) => Effect.Effect<Request | undefined>
   readonly provenance: (id: string) => Effect.Effect<Evaluator.Provenance | undefined>
   readonly diagnostics: (id: string) => Effect.Effect<Evaluator.Provenance | undefined>
-  readonly debugState: () => Effect.Effect<{ approvals: Evaluator.Approval[]; approved: Rule[]; session: Record<string, Ruleset> }>
-  readonly evaluateForDebug: (input: { permission: string; patterns: string[]; metadata?: Record<string, unknown>; sessionID: string; agent: string; agentPermission?: Ruleset; hardRuleset?: Ruleset; sessionPermission?: Ruleset; trustedReadCapability?: unknown }) => Effect.Effect<{ result: Evaluator.DecisiveResult; provenance: Evaluator.Provenance; ceilingId: Evaluator.CeilingId }>
+  readonly debugState: () => Effect.Effect<{ approvals: Evaluator.Approval[]; approved: Rule[]; session: Record<string, Ruleset>; policyVersion?: string }>
+  readonly evaluateForDebug: (input: { permission: string; patterns: string[]; metadata?: Record<string, unknown>; sessionID: string; agent: string; agentPermission?: Ruleset; hardRuleset?: Ruleset; sessionPermission?: Ruleset; trustedReadCapability?: unknown }) => Effect.Effect<{ result: Evaluator.DecisiveResult; provenance: Evaluator.Provenance; ceilingId: Evaluator.CeilingId; policyVersion: string }>
   // kilocode_change end
 }
 
@@ -294,6 +407,7 @@ interface PendingEntry {
   saved?: boolean
   provenance?: Evaluator.Provenance
   canonicalTargets: string[]
+  policy: Config.PolicySnapshot
   // kilocode_change end
   deferred: Deferred.Deferred<void, RejectedError | CorrectedError>
 }
@@ -410,12 +524,21 @@ export const layer = Layer.effect(
         }
         // never attach approval for rejected
         if ((prov as any).approval) delete (prov as any).approval
+        if (entry.policy?.version !== undefined && (prov as Evaluator.Provenance & { policyVersion?: string }).policyVersion === undefined) {
+          ;(prov as Evaluator.Provenance & { policyVersion?: string }).policyVersion = entry.policy.version
+        }
         yield* finalizeProvenance(String(entry.info.id), prov)
         return prov
       })
-    // Centralized evaluator builder — sole construction for all ask/drain re-evaluations, includes protected_files state
+    // Centralized evaluator builder — sole construction for all ask/drain re-evaluations, includes protected_files state.
+    // Generation policy (global/project permission layers, level, trusted-skill
+    // inputs, protected-file constraints, agent layers) comes exclusively from
+    // the pending entry's originating policy snapshot. Runtime session-bound
+    // approvals and session restrictions stay live. No disk or live-config
+    // reads occur here.
     const buildEvaluatorInputForEntry = (entry: PendingEntry, st: State) =>
       Effect.gen(function* () {
+        const policy = entry.policy
         const ctx = yield* InstanceState.context
         const ws = ctx.worktree === "/" ? ctx.directory : ctx.worktree
         const base = ProtectedFiles.base(ctx)
@@ -437,91 +560,26 @@ export const layer = Layer.effect(
         const allowEverythingFlag =
           st.approved.some((r) => r.permission === "*" && r.pattern === "*" && r.action === "allow") ||
           (st.session[String(entry.info.sessionID)] ?? []).some((r) => r.permission === "*" && r.pattern === "*" && r.action === "allow")
-        const gRaw = yield* config.getGlobal().pipe(Effect.map((v) => v as any), Effect.catch((err) => { log.warn("permission: config unavailable", { err }); return Effect.succeed({} as any) }))
-        const gPermRaw = (gRaw as any).permission
-        const globalLayers: Evaluator.LayerInput[] = [...resolveAuthoredGlobalLayers(gPermRaw, ws)]
+        const globalLayers: Evaluator.LayerInput[] = [...globalLayersFromPolicy(policy)]
         if (st.approved.length > 0) globalLayers.push({ kind: "global", sourceKind: "approval", canonicalPath: "memory:global-approved", ruleset: [...st.approved] })
-        let projLayer: Evaluator.LayerInput | undefined
+        const projLayer = projectLayerFromPolicy(policy)
+        const projectFound = policy.projectFound
         let callerFallbackLayer: Evaluator.LayerInput | undefined
-        {
-          const cands = [".kilo/kilo.jsonc"] as const
-          let pr: Ruleset | undefined
-          let pcp = `${ws}/.kilo/kilo.jsonc`
-          let found = false
-          for (const cand of cands) {
-            const full = path.join(ws, cand)
-            if (!existsSync(full)) continue
-            try {
-              const txt = readFileSync(full, "utf8")
-              const parsed = parseJsonc(txt) as any
-              if (!parsed || typeof parsed !== "object" || !Object.prototype.hasOwnProperty.call(parsed, "permission")) continue
-              const perm = (parsed as any).permission
-              if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length === 0) pr = []
-              else if (perm && typeof perm === "object" && perm !== null && !Array.isArray(perm)) pr = fromConfig(perm as any)
-              else if (perm === null || perm === undefined) pr = []
-              else pr = []
-              pcp = full
-              found = true
-              break
-            } catch (err) {
-              log.warn("buildEvaluatorInputForEntry: failed to read project file", { file: full, err })
-              pr = []
-              pcp = full
-              found = true
-              break
-            }
-          }
-          if (found) projLayer = { kind: "project", sourceKind: "project-file", canonicalPath: pcp, ruleset: pr ?? [] }
-          if (entry.ruleset.length > 0) {
-            if (!found) log.warn("buildEvaluatorInputForEntry: no authored project permission source, using truthful non-file layer for caller ruleset", { workspaceRoot: ws, hasRules: entry.ruleset.length })
-            callerFallbackLayer = { kind: "session-restriction", sourceKind: "session-restriction", canonicalPath: "memory:request-ruleset", ruleset: entry.ruleset }
-          }
+        if (entry.ruleset.length > 0) {
+          callerFallbackLayer = { kind: "session-restriction", sourceKind: "session-restriction", canonicalPath: "memory:request-ruleset", ruleset: entry.ruleset }
         }
-        let agentLayers: Evaluator.LayerInput[] = []
-        if (reqAgent !== "unknown") {
-          if (testAgentOverrides.has(reqAgent)) {
-            const ov = testAgentOverrides.get(reqAgent)!
-            agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${reqAgent}`, ruleset: [...ov] }]
-          } else {
-            const cfg2 = yield* config.get().pipe(Effect.map((c) => c as any), Effect.catch((err) => {
-              log.warn("buildEvaluatorInputForEntry: failed to load config for agent layer", { err, reqAgent })
-              return Effect.succeed({} as any)
-            }))
-            const derived = (cfg2 as { agent_permission_sources?: unknown }).agent_permission_sources
-            if (Array.isArray(derived) && derived.length > 0) {
-              agentLayers = resolveAuthoredAgentLayers(derived, reqAgent)
-            } else {
-              const keys = reqAgent === "code" || reqAgent === "build" ? ["code", "build"] : [reqAgent]
-              for (const key of keys) {
-                const aInfo = (cfg2 as any).agent?.[key] as { permission?: Record<string, unknown> } | undefined
-                if (aInfo && Object.prototype.hasOwnProperty.call(aInfo, "permission")) {
-                  const perm = (aInfo as any).permission
-                  if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length > 0)
-                    agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: fromConfig(perm as any) })
-                  else agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: [] })
-                }
-              }
-            }
-          }
-        }
+        const agentLayers: Evaluator.LayerInput[] = agentLayersFromPolicy(policy, reqAgent !== "unknown" ? reqAgent : undefined, testAgentOverrides)
         const sessRules = st.session[String(entry.info.sessionID)] ?? []
         const sessLayer: Evaluator.LayerInput | undefined = sessRules.length > 0 ? { kind: "session-restriction", sourceKind: "session-restriction", canonicalPath: `session:${String(entry.info.sessionID)}`, ruleset: sessRules } : undefined
         // Durable protected_files state — included in every reevaluation, preserving hard-deny/session restrictions
         const skill = ConfigProtection.globalSkillPattern(entry.info)
         const trusted = skill
           ? ExternalDirectoryPermission.isTrustedSkill(skill, entry.info.permission, st.approved) ||
-            (yield* config.getGlobal().pipe(
-              Effect.map((global) => fromConfig((global as any).permission ?? {})),
-              Effect.map((rules) => ExternalDirectoryPermission.isTrustedSkill(skill, entry.info.permission, rules)),
-              Effect.catch((err) => { log.warn("permission: trusted skill check failed", { err }); return Effect.succeed(false) }),
-            ))
+            trustedSkillFromPolicy(policy, skill, entry.info.permission)
           : false
         const isExternalReadOnly2 = entry.info.permission === "external_directory" && isTrustedExternalRead(entry as any)
         const targetsProtected = !isExternalReadOnly2 && canonicalTargetsForEntry.some((p: string) => Evaluator.isProtectedForCeiling(p, ws, entry.info.permission))
-        const protectedRules = reqAgent !== "unknown" && targetsProtected && !trusted ? yield* config.getGlobal().pipe(Effect.map((g) => ProtectedFiles.rules(g as any, reqAgent)), Effect.catch((err) => {
-          log.warn("buildEvaluatorInputForEntry: failed to load protected rules", { err, reqAgent })
-          return Effect.succeed({} as ProtectedFiles.Rules)
-        })) : ({} as ProtectedFiles.Rules)
+        const protectedRules = reqAgent !== "unknown" && targetsProtected && !trusted ? protectedRulesFromPolicy(policy, reqAgent) : ({} as ProtectedFiles.Rules)
         const protectedPaths = reqAgent !== "unknown" && targetsProtected ? new Set(ProtectedFiles.requestPaths(entry.info, base)) : undefined
         let syntheticApprovals: Evaluator.Approval[] = []
         let protectedDenyLayer: Evaluator.LayerInput | undefined
@@ -572,18 +630,20 @@ export const layer = Layer.effect(
         if (sessLayer) layers.push(sessLayer)
         if (protectedDenyLayer) layers.push(protectedDenyLayer)
         const approvals = [...st.r18.approvals, ...syntheticApprovals]
-        return { evalReq, layers, approvals, allowEverything: allowEverythingFlag, hardDenyRuleset: entry.hardRuleset, permissionLevel: resolvePermissionLevel(gRaw) }
+        return { evalReq, layers, approvals, allowEverything: allowEverythingFlag, hardDenyRuleset: entry.hardRuleset, permissionLevel: levelFromPolicy(policy) }
       })
     const computeProvenanceForEntry = (entry: PendingEntry, st: State) =>
       Effect.gen(function* () {
         const { evalReq, layers, approvals, allowEverything, hardDenyRuleset, permissionLevel } = yield* buildEvaluatorInputForEntry(entry, st)
-        const out = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything, hardDenyRuleset, permissionLevel })
+        const raw = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything, hardDenyRuleset, permissionLevel })
+        const out = withPolicyVersion(raw, entry.policy)
         yield* finalizeProvenance(String(entry.info.id), out.provenance)
         return out
       })
 
-    // Shared private evaluator input/context builder — sole policy composition logic for both normal Permission.ask and debug handler (LOCK-001).
+    // Shared private evaluator input/context builder — sole policy composition for both normal Permission.ask and debug handler.
     // Debug must call this via evaluateForDebug, not duplicate layer assembly.
+    // Generation policy comes from the supplied snapshot; session approvals stay live. No disk or live-config reads.
     const buildSharedEvaluatorInput = (opts: {
       request: { permission: string; patterns: string[]; metadata?: Record<string, unknown>; sessionID: string }
       agentName?: string
@@ -593,33 +653,25 @@ export const layer = Layer.effect(
       hardRuleset?: Ruleset
       localSessionRules: Ruleset
       st: State
+      policy: Config.PolicySnapshot
       permissionRequestId: string
       operationId: string
       fallbackAgentRuleset?: Ruleset
       trustedReadCapability?: TrustedReadCapability
     }) =>
       Effect.gen(function* () {
-        const { request, agentName, workspaceRoot, base, ruleset, hardRuleset, localSessionRules, st, permissionRequestId, operationId } = opts
+        const { request, agentName, workspaceRoot, base, ruleset, hardRuleset, localSessionRules, st, policy, permissionRequestId, operationId } = opts
         const { approved, r18 } = st
+        void r18
         const skill = ConfigProtection.globalSkillPattern(request as any)
         const trustedSkill = skill
           ? ExternalDirectoryPermission.isTrustedSkill(skill, request.permission, approved) ||
-            (yield* config.getGlobal().pipe(
-              Effect.map((global) => fromConfig((global as any).permission ?? {})),
-              Effect.map((rules) => ExternalDirectoryPermission.isTrustedSkill(skill, request.permission, rules)),
-              Effect.catch((err) => {
-                log.warn("buildSharedEvaluatorInput: failed to check trusted skill via global config", { err })
-                return Effect.succeed(false)
-              }),
-            ))
+            trustedSkillFromPolicy(policy, skill, request.permission)
           : false
         const isExternalReadOnly = request.permission === "external_directory" && isTrustedExternalRead(opts as any)
         const canonicalTargets = Evaluator.buildCanonicalTargets({ patterns: [...request.patterns], metadata: request.metadata as any, permission: request.permission }, workspaceRoot)
         const targetsProtected = !isExternalReadOnly && canonicalTargets.some((p: string) => Evaluator.isProtectedForCeiling(p, workspaceRoot, request.permission))
-        const protectedRules = agentName && targetsProtected && !trustedSkill ? yield* config.getGlobal().pipe(Effect.map((g) => ProtectedFiles.rules(g as any, agentName)), Effect.catch((err) => {
-          log.warn("buildSharedEvaluatorInput: failed to load protected rules", { err, agentName })
-          return Effect.succeed({} as ProtectedFiles.Rules)
-        })) : ({} as ProtectedFiles.Rules)
+        const protectedRules = agentName && targetsProtected && !trustedSkill ? protectedRulesFromPolicy(policy, agentName) : ({} as ProtectedFiles.Rules)
         const protectedPaths = agentName && targetsProtected ? new Set(ProtectedFiles.requestPaths(request as any, base)) : undefined
         const hasDurableProtectedAllow = (() => {
           if (!targetsProtected || !agentName || !protectedPaths || trustedSkill) return false
@@ -651,75 +703,11 @@ export const layer = Layer.effect(
         const hasGlobalAllowEverything = approved.some((r) => r.permission === "*" && r.pattern === "*" && r.action === "allow")
         const hasSessionAllowEverything = (st.session[String(request.sessionID)] ?? []).some((r) => r.permission === "*" && r.pattern === "*" && r.action === "allow")
         const allowEverythingFlag = hasGlobalAllowEverything || hasSessionAllowEverything
-        const gForAuthored = yield* config.getGlobal().pipe(Effect.map((v) => v as any), Effect.catch((err) => { log.warn("buildSharedEvaluatorInput: config unavailable", { err }); return Effect.succeed({} as any) }))
-        const gPermForAuthored = (gForAuthored as any).permission
-        const authoredGlobalLayers = resolveAuthoredGlobalLayers(gPermForAuthored, workspaceRoot)
-        const globalLayers: Evaluator.LayerInput[] = [...authoredGlobalLayers]
+        const globalLayers: Evaluator.LayerInput[] = [...globalLayersFromPolicy(policy)]
         if (approved.length > 0) globalLayers.push({ kind: "global", sourceKind: "approval", canonicalPath: "memory:global-approved", ruleset: [...approved] })
-        let projectRuleset: Ruleset | undefined
-        let projectCanonicalPath = `${workspaceRoot}/.kilo/kilo.jsonc`
-        let projectFound = false
-        for (const cand of [".kilo/kilo.jsonc"] as const) {
-          const full = path.join(workspaceRoot, cand)
-          if (!existsSync(full)) continue
-          try {
-            const text = readFileSync(full, "utf8")
-            const parsed = parseJsonc(text) as any
-            if (!parsed || typeof parsed !== "object" || !Object.prototype.hasOwnProperty.call(parsed, "permission")) continue
-            const perm = (parsed as any).permission
-            if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length === 0) projectRuleset = []
-            else if (perm && typeof perm === "object" && perm !== null && !Array.isArray(perm)) projectRuleset = fromConfig(perm as any)
-            else if (perm === null || perm === undefined) projectRuleset = []
-            else projectRuleset = []
-            projectCanonicalPath = full
-            projectFound = true
-            break
-          } catch (err) {
-            log.warn("buildSharedEvaluatorInput: failed to read project file", { file: full, err })
-            projectRuleset = []
-            projectCanonicalPath = full
-            projectFound = true
-            break
-          }
-        }
-        const projectLayer: Evaluator.LayerInput | undefined = projectFound ? { kind: "project", sourceKind: "project-file", canonicalPath: projectCanonicalPath, ruleset: projectRuleset ?? [] } : undefined
-        const callerFallbackLayer: Evaluator.LayerInput | undefined = ruleset.length > 0 ? (() => {
-          if (!projectFound) log.warn("buildSharedEvaluatorInput: no authored project permission source, using truthful non-file layer for caller ruleset", { workspaceRoot, hasRules: ruleset.length })
-          return { kind: "session-restriction" as const, sourceKind: "session-restriction" as const, canonicalPath: "memory:request-ruleset", ruleset }
-        })() : undefined
-        let agentLayers: Evaluator.LayerInput[] = []
-        if (agentName) {
-          if (testAgentOverrides.has(agentName)) {
-            const ov = testAgentOverrides.get(agentName)!
-            agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...ov] }]
-          } else {
-            const cfg = yield* config.get().pipe(Effect.map((c) => c as any), Effect.catch((err) => {
-              log.warn("buildSharedEvaluatorInput: failed to load config for agent layer", { err, agentName })
-              return Effect.succeed({} as any)
-            }))
-            const derived = (cfg as { agent_permission_sources?: unknown }).agent_permission_sources
-            if (Array.isArray(derived) && derived.length > 0) {
-              agentLayers = resolveAuthoredAgentLayers(derived, agentName)
-              if (agentLayers.length === 0 && opts.fallbackAgentRuleset && opts.fallbackAgentRuleset.length > 0) {
-                agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...opts.fallbackAgentRuleset] }]
-              }
-            } else {
-              const keys = agentName === "code" || agentName === "build" ? ["code", "build"] : [agentName]
-              for (const key of keys) {
-                const agentInfo = (cfg as any).agent?.[key] as { permission?: Record<string, unknown> } | undefined
-                if (agentInfo && Object.prototype.hasOwnProperty.call(agentInfo, "permission")) {
-                  const perm = (agentInfo as any).permission
-                  if (perm && typeof perm === "object" && !Array.isArray(perm) && Object.keys(perm as object).length > 0)
-                    agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: fromConfig(perm as any) })
-                  else agentLayers.push({ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${key}`, ruleset: [] })
-                }
-              }
-              if (agentLayers.length === 0 && opts.fallbackAgentRuleset && opts.fallbackAgentRuleset.length > 0) {
-                agentLayers = [{ kind: "agent", sourceKind: "agent-manifest", canonicalPath: `agent:${agentName}`, ruleset: [...opts.fallbackAgentRuleset] }]
-              }
-            }
-          }
-        }
+        const projectLayer: Evaluator.LayerInput | undefined = projectLayerFromPolicy(policy)
+        const callerFallbackLayer: Evaluator.LayerInput | undefined = ruleset.length > 0 ? { kind: "session-restriction" as const, sourceKind: "session-restriction" as const, canonicalPath: "memory:request-ruleset", ruleset } : undefined
+        const agentLayers: Evaluator.LayerInput[] = agentName ? agentLayersFromPolicy(policy, agentName, testAgentOverrides, opts.fallbackAgentRuleset) : []
         const sessionLayer: Evaluator.LayerInput | undefined = localSessionRules.length > 0 ? { kind: "session-restriction", sourceKind: "session-restriction", canonicalPath: `session:${String(request.sessionID)}`, ruleset: localSessionRules } : undefined
         const syntheticApprovals: Evaluator.Approval[] = hasDurableProtectedAllow ? (() => {
           const provPath = `protected:${agentName}:${canonicalTargets.join(",")}`
@@ -745,7 +733,7 @@ export const layer = Layer.effect(
         if (sessionLayer) layers.push(sessionLayer)
         if (protectedDenyLayer) layers.push(protectedDenyLayer)
         const allApprovals = [...st.r18.approvals, ...syntheticApprovals]
-        return { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: hardRuleset, permissionLevel: resolvePermissionLevel(gForAuthored) }
+        return { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: hardRuleset, permissionLevel: levelFromPolicy(policy) }
       })
 
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
@@ -773,6 +761,22 @@ export const layer = Layer.effect(
       }
       const isHardModeAsk = !agentName || agentName === "unknown" || ["ask", "plan", "architect"].includes(agentName.toLowerCase())
       const effectiveHardRuleset = isHardModeAsk ? hardRuleset : undefined
+      const policy = yield* config.getPolicySnapshot().pipe(
+        Effect.catch((err) => {
+          log.warn("ask: policy snapshot unavailable, using empty policy", { err })
+          return Effect.succeed({
+            version: "empty",
+            info: {} as any,
+            canonical: { providers: {}, conflicts: [] } as any,
+            global: {} as any,
+            globalSource: "memory:empty",
+            globalPermission: { present: false, raw: undefined },
+            projectSource: `${workspaceRoot}/.kilo/kilo.jsonc`,
+            projectFound: false,
+            projectPermission: { present: false, raw: undefined },
+          } as Config.PolicySnapshot)
+        }),
+      )
       const shared = yield* buildSharedEvaluatorInput({
         request: request as any,
         agentName,
@@ -782,13 +786,14 @@ export const layer = Layer.effect(
         hardRuleset: effectiveHardRuleset,
         localSessionRules: local,
         st,
+        policy,
         permissionRequestId,
         operationId,
         fallbackAgentRuleset: effectiveHardRuleset,
         trustedReadCapability: trustedReadForShared,
       })
       const { evalReq, layers, approvals: allApprovals, allowEverything: allowEverythingFlag, hardDenyRuleset: sharedHardDeny, permissionLevel } = shared
-      const evalOut = Evaluator.evaluate({
+      const rawOut = Evaluator.evaluate({
         request: evalReq,
         layers,
         approvals: allApprovals,
@@ -796,6 +801,7 @@ export const layer = Layer.effect(
         hardDenyRuleset: sharedHardDeny,
         permissionLevel,
       })
+      const evalOut = withPolicyVersion(rawOut, policy)
       const skill = ConfigProtection.globalSkillPattern(request as any)
       const canonicalTargetsForMeta = (evalReq as any).targets as string[] ?? [...request.patterns]
       const isExternalReadOnlyMeta = request.permission === "external_directory" && isTrustedExternalRead(input as any)
@@ -848,7 +854,7 @@ export const layer = Layer.effect(
       log.info("asking", { id, permission: info.permission, patterns: info.patterns, provenance: evalOut.provenance })
 
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
-      pending.set(id, { info, ruleset, hardRuleset, trustedAgent: agentName, trustedRead: trustedReadForShared, deferred, provenance: evalOut.provenance, canonicalTargets: (shared.evalReq as any).targets ?? Evaluator.buildCanonicalTargets({ patterns: [...request.patterns], metadata: request.metadata as any, permission: request.permission }, workspaceRoot) })
+      pending.set(id, { info, ruleset, hardRuleset, trustedAgent: agentName, trustedRead: trustedReadForShared, deferred, provenance: evalOut.provenance, canonicalTargets: (shared.evalReq as any).targets ?? Evaluator.buildCanonicalTargets({ patterns: [...request.patterns], metadata: request.metadata as any, permission: request.permission }, workspaceRoot), policy })
       yield* events.publish(Event.Asked, info)
       const timer = P0Perf.span("permission_wait", {
         id: String(id),
@@ -872,7 +878,7 @@ export const layer = Layer.effect(
       )
     })
 
-    // Shared parity helpers — compute production-effective ruleset exactly as KiloSessionPrompt (LOCK-001/003) without duplicating layer assembly
+    // Shared parity helpers — compute production-effective ruleset exactly as KiloSessionPrompt without duplicating layer assembly
     const guardPermissionsLocal = (agentName: string, agentPerm: Ruleset | undefined, sessionPerm: Ruleset | undefined): Ruleset => {
       const sessionRules = sessionPerm ?? []
       const modes = ["ask", "plan", "architect"]
@@ -898,17 +904,14 @@ export const layer = Layer.effect(
       const permissionRequestId = PermissionV1.ID.ascending()
       const operationId = `permission:${permissionRequestId}`
       const localSessionRules = st.session[input.sessionID] ?? input.sessionPermission ?? []
+      const policy = yield* config.getPolicySnapshot()
       // Determine hard deny from agent permission if applicable (same as KiloSessionPrompt.hardPermissions) — mode-gated, not all agent rules
       const hardMode = ["ask", "plan", "architect"].includes(input.agent.toLowerCase())
       let hardRuleset: Ruleset | undefined = input.hardRuleset
       if (hardMode) {
         if (!hardRuleset) {
           try {
-            const cfg = yield* config.get().pipe(Effect.map((c) => c as any), Effect.catch((err) => {
-              log.warn("evaluateForDebug: failed to load config for hardDeny", { err })
-              return Effect.succeed({} as any)
-            }))
-            const aInfo = (cfg as any).agent?.[input.agent] as { permission?: Record<string, unknown> } | undefined
+            const aInfo = (policy.info as any).agent?.[input.agent] as { permission?: Record<string, unknown> } | undefined
             if (aInfo && aInfo.permission && typeof aInfo.permission === "object" && !Array.isArray(aInfo.permission) && Object.keys(aInfo.permission as object).length > 0) {
               hardRuleset = fromConfig(aInfo.permission as any)
             } else if (input.agentPermission && input.agentPermission.length > 0) {
@@ -924,7 +927,7 @@ export const layer = Layer.effect(
       } else {
         hardRuleset = undefined
       }
-      // Production-effective ruleset via same merge as KiloSessionPrompt (LOCK-001) — ensures non-empty agent/session are exercised truthfully
+      // Production-effective ruleset via same merge as KiloSessionPrompt — ensures non-empty agent/session are exercised truthfully
       const effectiveRuleset = effectiveRulesetLocal(input.agent, input.agentPermission, input.sessionPermission)
       const shared = yield* buildSharedEvaluatorInput({
         request: { permission: input.permission, patterns: input.patterns, metadata: input.metadata as any, sessionID: input.sessionID as any },
@@ -935,13 +938,15 @@ export const layer = Layer.effect(
         hardRuleset,
         localSessionRules,
         st,
+        policy,
         permissionRequestId,
         operationId,
         fallbackAgentRuleset: input.agentPermission,
         trustedReadCapability: input.trustedReadCapability as any,
       })
-      const out = Evaluator.evaluate({ request: shared.evalReq, layers: shared.layers, approvals: shared.approvals, allowEverything: shared.allowEverything, hardDenyRuleset: shared.hardDenyRuleset, permissionLevel: shared.permissionLevel })
-      return { result: out.result, provenance: out.provenance, ceilingId: out.ceilingId }
+      const raw = Evaluator.evaluate({ request: shared.evalReq, layers: shared.layers, approvals: shared.approvals, allowEverything: shared.allowEverything, hardDenyRuleset: shared.hardDenyRuleset, permissionLevel: shared.permissionLevel })
+      const out = withPolicyVersion(raw, policy)
+      return { result: out.result, provenance: out.provenance, ceilingId: out.ceilingId, policyVersion: policy.version }
     })
 
     const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
@@ -1017,7 +1022,8 @@ export const layer = Layer.effect(
         // drain other pending that may be covered by remaining session approvals (once not carried) via evaluator — centralized with protected state
         for (const [id, item] of [...pending.entries()]) {
           const { evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel } = yield* buildEvaluatorInputForEntry(item, st)
-          const out = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel })
+          const rawDrain = Evaluator.evaluate({ request: evalReq, layers, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel })
+          const out = withPolicyVersion(rawDrain, item.policy)
           if (out.result === "allow") {
             yield* finalizeProvenance(String(item.info.id), out.provenance)
             pending.delete(id)
@@ -1053,7 +1059,7 @@ export const layer = Layer.effect(
       const literalProtAlways = ceilingLiterals(canonicalTargetsAlways, existing.info.permission, ws2)
       if (!existing.saved && isProtForR18) {
         if (literalProtAlways.length > 0) {
-          // Protected (ceiling b/c): persist only canonical exact literal identities (LOCK-002); mixed literal+glob stores literals, glob-only stores nothing
+          // Protected (ceiling b/c): persist only canonical exact literal identities; mixed literal+glob stores literals, glob-only stores nothing
           const agentForProt2 = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
           const canonSet = [...literalProtAlways].sort()
           const exists = r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForProt2 && a.permission === existing.info.permission && a.patterns.length === canonSet.length && a.patterns.slice().sort().every((v, i) => v === canonSet[i]))
@@ -1124,7 +1130,8 @@ export const layer = Layer.effect(
       // drain pending covered by this session approval (same session only via evaluator's sessionID check) — centralized with protected state
       for (const [id, item] of [...pending.entries()]) {
         const { evalReq: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 } = yield* buildEvaluatorInputForEntry(item, st)
-        const out2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 })
+        const raw2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 })
+        const out2 = withPolicyVersion(raw2, item.policy)
         if (out2.result === "allow") {
           yield* finalizeProvenance(String(item.info.id), out2.provenance)
           pending.delete(id)
@@ -1169,7 +1176,7 @@ export const layer = Layer.effect(
         const literalProt = ceilingLiterals(canonicalTargetsSave, existing.info.permission, ws2)
         if (hasStar) {
           if (literalProt.length === 0) {
-            // reject - glob-only or permission-glob: never persist glob syntax (LOCK-002); mixed persists only literals below
+            // reject - glob-only or permission-glob: never persist glob syntax; mixed persists only literals below
           } else {
             const sorted = [...literalProt].sort()
             const exists = s.r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForProt && a.permission === existing.info.permission && a.patterns.length === sorted.length && a.patterns.slice().sort().every((v, i) => v === sorted[i]))
@@ -1271,7 +1278,8 @@ export const layer = Layer.effect(
       for (const [id, item] of [...s.pending.entries()]) {
         if (String(item.info.id) === String(input.requestID)) continue
         const { evalReq: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 } = yield* buildEvaluatorInputForEntry(item, s)
-        const out2 = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 })
+        const rawSave = Evaluator.evaluate({ request: evalReq2, layers: layers2, approvals: approvals2, allowEverything: allow2, hardDenyRuleset: hd2, permissionLevel: pl2 })
+        const out2 = withPolicyVersion(rawSave, item.policy)
         if (out2.result === "allow") {
           yield* finalizeProvenance(String(item.info.id), out2.provenance)
           s.pending.delete(id)
@@ -1315,7 +1323,8 @@ export const layer = Layer.effect(
 
       const evalOne = (entry: PendingEntry): Effect.Effect<boolean> => Effect.gen(function* () {
         const { evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel } = yield* buildEvaluatorInputForEntry(entry, s)
-        const outAE = Evaluator.evaluate({ request: evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel })
+        const rawAE = Evaluator.evaluate({ request: evalReq, layers: layersAE, approvals, allowEverything: allowEv, hardDenyRuleset, permissionLevel })
+        const outAE = withPolicyVersion(rawAE, entry.policy)
         if (outAE.result === "allow") yield* finalizeProvenance(String(entry.info.id), outAE.provenance)
         else if (outAE.result === "deny") {
           yield* finalizeProvenance(String(entry.info.id), outAE.provenance)
@@ -1395,7 +1404,13 @@ export const layer = Layer.effect(
     })
     const debugState = Effect.fn("Permission.debugState")(function* () {
       const s = yield* InstanceState.get(state)
-      return { approvals: [...s.r18.approvals], approved: [...s.approved], session: { ...s.session } }
+      const policy = yield* config.getPolicySnapshot().pipe(Effect.catch(() => Effect.succeed(undefined as unknown as Config.PolicySnapshot)))
+      return {
+        approvals: [...s.r18.approvals],
+        approved: [...s.approved],
+        session: { ...s.session },
+        ...(policy?.version !== undefined ? { policyVersion: policy.version } : {}),
+      }
     })
     const __testSetSessionRules = Effect.fn("Permission.__testSetSessionRules")(function* (sessionID: string, ruleset: Ruleset) {
       const s = yield* InstanceState.get(state)

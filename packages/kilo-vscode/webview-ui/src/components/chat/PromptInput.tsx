@@ -25,9 +25,7 @@ import { canUseSpeechToText, selectedSpeechToTextModel } from "../speech-to-text
 import { ThinkingSelector } from "../shared/ThinkingSelector"
 import { PermissionLevelChip } from "../shared/PermissionLevelChip"
 import { useFileMention } from "../../hooks/useFileMention"
-import { useTerminalContext } from "../../hooks/useTerminalContext"
 import { useGitChangesContext } from "../../hooks/useGitChangesContext"
-import { hasTerminalMention } from "../../hooks/terminal-context-utils"
 import { hasGitChangesMention } from "../../hooks/git-changes-context-utils"
 import { useSlashCommand } from "../../hooks/useSlashCommand"
 import { useSpeechToText } from "../speech-to-text/useSpeechToText"
@@ -113,7 +111,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
   const hasGit = () => server.gitInstalled()
   const mention = useFileMention(vscode, sid, hasGit)
-  const terminal = useTerminalContext(vscode)
   const git = useGitChangesContext(vscode, ctx, hasGit)
   const imageAttach = useImageAttachments()
   imageAttach.setFilePathDropHandler((paths) => {
@@ -419,11 +416,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const speechModel = () => selectedSpeechToTextModel(config())
   const hasInput = () => text().trim().length > 0 || imageAttach.images().length > 0 || reviewComments().length > 0
   const canSend = () =>
-    !isDisabled() &&
-    !terminal.pending() &&
-    !git.pending() &&
-    !props.blocked?.() &&
-    (speech.state() === "recording" || (hasInput() && !speech.active()))
+    !isDisabled() && !git.pending() && !props.blocked?.() && (speech.state() === "recording" || (hasInput() && !speech.active()))
   const sendLabel = () => {
     const reason = props.blockedReason?.()
     if (reason) return reason
@@ -436,7 +429,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     textareaRef ? atEnd(textareaRef.selectionStart, textareaRef.selectionEnd, textareaRef.value.length) : false
   const highlightMentions = () => {
     const paths = new Set(mention.mentionedPaths())
-    if (hasTerminalMention(text())) paths.add("terminal")
     if (hasGit() && hasGitChangesMention(text())) paths.add("git-changes")
     return paths
   }
@@ -450,6 +442,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         return language.t("prompt.placeholder.default")
     }
   }
+  // Runtime-needed send waits for the worker (server connection). The draft
+  // stays in the composer — nothing is queued, persisted, or replayed, and no
+  // second operation owner is created. Model/agent/thinking selectors stay
+  // enabled: their selections resolve from the canonical file, not the worker.
+  const waiting = () => !server.isConnected() && server.connectionState() !== "error"
+  const waitingReason = () =>
+    server.connectionState() === "connecting"
+      ? language.t("prompt.placeholder.connecting")
+      : language.t("session.status.offline")
 
   const restoreFailed = (failed: SendMessageFailedMessage) => {
     const draft = failed.review ? reviewBody(failed.review, failed.text) : failed.text
@@ -912,14 +913,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const review = pending.length > 0 ? formatReviewCommentsMarkdown(pending) : ""
     const message = draft && review ? `${review}\n\n${draft}` : draft || review
     const data = review ? { version: 1 as const, comments: pending } : undefined
-    if (
-      (!message && imgs.length === 0) ||
-      isDisabled() ||
-      speech.active() ||
-      terminal.pending() ||
-      git.pending() ||
-      props.blocked?.()
-    )
+    if ((!message && imgs.length === 0) || isDisabled() || speech.active() || git.pending() || props.blocked?.())
       return
 
     const mentionFiles = mention.parseFileAttachments(draft)
@@ -931,15 +925,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const sel = session.selected(id)
     const context = ctx()
     const key = draftKey()
-
-    const terminalFile = await terminal.resolveAttachment(message, id).catch((err: Error) => {
-      showToast({ variant: "error", title: "Terminal context unavailable", description: err.message })
-      return undefined
-    })
-    if (hasTerminalMention(message) && !terminalFile) {
-      finishPending(pendingId)
-      return
-    }
 
     const gitFile = await git.resolveAttachment(message, id, context).catch((err: Error) => {
       showToast({ variant: "error", title: "Git changes unavailable", description: err.message })
@@ -955,12 +940,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
     if (finishPending(pendingId)) return
 
-    const allFiles = [
-      ...mentionFiles,
-      ...imgFiles,
-      ...(terminalFile ? [terminalFile] : []),
-      ...(gitFile ? [gitFile] : []),
-    ]
+    const allFiles = [...mentionFiles, ...imgFiles, ...(gitFile ? [gitFile] : [])]
     const attachments = allFiles.length > 0 ? allFiles : undefined
 
     // Server-side slash command (cmdMatch/matched already computed above)
@@ -1031,13 +1011,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     }}
                     onMouseEnter={() => mention.setMentionIndex(index())}
                   >
-                    {item.type === "terminal" ? (
-                      <>
-                        <Icon name="console" class="file-mention-icon" />
-                        <span class="file-mention-name">{item.label}</span>
-                        <span class="file-mention-dir">{item.description}</span>
-                      </>
-                    ) : item.type === "git-changes" ? (
+                    {item.type === "git-changes" ? (
                       <>
                         <Icon name="branch" class="file-mention-icon" />
                         <span class="file-mention-name">{item.label}</span>
@@ -1158,6 +1132,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           </For>
         </div>
       </Show>
+      <Show when={waiting()}>
+        <div class="prompt-input-waiting" role="status">
+          {waitingReason()}
+        </div>
+      </Show>
       <div class="prompt-input-wrapper">
         <div class="prompt-input-overlay-wrapper">
           <div class="prompt-input-highlight-overlay" ref={highlightRef} aria-hidden="true" dir="auto">
@@ -1268,6 +1247,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   variant="ghost"
                   size="small"
                   onClick={handleSendClick}
+                  disabled={!canSend()}
                   aria-disabled={!canSend()}
                   aria-describedby={props.blockedReason?.() ? blockedHelpId() : undefined}
                   aria-label={sendLabel()}

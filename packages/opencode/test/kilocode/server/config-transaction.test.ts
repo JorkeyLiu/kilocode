@@ -1199,6 +1199,30 @@ describe("config transaction - LOCK-005 dynamic", () => {
           getCanonicalProvenance: () => Effect.succeed({ providers: {}, conflicts: [] }),
           getCanonicalProviders: () => Effect.succeed({ providers: {}, conflicts: [] }),
           getWithCanonical: () => Effect.succeed({ info: {} as Config.Info, canonical: { providers: {}, conflicts: [] } }),
+          getPolicySnapshot: () =>
+            Effect.succeed({
+              version: "empty",
+              info: {} as Config.Info,
+              canonical: { providers: {}, conflicts: [] },
+              global: {} as Config.Info,
+              globalSource: "memory:empty",
+              globalPermission: { present: false, raw: undefined },
+              projectSource: "memory:empty",
+              projectFound: false,
+              projectPermission: { present: false, raw: undefined },
+            } as Config.PolicySnapshot),
+          captureFreshPolicySnapshot: () =>
+            Effect.succeed({
+              version: "empty",
+              info: {} as Config.Info,
+              canonical: { providers: {}, conflicts: [] },
+              global: {} as Config.Info,
+              globalSource: "memory:empty",
+              globalPermission: { present: false, raw: undefined },
+              projectSource: "memory:empty",
+              projectFound: false,
+              projectPermission: { present: false, raw: undefined },
+            } as Config.PolicySnapshot),
           update: () => Effect.die("unexpected update"),
           updateGlobal: () => Effect.die("unexpected updateGlobal"),
         })

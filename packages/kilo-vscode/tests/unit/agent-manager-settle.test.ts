@@ -1,22 +1,5 @@
 import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test"
 
-mock.module("../../src/agent-manager/terminal-host", () => ({
-  createTerminalHost: () => ({
-    createTerminal: () => ({ show: () => {}, dispose: () => {}, exitStatus: undefined }),
-    activeTerminal: () => undefined,
-    repoPath: () => "/tmp",
-    showWarning: () => {},
-    setContext: () => {},
-    onTerminalClosed: () => ({ dispose: () => {} }),
-    onActiveTerminalChanged: () => ({ dispose: () => {} }),
-    registerCommand: () => ({ dispose: () => {} }),
-    executeCommand: async () => {},
-  }),
-}))
-mock.module("../../src/agent-manager/terminal-font", () => ({
-  readTerminalFont: () => undefined,
-  watchTerminalFont: () => () => {},
-}))
 
 const { AgentManagerProvider } = await import("../../src/agent-manager/AgentManagerProvider")
 

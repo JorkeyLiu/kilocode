@@ -1,5 +1,7 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import { execFile, spawn as nodeSpawn } from "node:child_process"
+import * as crypto from "node:crypto"
 import os from "node:os"
 import path from "node:path"
 import { Effect, Exit, Stream } from "effect"
@@ -373,6 +375,94 @@ describe("cross-spawn spawner", () => {
         expect(out).toContain("stderr")
       }),
     )
+  })
+
+  describe("F-E owned force escalation (stuck guardian)", () => {
+    test("SIGSTOP guardian + forceKillAfter reaps env -i tree before scope returns, decoy lives", async () => {
+      if (process.platform !== "darwin" && process.platform !== "linux") return
+      const repo = path.resolve(import.meta.dirname, "..", "..", "..", "..")
+      const entry = path.join(repo, "packages", "opencode", "src", "serve-entry.ts")
+      const token = crypto.randomBytes(32).toString("hex")
+      const savedToken = process.env.KILO_RUNTIME_TOKEN
+      const savedCmd = process.env.KILO_GUARDIAN_CMD
+      process.env.KILO_RUNTIME_TOKEN = token
+      process.env.KILO_GUARDIAN_CMD = JSON.stringify([process.execPath, entry])
+      const childOf = (pid: number): Promise<number[]> =>
+        new Promise((resolve) => {
+          execFile("ps", ["-axo", "pid=,ppid="], { windowsHide: true }, (_e, out) => {
+            const found: number[] = []
+            for (const line of String(out ?? "").split(/\r?\n/)) {
+              const m = line.match(/^\s*(\d+)\s+(\d+)\s*$/)
+              if (!m) continue
+              if (Number(m[2]) === pid) found.push(Number(m[1]))
+            }
+            resolve(found)
+          })
+        })
+      const waitFor = async (cond: () => boolean | Promise<boolean>, ms: number): Promise<boolean> => {
+        const end = Date.now() + ms
+        while (Date.now() < end) {
+          if (await cond()) return true
+          await new Promise((r) => setTimeout(r, 50))
+        }
+        return await cond()
+      }
+      const decoy = nodeSpawn("/bin/sleep", ["60"], { detached: true, stdio: "ignore" })
+      decoy.unref()
+      const decoyPid = decoy.pid!
+      expect(alive(decoyPid)).toBe(true)
+      const origKill = process.kill.bind(process)
+      const kills: Array<{ target: number; signal: string | number | undefined }> = []
+      ;(process.kill as unknown as typeof process.kill) = ((pid: number, sig?: string | number) => {
+        kills.push({ target: pid, signal: sig })
+        return origKill(pid, sig as NodeJS.Signals)
+      }) as typeof process.kill
+      try {
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+            const handle = yield* spawner.spawn(
+              ChildProcess.make("/usr/bin/env", ["-i", "PATH=/usr/bin:/bin", "/bin/sh", "-c", "sleep 60 & wait"], {
+                stdin: "ignore",
+              }),
+            )
+            const gpid = Number(handle.pid)
+            const ready = yield* Effect.promise(() => waitFor(async () => (await childOf(gpid)).filter(alive).length > 0, 20000))
+            if (!ready) return yield* Effect.fail(new Error("guardian never admitted target"))
+            const inner = (yield* Effect.promise(() => childOf(gpid))).filter(alive)
+            const innerPid = inner[0]!
+            const grandReady = yield* Effect.promise(() => waitFor(async () => (await childOf(innerPid)).filter(alive).length > 0, 20000))
+            if (!grandReady) return yield* Effect.fail(new Error("grandchild never admitted"))
+            const grand = (yield* Effect.promise(() => childOf(innerPid))).filter(alive)
+            const grandPid = grand[0]!
+            yield* Effect.sync(() => origKill(gpid, "SIGSTOP"))
+            yield* handle.kill({ forceKillAfter: 200 })
+            const treeDead = !alive(gpid) && !alive(innerPid) && !alive(grandPid)
+            if (!treeDead) return yield* Effect.fail(new Error("owned tree survived force escalation"))
+            if (!alive(decoyPid)) return yield* Effect.fail(new Error("decoy died"))
+            return { gpid, innerPid, grandPid }
+          }),
+        ).pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+        const ids = await Effect.runPromise(program)
+        const terms = kills.filter((k) => k.signal === "SIGTERM")
+        expect(terms.length).toBeGreaterThan(0)
+        expect(terms.every((k) => k.target > 0)).toBe(true)
+        expect(kills.some((k) => k.target === -ids.gpid && k.signal === "SIGKILL")).toBe(true)
+        expect(alive(ids.gpid)).toBe(false)
+        expect(alive(ids.innerPid)).toBe(false)
+        expect(alive(ids.grandPid)).toBe(false)
+        expect(alive(decoyPid)).toBe(true)
+      } finally {
+        process.kill = origKill
+        if (savedToken === undefined) delete process.env.KILO_RUNTIME_TOKEN
+        else process.env.KILO_RUNTIME_TOKEN = savedToken
+        if (savedCmd === undefined) delete process.env.KILO_GUARDIAN_CMD
+        else process.env.KILO_GUARDIAN_CMD = savedCmd
+        try {
+          process.kill(decoyPid, "SIGKILL")
+        } catch {}
+      }
+    }, 90000)
   })
 
   describe("Windows-specific", () => {

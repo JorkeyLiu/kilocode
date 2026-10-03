@@ -1,5 +1,5 @@
 /**
- * JSX helpers for the agent-manager tab bar and terminal layer.
+ * JSX helpers for the agent-manager tab bar.
  *
  * Extracted from AgentManagerApp.tsx to keep that file under the
  * `max-lines` lint cap. These are not standalone components — they are
@@ -10,33 +10,20 @@
 import { Show } from "solid-js"
 import type { Accessor, JSX } from "solid-js"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
-import { DropdownMenu } from "@kilocode/kilo-ui/dropdown-menu"
-import { Icon } from "@kilocode/kilo-ui/icon"
 import { TooltipKeybind } from "@kilocode/kilo-ui/tooltip"
 import { SortableTab } from "./sortable-tab"
-import type { TerminalStateControls } from "./terminal"
-import { isTerminalTabId, renderTerminalTab } from "./terminal"
 import type { SessionInfo } from "../src/types/messages"
-import { parseBindingTokens } from "./keybind-tokens"
 
 interface FocusTabDeps {
   id: string
-  terms: TerminalStateControls
-  isTerminal: (id: string) => boolean
   isPending: (id: string) => boolean
   tabLookup: Accessor<Map<string, SessionInfo>>
   setActivePendingId: (id: string | undefined) => void
   clearSession: () => void
   selectSession: (id: string) => void
-  activateTerminal: (id: string) => void
 }
 
 export function focusCurrentTab(deps: FocusTabDeps) {
-  if (deps.isTerminal(deps.id)) {
-    deps.activateTerminal(deps.id)
-    return
-  }
-  deps.terms.setActiveId(undefined)
   const target = deps.tabLookup().get(deps.id)
   if (!target) return
   if (deps.isPending(target.id)) {
@@ -49,15 +36,14 @@ export function focusCurrentTab(deps: FocusTabDeps) {
 }
 
 export interface TabRenderDeps {
-  terms: TerminalStateControls
   tabIds: () => string[]
   kb: () => Record<string, string>
   currentSessionID: () => string | undefined
   activePendingId: () => string | undefined
   /** Id of the currently visible tab. Single source of truth — kept in
-   *  the parent component as `visibleTabId` (sessions and terminal
-   *  kinds collapsed into one id string). Consumed here as a
-   *  getter so Solid tracks its reactivity inside rendered JSX. */
+   *  the parent component as `visibleTabId` (session ids only).
+   *  Consumed here as a getter so Solid tracks its reactivity inside
+   *  rendered JSX. */
   visibleTabId: () => string | undefined
   isPending: (id: string) => boolean
   isBusy: (id: string) => boolean
@@ -67,10 +53,6 @@ export interface TabRenderDeps {
   ctx: () => string
   tabMgrCloseOthers: (ctx: string, target: string) => void
   // Handlers
-  activateTerminal: (id: string) => void
-  deactivateTerminal: () => void
-  closeTerminal: (id: string) => void
-  terminalMiddleClick: (id: string, e: MouseEvent) => void
   selectSessionTab: (id: string, pending: boolean) => void
   sessionMiddleClick: (id: string, e: MouseEvent) => void
   sessionClose: (id: string) => void
@@ -81,43 +63,15 @@ export interface TabRenderDeps {
   onTabKey: (id: string, event: KeyboardEvent) => void
 }
 
-/** Render a single tab by id — routes to terminal or session render paths. */
+/** Render a single tab by id — session render path only. */
 export function renderTab(id: string, deps: TabRenderDeps): JSX.Element {
-  if (isTerminalTabId(id)) {
-    // Pass `keybind` as a getter — Solid's JSX compiler wraps getter
-    // calls in reactive effects, so the tooltip stays in sync with
-    // `activeId` / `tabIds()` changes. A precomputed string would
-    // capture the value at render time and never update.
-    return renderTerminalTab({
-      id,
-      terms: deps.terms,
-      keybind: () =>
-        deps.adjacentHint(
-          id,
-          deps.visibleTabId() ?? "",
-          deps.tabIds(),
-          deps.kb().previousTab ?? "",
-          deps.kb().nextTab ?? "",
-        ),
-      closeKeybind: () => deps.kb().closeTab ?? "",
-      onSelect: deps.activateTerminal,
-      onMiddleClick: deps.terminalMiddleClick,
-      onClose: deps.closeTerminal,
-      onCloseOthers: (target) => closeOthers(target, deps),
-      role: "tab",
-      selected: deps.visibleTabId() === id,
-      tabIndex: deps.visibleTabId() === id ? 0 : -1,
-      onKeyDown: (event) => deps.onTabKey(id, event),
-    })
-  }
   return <Show when={deps.tabLookup().get(id)}>{(s) => renderSessionTab(s, deps)}</Show>
 }
 
 function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps): JSX.Element {
   const pending = deps.isPending(s()!.id)
   const active = () =>
-    !deps.terms.activeId() &&
-    (pending ? s()!.id === deps.activePendingId() && !deps.currentSessionID() : s()!.id === deps.currentSessionID())
+    pending ? s()!.id === deps.activePendingId() && !deps.currentSessionID() : s()!.id === deps.currentSessionID()
   const keybind = () => {
     if (active()) return ""
     return deps.adjacentHint(
@@ -140,7 +94,6 @@ function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps)
       keybind={keybind()}
       closeKeybind={deps.kb().closeTab ?? ""}
       onSelect={() => {
-        deps.deactivateTerminal()
         deps.selectSessionTab(s()!.id, pending)
       }}
       onMiddleClick={(e: MouseEvent) => deps.sessionMiddleClick(s()!.id, e)}
@@ -152,17 +105,11 @@ function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps)
 }
 
 function closeOthers(target: string, deps: TabRenderDeps) {
-  // Collect the non-session removals (terminals) that still need
-  // individual cleanup, and the session IDs that need individual close
-  // messages sent to the backend.
+  // Collect the session IDs that need individual close messages sent to
+  // the backend.
   const removedSessions: string[] = []
-  const removedTerminals: string[] = []
   for (const id of deps.tabIds()) {
     if (id === target) continue
-    if (isTerminalTabId(id)) {
-      removedTerminals.push(id)
-      continue
-    }
     removedSessions.push(id)
   }
   // Atomically update the tab registry: keep only the target.
@@ -173,41 +120,22 @@ function closeOthers(target: string, deps: TabRenderDeps) {
   for (const id of removedSessions) {
     deps.sessionCloseMessage(id)
   }
-  // Preserve terminal close behavior.
-  for (const id of removedTerminals) {
-    deps.closeTerminal(id)
-  }
   // Activate the surviving target.
-  if (isTerminalTabId(target)) {
-    deps.activateTerminal(target)
-    return
-  }
   deps.selectSessionTab(target, deps.isPending(target))
 }
-
-// Terminal-specific renderers (layer + add button) live in `./terminal/render.tsx`
-// and are re-exported for convenience so AgentManagerApp.tsx has a single
-// import point for tab rendering.
-export { renderTerminalLayer } from "./terminal"
 
 export interface NewTabButtonDeps {
   contextSelected: () => boolean
   kb: () => Record<string, string>
   newSessionLabel: string
-  newTerminalLabel: string
-  newSessionMenuLabel: string
   moreOptionsLabel: string
   onNewSession: () => void
-  onNewTerminal: () => void
 }
 
 /**
- * Render the tab bar's "new" affordance: a split button with the plus
- * icon (primary action: new agent session) and a chevron that opens a
- * dropdown menu for picking between "New Session" and "New Terminal".
- * Mirrors the split-button at the top of the sidebar. Falls
- * back to nothing when no sidebar context is selected (tab bar isn't
- * visible anyway).
+ * Render the tab bar's "new" affordance: a single plus button that creates
+ * a new agent session. Falls back to nothing when no sidebar context is
+ * selected (tab bar isn't visible anyway).
  */
 export function renderNewTabButton(deps: NewTabButtonDeps): JSX.Element {
   return (
@@ -228,33 +156,6 @@ export function renderNewTabButton(deps: NewTabButtonDeps): JSX.Element {
             onClick={deps.onNewSession}
           />
         </TooltipKeybind>
-        <DropdownMenu gutter={4} placement="bottom-end">
-          <DropdownMenu.Trigger class="am-split-arrow" aria-label={deps.moreOptionsLabel}>
-            <Icon name="chevron-down" size="small" />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content class="am-split-menu">
-              <DropdownMenu.Item onSelect={deps.onNewSession}>
-                <Icon name="plus" size="small" />
-                <DropdownMenu.ItemLabel>{deps.newSessionMenuLabel}</DropdownMenu.ItemLabel>
-                <span class="am-menu-shortcut">
-                  {parseBindingTokens(deps.kb().newTab ?? "").map((token) => (
-                    <kbd class="am-menu-key">{token}</kbd>
-                  ))}
-                </span>
-              </DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={deps.onNewTerminal}>
-                <Icon name="console" size="small" />
-                <DropdownMenu.ItemLabel>{deps.newTerminalLabel}</DropdownMenu.ItemLabel>
-                <span class="am-menu-shortcut">
-                  {parseBindingTokens(deps.kb().newTerminal ?? "").map((token) => (
-                    <kbd class="am-menu-key">{token}</kbd>
-                  ))}
-                </span>
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu>
       </div>
     </Show>
   )

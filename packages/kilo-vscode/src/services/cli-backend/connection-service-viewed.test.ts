@@ -439,9 +439,9 @@ describe("KiloConnectionService session/viewed private-first", () => {
     ;(svc as unknown as { privateAvailable: boolean }).privateAvailable = true
     ;(svc as unknown as { privateEpoch: number }).privateEpoch = 1
     ;(svc as unknown as { viewedSequence: number }).viewedSequence = 10
-    const sm = (svc as unknown as { serverManager: { dispose: () => void } }).serverManager
+    const sm = (svc as unknown as { serverManager: { dispose: () => Promise<void> } }).serverManager
     const origDispose = sm.dispose.bind(sm)
-    ;(svc as unknown as { serverManager: { dispose: () => void } }).serverManager.dispose = () => { serverDisposes += 1; order.push("server-disposed") }
+    ;(svc as unknown as { serverManager: { dispose: () => Promise<void> } }).serverManager.dispose = async () => { serverDisposes += 1; order.push("server-disposed") }
     // install observable timers
     ;(svc as unknown as { debounceTimer: unknown }).debounceTimer = setTimeout(() => {}, 10000)
     ;(svc as unknown as { checkinTimer: unknown }).checkinTimer = setInterval(() => {}, 10000)
@@ -475,7 +475,7 @@ describe("KiloConnectionService session/viewed private-first", () => {
     expect((svc as unknown as { checkinTimer: unknown }).checkinTimer).toBe(null)
     expect((svc as unknown as { viewedDirty: boolean }).viewedDirty).toBe(false)
     // restore to avoid leaking mocked serverManager for other tests (no further tests in file but keep clean)
-    ;(svc as unknown as { serverManager: { dispose: () => void } }).serverManager.dispose = origDispose
+    ;(svc as unknown as { serverManager: { dispose: () => Promise<void> } }).serverManager.dispose = origDispose
     const dt = (svc as unknown as { debounceTimer: ReturnType<typeof setTimeout> | null }).debounceTimer
     if (dt) clearTimeout(dt)
     const ct = (svc as unknown as { checkinTimer: ReturnType<typeof setInterval> | null }).checkinTimer

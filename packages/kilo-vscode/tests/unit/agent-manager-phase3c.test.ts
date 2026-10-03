@@ -6,7 +6,7 @@
  *     do not call worktree-specific operations.
  *  2. The run controller (run/controller.ts) is removed with the
  *     managed-worktree run-script infra.
- *  3. Terminal routing resolves all terminals to workspace root.
+ *  3. Agent Manager terminal routing is removed (no PTY overlay).
  *  4. parseToolRequest accepts root-local requests.
  */
 
@@ -137,52 +137,17 @@ describe("Phase 3C — run controller removed", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. terminal-routing.ts — ALL terminals resolve to workspace root
+// 3. terminal routing removed — no Agent Manager PTY overlay
 // ---------------------------------------------------------------------------
 
-import { TerminalRouter, type TerminalRoutingDeps } from "../../src/agent-manager/terminal-routing"
-
-function createTerminalDeps(overrides: Partial<TerminalRoutingDeps> = {}): TerminalRoutingDeps {
-  return {
-    getClient: () => ({}) as any,
-    getServerConfig: () => ({ baseUrl: "http://localhost:3000", password: "test" }),
-    getRoot: () => "/repo",
-    log: vi.fn(),
-    post: vi.fn(),
-    getTerminalFont: () => ({ fontFamily: "Menlo", fontSize: 14 }),
-    ...overrides,
-  }
-}
-
-describe("Phase 3C — terminal routing resolves ALL to root", () => {
-  it("terminal create with null slotId uses workspace root as cwd", async () => {
-    const getRoot = vi.fn().mockReturnValue("/workspace")
-    const router = new TerminalRouter({
-      ...createTerminalDeps(),
-      getRoot,
-    })
-
-    await router.handle({ type: "agentManager.terminal.create", slotId: null })
-
-    expect(getRoot).toHaveBeenCalled()
-  })
-
-  it("terminal create with any slotId also uses workspace root", async () => {
-    const getRoot = vi.fn().mockReturnValue("/workspace")
-    const router = new TerminalRouter({
-      ...createTerminalDeps(),
-      getRoot,
-    })
-
-    await router.handle({ type: "agentManager.terminal.create", slotId: "local" })
-
-    // Should use root regardless of slotId
-    expect(getRoot).toHaveBeenCalled()
-  })
-
-  it("TerminalRoutingDeps no longer has getWorktreePath", () => {
-    const deps = createTerminalDeps()
-    expect(deps).not.toHaveProperty("getWorktreePath")
+describe("Phase 3C — terminal routing removed", () => {
+  it("terminal routing modules are gone", () => {
+    const fs = require("fs")
+    const path = require("path")
+    expect(fs.existsSync(path.resolve(__dirname, "../../src/agent-manager/terminal-routing.ts"))).toBe(false)
+    expect(fs.existsSync(path.resolve(__dirname, "../../src/agent-manager/terminal-manager.ts"))).toBe(false)
+    expect(fs.existsSync(path.resolve(__dirname, "../../src/agent-manager/SessionTerminalManager.ts"))).toBe(false)
+    expect(fs.existsSync(path.resolve(__dirname, "../../webview-ui/agent-manager/terminal"))).toBe(false)
   })
 })
 

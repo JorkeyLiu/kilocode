@@ -37,21 +37,21 @@ describe("resolveNavigation real logic", () => {
   })
 })
 
-describe("resolveTabNavigation real logic (includes terminal/pending)", () => {
-  const ids = ["ses-a", "pending:1", "terminal:1", "ses-b"]
+describe("resolveTabNavigation real logic (session/pending)", () => {
+  const ids = ["ses-a", "pending:1", "ses-b"]
   it("prev from middle", () => {
-    expect(resolveTabNavigation("prev", "terminal:1", ids)).toEqual("pending:1")
+    expect(resolveTabNavigation("prev", "ses-b", ids)).toEqual("pending:1")
     expect(resolveTabNavigation("prev", "pending:1", ids)).toEqual("ses-a")
   })
   it("next from middle", () => {
-    expect(resolveTabNavigation("next", "pending:1", ids)).toEqual("terminal:1")
-    expect(resolveTabNavigation("next", "terminal:1", ids)).toEqual("ses-b")
+    expect(resolveTabNavigation("next", "pending:1", ids)).toEqual("ses-b")
+    expect(resolveTabNavigation("next", "ses-a", ids)).toEqual("pending:1")
   })
   it("next handles pending as regular tab", () => {
     expect(resolveTabNavigation("next", "ses-a", ids)).toEqual("pending:1")
   })
-  it("prev handles terminal as current", () => {
-    expect(resolveTabNavigation("prev", "ses-b", ids)).toEqual("terminal:1")
+  it("prev handles pending as current", () => {
+    expect(resolveTabNavigation("prev", "ses-b", ids)).toEqual("pending:1")
   })
   it("bounds no-wrap", () => {
     expect(resolveTabNavigation("prev", "ses-a", ids)).toBeUndefined()
@@ -96,7 +96,7 @@ describe("action wiring contract in AgentManagerApp", () => {
     expect(s).not.toMatch(/tabPrevious:\s*\(\)\s*=>\s*\{\}/)
   })
 
-  it("session navigation skips terminal (uses session.currentSessionID not visibleTabId)", () => {
+  it("session navigation uses session identity (not visible tab)", () => {
     const s = fs.readFileSync(AM_APP, "utf-8")
     // extract sessionPrevious block
     const idx = s.indexOf("sessionPrevious")
@@ -106,7 +106,7 @@ describe("action wiring contract in AgentManagerApp", () => {
     expect(block).not.toContain("terms.activeId")
   })
 
-  it("tab navigation includes terminal/pending via tabIds", () => {
+  it("tab navigation includes pending via tabIds", () => {
     const s = fs.readFileSync(AM_APP, "utf-8")
     const idx = s.indexOf("tabPrevious")
     const block = s.slice(idx, idx + 400)
@@ -135,14 +135,12 @@ describe("action wiring contract in AgentManagerApp", () => {
     expect(visibleCount).toBe(1)
   })
 
-  it("focusTab syncs tabMgr for session/pending but not terminal", () => {
+  it("focusTab syncs tabMgr for session/pending", () => {
     const s = fs.readFileSync(AM_APP, "utf-8")
     const idx = s.indexOf("const focusTab")
     const block = s.slice(idx, idx + 600)
     expect(block).toContain("tabMgr.select(LOCAL, id)")
-    expect(block).toContain("isTerminalTabId")
-    // guard must prevent terminal from touching tabMgr
-    expect(block).toMatch(/if\s*\(\s*!isTerminalTabId\(id\)\)\s*tabMgr\.select/)
+    expect(block).not.toContain("isTerminalTabId")
     expect(block).toContain("focusCurrentTab")
   })
 

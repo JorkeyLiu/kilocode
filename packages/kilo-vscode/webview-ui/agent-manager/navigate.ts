@@ -7,7 +7,7 @@
  */
 
 import { deriveTopics } from "./topics"
-import { buildDisplayList, dateGroupKey, DATE_GROUP_KEYS } from "../src/utils/session-tree"
+import { buildDisplayList } from "../src/utils/session-tree"
 
 /** Sentinel value for the single LOCAL session tab context. */
 export const LOCAL = "local" as const
@@ -51,7 +51,7 @@ export function validateLocalSession(persisted: string | undefined, ids: string[
 }
 
 /**
- * Tab navigation (including terminal and pending) — no wrap.
+ * Tab navigation (including pending) — no wrap.
  * Returns the id of the adjacent tab or undefined at the boundary or when
  * current is missing/unknown.
  */
@@ -68,30 +68,21 @@ export function resolveTabNavigation(
 }
 
 /**
- * Visible sidebar order — date-group rank (today → older) then activity
- * descending within each group, then depth-first member order per topic,
- * respecting the current expansion state. Only sessions whose ancestors are
- * expanded appear. Collapsed topic children are skipped, matching the actual
- * rendered DOM in SidebarSessionList. This is the single source of truth for
- * both rendering and keyboard navigation to prevent drift.
+ * Visible sidebar order — the authoritative Topic projection
+ * (activity-descending with deterministic ID tie-break) then depth-first
+ * member order per topic, respecting the current expansion state. Only
+ * sessions whose ancestors are expanded appear. Collapsed topic children are
+ * skipped, matching the actual rendered DOM in SidebarSessionList. Date-group
+ * headers in SidebarSessionList are presentation-only labels and never reorder
+ * this list. This is the single source of truth for both rendering and
+ * keyboard navigation to prevent drift.
  */
 export function visibleSidebarIds(sessions: SessionLike[], expanded: Set<string>): string[] {
   const topics = deriveTopics(sessions as Parameters<typeof deriveTopics>[0])
-  const rank = new Map<string, number>(DATE_GROUP_KEYS.map((k, i) => [k, i] as const))
-  const groups = new Map<string, typeof topics>()
-  for (const tp of topics) {
-    const key = dateGroupKey(tp.activity)
-    const list = groups.get(key)
-    if (list) list.push(tp)
-    else groups.set(key, [tp])
-  }
-  const sorted = [...groups.entries()].sort((a, b) => (rank.get(a[0]) ?? 99) - (rank.get(b[0]) ?? 99))
   const order: string[] = []
-  for (const [, list] of sorted) {
-    for (const tp of list) {
-      const display = buildDisplayList(tp.members, expanded)
-      for (const item of display) order.push(item.session.id)
-    }
+  for (const tp of topics) {
+    const display = buildDisplayList(tp.members, expanded)
+    for (const item of display) order.push(item.session.id)
   }
   return order
 }
@@ -130,11 +121,10 @@ export function remoteSessions(local: string[], managed: { id: string }[], pendi
 
 /**
  * A "focus chat search" request only reaches TaskHeader while ChatView is
- * the visible main surface — history and an active terminal tab each
- * replace it. Reset to chat first, then dispatch.
+ * the visible main surface — the history overlay replaces it. Reset to chat
+ * first, then dispatch.
  */
-export function focusChatSearch(reset: { history(v: boolean): void; terminal(): void }) {
+export function focusChatSearch(reset: { history(v: boolean): void }) {
   reset.history(false)
-  reset.terminal()
   window.dispatchEvent(new CustomEvent("focusTranscriptSearch"))
 }

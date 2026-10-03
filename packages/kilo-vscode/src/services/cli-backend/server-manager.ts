@@ -9,6 +9,12 @@ import { resolveLocalBwrapEnv, resolveTreeSitterEnv } from "./cli-resources"
 import { t } from "./i18n"
 import { parseServerPort } from "./server-utils"
 import { StderrTail } from "./stderr-tail"
+import {
+  RUNTIME_TOKEN_ENV,
+  cleanupOwnedProcesses,
+  createRuntimeToken,
+  isValidRuntimeToken,
+} from "./server-resource-cleanup"
 import { LlmRequestCollector, type LlmRequestRecord } from "./llm-request-collector"
 import { p0Stage, isP0PerfEnabled } from "../../perf/perf-instrument"
 import { resolveCanonicalDbPath } from "../../private-worker/canonical-db-path"
@@ -23,6 +29,15 @@ export interface ServerInstance {
   pid: number | undefined
   epoch: number
   spawnCwd: string
+  /** Cryptographically unique ownership token inherited by runtime children. */
+  token: string
+}
+
+/** Crashed-instance identity retained for token-verified cleanup before replacement. */
+export interface CrashedInstanceIdentity {
+  epoch: number
+  token: string
+  pid: number | undefined
 }
 
 const STARTUP_TIMEOUT_SECONDS = 30
@@ -193,10 +208,23 @@ export function buildHiddenChildEnv(baseEnv: NodeJS.ProcessEnv = process.env): N
 /**
  * Serve child is the sole owner of the internal private marker; always set
  * exactly "1" (extension invariant). Callers spread host env then override.
+ * Never mutates `process.env`: the returned record is per-spawn only.
  */
 export function buildServeChildEnvAugment(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Strict === '1' at flag read ensures invalid values never activate; extension always sets "1".
   return { ...baseEnv, KILO_PRIVATE_RUNTIME: "1" }
+}
+
+/**
+ * Per-spawn serve env with the crash-cleanup ownership token. The token is
+ * cryptographically unique per serve child and inherited by every
+ * runtime-dependent grandchild; `persistent` BackgroundProcess runners strip
+ * it. Never mutates `process.env`. Throws fail-closed on malformed tokens.
+ * Internal to this module (sole production use is the serve spawn below).
+ */
+function buildServeChildEnvWithToken(baseEnv: NodeJS.ProcessEnv, token: string): NodeJS.ProcessEnv {
+  if (!isValidRuntimeToken(token)) throw new Error("invalid runtime ownership token")
+  return { ...baseEnv, KILO_PRIVATE_RUNTIME: "1", [RUNTIME_TOKEN_ENV]: token }
 }
 
 /**
@@ -262,6 +290,16 @@ export class ServerManager {
    */
   private llmStore: LlmRequestCollector | null = null
   private llmInstance = 0
+  /**
+   * Last crashed-instance identity for token-verified cleanup. Set on
+   * unexpected exit (or when a dead instance is observed in `getServer`),
+   * retained through startup failures and dispose, cleared only when its
+   * cleanup completes clean. The replacement backend never spawns until that
+   * cleanup completes; cleanup failure fails closed with no restart.
+   */
+  private crashed: CrashedInstanceIdentity | null = null
+  /** Singleflight crash cleanup keyed by `epoch:token`. */
+  private cleanupFlight: { key: string; promise: Promise<void> } | null = null
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -276,10 +314,12 @@ export class ServerManager {
     if (this.disposed) throw new Error("ServerManager disposed")
     if (this.instance) {
       if (isChildDead(this.instance.process)) {
-        // Dead process (numeric exit OR signal termination) cannot be cached — clear and fall through to restart
+        // Dead process (numeric exit OR signal termination) cannot be cached — retain exact
+        // epoch/token for crash cleanup, then fall through to the cleanup gate below.
         const dying = this.instance
         this.instance = null
         ServerManager.releasePrivateStreams(dying)
+        this.rememberCrashed(dying)
       } else {
         console.log("[Kilo New] ServerManager: ♻️ Returning existing instance:", { port: this.instance.port })
         return this.instance
@@ -293,17 +333,20 @@ export class ServerManager {
 
     console.log("[Kilo New] ServerManager: 🚀 Starting new server instance...")
     const genAtStart = ++this.startupGeneration
-    this.startupPromise = this.startServer(genAtStart)
+    this.startupPromise = this.startServerWithCrashGate(genAtStart)
     try {
       const started = await this.startupPromise
       if (this.disposed || this.startupGeneration !== genAtStart) {
-        // Startup outlived dispose or was superseded — kill exact owned child only when still alive
+        // Startup outlived dispose or was superseded — kill exact owned child only when still alive.
+        // Retain its token so the next startup sweeps detached grandchildren first.
+        this.rememberCrashed(started)
         if (isChildAlive(started.process)) ServerManager.killProcess(started.process, "SIGTERM")
         ServerManager.releasePrivateStreams(started)
         throw new Error("Server startup superseded by dispose")
       }
       if (isChildDead(started.process)) {
         ServerManager.releasePrivateStreams(started)
+        this.rememberCrashed(started)
         throw new ServerStartupError("CLI background process exited after port detection", `pid ${started.pid ?? "?"} exited with ${describeChildExit(started.process)}`)
       }
       this.instance = started
@@ -327,6 +370,70 @@ export class ServerManager {
         }
       }
     }
+  }
+
+  /**
+   * Retain a crashed identity for the pre-replacement cleanup gate. Newest
+   * epoch wins; a missing/invalid token still records the epoch so the gate
+   * fails closed instead of silently spawning over unknown ownership.
+   */
+  private rememberCrashed(id: { epoch: number; token?: string; pid?: number }): void {
+    const cur = this.crashed
+    if (cur && cur.epoch > id.epoch) return
+    this.crashed = { epoch: id.epoch, token: typeof id.token === "string" ? id.token : "", pid: id.pid }
+  }
+
+  /**
+   * Crash gate: when a previous instance died, its token-verified orphans
+   * (detached shell/background/PTY/LSP/MCP children in separate groups) must
+   * be reaped BEFORE the replacement spawns. Singleflight per epoch:token so
+   * concurrent getServer calls share one sweep. Cleanup failure or unsupported
+   * ownership fails closed with a visible ServerStartupError and no spawn.
+   */
+  private async startServerWithCrashGate(generation: number): Promise<ServerInstance> {
+    const dead = this.crashed
+    if (dead) await this.runCrashCleanupSingleflight(dead, generation)
+    if (this.disposed || this.startupGeneration !== generation) {
+      throw new ServerStartupError("Server startup superseded by dispose", `generation ${generation} cancelled during crash cleanup gate`)
+    }
+    return this.startServer(generation)
+  }
+
+  private runCrashCleanupSingleflight(dead: CrashedInstanceIdentity, generation: number): Promise<void> {
+    const key = `${dead.epoch}:${dead.token}`
+    if (this.cleanupFlight && this.cleanupFlight.key === key) return this.cleanupFlight.promise
+    const promise = (async () => {
+      if (!isValidRuntimeToken(dead.token)) {
+        throw new ServerStartupError(
+          "Backend crash cleanup refused: unknown ownership",
+          `epoch ${dead.epoch} pid ${String(dead.pid ?? "?")} carries no valid ownership token — refusing replacement to avoid orphaned or PID-reused kills`,
+        )
+      }
+      console.log("[Kilo New] ServerManager: 🧹 Crash cleanup for epoch", dead.epoch, "pid", dead.pid)
+      const out = await cleanupOwnedProcesses(dead.token)
+      if (out.status === "clean") {
+        console.log("[Kilo New] ServerManager: 🧹 Crash cleanup clean", { epoch: dead.epoch, killed: out.killed })
+        if (this.crashed && this.crashed.epoch === dead.epoch && this.crashed.token === dead.token) this.crashed = null
+        return
+      }
+      const reason = out.status === "unsupported" ? out.reason : out.reason
+      const remaining = out.status === "unsupported" ? "" : ` remaining [${out.remaining.join(",")}]`
+      const stable =
+        out.status === "unsupported" ? " (stable platform limit — retry cannot recover; manual cleanup required)" : ""
+      throw new ServerStartupError(
+        "Backend crash cleanup failed: replacement withheld",
+        `epoch ${dead.epoch} token-owned sweep ${out.status}${stable}: ${reason}${remaining} — resolve manually, then retry`,
+      )
+    })()
+    this.cleanupFlight = { key, promise }
+    const clear = () => {
+      if (this.cleanupFlight && this.cleanupFlight.promise === promise) this.cleanupFlight = null
+    }
+    promise.then(clear, clear)
+    // Cancellation races the sweep but never skips it: a superseded generation
+    // still awaited the shared sweep above before throwing.
+    void generation
+    return promise
   }
 
   /**
@@ -510,6 +617,16 @@ export class ServerManager {
 
   private async startServer(generation: number): Promise<ServerInstance> {
     const password = crypto.randomBytes(32).toString("hex")
+    // Crash-cleanup ownership token: unique per serve child, inherited by all
+    // runtime-dependent grandchildren. Minted here (never in process.env),
+    // passed per-spawn only. Persistent BackgroundProcess runners strip it and
+    // are never wrapped. Every nonpersistent child IS a `__process-guardian`
+    // prelaunch wrapper (real group/job ownership across serve death, env
+    // -i safe, no SIGKILL/install gap); the sweep reaps guardians by
+    // exact-PID signals and guardians reap their trees, with Windows
+    // attested via the guardian CIM oracle (unsupported only when the
+    // oracle itself fails; Windows job hold is a structural code claim).
+    const token = createRuntimeToken()
     const cliPath = this.getCliPath()
     console.log("[Kilo New] ServerManager: 📍 CLI path:", cliPath)
     console.log("[Kilo New] ServerManager: 🔐 Generated password (length):", password.length)
@@ -609,8 +726,11 @@ export class ServerManager {
           // See oven-sh/bun#18265 and Jarred's workaround note in #21560.
           MIMALLOC_PURGE_DELAY: "0",
           KILO_SERVER_PASSWORD: password,
-          // Strict "1" marker: invalid values never activate; extension always sets exactly "1".
-          KILO_PRIVATE_RUNTIME: "1",
+          // Sole private-runtime marker + crash-cleanup ownership token.
+          // Per-spawn only; never mutates process.env. The token is inherited
+          // by runtime-dependent grandchildren and stripped by persistent
+          // runners (see buildServeChildEnvWithToken).
+          ...buildServeChildEnvWithToken({}, token),
           // The CLI watches this PID and exits if the extension host is hard-killed without a
           // chance to run dispose(), so it is never orphaned. See parent-watchdog.ts.
           KILO_PARENT_PID: String(process.pid),
@@ -743,7 +863,7 @@ export class ServerManager {
               return
             }
           })
-          resolve({ port, password, process: serverProcess, privateReader, privateWriter, pid, epoch, spawnCwd })
+          resolve({ port, password, process: serverProcess, privateReader, privateWriter, pid, epoch, spawnCwd, token })
         }
       })
 
@@ -770,9 +890,16 @@ export class ServerManager {
           const dying = this.instance
           this.instance = null
           ServerManager.releasePrivateStreams(dying)
+          // Retain exact epoch/token: the next getServer must clean token-verified
+          // orphans before a replacement accepts work. Never cleared implicitly.
+          this.rememberCrashed(dying)
           this.onExit?.(code)
         } else {
           ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
+          // A startup-failure child may still have spawned token-carrying
+          // descendants before dying; retain its identity so the next startup
+          // cleans it before replacing. Keyed by epoch so a newer crash wins.
+          this.rememberCrashed({ epoch, token, pid })
         }
         if (!resolved) {
           resolved = true
@@ -1057,9 +1184,16 @@ export class ServerManager {
     }
   }
 
-  dispose(): void {
+  /**
+   * Awaited shutdown convergence: kills the exact owned children, waits for
+   * their exit (bounded), then awaits the token-verified sweep for detached
+   * grandchildren the group-kill cannot reach. Callers must await this —
+   * authority is relinquished only after convergence settles (clean or
+   * logged-incomplete, never silent fire-and-forget). The already-disposed
+   * path converges identically for any in-flight startup child.
+   */
+  async dispose(): Promise<void> {
     if (this.disposed) {
-      // Already disposed — ensure starting proc also cleaned if still pending, retain handle until exit.
       const cur = this.startingProc
       if (cur && isChildAlive(cur)) {
         ServerManager.killForStartingProc(cur, "SIGTERM")
@@ -1067,16 +1201,8 @@ export class ServerManager {
           privateReader: (cur.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
           privateWriter: (cur.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
         } as unknown as ServerInstance)
-        // Retain handle until exit; clear only if still ours to avoid race with newer startingProc.
-        // SIGKILL only while still alive — a signal-dead child (signalCode set) is never re-killed.
-        const timer = setTimeout(() => {
-          if (isChildAlive(cur)) ServerManager.killForStartingProc(cur, "SIGKILL")
-        }, 5000)
-        ;(timer as unknown as { unref?: () => void })?.unref?.()
-        cur.on("exit", () => {
-          clearTimeout(timer)
-          if (this.startingProc === cur) this.startingProc = null
-        })
+        await ServerManager.waitForChildExit(cur, 5000, ServerManager.killForStartingProc)
+        if (this.startingProc === cur) this.startingProc = null
       } else if (cur && this.startingProc === cur) {
         this.startingProc = null
       }
@@ -1089,7 +1215,6 @@ export class ServerManager {
     this.canonicalStorageDone = false
     this.canonicalStorageError = null
     const starting = this.startingProc
-    // Retain exact child handle until exit; clear only if still ours.
     if (starting && isChildAlive(starting)) {
       console.log("[Kilo New] ServerManager: 🔴 Disposing — killing in-flight startup PID:", starting.pid)
       ServerManager.releasePrivateStreams({
@@ -1097,24 +1222,22 @@ export class ServerManager {
         privateWriter: (starting.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
       } as unknown as ServerInstance)
       ServerManager.killForStartingProc(starting, "SIGTERM")
-      const timer = setTimeout(() => {
-        if (isChildAlive(starting)) ServerManager.killForStartingProc(starting, "SIGKILL")
-      }, 5000)
-      ;(timer as unknown as { unref?: () => void })?.unref?.()
-      starting.on("exit", () => {
-        clearTimeout(timer)
-        if (this.startingProc === starting) this.startingProc = null
-      })
+      await ServerManager.waitForChildExit(starting, 5000, ServerManager.killForStartingProc)
+      if (this.startingProc === starting) this.startingProc = null
     } else if (starting && this.startingProc === starting) {
       this.startingProc = null
     }
     if (!this.instance) {
+      await this.sweepTokenAfterDispose()
       return
     }
     const inst = this.instance
     const proc = inst.process
     this.instance = null
     ServerManager.releasePrivateStreams(inst)
+    // Retain exact epoch/token through dispose: detached token-carrying
+    // grandchildren live in separate groups the serve group-kill cannot reach.
+    this.rememberCrashed(inst)
 
     // Dispose kills the exact owned serve child only when still alive. A signal-dead
     // child (exitCode null + signalCode set) is already gone: no SIGTERM and no
@@ -1127,18 +1250,87 @@ export class ServerManager {
       console.log("[Kilo New] ServerManager: 🔴 Disposing — owned child already dead, no kill", describeChildExit(proc))
     }
 
-    // SIGKILL fallback after 5s. Ensures the process tree dies even if SIGTERM is ignored
-    // or Instance.disposeAll() hangs past the serve.ts shutdown timeout.
-    // Guarded by signal-aware aliveness: signal-dead children are never re-killed.
-    const timer = setTimeout(() => {
-      if (isChildAlive(proc)) {
-        console.warn("[Kilo New] ServerManager: ⚠️ Process did not exit after SIGTERM, sending SIGKILL")
-        ServerManager.killProcess(proc, "SIGKILL")
+    await ServerManager.waitForChildExit(proc, 5000, ServerManager.killProcess)
+    await this.sweepTokenAfterDispose()
+  }
+
+  private static waitForChildExit(
+    proc: ChildProcess,
+    ms: number,
+    kill: (proc: ChildProcess, signal: NodeJS.Signals) => void,
+  ): Promise<void> {
+    if (!isChildAlive(proc)) return Promise.resolve()
+    return new Promise((resolve) => {
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve()
       }
-    }, 5000)
-    // unref so this timer doesn't prevent the extension host from exiting
-    timer.unref()
-    proc.on("exit", () => clearTimeout(timer))
+      const off = () => {
+        try {
+          const p = proc as unknown as { off?: unknown; removeListener?: unknown }
+          if (typeof p.off === "function") (p.off as (e: string, l: () => void) => void).call(proc, "exit", done)
+          else if (typeof p.removeListener === "function")
+            (p.removeListener as (e: string, l: () => void) => void).call(proc, "exit", done)
+        } catch {}
+      }
+      const onExit = (fn: () => void) => {
+        try {
+          const p = proc as unknown as { once?: unknown; on?: unknown }
+          if (typeof p.once === "function") (p.once as (e: string, l: () => void) => void).call(proc, "exit", fn)
+          else if (typeof p.on === "function") (p.on as (e: string, l: () => void) => void).call(proc, "exit", fn)
+        } catch {}
+      }
+      const timer = setTimeout(() => {
+        if (isChildAlive(proc)) {
+          console.warn("[Kilo New] ServerManager: ⚠️ Process did not exit after SIGTERM, sending SIGKILL")
+          try {
+            kill(proc, "SIGKILL")
+          } catch {}
+        }
+        // Bounded SIGKILL grace before relinquishing (no indefinite hang).
+        const grace = setTimeout(() => {
+          off()
+          done()
+        }, 2000)
+        ;(grace as unknown as { unref?: () => void })?.unref?.()
+        onExit(() => {
+          clearTimeout(grace)
+          done()
+        })
+      }, ms)
+      ;(timer as unknown as { unref?: () => void })?.unref?.()
+      onExit(done)
+    })
+  }
+
+  /**
+   * Awaited post-dispose token sweep for detached grandchildren the serve
+   * group-kill cannot reach. Exact-PID only, never group/pattern; failure only
+   * logs because dispose owns no replacement to withhold, but the caller has
+   * awaited the outcome — nothing is silently abandoned.
+   */
+  private async sweepTokenAfterDispose(): Promise<void> {
+    const dead = this.crashed
+    if (!dead || !isValidRuntimeToken(dead.token)) return
+    try {
+      const out = await cleanupOwnedProcesses(dead.token)
+      if (out.status === "clean") {
+        if (this.crashed && this.crashed.epoch === dead.epoch) this.crashed = null
+        console.log("[Kilo New] ServerManager: 🧹 Dispose sweep clean", { epoch: dead.epoch, killed: out.killed })
+      } else {
+        console.warn("[Kilo New] ServerManager: 🧹 Dispose sweep incomplete:", out.status, out.reason)
+      }
+    } catch (err) {
+      console.warn("[Kilo New] ServerManager: 🧹 Dispose sweep error:", String(err))
+    }
+  }
+
+  /** Test-only read of the retained crash identity (epoch/token, never secrets). */
+  public getCrashedForTest(): CrashedInstanceIdentity | null {
+    return this.crashed ? { ...this.crashed } : null
   }
 }
 

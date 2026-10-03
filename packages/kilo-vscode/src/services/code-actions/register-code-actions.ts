@@ -76,8 +76,8 @@ export function registerCodeActions(context: vscode.ExtensionContext, resolveTar
     // route through VS Code's keybinding-to-focused-webview forwarding,
     // which doesn't reliably reach a webview whose own input already has
     // focus; invoking straight from the palette sidesteps that path
-    // entirely, the same way terminalAddToContext etc. do. Toggles: the
-    // webview closes the search bar itself if it's already open.
+    // entirely. Toggles: the webview closes the search bar itself if it's
+    // already open.
     vscode.commands.registerCommand("kilo-code.new.toggleChatSearch", async () => {
       const view = await resolveTarget()
       if (!view) return

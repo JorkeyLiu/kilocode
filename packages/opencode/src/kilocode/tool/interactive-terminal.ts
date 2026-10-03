@@ -3,6 +3,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { InteractiveTerminal } from "@/kilocode/interactive-terminal"
 import { Plugin } from "@/plugin"
 import { Shell } from "@/shell/shell"
+import { assertRuntimeToken } from "@/kilocode/runtime-token"
 import { ShellPermission } from "@/tool/shell"
 import { Tool } from "@/tool/tool"
 import type { FSUtil } from "@opencode-ai/core/fs-util"
@@ -68,7 +69,7 @@ export const InteractiveTerminalTool = Tool.define<
               cwd,
               description: params.description,
               shell,
-              env: { ...process.env, ...extra.env },
+              env: assertRuntimeToken({ ...process.env, ...extra.env }),
               abort: ctx.abort,
             }),
           )

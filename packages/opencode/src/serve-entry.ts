@@ -36,6 +36,44 @@ const args = hideBin(process.argv)
 // kilocode_change - track hidden cutover for bootstrap/shutdown bypass (precise positional, not args.includes)
 let isInternalCutover = false
 
+// kilocode_change - help/version fast path: must not touch session/storage/telemetry/bootstrap/shutdown.
+// Detected from raw args early (before yargs) so the finally shutdown gate holds
+// even if yargs short-circuits middleware for --version. Middleware re-checks
+// parsed help/version flags to cover alias forms.
+let isHelpOnly = false
+function isHelpVersionArgs(list: string[]): boolean {
+  if (list.length === 0) return true
+  if (list.includes("-h") || list.includes("--help") || list.includes("--version") || list.includes("-v")) return true
+  if (list[0] === "help" || list[0] === "version") return true
+  return false
+}
+isHelpOnly = isHelpVersionArgs(args)
+
+// kilocode_change - ephemeral per-child process-resource guardian: same
+// shipped executable, pre-bootstrap/DB/AppLayer. Prelaunch command
+// wrapper: owns cleanup BEFORE starting the target, never an
+// after-spawn sidecar. Carries no sessions, config, operations, or
+// persistent ledger. Exits via its own main, never serving.
+{
+  const marker = "__process-guardian"
+  if (process.argv.includes(marker)) {
+    const { parseGuardianArgv, runGuardian } = await import("@/kilocode/process-resource/guardian")
+    const parsed = parseGuardianArgv(process.argv)
+    if (!parsed || !parsed.isGuardian || parsed.mode !== "wrap" || !parsed.target) {
+      process.stderr.write(`[guardian] missing guardian wrap args; target not launched\n`)
+      process.exit(2)
+    }
+    await runGuardian(parsed)
+    process.exit(0)
+  }
+  // Publish the resolved self command for core spawners (no opencode import
+  // in core): KILO_GUARDIAN_CMD JSON [cmd, ...baseArgs].
+  try {
+    const { publishGuardianCmd } = await import("@/kilocode/process-resource/supervise")
+    publishGuardianCmd()
+  } catch {}
+}
+
 if (await KiloBootstrap.runner()) process.exit()
 
 function show(out: string) {
@@ -71,6 +109,20 @@ const cli = yargs(args)
     type: "boolean",
   })
   .middleware(async (opts) => {
+    if (
+      (opts as any)?.help === true ||
+      (opts as any)?.version === true ||
+      (opts as any)?.h === true ||
+      (opts as any)?.v === true
+    ) {
+      isHelpOnly = true
+    }
+    if (isHelpOnly) {
+      // Help/version output must not initialize session/storage/telemetry or
+      // acquire DB/migration/provider work. Skip Log/Heap/bootstrap entirely.
+      P0Perf.mark("cli_bootstrap_skip_help")
+      return
+    }
     if (opts.pure) {
       process.env.KILO_PURE = "1"
     }
@@ -194,6 +246,9 @@ try {
   if (isInternalCutover) {
     // kilocode_change - hidden cutover owns its own lease/marker lifecycle; skip heavy AppRuntime shutdown that would acquire DB lease
     P0Perf.mark("cli_shutdown_skip_internal_cutover")
+  } else if (isHelpOnly) {
+    // kilocode_change - help/version never bootstrapped; skip shutdown side effects (telemetry/disposal).
+    P0Perf.mark("cli_shutdown_skip_help")
   } else {
     await KiloBootstrap.shutdown()
   }

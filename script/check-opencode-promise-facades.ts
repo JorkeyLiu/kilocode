@@ -52,6 +52,11 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   "kilocode/config-validation.test.ts": { count: 2, reason: "existing runtime integration test" },
   "kilocode/cli-shutdown.test.ts": { count: 1, reason: "mocked runtime boundary for shutdown unit tests" },
   "kilocode/plan-followup.test.ts": { count: 3, reason: "existing runtime integration test" },
+  "kilocode/plan-followup-permission.test.ts": {
+    count: 2,
+    reason:
+      "production AppRuntime integration test for the aborted plan follow-up permission gate (Permission.list and Question.list empty after abort with main/child shared question level)",
+  },
   "kilocode/session-compaction-chunks.test.ts": {
     count: 2,
     reason: "disk-backed instance integration test cleanup",
@@ -106,6 +111,11 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 55,
     reason:
       "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
+  },
+  "kilocode/session/cancel-queued-crash-recovery.test.ts": {
+    count: 12,
+    reason:
+      "B0 durable cancelQueued crash-recovery integration test via AppRuntime and InstanceRef (converged orphan replays as explicit ambiguous with no revision/feed advance, single ambiguous op row, no replay side effects, normal succeeded cancelled-false path)",
   },
   "kilocode/server/fd-carrier.test.ts": {
     count: 10,

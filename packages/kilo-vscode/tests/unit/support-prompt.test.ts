@@ -104,59 +104,6 @@ describe("createPrompt", () => {
     })
   })
 
-  describe("TERMINAL_ADD_TO_CONTEXT", () => {
-    it("includes terminalContent in code fence", () => {
-      const result = createPrompt("TERMINAL_ADD_TO_CONTEXT", {
-        userInput: "",
-        terminalContent: "npm install",
-      })
-      expect(result).toContain("```\nnpm install\n```")
-    })
-
-    it("includes userInput when provided", () => {
-      const result = createPrompt("TERMINAL_ADD_TO_CONTEXT", {
-        userInput: "context here",
-        terminalContent: "ls",
-      })
-      expect(result).toContain("context here")
-    })
-
-    it("renders empty string for missing terminalContent", () => {
-      const result = createPrompt("TERMINAL_ADD_TO_CONTEXT", { userInput: "" })
-      expect(result).toContain("```\n\n```")
-    })
-  })
-
-  describe("TERMINAL_FIX", () => {
-    it("includes terminalContent in code fence", () => {
-      const result = createPrompt("TERMINAL_FIX", {
-        userInput: "",
-        terminalContent: "gti status",
-      })
-      expect(result).toContain("```\ngti status\n```")
-    })
-
-    it("asks to fix the command", () => {
-      const result = createPrompt("TERMINAL_FIX", { userInput: "", terminalContent: "" })
-      expect(result).toContain("Fix this terminal command")
-    })
-  })
-
-  describe("TERMINAL_EXPLAIN", () => {
-    it("includes terminalContent in code fence", () => {
-      const result = createPrompt("TERMINAL_EXPLAIN", {
-        userInput: "",
-        terminalContent: "grep -r foo .",
-      })
-      expect(result).toContain("```\ngrep -r foo .\n```")
-    })
-
-    it("asks to explain the command", () => {
-      const result = createPrompt("TERMINAL_EXPLAIN", { userInput: "", terminalContent: "" })
-      expect(result).toContain("Explain this terminal command")
-    })
-  })
-
   describe("missing params", () => {
     it("renders empty string for unknown template variable", () => {
       const result = createPrompt("ADD_TO_CONTEXT", {

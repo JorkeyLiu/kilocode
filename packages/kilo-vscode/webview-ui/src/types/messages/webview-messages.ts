@@ -399,12 +399,6 @@ export interface RequestFilePickerMessage {
   requestId: string
 }
 
-export interface RequestTerminalContextMessage {
-  type: "requestTerminalContext"
-  requestId: string
-  sessionID?: string
-}
-
 export interface RequestGitChangesContextMessage {
   type: "requestGitChangesContext"
   requestId: string
@@ -550,46 +544,10 @@ export interface RequestStateMessage {
   type: "agentManager.requestState"
 }
 
-// Show terminal for a session
-export interface ShowTerminalRequest {
-  type: "agentManager.showTerminal"
-  sessionId: string
-}
-
-// Show terminal for the local workspace (when no session is active)
-export interface ShowLocalTerminalRequest {
-  type: "agentManager.showLocalTerminal"
-}
-
 // Copy text to the system clipboard via the extension host
 export interface CopyToClipboardRequest {
   type: "agentManager.copyToClipboard"
   text: string
-}
-
-// Show existing local terminal when switching to local context (no-op if none exists)
-export interface ShowExistingLocalTerminalRequest {
-  type: "agentManager.showExistingLocalTerminal"
-}
-
-// Create a new xterm terminal tab in the local workspace
-export interface AgentManagerTerminalCreateRequest {
-  type: "agentManager.terminal.create"
-  slotId: string | null
-}
-
-// Close a terminal tab
-export interface AgentManagerTerminalCloseRequest {
-  type: "agentManager.terminal.close"
-  terminalId: string
-}
-
-// Notify the extension of an xterm resize so it can update the backend PTY dimensions
-export interface AgentManagerTerminalResizeRequest {
-  type: "agentManager.terminal.resize"
-  terminalId: string
-  cols: number
-  rows: number
 }
 
 // Open a file in the selected session
@@ -912,7 +870,6 @@ export type WebviewMessage =
   | SpeechToTextCancelMessage
   | RequestFileSearchMessage
   | RequestFilePickerMessage
-  | RequestTerminalContextMessage
   | RequestGitChangesContextMessage
   | UpdateSettingRequest
   | RequestTimelineSettingMessage
@@ -938,10 +895,7 @@ export type WebviewMessage =
   | TelemetryRequest
   | RequestRepoInfoMessage
   | RequestStateMessage
-  | ShowTerminalRequest
-  | ShowLocalTerminalRequest
   | CopyToClipboardRequest
-  | ShowExistingLocalTerminalRequest
   | AgentManagerOpenFileRequest
   | SetTabOrderRequest
   | SetSessionsCollapsedRequest
@@ -982,9 +936,6 @@ export type WebviewMessage =
   | SetRemoteEnabledMessage
   | RequestRemoteStatusMessage
   | OpenContentRequest
-  | AgentManagerTerminalCreateRequest
-  | AgentManagerTerminalCloseRequest
-  | AgentManagerTerminalResizeRequest
   | RequestImageModelsMessage
   | P0PerfMessage
 

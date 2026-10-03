@@ -4,10 +4,23 @@ import { emptyProvenance } from "@/kilocode/provider/canonical-provenance"
 import { Effect, Layer } from "effect"
 
 export function make(overrides: Partial<Config.Interface> = {}) {
+  const emptyPolicy: Config.PolicySnapshot = {
+    version: "empty",
+    info: {},
+    canonical: emptyProvenance,
+    global: {},
+    globalSource: "memory:empty",
+    globalPermission: { present: false, raw: undefined },
+    projectSource: "memory:empty",
+    projectFound: false,
+    projectPermission: { present: false, raw: undefined },
+  }
   return Config.Service.of({
     get: () => Effect.succeed({}),
     getGlobal: () => Effect.succeed({}),
     getConsoleState: () => Effect.succeed(emptyConsoleState),
+    getPolicySnapshot: () => Effect.succeed(emptyPolicy),
+    captureFreshPolicySnapshot: () => Effect.succeed(emptyPolicy),
     update: (config) => Effect.succeed({ config, changed: false }), // kilocode_change
     updateGlobal: (config) => Effect.succeed({ info: config, changed: false }),
     // kilocode_change start - prepared mutation split added to the Config interface

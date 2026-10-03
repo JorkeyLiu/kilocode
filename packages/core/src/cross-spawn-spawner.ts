@@ -3,6 +3,7 @@ import { NodeFileSystem, NodeSink, NodeStream } from "@effect/platform-node"
 import * as NodePath from "@effect/platform-node/NodePath"
 import { prepareCommand as prepareSandbox } from "@kilocode/sandbox" // kilocode_change
 import { tap as tapStdio, tapped } from "./kilocode/stdio-tap" // kilocode_change - Bun drops buffered stdio on close
+import { birthOf, groupMembers, owned as verifyOwned } from "./kilocode/process-birth" // kilocode_change - shared parent birth identity + F-E verified group teardown
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
@@ -264,10 +265,178 @@ export const make = Effect.gen(function* () {
     return { stdout, stderr, all: Stream.merge(stdout, stderr) }
   }
 
+  // kilocode_change - prelaunch guardian wrapper: the guardian is launched
+  // INSTEAD of the target and owns cleanup before the target can run
+  // (no after-spawn attach, no async poll gap). Command via
+  // KILO_GUARDIAN_CMD JSON [cmd, ...base] (published by the serve entry
+  // from KiloPtySelfCommand); core never imports opencode. Active only
+  // with a valid KILO_RUNTIME_TOKEN; KILO_GUARDIAN=1 (inside a guardian)
+  // or KILO_PROCESS_GUARDIAN=0 opts out. Fail closed: install
+  // absent/invalid fails the spawn with no target side effect.
+  const wrapActive = (): boolean => {
+    if (globalThis.process.env["KILO_GUARDIAN"] === "1") return false
+    if (globalThis.process.env["KILO_PROCESS_GUARDIAN"] === "0") return false
+    if (globalThis.process.argv.includes("__process-guardian")) return false
+    const token = globalThis.process.env["KILO_RUNTIME_TOKEN"]
+    return typeof token === "string" && /^[0-9a-f]{64}$/.test(token)
+  }
+
+  const guardianBase = (): Array<string> | undefined => {
+    try {
+      const raw = globalThis.process.env["KILO_GUARDIAN_CMD"]
+      if (!raw) return undefined
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed) || typeof parsed[0] !== "string") return undefined
+      if (!parsed.every((x) => typeof x === "string")) return undefined
+      return parsed as Array<string>
+    } catch {
+      return undefined
+    }
+  }
+
+  const b64url = (text: string): string =>
+    Buffer.from(text, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+
+  // kilocode_change - every wrapper carries the owner birth identity;
+  // unobtainable birth fails closed (undefined -> no argv -> no target).
+  const wrapArgv = (target: { cmd: string; args: readonly string[]; shell?: boolean | string; extraFds: number[] }): Array<string> | undefined => {
+    const base = guardianBase()
+    if (!base) return undefined
+    const birth = birthOf(globalThis.process.pid)
+    if (!birth) return undefined
+    const token = globalThis.process.env["KILO_RUNTIME_TOKEN"]
+    const oracle = typeof token === "string" ? `KILO_RUNTIME_TOKEN=${token}` : undefined
+    return [
+      ...base.slice(1),
+      "__process-guardian",
+      "--cmd-b64",
+      b64url(JSON.stringify({ cmd: target.cmd, args: target.args, shell: target.shell ?? false, extraFds: target.extraFds })),
+      "--parent-pid",
+      String(globalThis.process.pid),
+      "--parent-birth",
+      birth,
+      ...(oracle ? ["--token", oracle] : []),
+    ]
+  }
+
+  const guardianCmdFor = (target: { cmd: string; args: readonly string[]; shell?: boolean | string; extraFds: number[] }): { cmd: string; args: string[] } | undefined => {
+    const base = guardianBase()
+    const argv = wrapArgv(target)
+    if (!base || !argv) return undefined
+    return { cmd: base[0]!, args: argv }
+  }
+
+  // kilocode_change (F-E) - ownership registry: wrapped procs are signalled
+  // via the guardian PID ONLY for TERM/INT (never a negative-pid group
+  // kill, never taskkill /T); the guardian owns bounded tree cleanup and
+  // its exit proves descendants are dead. Forced SIGKILL escalates to the
+  // WHOLE owned tree only after independent verification (retained handle
+  // alive + same birth + pgid === pid); without proof it fails closed with
+  // reason and never guesses a shared/dead group. Unwrapped procs keep
+  // group-kill behavior.
+  const registry = new WeakMap<NodeChildProcess.ChildProcess, { birth: string | undefined }>()
+  const isOwned = (proc: NodeChildProcess.ChildProcess): boolean => {
+    try {
+      return registry.has(proc)
+    } catch {
+      return false
+    }
+  }
+  const birthFor = (proc: NodeChildProcess.ChildProcess): string | undefined => {
+    try {
+      return registry.get(proc)?.birth
+    } catch {
+      return undefined
+    }
+  }
+
+  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+  const waitGone = async (pgid: number, ms = 3000): Promise<boolean> => {
+    const end = Date.now() + ms
+    while (Date.now() < end) {
+      try {
+        if (groupMembers(pgid).length === 0) return true
+      } catch {}
+      await sleepMs(50)
+    }
+    try {
+      return groupMembers(pgid).length === 0
+    } catch {
+      return false
+    }
+  }
+
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const proc = launch(command.command, command.args, opts)
+      // kilocode_change - prelaunch wrap: guardian instead of target.
+      // stdio/env/cwd already mirror the target (built by spawnCommand
+      // below); the guardian proxies them via inherit so behavior is
+      // preserved and proc.pid is the real owned group leader.
+      const start = (): NodeChildProcess.ChildProcess | undefined => {
+        if (!wrapActive()) return launch(command.command, command.args, opts)
+        const stdio = (opts.stdio ?? []) as Array<unknown>
+        const extraFds: number[] = []
+        for (let fd = 3; fd < stdio.length; fd++) {
+          if (stdio[fd] !== undefined && stdio[fd] !== "ignore") extraFds.push(fd)
+        }
+        const shell = (opts as { shell?: boolean | string }).shell
+        const wrapped = guardianCmdFor({ cmd: command.command, args: command.args, shell, extraFds })
+        if (!wrapped) {
+          resume(
+            Effect.fail(
+              toPlatformError(
+                "spawn",
+                Object.assign(
+                  new Error("Process guardian unavailable: KILO_GUARDIAN_CMD absent or invalid; refusing to launch target without ownership"),
+                  { code: "ENOENT" },
+                ),
+                command,
+              ),
+            ),
+          )
+          return undefined
+        }
+        try {
+          const guardian = NodeChildProcess.spawn(wrapped.cmd, wrapped.args, {
+            cwd: opts.cwd as string | undefined,
+            env: opts.env as NodeJS.ProcessEnv | undefined,
+            stdio: opts.stdio,
+            detached: true,
+            windowsHide: true,
+          })
+          try {
+            const id = guardian.pid
+            registry.set(guardian, { birth: typeof id === "number" ? birthOf(id) : undefined })
+          } catch {
+            try {
+              registry.set(guardian, { birth: undefined })
+            } catch {}
+          }
+          return guardian
+        } catch (err) {
+          resume(Effect.fail(toPlatformError("spawn", err as NodeJS.ErrnoException, command)))
+          return undefined
+        }
+      }
+      const proc = start()
+      if (!proc) return Effect.sync(() => {})
+      if (!proc.pid) {
+        // Swallow the async 'error' of the failed spawn; the fail below
+        // is the only signal.
+        try {
+          proc.on("error", () => {})
+        } catch {}
+        try {
+          proc.kill("SIGKILL")
+        } catch {}
+        resume(
+          Effect.fail(
+            toPlatformError("spawn", Object.assign(new Error("Process guardian produced no pid, target not launched"), { code: "ENOENT" }), command),
+          ),
+        )
+        return Effect.sync(() => {})
+      }
       tapStdio(proc) // kilocode_change - must run in the same tick as spawn
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
@@ -290,11 +459,154 @@ export const make = Effect.gen(function* () {
       })
     })
 
+  // kilocode_change (F-E) - exact guardian signal: PID only for TERM/INT,
+  // so the guardian's bounded cleanup runs to completion and its exit
+  // (awaited by callers) proves the tree is dead. POSIX SIGKILL to an
+  // owned guardian escalates to the WHOLE owned tree only after
+  // independent verification (retained handle alive + same birth + pgid
+  // === pid); without proof it fails closed (PID best-effort, then fail
+  // with reason, never a guessed shared/dead group). Win32 stays PID-only
+  // (KILL_ON_CLOSE job owns the tree; no on-platform group claim here).
+  const killOwnedPid = (
+    command: ChildProcess.StandardCommand,
+    proc: NodeChildProcess.ChildProcess,
+    signal: NodeJS.Signals,
+  ) =>
+    Effect.try({
+      try: () => {
+        if (!proc.pid) throw new Error("Process guardian has no pid")
+        globalThis.process.kill(proc.pid, signal)
+      },
+      catch: (err) => toPlatformError("kill", toError(err), command),
+    })
+
+  const killOwned = (
+    command: ChildProcess.StandardCommand,
+    proc: NodeChildProcess.ChildProcess,
+    signal: NodeJS.Signals,
+  ): Effect.Effect<void, PlatformError.PlatformError> =>
+    Effect.suspend(() => {
+      if (globalThis.process.platform === "win32") return killOwnedPid(command, proc, signal)
+      if (signal !== "SIGKILL") return killOwnedPid(command, proc, signal)
+      const pid = proc.pid
+      if (!pid) {
+        return Effect.fail(
+          toPlatformError("kill", new Error("Owned guardian has no pid; cannot verify owned group, tree may survive"), command),
+        )
+      }
+      const check = verifyOwned(pid, birthFor(proc))
+      if (check.ok) {
+        const pgid = check.pgid
+        return Effect.suspend(() => {
+          try {
+            globalThis.process.kill(-pgid, signal)
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException)?.code
+            if (code !== "ESRCH") return Effect.fail(toPlatformError("kill", toError(err), command))
+          }
+          return Effect.void
+        })
+      }
+      try {
+        globalThis.process.kill(pid, "SIGKILL")
+      } catch {}
+      return Effect.fail(
+        toPlatformError(
+          "kill",
+          new Error(`Owned guardian group unverified (${check.reason}); PID SIGKILL best-effort only, tree may survive`),
+          command,
+        ),
+      )
+    })
+
+  const drainOwned = (
+    command: ChildProcess.StandardCommand,
+    signal: ExitSignal,
+    pgid: number | undefined,
+  ): Effect.Effect<void, PlatformError.PlatformError> =>
+    Effect.suspend(() => {
+      if (pgid === undefined) return Deferred.await(signal).pipe(Effect.asVoid)
+      return Deferred.await(signal).pipe(
+        Effect.flatMap(() =>
+          Effect.promise(() => waitGone(pgid)).pipe(
+            Effect.flatMap((gone) =>
+              gone
+                ? Effect.void
+                : Effect.fail(
+                    toPlatformError("kill", new Error(`Owned group ${pgid} survived SIGKILL; retaining authority, tree may survive`), command),
+                  ),
+            ),
+          ),
+        ),
+      )
+    })
+
+  const killOwnedFinal = (
+    command: ChildProcess.StandardCommand,
+    proc: NodeChildProcess.ChildProcess,
+    signal: ExitSignal,
+  ): Effect.Effect<void, PlatformError.PlatformError> =>
+    Effect.suspend(() => {
+      if (globalThis.process.platform === "win32") {
+        return killOwnedPid(command, proc, "SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
+      }
+      const pid = proc.pid
+      if (!pid) {
+        return Effect.fail(
+          toPlatformError("kill", new Error("Owned guardian has no pid; cannot verify owned group, tree may survive"), command),
+        )
+      }
+      const check = verifyOwned(pid, birthFor(proc))
+      if (!check.ok) {
+        try {
+          globalThis.process.kill(pid, "SIGKILL")
+        } catch {}
+        return Deferred.await(signal).pipe(
+          Effect.andThen(
+            Effect.fail(toPlatformError("kill", new Error(`Owned guardian group unverified (${check.reason}); PID SIGKILL best-effort only, tree may survive`), command)),
+          ),
+        )
+      }
+      const pgid = check.pgid
+      const send: Effect.Effect<void, PlatformError.PlatformError> = Effect.suspend(() => {
+        try {
+          globalThis.process.kill(-pgid, "SIGKILL")
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code
+          if (code !== "ESRCH") return Effect.fail(toPlatformError("kill", toError(err), command))
+        }
+        return Effect.void
+      })
+      return send.pipe(Effect.andThen(drainOwned(command, signal, pgid)))
+    })
+
+  const doneOwned = (
+    command: ChildProcess.StandardCommand,
+    proc: NodeChildProcess.ChildProcess,
+  ): Effect.Effect<void, PlatformError.PlatformError> =>
+    Effect.suspend(() => {
+      if (globalThis.process.platform === "win32") return Effect.void
+      const pid = proc.pid
+      if (!pid) return Effect.void
+      const rest = (() => {
+        try {
+          return groupMembers(pid)
+        } catch {
+          return []
+        }
+      })()
+      if (rest.length === 0) return Effect.void
+      return Effect.fail(
+        toPlatformError("kill", new Error(`Owned guardian exited with ${rest.length} group member(s) still alive; retaining authority, no group guess`), command),
+      )
+    })
+
   const killGroup = (
     command: ChildProcess.StandardCommand,
     proc: NodeChildProcess.ChildProcess,
     signal: NodeJS.Signals,
   ) => {
+    if (isOwned(proc)) return killOwned(command, proc, signal)
     if (globalThis.process.platform === "win32") {
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
         NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
@@ -389,20 +701,30 @@ export const make = Effect.gen(function* () {
               const done = yield* Deferred.isDone(signal)
               const kill = timeout(proc, command, target.options) // kilocode_change
               if (done) {
+                // kilocode_change (F-E): owned exit proves the tree is dead
+                // via guardian cleanup; never guess a group from a dead
+                // leader. Retain authority (fail, no group kill) if members
+                // still linger.
+                if (isOwned(proc)) return yield* Effect.ignore(doneOwned(command, proc))
                 const [code] = yield* Deferred.await(signal)
                 if (process.platform === "win32") return yield* Effect.void
                 if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
                 return yield* Effect.void
               }
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
+              const send = (s: NodeJS.Signals) => {
+                if (isOwned(proc) && s === "SIGKILL" && globalThis.process.platform !== "win32") return killOwned(command, proc, s)
+                return Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
+              }
               // kilocode_change start - preserve kill options from the prepared command
               const sig = target.options.killSignal ?? "SIGTERM"
               const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
               const escalated = target.options.forceKillAfter
                 ? Effect.timeoutOrElse(attempt, {
                     duration: target.options.forceKillAfter,
-                    orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
+                    orElse: () =>
+                      isOwned(proc)
+                        ? killOwnedFinal(command, proc, signal)
+                        : send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
                   })
                 : attempt
               // kilocode_change end
@@ -434,13 +756,18 @@ export const make = Effect.gen(function* () {
             }),
             kill: (opts?: ChildProcess.KillOptions) => {
               const sig = opts?.killSignal ?? "SIGTERM"
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
+              const ownedFinal = isOwned(proc) && globalThis.process.platform !== "win32"
+              if (ownedFinal && sig === "SIGKILL") return killOwnedFinal(command, proc, signal)
+              const send = (s: NodeJS.Signals) => {
+                if (isOwned(proc) && s === "SIGKILL" && globalThis.process.platform !== "win32") return killOwned(command, proc, s)
+                return Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
+              }
               const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
               if (!opts?.forceKillAfter) return attempt
               return Effect.timeoutOrElse(attempt, {
                 duration: opts.forceKillAfter,
-                orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
+                orElse: () =>
+                  isOwned(proc) ? killOwnedFinal(command, proc, signal) : send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
               })
             },
             unref: Effect.sync(() => {

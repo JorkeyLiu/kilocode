@@ -10,15 +10,20 @@
  * closed canonical seed shape from script/e2e-restart-seed.ts, and the
  * read-only Bun gate (script/e2e-generation-gate.ts) for DB evidence.
  *
- * TCP connection count (hang.hits) is distinct from logical LLM requests
- * (llm-request-collector keyed pid/instance/session): both are snapshotted
- * at before/hardKill/reconnect. Title/small requests are permitted only
- * prekill; after the hard kill completes, zero new run-owned provider
- * network is allowed (no replay).
+ * TCP connection count (hang.hits) is diagnostic only and distinct from
+ * matching POST generation identity (hang.requests parsed method/url/body
+ * model, redacted) and logical LLM requests (llm-request-collector keyed
+ * pid/instance/session): all three are snapshotted at before/hardKill/
+ * reconnect. Title/small requests are permitted only prekill; after the hard
+ * kill completes, zero new matching POST generation requests and zero new
+ * run-owned LLM requests are allowed (no replay). Unknown/incomplete sockets
+ * are never reinterpreted as benign — they fail as investigation. Redacted
+ * per-socket records persist atomically; the DB ledger is retained before any
+ * replay gate aborts.
  */
 
 import { createServer, type Socket } from "node:net"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { spawnSync } from "node:child_process"
 import type { Browser, Frame } from "@playwright/test"
@@ -46,18 +51,323 @@ import { runGenerationGate } from "./e2e-generation-assert"
 
 export const OPERATION_CRASH_PROMPT = "E2E_CRASH_HOLD: stay busy behind the hang provider"
 
+export type HangRequestClassification = "complete-generation-post" | "complete-other" | "incomplete" | "empty"
+
+/**
+ * Redacted per-socket transport evidence for the raw-TCP hang fixture.
+ * Fixtures are plain HTTP (no TLS): the first bytes on each accepted socket
+ * carry the HTTP request line + headers + (when flushed) the JSON body.
+ * Secrets are redacted before this record is created — the raw bytes never
+ * persist. `complete=false` means the socket closed or is still streaming
+ * with only a prefix observed; such records are never treated as benign.
+ */
+export interface HangRequestRecord {
+  index: number
+  acceptedAt: string
+  bytes: number
+  complete: boolean
+  method?: string
+  url?: string
+  path?: string
+  headers: Record<string, string>
+  bodyBytes: number
+  bodyModel?: string
+  bodyKeys?: string[]
+  bodyPreviewRedacted?: string
+  classification: HangRequestClassification
+  incompleteReason?: string
+}
+
+export interface HangRequestSummary {
+  total: number
+  generationPosts: number
+  otherComplete: number
+  incomplete: number
+  empty: number
+}
+
 export interface CrashHang {
   port: number
   hits: () => number
+  requests: () => HangRequestRecord[]
+  generationPosts: () => number
+  dump: (scratch: string, stem: string) => string
   close: () => Promise<void>
+}
+
+const HANG_REDACTED = "[REDACTED]"
+const HANG_SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "api-key",
+  "apikey",
+  "cookie",
+  "set-cookie",
+  "x-auth-token",
+])
+const HANG_CAPTURE_MAX = 128 * 1024
+const HANG_PREVIEW_MAX = 2000
+
+function redactHangHeaderValue(name: string, value: string): string {
+  const lower = name.toLowerCase()
+  if (HANG_SENSITIVE_HEADERS.has(lower)) return HANG_REDACTED
+  let out = value
+  if (out.includes("e2e-fixture-key") || out.includes("KILO_SERVER_PASSWORD")) return HANG_REDACTED
+  const bearer = out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, `Bearer ${HANG_REDACTED}`)
+  return bearer.slice(0, 500)
+}
+
+/** Redact credential-bearing substrings from a body preview (never persist raw keys). */
+export function redactHangBodyText(raw: string): string {
+  let out = raw.slice(0, 4000)
+  out = out.split("e2e-fixture-key").join(HANG_REDACTED)
+  out = out.split("KILO_SERVER_PASSWORD").join(HANG_REDACTED)
+  out = out.replace(
+    /("?(?:apiKey|api_key|api-key|authorization)"?\s*[:=]\s*"?)[^",}\s]+("?)/gi,
+    `$1${HANG_REDACTED}$2`,
+  )
+  out = out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, `Bearer ${HANG_REDACTED}`)
+  return out.slice(0, HANG_PREVIEW_MAX)
+}
+
+function hangHeadEnd(text: string): { end: number; sep: number } | undefined {
+  const crlf = text.indexOf("\r\n\r\n")
+  if (crlf !== -1) return { end: crlf, sep: 4 }
+  const lf = text.indexOf("\n\n")
+  if (lf !== -1) return { end: lf, sep: 2 }
+  return undefined
+}
+
+function hangIncomplete(
+  index: number,
+  at: string,
+  bytes: number,
+  reason: string,
+  partial?: Partial<HangRequestRecord>,
+): HangRequestRecord {
+  return {
+    index,
+    acceptedAt: at,
+    bytes,
+    complete: false,
+    headers: {},
+    bodyBytes: 0,
+    classification: "incomplete",
+    incompleteReason: reason,
+    ...partial,
+  }
+}
+
+function parseHangHead(lines: string[]): {
+  method?: string
+  url?: string
+  path?: string
+  headers: Record<string, string>
+  contentLength?: number
+} {
+  const request = (lines[0] ?? "").trim().split(/\s+/)
+  const method = request[0]?.toUpperCase()
+  const url = request[1]
+  const headers: Record<string, string> = {}
+  let contentLength: number | undefined
+  for (const line of lines.slice(1)) {
+    const colon = line.indexOf(":")
+    if (colon === -1) continue
+    const name = line.slice(0, colon).trim()
+    const value = line.slice(colon + 1).trim()
+    if (!name) continue
+    headers[name.toLowerCase()] = redactHangHeaderValue(name, value)
+    if (name.toLowerCase() === "content-length" && contentLength === undefined) {
+      const parsed = Number.parseInt(value, 10)
+      if (Number.isInteger(parsed) && parsed >= 0 && parsed <= HANG_CAPTURE_MAX) contentLength = parsed
+    }
+  }
+  return { method, url, path: url?.split("?")[0], headers, contentLength }
+}
+
+function isHangMethod(value: string | undefined): value is string {
+  return !!value && /^[A-Z]+$/.test(value)
+}
+
+function hangHeadersIncomplete(text: string): { method?: string; url?: string; path?: string } {
+  const first = text.split(/\r?\n/, 1)[0] ?? ""
+  const parts = first.trim().split(/\s+/)
+  const method = parts[0]?.toUpperCase()
+  const url = parts[1]
+  return { method: isHangMethod(method) ? method : undefined, url, path: url?.split("?")[0] }
+}
+
+function isGenerationRoute(method: string, url: string, path: string | undefined): boolean {
+  if (method !== "POST") return false
+  if (url.endsWith("/chat/completions")) return true
+  return path?.endsWith("/chat/completions") ?? false
+}
+
+function hangBodyIdentity(bodyText: string): { bodyModel?: string; bodyKeys?: string[] } {
+  if (bodyText.length === 0) return {}
+  try {
+    const parsed: unknown = JSON.parse(bodyText)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const rec = parsed as Record<string, unknown>
+      const out: { bodyModel?: string; bodyKeys?: string[] } = { bodyKeys: Object.keys(rec).sort().slice(0, 25) }
+      if (typeof rec.model === "string") out.bodyModel = rec.model.slice(0, 120)
+      return out
+    }
+  } catch {
+    // Non-JSON bodies carry no model identity; preview stays redacted text.
+  }
+  return {}
+}
+
+/**
+ * Parse one socket's captured bytes into redacted request evidence.
+ * Shared by the fixture (`createCountingHang`) and the focused unit tests —
+ * tests must import this helper, never a duplicated regex.
+ */
+export function parseHangRequestBytes(
+  raw: Buffer | Uint8Array | string,
+  index: number,
+  acceptedAt?: string,
+): HangRequestRecord {
+  const at = acceptedAt ?? new Date().toISOString()
+  const buf = typeof raw === "string" ? Buffer.from(raw, "utf8") : Buffer.from(raw)
+  const bytes = buf.length
+  if (bytes === 0) {
+    return {
+      index,
+      acceptedAt: at,
+      bytes: 0,
+      complete: false,
+      headers: {},
+      bodyBytes: 0,
+      classification: "empty",
+      incompleteReason: "no-bytes",
+    }
+  }
+  const text = buf.toString("utf8")
+  const split = hangHeadEnd(text)
+  if (!split) {
+    return hangIncomplete(index, at, bytes, "headers-incomplete", hangHeadersIncomplete(text))
+  }
+  const head = text.slice(0, split.end)
+  const bodyRaw = buf.subarray(split.end + split.sep)
+  const parsed = parseHangHead(head.split(/\r?\n/))
+  const method = parsed.method
+  const url = parsed.url
+  const path = parsed.path
+  const headers = parsed.headers
+  const contentLength = parsed.contentLength
+  if (!isHangMethod(method) || !url) {
+    return hangIncomplete(index, at, bytes, "request-line-malformed", { bodyBytes: bodyRaw.length })
+  }
+  if (contentLength !== undefined && bodyRaw.length < contentLength) {
+    return hangIncomplete(index, at, bytes, `body-incomplete ${bodyRaw.length}/${contentLength}`, {
+      method,
+      url,
+      path,
+      headers,
+      bodyBytes: bodyRaw.length,
+    })
+  }
+  if (contentLength === undefined && method === "POST" && bodyRaw.length === 0) {
+    return hangIncomplete(index, at, bytes, "body-missing-post", { method, url, path, headers })
+  }
+  const bodyText = bodyRaw.toString("utf8")
+  const identity = hangBodyIdentity(bodyText)
+  const generation = isGenerationRoute(method, url, path)
+  return {
+    index,
+    acceptedAt: at,
+    bytes,
+    complete: true,
+    method,
+    url,
+    path,
+    headers,
+    bodyBytes: bodyRaw.length,
+    bodyModel: identity.bodyModel,
+    bodyKeys: identity.bodyKeys,
+    bodyPreviewRedacted: bodyText.length > 0 ? redactHangBodyText(bodyText) : undefined,
+    classification: generation ? "complete-generation-post" : "complete-other",
+  }
+}
+
+export function summarizeHangRequests(records: HangRequestRecord[]): HangRequestSummary {
+  let generationPosts = 0
+  let otherComplete = 0
+  let incomplete = 0
+  let empty = 0
+  for (const r of records) {
+    if (r.classification === "complete-generation-post") generationPosts += 1
+    else if (r.classification === "complete-other") otherComplete += 1
+    else if (r.classification === "empty") empty += 1
+    else incomplete += 1
+  }
+  return { total: records.length, generationPosts, otherComplete, incomplete, empty }
+}
+
+export function countHangGenerationPosts(records: HangRequestRecord[]): number {
+  return summarizeHangRequests(records).generationPosts
+}
+
+/** Best-effort snapshot of redacted hang requests (never throws — evidence must not hide the failure). */
+export function snapshotHangRequests(hang: Pick<CrashHang, "requests"> | undefined): HangRequestRecord[] {
+  try {
+    return hang?.requests() ?? []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Atomically persist redacted hang request records (`<scratch>/<stem>.json`
+ * via temp + rename, so KILO_E2E_EVIDENCE_DIR sees either nothing or the
+ * complete set). Returns the destination path.
+ */
+export function writeHangRequestsAtomic(scratch: string, stem: string, records: HangRequestRecord[]): string {
+  const summary = summarizeHangRequests(records)
+  const payload = JSON.stringify(
+    { collectedAt: new Date().toISOString(), ...summary, records },
+    null,
+    2,
+  )
+  if (payload.includes("e2e-fixture-key") || payload.includes("KILO_SERVER_PASSWORD")) {
+    throw new Error("operation-crash: hang evidence leaked credential (refusing to persist)")
+  }
+  const dest = join(scratch, `${stem}.json`)
+  const tmp = join(scratch, `.${stem}.tmp-${process.pid}-${Date.now()}`)
+  writeFileSync(tmp, payload)
+  renameSync(tmp, dest)
+  return dest
+}
+
+/** Atomically persist a JSON artifact (temp + rename) so evidence readers never see a partial file. */
+export function writeAtomicJson(scratch: string, stem: string, value: unknown): string {
+  const dest = join(scratch, `${stem}.json`)
+  const tmp = join(scratch, `.${stem}.tmp-${process.pid}-${Date.now()}`)
+  writeFileSync(tmp, JSON.stringify(value, null, 2))
+  renameSync(tmp, dest)
+  return dest
 }
 
 export async function createCountingHang(): Promise<CrashHang> {
   const sockets = new Set<Socket>()
+  const bufs: Buffer[] = []
+  const times: string[] = []
   let count = 0
   const server = createServer((socket) => {
+    const index = count
     count += 1
+    bufs.push(Buffer.alloc(0))
+    times.push(new Date().toISOString())
     socket.on("error", () => {})
+    socket.on("data", (chunk: Buffer) => {
+      const cur = bufs[index] ?? Buffer.alloc(0)
+      if (cur.length >= HANG_CAPTURE_MAX) return
+      const next = Buffer.concat([cur, chunk]).subarray(0, HANG_CAPTURE_MAX)
+      bufs[index] = next
+    })
     sockets.add(socket)
     socket.on("close", () => sockets.delete(socket))
   })
@@ -73,9 +383,14 @@ export async function createCountingHang(): Promise<CrashHang> {
     server.close()
     throw new Error("operation-crash: hang address unavailable")
   }
+  const requests = (): HangRequestRecord[] =>
+    bufs.map((b, i) => parseHangRequestBytes(b, i, times[i] ?? new Date().toISOString()))
   return {
     port: address.port,
     hits: () => count,
+    requests,
+    generationPosts: () => countHangGenerationPosts(requests()),
+    dump: (scratch: string, stem: string) => writeHangRequestsAtomic(scratch, stem, requests()),
     close: async () => {
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -295,6 +610,13 @@ export async function assertOperationCrashLifecycle(
   console.log(`[probe operation-crash] in-flight settled sid=${sid} op=${opId}`)
   const hitsBefore = hang.hits()
   if (hitsBefore < 1) throw new Error(`operation-crash: hang hits before kill must be >=1, got ${hitsBefore}`)
+  const hangBeforeRecords = snapshotHangRequests(hang)
+  const hangBeforeSummary = summarizeHangRequests(hangBeforeRecords)
+  try {
+    writeHangRequestsAtomic(scratch, "operation-crash-hang-requests-before", hangBeforeRecords)
+  } catch (err) {
+    console.log(`[probe operation-crash] hang dump before failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
   const llmBefore = llmSnapshot(scratch)
   if (llmBefore.length < 1) throw new Error(`operation-crash: llm requests before kill must be >=1, got ${llmBefore.length}`)
   assertAllRunOwned(llmBefore, "before-hard-kill")
@@ -307,7 +629,14 @@ export async function assertOperationCrashLifecycle(
   const openOwner = before.owners.find((o) => o.reason === null && o.closedAt === null)
   if (!openOwner) throw new Error(`operation-crash: no open generation owner before kill: ${JSON.stringify(before.owners)}`)
   if (before.members.length === 0) throw new Error("operation-crash: no generation members before kill")
-  writeFileSync(join(scratch, "operation-crash-before.json"), JSON.stringify({ sid, opId, hitsBefore, llmBefore, gate: before }, null, 2))
+  writeAtomicJson(scratch, "operation-crash-before", {
+    sid,
+    opId,
+    hitsBefore,
+    hangBefore: hangBeforeSummary,
+    llmBefore,
+    gate: before,
+  })
   // Hard crash: exact owned detached backend SIGKILL (no graceful SIGTERM).
   const killedRaw = await (async () => {
     writeFileSync(join(scratch, "oc-kill-hard-request"), "ok")
@@ -317,15 +646,25 @@ export async function assertOperationCrashLifecycle(
   if (!killedRaw.pid || !killedRaw.port) throw new Error(`operation-crash: hard kill recorded no pid/port ${JSON.stringify(killedRaw)}`)
   console.log(`[probe operation-crash] hard-killed exact pid=${killedRaw.pid} port=${killedRaw.port}`)
   const hitsAtKill = hang.hits()
+  const hangAtKillRecords = snapshotHangRequests(hang)
+  const hangAtKillSummary = summarizeHangRequests(hangAtKillRecords)
+  try {
+    writeHangRequestsAtomic(scratch, "operation-crash-hang-requests-at-kill", hangAtKillRecords)
+  } catch (err) {
+    console.log(`[probe operation-crash] hang dump at-kill failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
   const llmAtKill = llmSnapshot(scratch)
   assertAllRunOwned(llmAtKill, "at-hard-kill")
   // TCP vs logical distinction: raw hang TCP connections may grow in the
   // kill window (transport retries while the doomed backend still lives),
   // but logical LLM.run requests (service=llm lines) must not grow except
   // for prekill small/title. Record the TCP delta as evidence only; the
-  // strict no-replay gates below compare post-kill snapshots.
+  // strict no-replay gates below compare post-kill snapshots on matching
+  // POST generation identity + LLM ledger + DB (never raw TCP alone).
   if (hitsAtKill !== hitsBefore) {
-    console.log(`[probe operation-crash] TCP kill-window delta before=${hitsBefore} atKill=${hitsAtKill} (transport-level, evidence only)`)
+    console.log(
+      `[probe operation-crash] TCP kill-window delta before=${hitsBefore} atKill=${hitsAtKill} genPosts=${hangBeforeSummary.generationPosts}->${hangAtKillSummary.generationPosts} (transport-level, evidence only)`,
+    )
   }
   // Logical LLM: any delta between before and the kill instant must be
   // run-owned small/title only (prekill titles permitted, never a new main turn).
@@ -337,7 +676,17 @@ export async function assertOperationCrashLifecycle(
     }
     console.log(`[probe operation-crash] prekill title-only delta=${delta.length} allowed`)
   }
-  writeFileSync(join(scratch, "operation-crash-hardkill.json"), JSON.stringify({ sid, opId, hitsBefore, hitsAtKill, llmBefore, llmAtKill, killed: killedRaw }, null, 2))
+  writeAtomicJson(scratch, "operation-crash-hardkill", {
+    sid,
+    opId,
+    hitsBefore,
+    hitsAtKill,
+    hangBefore: hangBeforeSummary,
+    hangAtKill: hangAtKillSummary,
+    llmBefore,
+    llmAtKill,
+    killed: killedRaw,
+  })
   await sleep(1_000)
   writeFileSync(join(scratch, "oc-reconnect-request"), "ok")
   await waitForFile(join(scratch, "oc-reconnect.json"), 180_000, "oc-reconnect.json")
@@ -349,21 +698,136 @@ export async function assertOperationCrashLifecycle(
   while (pidAlive(killedRaw.pid) && Date.now() < goneDeadline) await sleep(250)
   if (pidAlive(killedRaw.pid)) throw new Error(`operation-crash: hard-killed pid ${killedRaw.pid} still alive`)
   const hitsAfterRestart = hang.hits()
+  const hangAfterRecords = snapshotHangRequests(hang)
+  const hangAfterSummary = summarizeHangRequests(hangAfterRecords)
+  try {
+    writeHangRequestsAtomic(scratch, "operation-crash-hang-requests-after", hangAfterRecords)
+  } catch (err) {
+    console.log(`[probe operation-crash] hang dump after failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
   const llmAfter = llmSnapshot(scratch)
-  assertAllRunOwned(llmAfter, "after-reconnect")
-  // Strict no-replay: no new TCP hang connection and no new logical LLM
-  // request (keyed pid/instance/session in the collector store) may appear
-  // after the hard kill completes. The pre-bind convergence sweep
-  // terminalizes without replay. TCP baseline is the at-kill snapshot (the
-  // kill window may carry pre-death transport retries); logical baseline is
-  // likewise at-kill (prekill titles already folded in above).
-  if (hitsAfterRestart !== hitsAtKill) {
-    throw new Error(`operation-crash: provider TCP replay detected hits atKill=${hitsAtKill} afterRestart=${hitsAfterRestart} (before=${hitsBefore})`)
+  // Retain-first ordering: the DB ledger + all request counts are captured
+  // and persisted BEFORE any replay gate aborts, so a failure still leaves
+  // the full triage set (TCP diagnostic, redacted POST identity, LLM ledger,
+  // owner/member/receipt). Raw TCP is diagnostic only; the replay invariant
+  // is matching POST generation identity + LLM records + DB. Unknown /
+  // incomplete sockets are never reinterpreted as benign.
+  let after: ReturnType<typeof runGenerationGate>
+  try {
+    after = runGenerationGate(root, scratch, dbPath, sid, opId)
+  } catch (err) {
+    writeAtomicJson(scratch, "operation-crash-after-failure", {
+      sid,
+      opId,
+      hitsBefore,
+      hitsAtKill,
+      hitsAfterRestart,
+      hangBefore: hangBeforeSummary,
+      hangAtKill: hangAtKillSummary,
+      hangAfter: hangAfterSummary,
+      llmBefore: llmBefore.length,
+      llmAtKill: llmAtKill.length,
+      llmAfter: llmAfter.length,
+      llmAfterRecords: llmAfter,
+      killed: killedRaw,
+      reconnect: rc,
+      gateError: err instanceof Error ? err.message.slice(0, 1000) : String(err).slice(0, 1000),
+    })
+    throw err
+  }
+  // Provisional ledger retention: later owner/receipt checks rewrite the same
+  // file on success; on replay failure this provisional copy already proves
+  // the DB state at restart.
+  writeAtomicJson(scratch, "operation-crash-after", {
+    sid,
+    opId,
+    hitsBefore,
+    hitsAtKill,
+    hitsAfterRestart,
+    hangBefore: hangBeforeSummary,
+    hangAtKill: hangAtKillSummary,
+    hangAfter: hangAfterSummary,
+    llmBefore: llmBefore.length,
+    llmAtKill: llmAtKill.length,
+    llmAfter: llmAfter.length,
+    gate: after,
+    killed: killedRaw,
+    reconnect: rc,
+  })
+  const failWithLedger = (message: string): never => {
+    writeAtomicJson(scratch, "operation-crash-after-failure", {
+      sid,
+      opId,
+      hitsBefore,
+      hitsAtKill,
+      hitsAfterRestart,
+      hangBefore: hangBeforeSummary,
+      hangAtKill: hangAtKillSummary,
+      hangAfter: hangAfterSummary,
+      hangAfterNew: hangAfterRecords.slice(hangAtKillRecords.length).map((r) => ({
+        index: r.index,
+        method: r.method,
+        url: r.url,
+        path: r.path,
+        classification: r.classification,
+        complete: r.complete,
+        bodyModel: r.bodyModel,
+        incompleteReason: r.incompleteReason,
+      })),
+      llmBefore: llmBefore.length,
+      llmAtKill: llmAtKill.length,
+      llmAfter: llmAfter.length,
+      llmAfterRecords: llmAfter,
+      llmDelta: llmAfter.slice(llmAtKill.length),
+      gate: after,
+      killed: killedRaw,
+      reconnect: rc,
+      failure: message.slice(0, 2000),
+    })
+    throw new Error(message)
+  }
+  try {
+    assertAllRunOwned(llmAfter, "after-reconnect")
+  } catch (err) {
+    failWithLedger(err instanceof Error ? err.message : String(err))
+  }
+  // Primary replay invariant: matching POST /chat/completions identity.
+  // A transport reconnection to the old hang (in-flight fetch retry after
+  // SIGKILL) that replays the same POST is a concrete generation/canonical
+  // executor replay — never fixture noise.
+  if (hangAfterSummary.generationPosts !== hangAtKillSummary.generationPosts) {
+    const added = hangAfterRecords.slice(hangAtKillRecords.length).map((r) => ({
+      index: r.index,
+      method: r.method,
+      url: r.url,
+      bodyModel: r.bodyModel,
+      classification: r.classification,
+    }))
+    failWithLedger(
+      `operation-crash: provider generation POST replay detected genPosts atKill=${hangAtKillSummary.generationPosts} afterRestart=${hangAfterSummary.generationPosts} (TCP atKill=${hitsAtKill} after=${hitsAfterRestart} before=${hitsBefore}) added=${JSON.stringify(added).slice(0, 800)} llm atKill=${llmAtKill.length} after=${llmAfter.length}`,
+    )
   }
   if (llmAfter.length !== llmAtKill.length) {
-    throw new Error(`operation-crash: provider LLM replay detected llm before=${llmBefore.length} atKill=${llmAtKill.length} after=${llmAfter.length}: ${JSON.stringify(llmAfter.slice(llmAtKill.length)).slice(0, 800)}`)
+    failWithLedger(
+      `operation-crash: provider LLM replay detected llm before=${llmBefore.length} atKill=${llmAtKill.length} after=${llmAfter.length}: ${JSON.stringify(llmAfter.slice(llmAtKill.length)).slice(0, 800)}`,
+    )
   }
-  const after = runGenerationGate(root, scratch, dbPath, sid, opId)
+  // Unknown-socket investigation: raw TCP grew without a matching POST.
+  // Do NOT reinterpret as benign — fail with the complete/incomplete
+  // classification until the extra socket is proved non-generation.
+  if (hitsAfterRestart !== hitsAtKill) {
+    const added = hangAfterRecords.slice(hangAtKillRecords.length).map((r) => ({
+      index: r.index,
+      method: r.method,
+      url: r.url,
+      classification: r.classification,
+      complete: r.complete,
+      incompleteReason: r.incompleteReason,
+    }))
+    failWithLedger(
+      `operation-crash: unidentified provider TCP connection(s) after restart require investigation hits atKill=${hitsAtKill} afterRestart=${hitsAfterRestart} (before=${hitsBefore}) genPosts unchanged=${hangAfterSummary.generationPosts} added=${JSON.stringify(added).slice(0, 800)}`,
+    )
+  }
   const owner = after.owners.find((o) => o.genID === openOwner.genID) ?? after.owners[0]
   if (!owner) throw new Error("operation-crash: owner missing after restart")
   // Strict hard-crash terminal: owner crash only (never graceful error).
@@ -413,10 +877,22 @@ export async function assertOperationCrashLifecycle(
     // still-open owner, so owner_close_reason is null (strict).
     if (pr.closeReason !== null) throw new Error(`operation-crash: provider receipt closeReason must be null for ${String(p.opId)}, got ${pr.closeReason}`)
   }
-  writeFileSync(
-    join(scratch, "operation-crash-after.json"),
-    JSON.stringify({ sid, opId, hitsBefore, hitsAtKill, hitsAfterRestart, llmBefore: llmBefore.length, llmAtKill: llmAtKill.length, llmAfter: llmAfter.length, gate: after, killed: killedRaw, reconnect: rc }, null, 2),
-  )
+  writeAtomicJson(scratch, "operation-crash-after", {
+    sid,
+    opId,
+    hitsBefore,
+    hitsAtKill,
+    hitsAfterRestart,
+    hangBefore: hangBeforeSummary,
+    hangAtKill: hangAtKillSummary,
+    hangAfter: hangAfterSummary,
+    llmBefore: llmBefore.length,
+    llmAtKill: llmAtKill.length,
+    llmAfter: llmAfter.length,
+    gate: after,
+    killed: killedRaw,
+    reconnect: rc,
+  })
   const ops = await requestOps(scratch, workspace, sid)
   const opsList = (ops.operations as unknown[] | undefined) ?? []
   const promptRow = opsList.find((o) => (o as Record<string, unknown>).opId === opId) as Record<string, unknown> | undefined
@@ -620,6 +1096,9 @@ export async function assertOperationCrashLifecycle(
         hitsBefore,
         hitsAtKill,
         hitsAfterRestart,
+        hangBefore: hangBeforeSummary,
+        hangAtKill: hangAtKillSummary,
+        hangAfter: hangAfterSummary,
         llmBefore: llmBefore.length,
         llmAtKill: llmAtKill.length,
         llmAfter: llmAfter.length,
@@ -642,7 +1121,7 @@ export async function assertOperationCrashLifecycle(
       2,
     ),
   )
-  console.log(`[probe operation-crash] proven hard crash sid=${sid} op=${opId} owner=crash hits=${hitsBefore}->${hitsAfterRestart} llm=${llmBefore.length}->${llmAfter.length} cursor=${cursor}->${cursorAfter}`)
+  console.log(`[probe operation-crash] proven hard crash sid=${sid} op=${opId} owner=crash hits=${hitsBefore}->${hitsAfterRestart} genPosts=${hangBeforeSummary.generationPosts}->${hangAfterSummary.generationPosts} llm=${llmBefore.length}->${llmAfter.length} cursor=${cursor}->${cursorAfter}`)
 }
 
 export function _userOpOfForTest(snap: BackendSnapshot): string | undefined {

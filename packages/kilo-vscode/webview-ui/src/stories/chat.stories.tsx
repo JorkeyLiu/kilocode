@@ -226,6 +226,56 @@ export const ChatViewWithMessages: Story = {
   },
 }
 
+/**
+ * Empty chat with recent sessions — proves the terminal-free empty state and
+ * session switch path: the welcome copy plus recent-session buttons render
+ * with no terminal tab affordance, and selecting one routes through
+ * onSelectSession (reported via data-testid for runtime checks).
+ */
+export const ChatViewEmptyWithRecentSessions: Story = {
+  name: "ChatView — empty with recent sessions (session switch)",
+  render: () => {
+    const now = Date.now()
+    const recent = [
+      {
+        id: "ses-recent-001",
+        title: "Fix login redirect",
+        createdAt: new Date(now - 3600_000).toISOString(),
+        updatedAt: new Date(now - 60_000).toISOString(),
+      },
+      {
+        id: "ses-recent-002",
+        title: "Refactor sidebar",
+        createdAt: new Date(now - 7200_000).toISOString(),
+        updatedAt: new Date(now - 120_000).toISOString(),
+      },
+    ]
+    const session = {
+      ...mockSessionValue({ id: SESSION_ID, status: "idle" }),
+      sessions: () => recent,
+    }
+    return (
+      <StoryProviders sessionID={SESSION_ID} status="idle" noPadding>
+        <SessionContext.Provider value={session as any}>
+          <div style={{ width: "100%", height: "600px", display: "flex", "flex-direction": "column" }}>
+            <output class="sr-only" data-testid="chat-empty-selection" aria-label="Selected session" />
+            <ChatView
+              onSelectSession={(id) => {
+                const out = document.querySelector<HTMLElement>('[data-testid="chat-empty-selection"]')
+                if (out) out.textContent = id
+              }}
+              onShowHistory={() => {
+                const out = document.querySelector<HTMLElement>('[data-testid="chat-empty-selection"]')
+                if (out) out.textContent = "history"
+              }}
+            />
+          </div>
+        </SessionContext.Provider>
+      </StoryProviders>
+    )
+  },
+}
+
 export const ChatViewRequirementsChecking: Story = {
   name: "ChatView — agent requirements checking",
   render: () => (
@@ -1043,7 +1093,7 @@ export const TaskUsageExpanded200: Story = {
   render: usageStory(true),
 }
 
-/** Mock server context with profile data so AccountSwitcher is visible */
+/** Mock server context with no profile data (custom-only: no account surface) */
 const mockServer = {
   connectionState: () => "connected" as const,
   serverInfo: () => undefined,
@@ -1051,15 +1101,7 @@ const mockServer = {
   errorMessage: () => undefined,
   errorDetails: () => undefined,
   isConnected: () => true,
-  profileData: () => ({
-    profile: {
-      email: "dev@kilo.dev",
-      name: "Dev User",
-      organizations: [{ id: "org-1", name: "Kilo Org", role: "member" }],
-    },
-    balance: { balance: 5.0 },
-    currentOrgId: "org-1",
-  }),
+  profileData: () => null,
   deviceAuth: () => ({ status: "idle" as const }),
   startLogin: () => {},
   goToLogin: () => {},

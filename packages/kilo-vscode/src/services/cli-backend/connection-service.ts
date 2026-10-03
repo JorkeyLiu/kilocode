@@ -93,7 +93,6 @@ import { wrapAuthRemoveOutcomeForOwner } from "./serve-private-auth-remove"
 import type { PrivateAuthRemoveWireOutcome, ServePrivateAuthRemoveRequest } from "./serve-private-auth-remove"
 import { wrapOrganizationSetOutcomeForOwner } from "./serve-private-organization-set"
 import { backgroundStopSessionOutcomeForOwner } from "./serve-private-background-process-stop-session-owner"
-import { ptyCreateOutcomeForOwner, ptyRemoveOutcomeForOwner, ptyUpdateOutcomeForOwner } from "./serve-private-pty-owner"
 import type {
   PrivateOrganizationSetWireOutcome,
   ServePrivateOrganizationSetRequest,
@@ -874,7 +873,7 @@ export class KiloConnectionService {
       this.sseClient = null
       this.liveEventSource = null
       this.disposePrivatePeer()
-      this.serverManager.dispose()
+      await this.serverManager.dispose()
       this.eventListeners.clear()
       this.stateListeners.clear()
       this.profileChangeListeners.clear()
@@ -1152,7 +1151,7 @@ export class KiloConnectionService {
     if (this.isDisposed || this.connectGeneration !== generation) {
       // Prevent post-dispose installation; clean up freshly acquired server resources
       try {
-        server.process.exitCode === null ? this.serverManager.dispose() : null
+        if (server.process.exitCode === null) await this.serverManager.dispose()
       } catch {}
       throw new Error("connect superseded after getServer")
     }
@@ -3362,18 +3361,6 @@ export class KiloConnectionService {
 
   privateBackgroundStopSessionOutcomeWithHandle(req: Parameters<typeof backgroundStopSessionOutcomeForOwner>[1]) {
     return backgroundStopSessionOutcomeForOwner(this, req)
-  }
-
-  privatePtyCreateOutcomeWithHandle(req: Parameters<typeof ptyCreateOutcomeForOwner>[1]) {
-    return ptyCreateOutcomeForOwner(this, req)
-  }
-
-  privatePtyUpdateOutcomeWithHandle(req: Parameters<typeof ptyUpdateOutcomeForOwner>[1]) {
-    return ptyUpdateOutcomeForOwner(this, req)
-  }
-
-  privatePtyRemoveOutcomeWithHandle(req: Parameters<typeof ptyRemoveOutcomeForOwner>[1]) {
-    return ptyRemoveOutcomeForOwner(this, req)
   }
 
   /**

@@ -11,16 +11,11 @@ import { getErrorMessage } from "../kilo-provider-utils"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
-import { SessionTerminalManager } from "./SessionTerminalManager"
-import { createTerminalHost } from "./terminal-host"
-import { TerminalRouter } from "./terminal-routing"
 import { AgentManagerVisiblePresence } from "./am-visible-presence"
 import { createLocalDiff, diffSummary as localDiffSummary } from "./local-diff"
 import { parseToolRequest, startFromTool, type ToolRequest } from "./tool-start"
 import { sandboxSessionMetadata } from "../shared/sandbox-session"
 import { startSession } from "./mcp-warmup"
-import { readTerminalFont, watchTerminalFont } from "./terminal-font"
-import type { PtyPrivateConnection } from "../kilo-provider/pty-privatefirst"
 import { buildKeybindingMap } from "./format-keybinding"
 import { isPanelSafeOperation } from "./operation-recovery"
 import { Semaphore } from "./semaphore"
@@ -39,8 +34,6 @@ export class AgentManagerProvider implements Disposable {
   public static readonly viewType = "kilo-code.new.AgentManagerPanel"
   private panel: PanelContext | undefined
   private outputChannel: OutputHandle
-  private terminalManager: SessionTerminalManager
-  private terminalRouter: TerminalRouter
   private stateReady: Promise<void> | undefined
   private statsPoller: GitStatsPoller
   private gitOps: GitOps
@@ -49,7 +42,6 @@ export class AgentManagerProvider implements Disposable {
   private unsubTool: (() => void) | undefined
   private unsubStatus: (() => void) | undefined
   private unsubDeleted: (() => void) | undefined
-  private unsubFont: (() => void) | undefined
   private unsubConnectionState: (() => void) | undefined
   private prevConnectionState: ConnectionState
   private seenConnected = false
@@ -117,22 +109,6 @@ export class AgentManagerProvider implements Disposable {
     if (privateObservation) this.coordinator = new AgentManagerObservationCoordinator(privateObservation)
     this.outputChannel = host.createOutput("Kilo Agent Manager")
     this.timing = new SessionTiming(host.workspaceStore)
-    this.terminalManager = new SessionTerminalManager(
-      (msg) => this.outputChannel.appendLine(`[SessionTerminal] ${msg}`),
-      createTerminalHost(),
-    )
-    this.terminalRouter = new TerminalRouter({
-      getClient: () => this.connectionService.getClient(),
-      getServerConfig: () => this.connectionService.getServerConfig() ?? undefined,
-      getRoot: () => this.getRoot(),
-      log: (...args) => this.log("[XTerm]", ...args),
-      post: (msg) => this.postToWebview(msg),
-      getTerminalFont: () => readTerminalFont(),
-      getPrivateConnection: () => this.connectionService as unknown as PtyPrivateConnection,
-    })
-    this.unsubFont = watchTerminalFont((font) => {
-      this.postToWebview({ type: "agentManager.terminal.fontChanged", font })
-    })
     const semaphore = new Semaphore(3)
     this.gitOps = new GitOps({ log: (...args) => this.log(...args), semaphore })
     const local = createLocalDiff(this.gitOps, (...args) => this.log(...args))
@@ -629,7 +605,6 @@ export class AgentManagerProvider implements Disposable {
     if (ui !== undefined) return ui
     const state = this.onStateMessage(m)
     if (state !== undefined) return state
-    if (this.terminalRouter.handle(m)) return null
 
     return msg
   }
@@ -721,20 +696,9 @@ export class AgentManagerProvider implements Disposable {
       return msg
     }
 
-    if (m.type === "requestTerminalContext") {
-      if (!m.sessionID || this.terminalManager.prepareContext(m.sessionID)) return msg
-      this.panel?.postMessage({
-        type: "terminalContextError",
-        requestId: m.requestId,
-        error: "No terminal is associated with this session",
-      })
-      return null
-    }
-
     if (m.type === "loadMessages") {
       const prev = this.activeSessionId
       this.activeSessionId = m.sessionID
-      this.terminalManager.syncOnSessionSwitch(m.sessionID)
       this.emitActiveSessionChanged(m.sessionID)
       this.schedulePersist()
       if (prev !== m.sessionID) {
@@ -779,24 +743,12 @@ export class AgentManagerProvider implements Disposable {
     m: AgentManagerInMessage,
     msg: Record<string, unknown>,
   ): Record<string, unknown> | null | undefined {
-    if (m.type === "agentManager.showTerminal") {
-      this.terminalManager.showTerminal(m.sessionId)
-      return null
-    }
-    if (m.type === "agentManager.showLocalTerminal") {
-      this.terminalManager.showLocalTerminal()
-      return null
-    }
     if (m.type === "agentManager.copyToClipboard") {
       this.host.copyToClipboard(m.text)
       return null
     }
     if (m.type === "previewImage") return msg
     if (m.type === "saveImage") return msg
-    if (m.type === "agentManager.showExistingLocalTerminal") {
-      this.terminalManager.syncLocalOnSessionSwitch()
-      return null
-    }
     if (m.type === "agentManager.requestRepoInfo") {
       void this.sendRepoInfo()
       return null
@@ -1974,12 +1926,9 @@ export class AgentManagerProvider implements Disposable {
     await this.timing.settle()
     await this.flush()
     this.unsubTool?.()
-    this.unsubFont?.()
     this.visiblePresence.clear()
     this.statsPoller.stop()
     this.gitOps.dispose()
-    this.terminalManager.dispose()
-    await this.terminalRouter.dispose()
     const panel = this.panel
     this.panel = undefined
     panel?.dispose()

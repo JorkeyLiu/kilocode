@@ -342,6 +342,14 @@
   opacity: 0.5;
 }
 
+/* Worker-waiting notice for runtime-needed send: explicit reason while the
+   draft stays in the composer (no queue/replay). Selectors stay enabled. */
+.prompt-input-waiting {
+  padding: 4px 2px;
+  color: var(--text-weaker);
+  font-size: var(--font-size-small);
+}
+
 .prompt-input::placeholder {
   color: var(--vscode-input-placeholderForeground, var(--text-weaker));
 }

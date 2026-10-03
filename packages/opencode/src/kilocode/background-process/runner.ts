@@ -184,9 +184,15 @@ export namespace BackgroundProcessRunner {
     await mkdir(path.dirname(input.log), { recursive: true, mode: 0o700 })
     await Promise.all([Filesystem.write(input.log, "", MODE), rm(input.control, { force: true })])
     const output = await writer(input)
+    // The runner carries the per-process oracle token; the crashing-instance
+    // token must never reach the inner child even if this runner was spawned
+    // by an older backend that did not strip it. Persistent work keeps its
+    // own persist lease and per-process oracle only.
+    const childEnv: NodeJS.ProcessEnv = { ...process.env }
+    delete childEnv.KILO_RUNTIME_TOKEN
     const child = spawn(input.shell, input.args, {
       cwd: input.cwd,
-      env: process.env,
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     })

@@ -23,16 +23,12 @@ const TSX_FILES = [
   path.join(ROOT, "webview-ui/agent-manager/SidebarToggleButton.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/tab-rendering.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/WorkStyleEmptyPicker.tsx"),
-  path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"),
-  path.join(ROOT, "webview-ui/agent-manager/terminal/SortableTerminalTab.tsx"),
-  path.join(ROOT, "webview-ui/agent-manager/terminal/render.tsx"),
   // Shared components that consume agent-manager CSS classes (e.g. am-dropdown,
   // am-branch-item) used by the agent manager.
   path.join(ROOT, "webview-ui/src/components/chat/TabDnd.tsx"),
 ]
 const TSX_FILE = TSX_FILES[0]!
 const PROVIDER_FILE = path.join(ROOT, "src/agent-manager/AgentManagerProvider.ts")
-const TERMINAL_ROUTING_FILE = path.join(ROOT, "src/agent-manager/terminal-routing.ts")
 
 function readAllCss(): string {
   return CSS_FILES.map((f) => fs.readFileSync(f, "utf-8")).join("\n")
@@ -145,7 +141,24 @@ describe("Agent Manager CSS/TSX Consistency", () => {
       "am-selector-",
     ]
     const phase4aDeferred = unused.filter((c) => worktreePrefixes.some((p) => c!.startsWith(p)))
-    const unexpected = unused.filter((c) => !worktreePrefixes.some((p) => c!.startsWith(p)))
+    // Session tab chrome (am-tab-*, am-ctx-menu) renders via the shared
+    // SessionTab/SessionTabMenu components outside agent-manager/ TSX, so the
+    // narrow TSX list above cannot see the literals. These classes remain
+    // live at runtime; the terminal dropdown classes (am-split-arrow/menu)
+    // were removed with the terminal tab UI and no longer exist in CSS.
+    const sharedTabClasses = new Set([
+      "am-tab-active",
+      "am-tab-target",
+      "am-tab-icon",
+      "am-tab-title",
+      "am-tab-tooltip",
+      "am-tab-close-wrap",
+      "am-tab-close",
+      "am-ctx-menu",
+    ])
+    const unexpected = unused.filter(
+      (c) => !worktreePrefixes.some((p) => c!.startsWith(p)) && !sharedTabClasses.has(c!),
+    )
 
     expect(unexpected, `Unexpected unused CSS classes (not worktree-related): ${unexpected.join(", ")}`).toEqual([])
     // Log deferred cleanups for visibility
@@ -212,10 +225,12 @@ describe("Agent Manager Provider Messages", () => {
     expect(pushes.length, "runInitialization must own at least two pushState calls").toBeGreaterThanOrEqual(2)
   })
 
-  it("async shutdown waits for terminal router cleanup", () => {
+  it("async shutdown settles timing and persists without terminal cleanup", () => {
     const body = getMethodBody("disposeAsync")
-    expect(body).toContain("await this.terminalRouter.dispose()")
-    expect(body).not.toContain("void this.terminalRouter.dispose()")
+    expect(body).not.toContain("terminalRouter")
+    expect(body).not.toContain("terminalManager")
+    expect(body).toContain("await this.timing.settle()")
+    expect(body).toContain("await this.flush()")
   })
 
   // Phase 4B: onCloseSession was removed (unreachable from local-only webview).
@@ -308,39 +323,45 @@ describe("Agent Manager Provider — onMessage routing", () => {
   // -- onMessage dispatches all expected message types -----------------------
 
   it("provider routing handles all documented agentManager.* message types", () => {
-    const text = provider() + fs.readFileSync(TERMINAL_ROUTING_FILE, "utf-8")
+    const text = provider()
     // Phase 4C: removed createWorktree, deleteWorktree, and other worktree-only messages;
-    // P3.2 removed the run-script subsystem.
+    // P3.2 removed the run-script subsystem. Terminal tabs removed: no
+    // agentManager.showTerminal/showLocal/showExistingLocal or
+    // agentManager.terminal.create/close/resize routes remain.
     const expected = [
       "agentManager.persistSession",
       "agentManager.forgetSession",
-      "agentManager.showTerminal",
-      "agentManager.showLocalTerminal",
-      "agentManager.showExistingLocalTerminal",
       "agentManager.requestRepoInfo",
       "agentManager.requestState",
       "agentManager.setTabOrder",
-      "agentManager.terminal.create",
-      "agentManager.terminal.close",
-      "agentManager.terminal.resize",
     ]
     for (const msg of expected) {
       expect(text, `provider routing should handle "${msg}"`).toContain(msg)
     }
+    const removed = [
+      "agentManager.showTerminal",
+      "agentManager.showLocalTerminal",
+      "agentManager.showExistingLocalTerminal",
+      "agentManager.terminal.create",
+      "agentManager.terminal.close",
+      "agentManager.terminal.resize",
+    ]
+    for (const msg of removed) {
+      expect(text, `provider routing should not handle removed "${msg}"`).not.toContain(msg)
+    }
   })
 
-  it("session routing handles loadMessages for terminal switching", () => {
+  it("session routing handles loadMessages without terminal switching", () => {
     const text = body("onSessionMessage")
     expect(text).toContain("loadMessages")
-    expect(text).toContain("syncOnSessionSwitch")
+    expect(text).not.toContain("syncOnSessionSwitch")
   })
 
-  it("terminal context reveals the terminal associated with the originating session", () => {
+  it("terminal context has no Agent Manager gate and forwards to the backend", () => {
     const text = body("onSessionMessage")
-    const show = text.indexOf("this.terminalManager.prepareContext(m.sessionID)")
-    expect(show).toBeGreaterThan(-1)
+    expect(text).not.toContain("this.terminalManager.prepareContext(m.sessionID)")
+    expect(text).not.toContain("terminalContextError")
     expect(text).not.toContain("!this.terminalManager.hasActiveTerminal()")
-    expect(text).toContain('type: "terminalContextError"')
   })
 
   it("session routing handles clearSession for SSE re-registration", () => {
@@ -642,14 +663,6 @@ const VSCODE_ALLOWED: Record<string, { note: string }> = {
   "vscode-host.ts": {
     note: "vscode adapter implementing Host interface",
   },
-  // Thin adapter: wraps vscode.window terminal APIs behind TerminalHost interface
-  "terminal-host.ts": {
-    note: "vscode adapter for SessionTerminalManager",
-  },
-  // Reads terminal.integrated.* and editor.font* config for xterm font settings
-  "terminal-font.ts": {
-    note: "vscode config reader for integrated terminal font settings",
-  },
 }
 
 /**
@@ -666,7 +679,7 @@ const VSCODE_ALLOWED: Record<string, { note: string }> = {
  */
 const MAX_LINES: Record<string, { maxLines: number; note: string }> = {
   "AgentManagerProvider.ts": {
-    maxLines: 2000,
+    maxLines: 1950,
     note: "diff and import workflows are extracted into cohesive domain services; extract more orchestration next",
   },
 }
@@ -1097,7 +1110,7 @@ describe("Agent Manager — Gate C in-flight preservation and bottom-page deriva
   it("reconciliation final invariant derives bottom-page from real content only", () => {
     expect(app).toContain("if (isBottomPage())")
     expect(app).toContain("shouldClearBottomPage(")
-    expect(app).toContain("terms.current().length")
+    expect(app).not.toContain("terms.current()")
     expect(app).not.toContain("if (finalIds.length > 0) setIsBottomPage(false)")
   })
   it("does not synthesize sessionsLoaded/sessionCreated/sessionAdded/title", () => {

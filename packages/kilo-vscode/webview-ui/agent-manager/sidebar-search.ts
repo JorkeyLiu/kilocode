@@ -2,6 +2,7 @@ import { createMemo } from "solid-js"
 import type { Accessor } from "solid-js"
 import type { PermissionRequest, QuestionRequest, SessionInfo, SessionStatusInfo } from "../src/types/messages"
 import { LOCAL } from "./navigate"
+import { deriveTopics } from "./topics"
 
 export type SidebarSearchState = "idle" | "busy" | "retry" | "waiting"
 
@@ -39,36 +40,72 @@ interface SidebarSearchInput {
   localBusy: boolean
 }
 
-const root = (item: SessionInfo) => !item.parentID
 const score = (state: SidebarSearchState) => (state === "waiting" ? 3 : state === "idle" ? 0 : 2)
-const newest = (items: SessionInfo[], fallback: string) =>
-  items.reduce((latest, item) => (item.updatedAt > latest ? item.updatedAt : latest), fallback)
 
+/** Safe timestamp rank: malformed sorts as oldest (0), never NaN/throw. */
+const rank = (iso: string) => {
+  const n = Date.parse(iso)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Deterministic tie-break: code-unit order, never locale-dependent. */
+const byKey = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/**
+ * Base order for an empty query (and tie-break for equally relevant fuzzy
+ * matches): authoritative Topic order — activity descending with deterministic
+ * ID tie-break. Transient presentation (state/visible) never reorders Topics.
+ */
 export function sortSidebarSearch(a: SidebarSearchItem, b: SidebarSearchItem) {
-  return (
-    score(b.state) - score(a.state) ||
-    Number(b.visible) - Number(a.visible) ||
-    b.updatedAt.localeCompare(a.updatedAt) ||
-    a.title.localeCompare(b.title)
-  )
+  return rank(b.updatedAt) - rank(a.updatedAt) || byKey(a.key, b.key)
 }
 
 export function buildSidebarSearch(input: SidebarSearchInput): SidebarSearchItem[] {
-  const local = input.local.filter((session) => root(session) && !input.pending(session.id))
-  const sessions: SidebarSearchItem[] = local.map((session) => ({
-    key: `session:${session.id}`,
-    kind: "session" as const,
-    group: "sessions" as const,
-    title: session.title || input.untitled,
-    meta: [input.localLabel],
-    search: [session.title || input.untitled, input.localLabel, session.id].join(" "),
-    sessionId: session.id,
-    location: "local" as const,
-    updatedAt: session.updatedAt,
-    state: input.status(session.id),
-    visible: true,
-  }))
-  const localState = local.map((session) => input.status(session.id)).sort((a, b) => score(b) - score(a))[0] ?? "idle"
+  // Authoritative Topic projection over the usable inventory (pending tabs are
+  // ephemeral, never Topics). Orphan/missing-parent/cycle components degrade
+  // to independent Topics via deriveTopics — never dropped as non-roots.
+  const usable = input.local.filter((session) => !input.pending(session.id))
+  const topics = deriveTopics(usable)
+  const sessions: SidebarSearchItem[] = topics.map((tp) => {
+    // Transient attention presentation only: the most severe member state.
+    // Never reorders Topics (see sortSidebarSearch).
+    let state: SidebarSearchState = "idle"
+    let best = -1
+    for (const m of tp.members) {
+      const s = input.status(m.id)
+      const v = score(s)
+      if (v > best) {
+        best = v
+        state = s
+      }
+    }
+    const title = tp.label || input.untitled
+    const memberTitles = tp.members.map((m) => m.title || input.untitled)
+    const memberIDs = tp.members.map((m) => m.id)
+    return {
+      key: `session:${tp.id}`,
+      kind: "session" as const,
+      group: "sessions" as const,
+      title,
+      meta: [input.localLabel],
+      search: [title, ...memberTitles, ...memberIDs, input.localLabel].join(" "),
+      sessionId: tp.id,
+      location: "local" as const,
+      updatedAt: tp.activity,
+      state,
+      visible: true,
+    }
+  })
+  let localState: SidebarSearchState = "idle"
+  let best = -1
+  for (const s of usable) {
+    const st = input.status(s.id)
+    const v = score(st)
+    if (v > best) {
+      best = v
+      localState = st
+    }
+  }
   const contexts: SidebarSearchItem[] = [
     {
       key: LOCAL,
@@ -77,10 +114,10 @@ export function buildSidebarSearch(input: SidebarSearchInput): SidebarSearchItem
       title: input.localLabel,
       meta: input.localBranch ? [input.localBranch] : [],
       search: [input.localLabel, input.localBranch].filter(Boolean).join(" "),
-      updatedAt: newest(local, ""),
+      updatedAt: topics[0]?.activity ?? "",
       state: input.localBusy && localState === "idle" ? "busy" : localState,
       visible: true,
-      count: local.length,
+      count: topics.length,
     },
   ]
 
@@ -128,12 +165,26 @@ export function createSidebarSearch(deps: SidebarSearchDeps) {
   const current = createMemo(() => {
     const id = deps.sessionId()
     const selection = deps.selection()
-    const active = items().find(
+    const list = items()
+    const active = list.find(
       (item) =>
         item.kind === "session" && item.sessionId === id && item.location === "local" && selection === LOCAL,
     )
     if (active || !selection) return active
-    if (selection === LOCAL) return items().find((item) => item.kind === "local")
+    // The active session may be a Topic member (child): highlight its Topic.
+    // Pure derivation from the same inventory — presentation only.
+    if (id && selection === LOCAL) {
+      const usable = deps.local().filter((s) => !deps.pending(s.id))
+      const topics = deriveTopics(usable)
+      for (const tp of topics) {
+        if (tp.members.some((m) => m.id === id)) {
+          const topicItem = list.find((item) => item.kind === "session" && item.sessionId === tp.id)
+          if (topicItem) return topicItem
+          break
+        }
+      }
+    }
+    if (selection === LOCAL) return list.find((item) => item.kind === "local")
     return undefined
   })
 

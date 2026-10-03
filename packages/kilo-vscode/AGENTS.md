@@ -130,7 +130,7 @@ Extension (Node.js)                          Backend (private child process)
 
 - **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared by Agent Manager (the only chat UI). It owns the current server process, HTTP client, and SSE connection.
 - **`ServerManager`** (`src/services/cli-backend/server-manager.ts`) lazily spawns the staged serve-only binary (`bin/kilo-serve`, falling back to `bin/kilo` only when the serve entry is absent in dev/older bundles), reuses its current process, and can start a replacement if that process exits.
-- Agent Manager (only chat UI) reuses this connection; its internal session sidebar/tabs/terminals/navigation/persistence are retained. SSE events are filtered per-session via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo-serve serve` processes.
+- Agent Manager (only chat UI) reuses this connection; its internal session sidebar/tabs/navigation/persistence are retained. SSE events are filtered per-session via a `trackedSessionIds` Set. There are no terminal surfaces: Agent Manager PTY tabs and integrated-terminal context/actions are removed.
 - Backend state follows where it is allocated, not the panel shown in an editor tab. Snapshot repository state uses directory-keyed `InstanceState`, while `trackState` is created once in the active Snapshot service closure. For these shared VS Code session paths, its slow-track `asked` guard spans the root-local requests; choosing **Continue with snapshots** resets `asked` only when continued tracking returns a snapshot hash.
 
 ### Builds
@@ -172,7 +172,7 @@ Key patterns:
 
 ## Agent Manager — the only chat UI
 
-The Agent Manager is a feature within this extension (not a separate product). It is the only chat UI and provides multi-session orchestration — running multiple independent AI sessions in parallel at the workspace root. It may be hosted in Primary/Secondary Sidebar or editor group; internal session sidebar/tabs/terminals/navigation/persistence/hydration are retained.
+The Agent Manager is a feature within this extension (not a separate product). It is the only chat UI and provides multi-session orchestration — running multiple independent AI sessions in parallel at the workspace root. It may be hosted in Primary/Secondary Sidebar or editor group; internal session sidebar/tabs/navigation/persistence/hydration are retained.
 
 | Aspect | Agent Manager (only chat UI) |
 |---|---|
@@ -180,11 +180,10 @@ The Agent Manager is a feature within this extension (not a separate product). I
 | Sessions | Multiple parallel sessions with tabbed UI |
 | Working directory | Workspace root — sessions share it, no isolation |
 | State | Workspace-owned durable open-tab persistence (`kilo.agentManager.persistence.v1` via `workspaceState`) + webview-local UI state |
-| Terminals | Dedicated VS Code terminal per session |
 
 ### Architecture
 
-Agent Manager root-local sessions use the current shared `kilo-serve serve` private child owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the workspace root as `directory`, which resolves directory-scoped backend state. Terminal PTYs, git subprocesses, and the extension host are separate process or extension-host boundaries, not per-session `kilo-serve serve` instances. Because every session runs in the same workspace directory, concurrent sessions can conflict on file edits; sessions targeting distinct areas of work are the safe pattern.
+Agent Manager root-local sessions use the current shared `kilo-serve serve` private child owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the workspace root as `directory`, which resolves directory-scoped backend state. Git subprocesses and the extension host are separate process or extension-host boundaries, not per-session `kilo-serve serve` instances. Because every session runs in the same workspace directory, concurrent sessions can conflict on file edits; sessions targeting distinct areas of work are the safe pattern.
 
 Extension-side code lives in `src/agent-manager/`, webview code in `webview-ui/agent-manager/`. The webview reuses the shared chat provider chain and `ChatView` component with a root-local tab layout; there is no worktree-mode context provider.
 

@@ -92,6 +92,7 @@ export type Provenance = {
     scope: string
     expiry: string
   }
+  policyVersion?: string
 }
 
 // helpers
@@ -437,7 +438,7 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
 
   const hardDenyMatches: { rule: Rule; order: number }[] = []
   if (input.hardDenyRuleset) {
-    // LOCK-002: hard deny absolute — never filter mode rules from veto evaluation
+    // hard deny absolute — never filter mode rules from veto evaluation
     for (const pat of targets) {
       for (let i = 0; i < input.hardDenyRuleset.length; i++) {
         const rule = input.hardDenyRuleset[i]

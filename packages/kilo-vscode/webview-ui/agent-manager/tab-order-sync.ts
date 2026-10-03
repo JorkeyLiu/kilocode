@@ -1,5 +1,5 @@
 /**
- * Factory for tab-order mutations used when sessions/terminals are created,
+ * Factory for tab-order mutations used when sessions are created,
  * a pending tab is promoted to a real session id, or a session is forked.
  *
  * Exists as a separate module to keep the tab-order branching out of
@@ -15,16 +15,14 @@ export interface TabOrderSyncDeps {
   setOrder: (updater: (prev: Record<string, string[]>) => Record<string, string[]>) => void
   /** Persist to durable state. Callers should strip transient ids here. */
   persist: (key: string, value: string[]) => void
-  /** State accessors used to rebuild the base order `[sessions, terminals]`. */
+  /** State accessors used to rebuild the base order `[sessions]`. */
   localSessionIDs: () => string[]
-  terminalIdsFor: (key: string) => string[]
 }
 
 export function createTabOrderSync(deps: TabOrderSyncDeps) {
   const baseFor = (key: string): string[] => {
-    // All sessions and terminals live in the LOCAL context — no other keys.
-    const sids = key === deps.LOCAL ? deps.localSessionIDs() : []
-    return [...sids, ...deps.terminalIdsFor(key)]
+    // All sessions live in the LOCAL context — no other keys.
+    return key === deps.LOCAL ? deps.localSessionIDs() : []
   }
 
   const commit = (key: string, next: string[]) => {

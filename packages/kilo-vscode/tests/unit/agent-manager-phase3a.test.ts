@@ -1,59 +1,46 @@
 /**
- * Phase 3A audit contract tests.
+ * Phase 3A audit contract tests (terminal-free).
  *
  * Proves:
  *  1. Non-LOCAL incoming selection cannot alter session tab order or drag target key.
- *  2. Terminal created from a worktree-tagged message is stored/ordered/selected in LOCAL.
- *  3. Pending draft remains connected independently of selection.
- *  4. handlePromote is removed (dead code).
+ *  2. Pending draft remains connected independently of selection.
+ *  3. handlePromote is removed (dead code).
+ *  4. No terminal tab subsystem remains in the Agent Manager surface.
  */
 
 import { describe, expect, it } from "bun:test"
-import { createRoot, createSignal } from "solid-js"
-import {
-  createTerminalState,
-  createTerminalMessageHandler,
-  isTerminalTabId,
-  TERMINAL_PREFIX,
-} from "../../webview-ui/agent-manager/terminal/state"
+import { createSignal } from "solid-js"
 import { LOCAL } from "../../webview-ui/agent-manager/navigate"
 import { applyTabOrder } from "../../webview-ui/agent-manager/tab-order"
-import { createSessionTabManager } from "../../webview-ui/agent-manager/session-tab-manager"
-import type { ExtensionMessage } from "../../webview-ui/src/types/messages/extension-messages"
-import type { TerminalFont } from "../../src/types/messages/agent-manager"
 
 const WT_A = "worktree-aaa"
 const WT_B = "worktree-bbb"
 const SESSION_1 = "sess-1111"
 const SESSION_2 = "sess-2222"
 const SESSION_3 = "sess-3333"
-const TERM_1 = `${TERMINAL_PREFIX}term-1`
-const TERM_2 = `${TERMINAL_PREFIX}term-2`
 const PENDING_1 = "pending:aaa-bbb"
-
-const font: TerminalFont = { fontFamily: "Menlo", fontSize: 14 }
 
 describe("Phase 3A — tab order always uses LOCAL key", () => {
   it("applyTabOrder with LOCAL key is independent of non-LOCAL selection", () => {
-    const items = [{ id: SESSION_1 }, { id: SESSION_2 }, { id: TERM_1 }]
-    const order = [TERM_1, SESSION_1, SESSION_2]
+    const items = [{ id: SESSION_1 }, { id: SESSION_2 }, { id: SESSION_3 }]
+    const order = [SESSION_3, SESSION_1, SESSION_2]
     const result = applyTabOrder(items, order)
-    expect(result.map((i) => i.id)).toEqual([TERM_1, SESSION_1, SESSION_2])
+    expect(result.map((i) => i.id)).toEqual([SESSION_3, SESSION_1, SESSION_2])
   })
 
   it("non-LOCAL selection does not introduce a separate tab order namespace", () => {
     // Simulate tabIds() memo: only LOCAL key is used for worktreeTabOrder
     const tabOrder: Record<string, string[]> = {
-      [LOCAL]: [SESSION_1, TERM_1, SESSION_2],
-      [WT_A]: [SESSION_3, TERM_2], // should never be read by tabIds
+      [LOCAL]: [SESSION_1, SESSION_3, SESSION_2],
+      [WT_A]: [SESSION_3], // should never be read by tabIds
     }
-    const ids = [SESSION_1, SESSION_2, TERM_1]
+    const ids = [SESSION_1, SESSION_2, SESSION_3]
     const result = applyTabOrder(
       ids.map((id) => ({ id })),
       tabOrder[LOCAL],
     ).map((i) => i.id)
     // Always uses LOCAL order, regardless of what WT_A has
-    expect(result).toEqual([SESSION_1, TERM_1, SESSION_2])
+    expect(result).toEqual([SESSION_1, SESSION_3, SESSION_2])
   })
 
   it("drag over persists to LOCAL key even when selection is non-LOCAL", () => {
@@ -71,150 +58,20 @@ describe("Phase 3A — tab order always uses LOCAL key", () => {
   })
 })
 
-describe("Phase 3A — terminal created from worktree-tagged message uses LOCAL", () => {
-  it("terminal state stores in LOCAL context regardless of worktreeId", () => {
-    createRoot((dispose) => {
-      const [sel, setSel] = createSignal<string | null>(LOCAL)
-      const state = createTerminalState(sel)
-
-      // Add terminal with non-null worktreeId
-      state.add(WT_A, { id: TERM_1, title: "Terminal 1", wsUrl: "ws://...", font })
-      state.add(null, { id: TERM_2, title: "Terminal 2", wsUrl: "ws://...", font })
-
-      // All terminals should be in LOCAL context
-      expect(state.forSelection(LOCAL).length).toBe(2)
-      expect(state.forSelection(LOCAL).map((t) => t.id)).toEqual([TERM_1, TERM_2])
-
-      // forSelection with non-LOCAL should still return LOCAL terminals
-      expect(state.forSelection(WT_A).length).toBe(2)
-      expect(state.forSelection(WT_A).map((t) => t.id)).toEqual([TERM_1, TERM_2])
-
-      // forSelection with null returns empty
-      expect(state.forSelection(null).length).toBe(0)
-
-      dispose()
-    })
+describe("Phase 3A — no terminal tab subsystem", () => {
+  it("terminal tab modules are removed", async () => {
+    const fs = await import("fs")
+    const path = await import("path")
+    expect(fs.existsSync(path.resolve(__dirname, "../../webview-ui/agent-manager/terminal"))).toBe(false)
+    expect(fs.existsSync(path.resolve(__dirname, "../../src/agent-manager/terminal-routing.ts"))).toBe(false)
+    expect(fs.existsSync(path.resolve(__dirname, "../../src/agent-manager/terminal-manager.ts"))).toBe(false)
+    expect(fs.existsSync(path.resolve(__dirname, "../../src/agent-manager/SessionTerminalManager.ts"))).toBe(false)
   })
 
-  it("currentKey returns LOCAL regardless of worktree selection", () => {
-    // Test each selection value in a separate createRoot because bun test
-    // uses the SSR build of Solid.js where memos don't re-evaluate.
-    createRoot((dispose) => {
-      const state = createTerminalState(() => LOCAL)
-      expect(state.currentKey()).toBe(LOCAL)
-      dispose()
-    })
-    createRoot((dispose) => {
-      const state = createTerminalState(() => WT_A)
-      expect(state.currentKey()).toBe(LOCAL)
-      dispose()
-    })
-    createRoot((dispose) => {
-      const state = createTerminalState(() => WT_B)
-      expect(state.currentKey()).toBe(LOCAL)
-      dispose()
-    })
-    createRoot((dispose) => {
-      const state = createTerminalState(() => null)
-      expect(state.currentKey()).toBeUndefined()
-      dispose()
-    })
-  })
-
-  it("current() concept is proven by currentKey + forSelection returning LOCAL terminals", () => {
-    createRoot((dispose) => {
-      // Use WT_A as selection — currentKey should still be LOCAL
-      const state = createTerminalState(() => WT_A)
-
-      // Add terminal before first read so the SSR memo evaluates correctly
-      state.add(WT_A, { id: TERM_1, title: "Terminal 1", wsUrl: "ws://...", font })
-
-      // currentKey returns LOCAL even with non-LOCAL selection
-      expect(state.currentKey()).toBe(LOCAL)
-
-      // forSelection(LOCAL) returns the terminal (proves the LOCAL context owns it)
-      expect(state.forSelection(LOCAL).length).toBe(1)
-      expect(state.forSelection(LOCAL)[0]!.id).toBe(TERM_1)
-
-      // forSelection(WT_A) also returns LOCAL terminals (alias)
-      expect(state.forSelection(WT_A).length).toBe(1)
-
-      dispose()
-    })
-  })
-
-  it("message handler sets selection to LOCAL and calls onCreated with LOCAL", () => {
-    createRoot((dispose) => {
-      const [sel, setSel] = createSignal<string | null>(WT_A)
-      const state = createTerminalState(sel)
-      const activated: string[] = []
-      const createdArgs: { contextKey: string; terminalId: string }[] = []
-
-      const handler = createTerminalMessageHandler({
-        state,
-        activate: (id) => activated.push(id),
-        setSelection: (s) => setSel(s),
-        showError: () => undefined,
-        onCreated: (contextKey, terminalId) => createdArgs.push({ contextKey, terminalId }),
-      })
-
-      const msg = {
-        type: "agentManager.terminal.created",
-        worktreeId: WT_A,
-        terminalId: TERM_1,
-        title: "Terminal 1",
-        wsUrl: "ws://...",
-        font,
-      } satisfies ExtensionMessage
-
-      expect(handler(msg)).toBe(true)
-
-      // onCreated was called with LOCAL, not WT_A
-      expect(createdArgs).toEqual([{ contextKey: LOCAL, terminalId: TERM_1 }])
-
-      // Selection was set to LOCAL
-      expect(sel()).toBe(LOCAL)
-
-      // Terminal was activated
-      expect(activated).toEqual([TERM_1])
-
-      // Terminal is in LOCAL context
-      expect(state.forSelection(LOCAL).length).toBe(1)
-      expect(state.forSelection(LOCAL)[0]!.id).toBe(TERM_1)
-
-      dispose()
-    })
-  })
-
-  it("terminal created from null worktreeId is also stored in LOCAL", () => {
-    createRoot((dispose) => {
-      const [sel, setSel] = createSignal<string | null>(LOCAL)
-      const state = createTerminalState(sel)
-      const createdArgs: string[] = []
-
-      const handler = createTerminalMessageHandler({
-        state,
-        activate: () => undefined,
-        setSelection: () => undefined,
-        showError: () => undefined,
-        onCreated: (contextKey) => createdArgs.push(contextKey),
-      })
-
-      const msg = {
-        type: "agentManager.terminal.created",
-        worktreeId: null,
-        terminalId: TERM_1,
-        title: "Terminal 1",
-        wsUrl: "ws://...",
-        font,
-      } satisfies ExtensionMessage
-
-      handler(msg)
-      expect(createdArgs).toEqual([LOCAL])
-      expect(state.forSelection(LOCAL).length).toBe(1)
-
-      dispose()
-    })
+  it("tab order contains session ids only", () => {
+    const ids = [SESSION_1, SESSION_2]
+    for (const id of ids) expect(id.startsWith("terminal:")).toBe(false)
+    expect(WT_B.startsWith("terminal:")).toBe(false)
   })
 })
 

@@ -18,11 +18,13 @@ import { Flock } from "@opencode-ai/core/util/flock"
 import * as Log from "@opencode-ai/core/util/log"
 import { Filesystem } from "@/util/filesystem"
 import { isRecord } from "@/util/record"
+import { stripRuntimeToken } from "@/kilocode/runtime-token"
 import { BackgroundProcessRunner } from "./runner"
 import { chmod, mkdir, readFile, readdir, rm, stat } from "fs/promises"
 import { randomUUID } from "crypto"
 import { hostname } from "os"
 import { spawn, type ChildProcess } from "child_process"
+import { guardianCommandFor, shouldWrap } from "@/kilocode/process-resource/supervise"
 import { Context, Effect, Layer, Schema, Types } from "effect"
 import net from "net"
 import path from "path"
@@ -573,17 +575,22 @@ export namespace BackgroundProcess {
     })
   }
 
-  function env(id?: ID, token?: string) {
+  function env(id?: ID, token?: string, lifetime?: Lifetime) {
     const result: NodeJS.ProcessEnv = {
       ...process.env,
       TERM: "dumb",
       ...(id ? { KILO_BACKGROUND_PROCESS_ID: id } : {}),
       ...(token ? { KILO_BACKGROUND_PROCESS_TOKEN: token } : {}),
     }
-    delete result.KILO_SERVER_PASSWORD
-    delete result.KILO_SERVER_USERNAME
-    delete result.KILO_BACKGROUND_PROCESS_PORTS
-    return result
+    // Explicit persistent work is independently owned (own persist lease +
+    // per-process token oracle): strip the crashing-instance token so a
+    // private-runtime crash sweep never reaps it. Session/parent lifetimes
+    // keep the instance token via process.env inheritance.
+    const scoped = lifetime === "persistent" ? stripRuntimeToken(result) : result
+    delete scoped.KILO_SERVER_PASSWORD
+    delete scoped.KILO_SERVER_USERNAME
+    delete scoped.KILO_BACKGROUND_PROCESS_PORTS
+    return scoped
   }
 
   function stopped(proc: ChildProcess) {
@@ -617,6 +624,36 @@ export namespace BackgroundProcess {
       .split(/\s+/)
     const value = Number(fields[2])
     return Number.isInteger(value) && value > 0 ? value : undefined
+  }
+
+  /**
+   * Exact persistent-oracle match (never substring). Exported for unit tests;
+   * the live `unix`/`windows` probes below share this exact predicate.
+   */
+  export function hasExactPersistentToken(text: string, token: string): boolean {
+    if (!token) return false
+    const keyNeedle = `KILO_BACKGROUND_PROCESS_TOKEN=${token}`
+    let from = 0
+    while (true) {
+      const at = text.indexOf(keyNeedle, from)
+      if (at < 0) break
+      const before = at === 0 ? "" : text[at - 1]!
+      const after = text[at + keyNeedle.length] ?? ""
+      const beforeOk = before === "" || /[\s\0"']/.test(before)
+      const afterOk = after === "" || /[\s\0"']/.test(after)
+      if (beforeOk && afterOk) return true
+      from = at + keyNeedle.length
+    }
+    const isTok = (c: string) => /[A-Za-z0-9_-]/.test(c)
+    let pos = 0
+    while (true) {
+      const at = text.indexOf(token, pos)
+      if (at < 0) return false
+      const before = at === 0 ? "" : text[at - 1]!
+      const after = text[at + token.length] ?? ""
+      if ((before === "" || !isTok(before)) && (after === "" || !isTok(after))) return true
+      pos = at + token.length
+    }
   }
 
   async function linux(active: Active): Promise<Probe> {
@@ -663,7 +700,7 @@ export namespace BackgroundProcess {
       return [match[3]]
     })
     if (members.length === 0) return "gone"
-    return members.some((command) => command.includes(token)) ? "owned" : "foreign"
+    return members.some((command) => hasExactPersistentToken(command, token)) ? "owned" : "foreign"
   }
 
   async function windows(active: Active): Promise<Probe> {
@@ -678,7 +715,7 @@ export namespace BackgroundProcess {
     })
     if (out.code !== 0) return "unknown"
     if (!out.text.trim()) return "gone"
-    return out.text.includes(token) ? "owned" : "foreign"
+    return hasExactPersistentToken(out.text, token) ? "owned" : "foreign"
   }
 
   async function probe(active: Active): Promise<Probe> {
@@ -806,6 +843,9 @@ export namespace BackgroundProcess {
     if (active.watch) clearTimeout(active.watch)
     active.resolve?.(false)
     active.resolve = undefined
+    // kilocode_change - prelaunch wrapper: active.proc IS the guardian
+    // (group leader); kill() above already reaped the owned tree via the
+    // group, so no separate release exists.
     if (active.info.lifetime === "persistent") await forget(state.shared, active)
     if (opts.silent) return
     await Instance.restore(active.ctx, () =>
@@ -922,11 +962,23 @@ export namespace BackgroundProcess {
       logpath && token && control
         ? BackgroundProcessRunner.command({ token, shell: sh, args, cwd, log: logpath, control })
         : [sh, ...args]
+    // kilocode_change - prelaunch guardian wrapper for nonpersistent
+    // children (real group/job ownership across serve death, env -i
+    // safe). The guardian is launched INSTEAD of the shell; pid is the
+    // owned group leader so ports/group management keep working with no
+    // silent API change. Explicit persistent bypass unchanged: never
+    // wrapped. Fail closed: install absent/invalid throws with no shell
+    // side effect.
+    let wrappedCmd = cmd
+    if (lifetime !== "persistent" && shouldWrap({})) {
+      const wrapped = guardianCommandFor({ cmd: cmd[0]!, args: cmd.slice(1) })
+      wrappedCmd = [wrapped.cmd, ...wrapped.args]
+    }
     const proc = await Promise.resolve()
       .then(() =>
-        spawn(cmd[0], cmd.slice(1), {
+        spawn(wrappedCmd[0], wrappedCmd.slice(1), {
           cwd,
-          env: env(id, token),
+          env: env(id, token, lifetime),
           stdio: ["ignore", "pipe", "pipe"],
           detached: lifetime === "persistent" || process.platform !== "win32",
           windowsHide: true,

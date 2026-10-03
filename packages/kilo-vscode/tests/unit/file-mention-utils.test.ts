@@ -10,7 +10,6 @@ import {
   isCursorAtMentionEnd,
   findMentionRange,
   FILE_PICKER_RESULT,
-  TERMINAL_RESULT,
   GIT_CHANGES_RESULT,
 } from "../../webview-ui/src/hooks/file-mention-utils"
 
@@ -41,22 +40,11 @@ describe("buildMentionResults", () => {
   it("includes special mentions for empty mention query", () => {
     const result = buildMentionResults("", [])
     expect(result[0]).toEqual({
-      type: "terminal",
-      value: "terminal",
-      label: "Terminal",
-      description: "Active terminal output",
-    })
-    expect(result[1]).toEqual({
       type: "git-changes",
       value: "git-changes",
       label: "Git changes",
       description: "Current session changes",
     })
-  })
-
-  it("includes terminal for matching prefix", () => {
-    const result = buildMentionResults("term", ["src/terminal.ts"])
-    expect(result.map((item) => item.type)).toEqual(["terminal", "file", "file-picker"])
   })
 
   it("includes git changes for matching prefix", () => {
@@ -87,8 +75,7 @@ describe("buildMentionResults", () => {
   it("always includes file picker result at the end of the list", () => {
     const result = buildMentionResults("", ["src/index.ts"])
     expect(result).toEqual([
-      TERMINAL_RESULT,
-      GIT_CHANGES_RESULT,
+          GIT_CHANGES_RESULT,
       { type: "file", value: "src/index.ts" },
       FILE_PICKER_RESULT,
     ])
@@ -221,11 +208,6 @@ describe("buildTextAfterMentionSelect", () => {
   it("does not add a space when a tab follows the cursor", () => {
     const result = buildTextAfterMentionSelect("hello @par", "\tnext", "src/foo.ts")
     expect(result).toBe("hello @src/foo.ts\tnext")
-  })
-
-  it("works consistently for special mention tokens (terminal)", () => {
-    const result = buildTextAfterMentionSelect("hello @term", "", "terminal")
-    expect(result).toBe("hello @terminal ")
   })
 
   it("works consistently for special mention tokens (git-changes)", () => {
@@ -434,12 +416,6 @@ describe("getMentionRemovalRange", () => {
     expect(getMentionRemovalRange(text, 5, paths)).toBeNull()
   })
 
-  it("matches terminal builtin mention", () => {
-    const text = "see @terminal output"
-    const result = getMentionRemovalRange(text, 13, new Set())
-    expect(result).toEqual({ start: 4, end: 14 })
-  })
-
   it("matches git-changes builtin mention", () => {
     const text = "see @git-changes here"
     const result = getMentionRemovalRange(text, 16, new Set())
@@ -476,10 +452,6 @@ describe("isCursorAtMentionEnd", () => {
 
   it("returns false for empty paths and no builtin match", () => {
     expect(isCursorAtMentionEnd("hello", 3, new Set())).toBe(false)
-  })
-
-  it("matches terminal builtin", () => {
-    expect(isCursorAtMentionEnd("@terminal", 9, new Set())).toBe(true)
   })
 
   it("matches git-changes builtin", () => {
@@ -529,9 +501,9 @@ describe("findMentionRange", () => {
   })
 
   it("handles builtin mentions", () => {
-    const text = "check @terminal output"
+    const text = "check @git-changes output"
     const result = findMentionRange(text, 8, new Set())
-    expect(result).toEqual({ start: 6, end: 15 })
+    expect(result).toEqual({ start: 6, end: 18 })
   })
 
   it("prefers the longest matching path to avoid partial matches", () => {

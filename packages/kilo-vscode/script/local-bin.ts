@@ -16,6 +16,8 @@ import { currentFfmpegTarget, ensureFfmpegForTarget } from "./ffmpeg-helper"
 import { generateServeSourceWrapperContent, generateSourceWrapperContent } from "./source-wrapper"
 
 const forceRebuild = process.argv.includes("--force")
+const requireNative =
+  process.argv.includes("--require-native") || process.env.KILO_REQUIRE_NATIVE_BIN === "1"
 
 /**
  * Ensures the VS Code extension has a serve-only CLI binary at `packages/kilo-vscode/bin/kilo-serve`.
@@ -207,6 +209,11 @@ async function ensureLocalHelpers() {
 }
 
 async function writeSourceWrapper() {
+  if (requireNative) {
+    throw new Error(
+      "Compiled CLI build failed and --require-native forbids the source wrapper fallback (compile/package require a native binary).",
+    )
+  }
   if (process.platform === "win32") {
     throw new Error("Compiled CLI build failed and source wrapper fallback is not supported on Windows.")
   }
@@ -257,8 +264,12 @@ function stageState(): Stage {
   // Source-wrapper fallback for serve has no compiled serve binary resources;
   // a shebang at `bin/kilo-serve` keeps dev staging ready without requiring
   // a compiled backend. Presence of a stale full `bin/kilo` is ignored.
+  // Build-required mode (`--require-native` for compile/package) never treats
+  // the dev wrapper as ready: packaging must stage a native binary and fail
+  // instead of silently falling back.
   const wrapper = serveExists && isSourceWrapper(targetServePath)
-  return { serveReady: serveReady || wrapper, wrapper, ready: serveReady || wrapper }
+  const ready = requireNative ? serveReady && !wrapper : serveReady || wrapper
+  return { serveReady: serveReady || wrapper, wrapper, ready }
 }
 
 // Fast path: compiled serve was already staged but version file indicates fresh.
@@ -320,6 +331,12 @@ async function main() {
   }
 
   const sourceBinPath = await ensureBuiltBinary().catch(async (err) => {
+    if (requireNative) {
+      // Compile/package must deliver an actual native binary: do not hide an
+      // unsuccessful build behind the dev source wrapper (exit non-zero).
+      // Normal dev (no --require-native) keeps the wrapper fallback below.
+      throw err
+    }
     await writeSourceWrapper()
     log(`Wrapper fallback reason: ${err instanceof Error ? err.message : String(err)}`)
     return null

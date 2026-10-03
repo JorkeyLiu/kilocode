@@ -276,14 +276,31 @@ describe("P3.2 preservation — retained root-local orchestration and P4.4 bound
     expect(srcTypes).toContain("ManagedSession")
   })
 
-  it("keeps generic terminals with slotId routing and local git stats", () => {
-    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/terminal-routing.ts"))).toBe(true)
-    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/terminal-manager.ts"))).toBe(true)
-    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/SessionTerminalManager.ts"))).toBe(true)
+  it("removes Agent Manager terminal subsystems while keeping local git stats", () => {
+    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/terminal-routing.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/terminal-manager.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/SessionTerminalManager.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/terminal-host.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/agent-manager/terminal-font.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "webview-ui/agent-manager/terminal"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/services/terminal"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/services/code-actions/register-terminal-actions.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/services/cli-backend/serve-private-pty.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/services/cli-backend/serve-private-pty-contract.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "src/services/cli-backend/serve-private-pty-owner.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "webview-ui/src/hooks/terminal-context-utils.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, "webview-ui/src/hooks/useTerminalContext.ts"))).toBe(false)
     const amTypes = fs.readFileSync(path.join(ROOT, "webview-ui/src/types/messages/agent-manager.ts"), "utf-8")
     expect(amTypes).toContain("LocalGitStats")
     const srcTypes = fs.readFileSync(path.join(ROOT, "src/agent-manager/types.ts"), "utf-8")
     expect(srcTypes).toContain('type: "agentManager.localStats"')
+    expect(srcTypes).not.toContain("agentManager.terminal.create")
+    expect(srcTypes).not.toContain("agentManager.showTerminal")
+    expect(srcTypes).not.toContain("requestTerminalContext")
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"))
+    const declared = (pkg.contributes?.commands ?? []).map((c: { command: string }) => c.command)
+    expect(declared).not.toContain("kilo-code.new.terminalAddToContext")
+    expect(declared).not.toContain("kilo-code.new.generateTerminalCommand")
   })
 
   it("keeps permission/question routing and reload-directory", () => {
@@ -293,8 +310,12 @@ describe("P3.2 preservation — retained root-local orchestration and P4.4 bound
   })
 
   it("keeps H-12 SessionRevert/Snapshot revert/unrevert through the SDK", () => {
-    expect(ext).toContain("this.client.session.revert")
-    expect(ext).toContain("this.client.session.unrevert")
+    // Private-first semantics: KiloProvider delegates to the session-revert
+    // helper (single revert owner), which issues the SDK session calls.
+    expect(ext).toContain("revertSessionPrivateFirst")
+    expect(ext).toContain("unrevertSessionPrivateFirst")
+    expect(ext).toContain("client.session.revert")
+    expect(ext).toContain("client.session.unrevert")
     expect(ext).toContain('type: "sessionUpdated"')
     expect(webview).toContain('type: "revertSession"')
     expect(webview).toContain('type: "unrevertSession"')

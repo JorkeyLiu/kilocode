@@ -413,7 +413,7 @@ describe("P3.4 retention — preserved surfaces survive (LOCK-005/006/007/008)",
 
   it("keeps the generic chat/code actions and agent-manager surface", () => {
     expect(ext).toContain("registerCodeActions(context, resolveChatTarget)")
-    expect(ext).toContain("registerTerminalActions(context, resolveChatTarget)")
+    expect(ext).not.toContain("registerTerminalActions(context, resolveChatTarget)")
     expect(ext).toContain('vscode.commands.registerCommand("kilo-code.new.agentManagerOpen"')
     expect(ext).toContain("selectKiloModel")
   })
@@ -445,8 +445,13 @@ describe("P3.4 retention — preserved surfaces survive (LOCK-005/006/007/008)",
   })
 
   it("keeps checkpoint and revert paths and the SDK-backed session endpoints", () => {
-    expect(provider).toContain("this.client.session.revert")
-    expect(provider).toContain("this.client.session.unrevert")
+    // Private-first semantics: KiloProvider delegates to the session-revert
+    // helper (single revert owner), which issues the SDK session calls.
+    expect(provider).toContain("revertSessionPrivateFirst")
+    expect(provider).toContain("unrevertSessionPrivateFirst")
+    const helper = fs.readFileSync(path.join(ROOT, "src/kilo-provider/session-revert.ts"), "utf-8")
+    expect(helper).toContain("client.session.revert")
+    expect(helper).toContain("client.session.unrevert")
     expect(fs.existsSync(path.join(ROOT, "webview-ui/src/components/settings/CheckpointsTab.tsx"))).toBe(true)
   })
 })

@@ -1,8 +1,3 @@
-export interface TerminalFont {
-  fontFamily: string
-  fontSize: number
-}
-
 export interface ManagedSessionState {
   id: string
   createdAt: string

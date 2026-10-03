@@ -9,10 +9,8 @@
 
 import type { SnapshotFileDiff } from "@kilocode/sdk/v2/client"
 import type { DiffImage } from "./diff-media"
-import type { TerminalFont } from "./terminal-font"
 import type { SessionTimingMap } from "./session-timing"
 
-export type { TerminalFont }
 export type { SessionTimingEntry } from "./session-timing"
 
 // ---------------------------------------------------------------------------
@@ -78,31 +76,6 @@ interface StateMessage {
   isGitRepo?: boolean
   activeSessionId?: string
   recentOperations?: Record<string, PanelOperation>
-}
-
-interface TerminalCreatedMessage {
-  type: "agentManager.terminal.created"
-  slotId: string | null
-  terminalId: string
-  title: string
-  wsUrl: string
-  font: TerminalFont
-}
-
-interface TerminalClosedMessage {
-  type: "agentManager.terminal.closed"
-  terminalId: string
-}
-
-interface TerminalErrorMessage {
-  type: "agentManager.terminal.error"
-  terminalId?: string
-  message: string
-}
-
-interface TerminalFontChangedMessage {
-  type: "agentManager.terminal.fontChanged"
-  font: TerminalFont
 }
 
 interface ErrorOutMessage {
@@ -179,10 +152,6 @@ export type AgentManagerOutMessage =
   | RepoInfoMessage
   | ActionOutMessage
   | FixtureBarrierMessage
-  | TerminalCreatedMessage
-  | TerminalClosedMessage
-  | TerminalErrorMessage
-  | TerminalFontChangedMessage
 
 // ---------------------------------------------------------------------------
 // Webview → Extension messages (onMessage)
@@ -206,22 +175,9 @@ interface ForgetSessionIn {
   sessionId: string
 }
 
-interface ShowTerminalIn {
-  type: "agentManager.showTerminal"
-  sessionId: string
-}
-
-interface ShowLocalTerminalIn {
-  type: "agentManager.showLocalTerminal"
-}
-
 interface CopyToClipboardIn {
   type: "agentManager.copyToClipboard"
   text: string
-}
-
-interface ShowExistingLocalTerminalIn {
-  type: "agentManager.showExistingLocalTerminal"
 }
 
 interface RequestRepoInfoIn {
@@ -366,12 +322,6 @@ interface ToggleSandboxIn {
   contextDirectory?: string
 }
 
-interface RequestTerminalContextIn {
-  type: "requestTerminalContext"
-  requestId: string
-  sessionID?: string
-}
-
 interface ClearSessionIn {
   type: "clearSession"
 }
@@ -396,37 +346,13 @@ interface FixtureBarrierAckIn {
   token: string
 }
 
-// ---------------------------------------------------------------------------
-// Terminal inbound messages
-// ---------------------------------------------------------------------------
-
-interface TerminalCreateIn {
-  type: "agentManager.terminal.create"
-  slotId: string | null
-}
-
-interface TerminalCloseIn {
-  type: "agentManager.terminal.close"
-  terminalId: string
-}
-
-interface TerminalResizeIn {
-  type: "agentManager.terminal.resize"
-  terminalId: string
-  cols: number
-  rows: number
-}
-
 /** All messages the Agent Manager expects from the webview (onMessage input). */
 export type AgentManagerInMessage =
   | CloseSessionIn
   | PersistSessionIn
   | ForgetSessionIn
   | ForkSessionIn
-  | ShowTerminalIn
-  | ShowLocalTerminalIn
   | CopyToClipboardIn
-  | ShowExistingLocalTerminalIn
   | RequestRepoInfoIn
   | RequestStateIn
   | SetTabOrderIn
@@ -445,10 +371,6 @@ export type AgentManagerInMessage =
   | RequestSandboxDefaultIn
   | SetSandboxDefaultIn
   | ToggleSandboxIn
-  | RequestTerminalContextIn
   | ClearSessionIn
   | AbortIn
   | FixtureBarrierAckIn
-  | TerminalCreateIn
-  | TerminalCloseIn
-  | TerminalResizeIn

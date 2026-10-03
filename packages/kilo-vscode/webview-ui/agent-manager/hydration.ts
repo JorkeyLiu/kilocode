@@ -12,23 +12,19 @@ export function isPending(id: string): boolean {
   return id.startsWith(PENDING_PREFIX)
 }
 
-export function isTerminal(id: string): boolean {
-  return id.startsWith("terminal:")
-}
-
 export function pruneIds(ids: string[], catalog: Set<string>): string[] {
   return ids.filter((id) => isPending(id) || catalog.has(id))
 }
 
 export function pruneOrder(order: string[] | undefined, catalog: Set<string>): string[] | undefined {
   if (!order) return undefined
-  const next = order.filter((id) => isPending(id) || isTerminal(id) || catalog.has(id))
+  const next = order.filter((id) => isPending(id) || catalog.has(id))
   return next.length === order.length ? undefined : next
 }
 
 export function durableFilteredOrder(order: string[] | undefined): string[] | undefined {
   if (!order) return undefined
-  const next = order.filter((id) => !isPending(id) && !isTerminal(id))
+  const next = order.filter((id) => !isPending(id))
   return next
 }
 

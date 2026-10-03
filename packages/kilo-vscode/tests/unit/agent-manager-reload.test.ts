@@ -2,23 +2,6 @@ import { describe, expect, it, mock } from "bun:test"
 import type { PanelContext, Store } from "../../src/agent-manager/host"
 import { KEY } from "../../src/agent-manager/persistence"
 
-mock.module("../../src/agent-manager/terminal-host", () => ({
-  createTerminalHost: () => ({
-    createTerminal: () => ({ show: () => {}, dispose: () => {}, exitStatus: undefined }),
-    activeTerminal: () => undefined,
-    repoPath: () => "/tmp",
-    showWarning: () => {},
-    setContext: () => {},
-    onTerminalClosed: () => ({ dispose: () => {} }),
-    onActiveTerminalChanged: () => ({ dispose: () => {} }),
-    registerCommand: () => ({ dispose: () => {} }),
-    executeCommand: async () => {},
-  }),
-}))
-mock.module("../../src/agent-manager/terminal-font", () => ({
-  readTerminalFont: () => undefined,
-  watchTerminalFont: () => () => {},
-}))
 
 const { AgentManagerProvider } = await import("../../src/agent-manager/AgentManagerProvider")
 const { KiloProvider } = await import("../../src/KiloProvider")

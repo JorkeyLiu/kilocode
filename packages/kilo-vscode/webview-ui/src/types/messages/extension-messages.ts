@@ -25,7 +25,6 @@ import type {
   ManagedSessionState,
   ReviewComment,
   SessionTimingEntry,
-  TerminalFont,
 } from "./agent-manager"
 
 // ============================================
@@ -427,19 +426,6 @@ export interface FilePickerResultMessage {
   requestId: string
 }
 
-export interface TerminalContextResultMessage {
-  type: "terminalContextResult"
-  requestId: string
-  content: string
-  truncated?: boolean
-}
-
-export interface TerminalContextErrorMessage {
-  type: "terminalContextError"
-  requestId: string
-  error: string
-}
-
 export interface GitChangesContextResultMessage {
   type: "gitChangesContextResult"
   requestId: string
@@ -683,36 +669,6 @@ export interface AgentManagerStateMessage {
   isGitRepo?: boolean
   activeSessionId?: string
   recentOperations?: Record<string, import("./agent-manager").PanelOperation>
-}
-
-// ---------------------------------------------------------------------------
-// Agent Manager terminal messages
-// ---------------------------------------------------------------------------
-
-export interface AgentManagerTerminalCreatedMessage {
-  type: "agentManager.terminal.created"
-  /** Local workspace slot id (always null for root-local). */
-  slotId: string | null
-  terminalId: string
-  title: string
-  wsUrl: string
-  font: TerminalFont
-}
-
-export interface AgentManagerTerminalFontChangedMessage {
-  type: "agentManager.terminal.fontChanged"
-  font: TerminalFont
-}
-
-export interface AgentManagerTerminalClosedMessage {
-  type: "agentManager.terminal.closed"
-  terminalId: string
-}
-
-export interface AgentManagerTerminalErrorMessage {
-  type: "agentManager.terminal.error"
-  terminalId?: string
-  message: string
 }
 
 // Resolved keybindings for agent manager actions
@@ -1054,8 +1010,6 @@ export type ExtensionMessage =
   | SpeechToTextErrorMessage
   | FileSearchResultMessage
   | FilePickerResultMessage
-  | TerminalContextResultMessage
-  | TerminalContextErrorMessage
   | GitChangesContextResultMessage
   | GitChangesContextErrorMessage
   | QuestionRequestMessage
@@ -1099,10 +1053,6 @@ export type ExtensionMessage =
   | SelectKiloModelMessage
   | AgentManagerLocalStatsMessage
   | WorkspaceDirectoryChangedMessage
-  | AgentManagerTerminalCreatedMessage
-  | AgentManagerTerminalFontChangedMessage
-  | AgentManagerTerminalClosedMessage
-  | AgentManagerTerminalErrorMessage
   | EnhancePromptResultMessage
   | EnhancePromptErrorMessage
   | ProviderConnectedMessage

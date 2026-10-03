@@ -40,6 +40,17 @@ export interface TopicView<T extends TopicLike = TopicLike> {
   hasChildren: boolean
 }
 
+/** Safe timestamp rank: malformed timestamps sort as oldest (0), never NaN/throw. */
+function time(iso: string): number {
+  const n = Date.parse(iso)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Deterministic Topic ID tie-break: code-unit order, never locale-dependent. */
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 /** parentID -> direct children, each list sorted createdAt ascending. */
 function childGroups<T extends TopicLike>(sessions: T[]): Map<string, T[]> {
   const map = new Map<string, T[]>()
@@ -50,15 +61,15 @@ function childGroups<T extends TopicLike>(sessions: T[]): Map<string, T[]> {
     map.set(s.parentID, list)
   }
   for (const [, kids] of map) {
-    kids.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    kids.sort((a, b) => time(a.createdAt) - time(b.createdAt) || cmp(a.id, b.id))
   }
   return map
 }
 
 function topicFrom<T extends TopicLike>(root: T, members: T[]): TopicView<T> {
-  let activity = new Date(root.updatedAt).getTime()
+  let activity = time(root.updatedAt)
   for (const m of members) {
-    const t = new Date(m.updatedAt).getTime()
+    const t = time(m.updatedAt)
     if (t > activity) activity = t
   }
   return {
@@ -113,11 +124,7 @@ export function deriveTopics<T extends TopicLike>(sessions: T[]): TopicView<T>[]
   }
 
   // Order: activity descending, deterministic ID ascending tie-break.
-  topics.sort((a, b) => {
-    const byActivity = new Date(b.activity).getTime() - new Date(a.activity).getTime()
-    if (byActivity !== 0) return byActivity
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-  })
+  topics.sort((a, b) => time(b.activity) - time(a.activity) || cmp(a.id, b.id))
   return topics
 }
 

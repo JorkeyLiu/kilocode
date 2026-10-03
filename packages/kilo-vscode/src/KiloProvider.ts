@@ -87,7 +87,6 @@ import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
 import { handleFilePicker } from "./kilo-provider/file-picker"
 import { watchFontSizeConfig } from "./kilo-provider/font-size"
-import { getTerminalContents } from "./services/terminal/context"
 import { disposeGitChangesTarget } from "./kilo-provider/git-changes-target"
 import { interceptMessage } from "./kilo-provider/git-changes-request"
 import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/followup-session"
@@ -2430,9 +2429,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "requestFilePicker":
           await handleFilePicker({ requestId: message.requestId, post: (msg) => this.postMessage(msg) })
           break
-        case "requestTerminalContext":
-          void this.handleTerminalContext(message.requestId)
-          break
         case "toggleRemote":
         case "setRemoteEnabled":
         case "requestRemoteStatus":
@@ -3651,25 +3647,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.pendingSessionRefresh = ctx.pendingSessionRefresh
     this.sessionCursor = ctx.cursor
     this.sessionCount = ctx.loadedCount
-  }
-
-  private async handleTerminalContext(requestId: string): Promise<void> {
-    try {
-      const output = await getTerminalContents(-1)
-      this.postMessage({
-        type: "terminalContextResult",
-        requestId,
-        content: output.content,
-        truncated: output.truncated,
-      })
-    } catch (error) {
-      console.error("[Kilo New] Failed to capture terminal context:", error)
-      this.postMessage({
-        type: "terminalContextError",
-        requestId,
-        error: getErrorMessage(error) || "Failed to capture terminal output",
-      })
-    }
   }
 
   /**

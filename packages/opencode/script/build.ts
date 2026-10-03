@@ -2,7 +2,9 @@
 
 import { $ } from "bun"
 import fs from "fs"
+import os from "os"
 import path from "path"
+import { spawnSync } from "child_process"
 import { fileURLToPath } from "url"
 import { createRequire } from "module" // kilocode_change
 
@@ -275,18 +277,111 @@ for (const item of targets) {
   }
   // kilocode_change end
 
-  // Smoke test: only run if binary is for current platform — serve-only
+  // Smoke test: only run if binary is for current platform — serve-only.
+  // Help/version must exit 0 without bootstrap/shutdown side effects (no DB,
+  // migration, provider auth, telemetry, or owned files). Diagnostics are
+  // explicit: exit plus stdout/stderr tails are always logged, and failures
+  // include full output instead of a suppressed non-zero code.
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const servePath = `dist/${name}/bin/kilo-serve`
     console.log(`Running smoke test: ${servePath} --version`)
     try {
-      const serveVersion = await $`${servePath} --version`.text()
-      console.log(`Serve smoke test passed: ${serveVersion.trim()}`)
-      const serveHelp = await $`${servePath} serve --help`.nothrow().quiet()
-      if (serveHelp.exitCode !== 0) throw new Error("kilo-serve serve --help exited non-zero")
+      const versionRes = await $`${servePath} --version`.nothrow().quiet()
+      const vOut = String((versionRes as any).stdout ?? "").trim()
+      const vErr = String((versionRes as any).stderr ?? "").trim()
+      console.log(`--version exit=${(versionRes as any).exitCode} stdout=${vOut.slice(0, 500)} stderr=${vErr.slice(0, 500)}`)
+      if ((versionRes as any).exitCode !== 0) {
+        throw new Error(
+          `kilo-serve --version exited ${(versionRes as any).exitCode} stdout=${vOut.slice(0, 2000)} stderr=${vErr.slice(0, 2000)}`,
+        )
+      }
+      if (!vOut) {
+        throw new Error(`kilo-serve --version produced empty stdout stderr=${vErr.slice(0, 2000)}`)
+      }
+      console.log(`Serve smoke test passed: ${vOut}`)
+
+      const checkHelp = async (helpArgs: string[], wants: string[]) => {
+        const label = helpArgs.join(" ")
+        const helpRes = spawnSync(servePath, helpArgs, { encoding: "utf8", timeout: 15_000 })
+        const out = String(helpRes.stdout ?? "")
+        const err = String(helpRes.stderr ?? "")
+        const combined = out + err
+        console.log(
+          `serve ${label} exit=${helpRes.status} stdout=${out.trim().slice(0, 500)} stderr=${err.trim().slice(0, 500)}`,
+        )
+        if (helpRes.status !== 0) {
+          throw new Error(
+            `kilo-serve ${label} exited ${helpRes.status} stdout=${out.slice(0, 2000)} stderr=${err.slice(0, 2000)}`,
+          )
+        }
+        for (const want of wants) {
+          if (!combined.includes(want)) {
+            throw new Error(
+              `kilo-serve ${label} missing expected help output ${want} stdout=${out.slice(0, 2000)} stderr=${err.slice(0, 2000)}`,
+            )
+          }
+        }
+        if (/disposing all instances|telemetry|trackCli|kilo\.db/i.test(combined)) {
+          throw new Error(
+            `kilo-serve ${label} shows bootstrap/shutdown side effects stdout=${out.slice(0, 2000)} stderr=${err.slice(0, 2000)}`,
+          )
+        }
+      }
+
+      await checkHelp(["serve", "--help"], ["serve", "--port"])
       console.log("Serve help smoke test passed")
+      await checkHelp(["--help"], ["serve"])
+      console.log("Top-level help smoke test passed")
+
+      // Isolated help run proves no owned files/provider work: fresh XDG roots
+      // must stay free of DB/log artifacts after help exits.
+      const smokeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-serve-help-smoke-"))
+      try {
+        const isoEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          XDG_DATA_HOME: path.join(smokeTmp, "data"),
+          XDG_CACHE_HOME: path.join(smokeTmp, "cache"),
+          XDG_CONFIG_HOME: path.join(smokeTmp, "config"),
+          XDG_STATE_HOME: path.join(smokeTmp, "state"),
+          KILO_DB: ":memory:",
+        }
+        delete (isoEnv as any).KILO_DATA_DIR
+        const iso = spawnSync(servePath, ["serve", "--help"], {
+          encoding: "utf8",
+          timeout: 15_000,
+          env: isoEnv,
+        })
+        const isoCombined = String(iso.stdout ?? "") + String(iso.stderr ?? "")
+        console.log(`isolated serve --help exit=${iso.status} output=${isoCombined.trim().slice(0, 500)}`)
+        if (iso.status !== 0) {
+          throw new Error(
+            `isolated kilo-serve serve --help exited ${iso.status} stdout=${String(iso.stdout ?? "").slice(0, 2000)} stderr=${String(iso.stderr ?? "").slice(0, 2000)}`,
+          )
+        }
+        const leftovers: string[] = []
+        const walk = (dir: string) => {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name)
+            if (entry.isDirectory()) walk(full)
+            else if (!/\.DS_Store$/.test(entry.name)) leftovers.push(path.relative(smokeTmp, full))
+          }
+        }
+        if (fs.existsSync(smokeTmp)) walk(smokeTmp)
+        const owned = leftovers.filter((f) => /(\.db$|\.log$|\.sqlite|\.lease\.json|\.marker\.json)/i.test(f))
+        if (owned.length > 0) {
+          throw new Error(`isolated help created owned files: ${owned.slice(0, 20).join(", ")}`)
+        }
+      } finally {
+        fs.rmSync(smokeTmp, { recursive: true, force: true })
+      }
+      console.log("Isolated help no-owned-files smoke test passed")
     } catch (e) {
       console.error(`Smoke test failed for ${name}:`, e)
+      const err = e as any
+      if (err?.stdout !== undefined || err?.stderr !== undefined) {
+        console.error(`smoke stdout: ${String(err.stdout ?? "").slice(0, 4000)}`)
+        console.error(`smoke stderr: ${String(err.stderr ?? "").slice(0, 4000)}`)
+      }
       process.exit(1)
     }
   }

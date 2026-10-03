@@ -33,6 +33,7 @@ import { McpOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { assertRuntimeToken } from "@/kilocode/runtime-token"
 import { EventV2 } from "@opencode-ai/core/event"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
@@ -42,6 +43,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import * as SandboxNetwork from "@/kilocode/sandbox/network" // kilocode_change
+import { guardianCommandFor, shouldWrap } from "@/kilocode/process-resource/supervise" // kilocode_change - prelaunch guardian wrapper
+import { GuardianStdioTransport } from "./guardian-transport" // kilocode_change (F-A) - detached guardian ownership
 
 const log = Log.create({ service: "mcp" })
 const DEFAULT_TIMEOUT = 30_000
@@ -305,7 +308,7 @@ export const layer = Layer.effect(
     const auth = yield* McpAuth.Service
     const events = yield* EventV2Bridge.Service
 
-    type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
+    type Transport = StdioClientTransport | GuardianStdioTransport | StreamableHTTPClientTransport | SSEClientTransport
 
     /**
      * Connect a client via the given transport with resource safety:
@@ -451,18 +454,35 @@ export const layer = Layer.effect(
       const [cmd, ...args] = mcp.command
       const finalArgs = ensureDockerRm(cmd, args) // kilocode_change
       const cwd = yield* InstanceState.directory
-      const transport = new StdioClientTransport({
-        stderr: "pipe",
-        command: cmd,
-        args: finalArgs, // kilocode_change
-        cwd,
-        env: {
-          ...process.env,
-          ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
-          ...mcp.environment,
-        },
+      // kilocode_change (F-A) - transport-owned prelaunch wrapper: the
+      // transport spawns the guardian DETACHED (owned group, guardian is
+      // the leader) instead of the server; the guardian starts the server
+      // on the same pipes. Each generation owns its tree, so rapid
+      // reconnect cannot misattribute a pending guardian. Fail closed
+      // with no server side effect (absent install/unobtainable birth or
+      // guardian refusal never launches the server).
+      const serverEnv = assertRuntimeToken({
+        ...process.env,
+        ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
+        ...mcp.environment,
       })
-      transport.stderr?.on("data", (chunk: Buffer) => {
+      let transport: Transport
+      if (shouldWrap({})) {
+        let wrapped: { cmd: string; args: string[] }
+        try {
+          wrapped = guardianCommandFor({ cmd, args: finalArgs })
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          log.error("local mcp startup failed", { key, command: mcp.command, cwd, error: msg })
+          return { client: undefined as MCPClient | undefined, status: { status: "failed" as const, error: msg } }
+        }
+        transport = new GuardianStdioTransport({ stderr: "pipe", command: wrapped.cmd, args: wrapped.args, cwd, env: serverEnv })
+      } else {
+        transport = new StdioClientTransport({ stderr: "pipe", command: cmd, args: finalArgs, cwd, env: serverEnv })
+      }
+      // kilocode_change (F-A) - union-safe stderr tap (guardian and SDK
+      // transports expose different stream types; EventEmitter is common).
+      ;(transport.stderr as unknown as NodeJS.EventEmitter | null | undefined)?.on("data", (chunk: Buffer) => {
         log.info(`mcp stderr: ${chunk.toString()}`, { key })
       })
 
@@ -587,10 +607,21 @@ export const layer = Layer.effect(
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
+            // Transport-owned wrappers: closing the transport terminates
+            // the guardian, which reaps its owned tree. No shared map, so
+            // rapid reconnect generations cannot misattribute ownership.
             yield* Effect.forEach(
               Object.values(s.clients),
               (client) =>
                 Effect.gen(function* () {
+                  // kilocode_change (F-A/F-E) - guardian-owned trees are
+                  // reaped by the guardian itself on close (exact guardian
+                  // PID signals only); signalling descendants directly
+                  // would race bounded cleanup, so skip the pgrep sweep.
+                  if (client.transport instanceof GuardianStdioTransport) {
+                    yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+                    return
+                  }
                   const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : null
                   if (typeof pid === "number") {
                     const pids = yield* descendants(pid)

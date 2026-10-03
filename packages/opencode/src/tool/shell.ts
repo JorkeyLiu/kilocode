@@ -21,6 +21,7 @@ import * as Truncate from "./truncate"
 import { Plugin } from "@/plugin"
 import { normalizeUrls } from "@/kilocode/util/url" // kilocode_change
 import { CommandTimeout } from "@/kilocode/command-timeout" // kilocode_change
+import { assertRuntimeToken } from "@/kilocode/runtime-token" // kilocode_change - instance token ownership
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
@@ -516,10 +517,10 @@ export const ShellTool = Tool.define(
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
-      return {
+      return assertRuntimeToken({
         ...process.env,
         ...extra.env,
-      }
+      })
     })
 
     const run = Effect.fn("ShellTool.run")(function* (

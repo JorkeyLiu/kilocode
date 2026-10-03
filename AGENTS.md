@@ -105,16 +105,16 @@ investigation and ordinary no-impact tasks need no check and no report.
 
 ## Products
 
-The user product is the **Kilo VS Code extension** (`packages/kilo-vscode/`). The backend source (`packages/opencode/`) ships only the private `bin/kilo-serve` server binary — no public `bin/kilo` binary; full CLI/TUI source is retained only for dev and SDK generation. The extension owns one private `bin/kilo-serve serve --port 0` child (`KILO_PRIVATE_RUNTIME=1`, loopback `127.0.0.1` ephemeral port, `KILO_SERVER_PASSWORD` required) and drives it via the generated SDK over internal HTTP + SSE in the same process.
+The user product is the **Kilo VS Code extension** (`packages/kilo-vscode/`). The backend source (`packages/opencode/`) ships only the private `bin/kilo-serve` server binary — no public `bin/kilo` binary; full CLI/TUI source is retained only for dev and SDK generation. The extension owns one private `bin/kilo-serve serve --port 0` child (`KILO_PRIVATE_RUNTIME=1`, loopback `127.0.0.1` ephemeral port, `KILO_SERVER_PASSWORD` required). That single private runtime owns business facts and storage; the extension drives it private-first over fd carriers with the generated SDK as narrowed fallback, all terminating in the same `AppLayer`.
 
 | Product | Package | Description |
 |---|---|---|
-| Kilo VS Code Extension | `packages/kilo-vscode/` | Supported user product with Agent Manager (only chat UI). Ships the private `bin/kilo-serve` binary, spawns `bin/kilo-serve serve --port 0` as a child process. Ordinary webview bundle may still serve settings/profile surfaces (not chat). Includes the **Agent Manager** — a multi-session orchestration panel running concurrent root-local sessions. |
+| Kilo VS Code Extension | `packages/kilo-vscode/` | Supported user product with Agent Manager (only chat UI). Ships the private `bin/kilo-serve` binary, spawns `bin/kilo-serve serve --port 0` as a child process. Ordinary webview bundle serves non-chat settings surfaces only (no profile); provider surface is custom-only. Extension/webview holds the canonical file catalog with independent selections and derived projections. Includes the **Agent Manager** — a multi-session orchestration panel running concurrent root-local sessions. |
 | Kilo backend source | `packages/opencode/` | Agent runtime, tools, sessions, and server source. Builds only `bin/kilo-serve`; full CLI/TUI entries are source-only dev/SDK-generation internals. Originated from OpenCode; independently governed. |
 
-**Agent Manager** refers to a feature inside `packages/kilo-vscode/` (extension code in `src/agent-manager/`, webview in `webview-ui/agent-manager/`). It is the only chat UI; internal session sidebar/tabs/terminals/navigation/persistence/hydration retained. See the extension's `AGENTS.md` for details.
+**Agent Manager** refers to a feature inside `packages/kilo-vscode/` (extension code in `src/agent-manager/`, webview in `webview-ui/agent-manager/`). It is the only chat UI; internal session sidebar/tabs/navigation/persistence/hydration retained, with no terminal product. See the extension's `AGENTS.md` for details.
 
-In each VS Code extension host, one `KiloConnectionService` is created for Agent Manager (only chat UI) and lazily reuses one current `bin/kilo-serve serve --port 0` backend at a time. Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
+In each VS Code extension host, one `KiloConnectionService` is created for Agent Manager (only chat UI) and lazily reuses one current `bin/kilo-serve serve --port 0` backend at a time. Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated. Ephemeral `__process-guardian` sidecars own non-serving process-resource lifetime only, never business facts; see the canonical runtime docs for the boundary.
 
 Extension-specific settings should live in the Kilo extension settings, not default VS Code settings, unless they are intentionally VS Code-wide. Experimental flags should follow existing flag patterns, not VS Code settings; they usually belong in the Kilo Experimental settings section.
 
@@ -126,7 +126,7 @@ Turborepo + Bun workspaces. The packages you'll work with most:
 |---|---|---|
 | `packages/opencode/` | `@kilocode/cli` | Backend source -- agents, tools, sessions, server. Ships only `bin/kilo-serve`; full CLI/TUI entries are source-only dev/SDK-generation internals. |
 | `packages/sdk/js/` | `@kilocode/sdk` | Auto-generated TypeScript SDK (client for the server API). Do not edit `src/gen/` by hand. |
-| `packages/kilo-vscode/` | `kilo-code` | VS Code extension with Agent Manager (only chat UI; ordinary webview bundle may still serve settings/profile, not chat). See its own `AGENTS.md` for details. |
+| `packages/kilo-vscode/` | `kilo-code` | VS Code extension with Agent Manager (only chat UI; ordinary webview bundle serves non-chat settings only, custom providers only, not chat). See its own `AGENTS.md` for details. |
 | `packages/kilo-gateway/` | `@kilocode/kilo-gateway` | Kilo auth, provider routing, API integration |
 | `packages/kilo-telemetry/` | `@kilocode/kilo-telemetry` | PostHog analytics + OpenTelemetry |
 | `packages/kilo-i18n/` | `@kilocode/kilo-i18n` | Internationalization / translations |

@@ -87,6 +87,7 @@ import { MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { assertRuntimeToken } from "@/kilocode/runtime-token" // kilocode_change - instance token ownership
 import { AgentCapability } from "@/agent/capability" // kilocode_change
 import { LLMEvent } from "@opencode-ai/llm"
 import { withGenerationAdmission } from "@/kilocode/session/generation-admission" // kilocode_change
@@ -734,7 +735,7 @@ export const layer = Layer.effect(
               const cmd = ChildProcess.make(sh, args, {
                 cwd,
                 extendEnv: true,
-                env: { ...shellEnv.env, TERM: "dumb" },
+                env: assertRuntimeToken({ ...shellEnv.env, TERM: "dumb" }),
                 stdin: "ignore",
                 forceKillAfter: "3 seconds",
               })

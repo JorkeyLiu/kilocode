@@ -6,12 +6,7 @@ import { KiloConnectionService } from "./services/cli-backend"
 import { AttentionService } from "./services/attention"
 import { BrowserAutomationService } from "./services/browser-automation"
 import { TelemetryProxy } from "./services/telemetry"
-import {
-  registerCodeActions,
-  registerTerminalActions,
-  KiloCodeActionProvider,
-  type ChatTarget,
-} from "./services/code-actions"
+import { registerCodeActions, KiloCodeActionProvider, type ChatTarget } from "./services/code-actions"
 import { resolveChatTarget as resolveSharedChatTarget } from "./services/code-actions/chat-target"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
@@ -487,7 +482,7 @@ export function activate(context: vscode.ExtensionContext) {
     agentManagerProvider.postMessage(msg)
   }
 
-  const skip = ["kilo-code.new.agentManagerOpen", "kilo-code.new.agentManager.showTerminal"]
+  const skip = ["kilo-code.new.agentManagerOpen"]
   ensureCommandsSkipShell(skip)
 
   const privateSessionReader = {
@@ -616,16 +611,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.settingsButtonClicked", (tab?: string) => {
       settingsEditorProvider.openPanel("settings", tab)
     }),
-    vscode.commands.registerCommand("kilo-code.new.generateTerminalCommand", async () => {
-      const input = await vscode.window.showInputBox({
-        prompt: "Describe the terminal command you want to generate",
-        placeHolder: "e.g., find all .ts files modified in the last 24 hours",
-      })
-      if (!input) return
-      const target = await resolveChatTarget()
-      if (!target) return
-      target.postMessage({ type: "triggerTask", text: `Generate a terminal command: ${input}` })
-    }),
     vscode.commands.registerCommand("kilo-code.new.toggleRemote", () => {
       remoteService.toggle().catch((err) => console.error("[Kilo New] toggleRemote command failed:", err))
     }),
@@ -644,18 +629,12 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.agentManager.search", () => {
       agentManagerProvider.postMessage({ type: "action", action: "search" })
     }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.showTerminal", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "showTerminal" })
-    }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.showShortcuts", () => {
       agentManagerProvider.postMessage({ type: "action", action: "showShortcuts" })
     }),
 
     vscode.commands.registerCommand("kilo-code.new.agentManager.newTab", () => {
       agentManagerProvider.postMessage({ type: "action", action: "newTab" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.newTerminal", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "newTerminal" })
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.closeTab", () => {
       agentManagerProvider.postMessage({ type: "action", action: "closeTab" })
@@ -716,7 +695,6 @@ export function activate(context: vscode.ExtensionContext) {
   )
 
   registerCodeActions(context, resolveChatTarget)
-  registerTerminalActions(context, resolveChatTarget)
 
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(

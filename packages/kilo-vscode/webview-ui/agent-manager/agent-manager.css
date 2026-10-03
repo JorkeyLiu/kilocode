@@ -669,8 +669,7 @@ button.am-section-toggle:hover .am-section-label {
   flex-shrink: 0;
   align-self: center;
 }
-/* Split-button variant used in the tab bar when the experimental
-   terminal tabs feature is active — primary icon + chevron dropdown. */
+/* Split-button variant used in the tab bar — primary icon. */
 .am-tab-add-split {
   flex-shrink: 0;
   align-self: center;
@@ -880,10 +879,6 @@ button.am-section-toggle:hover .am-section-label {
   position: relative;
   isolation: isolate;
 }
-.am-main-pane-terminal-active .am-chat-wrapper {
-  opacity: 0;
-  pointer-events: none;
-}
 
 /* Setup overlay */
 
@@ -993,41 +988,12 @@ button.am-section-toggle:hover .am-section-label {
   opacity: 0.6;
   margin-left: 6px;
 }
-/* Split button (+ with dropdown arrow) */
+/* Split button (+ new session) */
 
 .am-split-button {
   display: flex;
   align-items: center;
   gap: 0;
-}
-.am-split-arrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--text-weak);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  opacity: 0.6;
-  transition: all 120ms;
-}
-.am-split-arrow:hover {
-  opacity: 1;
-  background: var(--surface-inset-base-hover);
-}
-.am-split-arrow[data-expanded] {
-  opacity: 1;
-  background: var(--surface-inset-base-hover);
-}
-.am-split-menu {
-  min-width: 250px;
-}
-.am-split-menu [data-slot="dropdown-menu-item"] {
-  padding: 6px 10px;
 }
 /* New Versioned Session Dialog */
 
@@ -1769,10 +1735,6 @@ body.vscode-high-contrast-light {
   .am-kbd {
     border-color: var(--vscode-contrastBorder, var(--border-weak-base));
   }
-  /* Split arrow */
-  .am-split-arrow {
-    border: 1px solid var(--vscode-contrastBorder, transparent);
-  }
   /* Shortcuts list */
   .am-shortcuts-list {
     border-color: var(--vscode-contrastBorder, var(--border-weak-base));
@@ -1818,36 +1780,6 @@ body.vscode-high-contrast-light {
     margin: 4px 0;
   }
 }
-/* Experimental terminal tabs (feature-flagged) */
-
-.am-tab-terminal {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-left: 1px solid var(--border-weak-base);
-}
-.am-tab-terminal [data-component="icon"] {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-/*
- * Stacking layout for xterm terminal tabs.
- *
- * The hydration invariant (see the render helpers under `terminal/`) requires that
- * xterm canvases never leave the paint tree. Both the layer and each
- * terminal slot therefore use absolute-positioning + opacity for
- * visibility — NEVER `display: none`, because that would detach the
- * subtree and stop xterm's internal rAF render loop, causing the
- * "press Enter to see content" bug on tab switches.
- *
- * Stack:  position:relative container hosting the main pane, review, *         and side panel. Sits below the tab bar inside `.am-detail`.
- * Layer:  absolute-positioned overlay covering the main pane.
- *         `pointer-events: none` when no terminal is active, letting
- *         clicks fall through to the chat behind it.
- * Slots:  absolute-positioned and stacked inside the layer; only the
- *         active one is opaque and receives pointer events.
- */
-
 .am-detail-stack {
   flex: 1;
   min-height: 0;
@@ -1855,43 +1787,6 @@ body.vscode-high-contrast-light {
   position: relative;
   display: flex;
   flex-direction: column;
-}
-.am-terminal-layer {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-  background: var(--vscode-terminal-background, #1e1e1e);
-  z-index: 30;
-  /* Force a dedicated compositor layer so opacity flips do not re-lay-out
-     the xterm canvases underneath. */
-  will-change: opacity;
-}
-.am-terminal-layer-active {
-  opacity: 1;
-  pointer-events: auto;
-}
-.am-terminal-slot {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 0;
-}
-.am-terminal-slot-visible {
-  opacity: 1;
-  pointer-events: auto;
-  z-index: 1;
-}
-.am-terminal-host {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  padding: 8px;
-  background: var(--vscode-terminal-background, #1e1e1e);
 }
 [data-component="am-operation-status"] {
   padding: 6px 12px;
@@ -1909,13 +1804,4 @@ body.vscode-high-contrast-light {
 }
 [data-component="am-operation-status"][data-tone="neutral"] {
   color: var(--text-weak);
-}
-
-/* Third-party xterm classes — addressed by attribute selector so the
-    agent-manager "am-* prefix" architecture test does not flag them. */
-.am-terminal-host [class="xterm"] {
-  height: 100%;
-}
-.am-terminal-host [class~="xterm-viewport"] {
-  background: transparent !important;
 }

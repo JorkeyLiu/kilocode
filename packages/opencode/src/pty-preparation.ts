@@ -4,6 +4,7 @@ import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { Plugin } from "@/plugin"
 import { Shell } from "@/shell/shell"
+import { assertRuntimeToken } from "@/kilocode/runtime-token"
 import { Pty } from "@opencode-ai/core/pty"
 import { KiloPtySelfCommand } from "@/kilocode/pty/self-command" // kilocode_change - ported from the deleted @/pty module
 import { Effect } from "effect"
@@ -23,13 +24,13 @@ export const prepareCreate = Effect.fn("PtyPreparation.prepareCreate")(function*
   // kilocode_change end
   const args = Shell.login(command) ? [...baseArgs, "-l"] : [...baseArgs]
   const shell = yield* plugin.trigger("shell.env", { cwd }, { env: {} })
-  const env = {
+  const env = assertRuntimeToken({
     ...process.env,
     ...input.env,
     ...shell.env,
     TERM: "xterm-256color",
     KILO_TERMINAL: "1",
-  } as Record<string, string>
+  } as Record<string, string>)
   // kilocode_change start - ported from the deleted @/pty module.
   // Don't leak the kilo server's auth credential into user shells: anything the shell forks (npm
   // post-install, `curl | bash`, compromised tools) would otherwise see the password for free. Users

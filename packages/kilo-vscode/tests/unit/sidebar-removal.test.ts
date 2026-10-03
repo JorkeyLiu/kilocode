@@ -262,14 +262,13 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(JSON.stringify(pkg)).not.toContain("openInTab")
   })
 
-  it("keeps editor/terminal context submenus and the preserved commands without TabPanel", () => {
+  it("keeps editor context submenu and the preserved commands without TabPanel", () => {
     const declared = pkg.contributes?.commands?.map((c: { command: string }) => c.command) ?? []
     for (const cmd of [
       "kilo-code.new.explainCode",
       "kilo-code.new.fixCode",
       "kilo-code.new.improveCode",
       "kilo-code.new.addToContext",
-      "kilo-code.new.terminalAddToContext",
       "kilo-code.new.focusChatInput",
       "kilo-code.new.toggleChatSearch",
       "kilo-code.new.cycleAgentMode",
@@ -279,11 +278,18 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
       expect(declared, `declared command ${cmd}`).toContain(cmd)
     }
     expect(declared).not.toContain("kilo-code.new.openInTab")
+    expect(declared).not.toContain("kilo-code.new.terminalAddToContext")
+    expect(declared).not.toContain("kilo-code.new.terminalFixCommand")
+    expect(declared).not.toContain("kilo-code.new.terminalExplainCommand")
+    expect(declared).not.toContain("kilo-code.new.generateTerminalCommand")
+    const raw = fs.readFileSync(PKG_JSON_FILE, "utf-8")
+    expect(raw).not.toContain("kilo-code.new.terminalContextMenu")
+    expect(raw).not.toContain("terminal/context")
   })
 
   it("routes chat commands through Agent Manager-only resolveChatTarget", () => {
     expect(ext).toContain("registerCodeActions(context, resolveChatTarget)")
-    expect(ext).toContain("registerTerminalActions(context, resolveChatTarget)")
+    expect(ext).not.toContain("registerTerminalActions(context, resolveChatTarget)")
     expect(ext).toContain("const resolveChatTarget = ")
     expect(ext).not.toContain("activeTabProvider")
     expect(ext).not.toContain("ensureChatTab")
@@ -314,8 +320,7 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(provider).not.toContain("appendReviewComments")
     const promptInput = fs.readFileSync(path.join(ROOT, "webview-ui/src/components/chat/PromptInput.tsx"), "utf-8")
     expect(promptInput).not.toContain('message.type === "appendReviewComments"')
-    const terminalTab = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"), "utf-8")
-    expect(terminalTab).not.toContain("appendReviewCommentsToTerminal")
+    expect(fs.existsSync(path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"))).toBe(false)
     expect(promptInput).toContain("if (message.review) replaceReviewComments(message.review)")
   })
 

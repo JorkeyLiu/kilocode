@@ -8,6 +8,7 @@ import { NonNegativeInt, PositiveInt } from "./schema"
 import { PtyID } from "./pty/schema"
 import { SessionSchema } from "./session/schema" // kilocode_change
 import { lazy } from "./util/lazy"
+import { birthOf } from "./kilocode/process-birth" // kilocode_change - shared parent birth identity
 import * as Log from "./util/log"
 
 const log = Log.create({ service: "pty" })
@@ -130,6 +131,57 @@ export const layer = Layer.effect(
     const runFork = Effect.runForkWith(context)
     const sessions = new Map<PtyID, Active>()
 
+    // kilocode_change - prelaunch guardian wrapper for PTY children: the
+    // pty spawns the guardian command (with the target's cwd/env) and the
+    // guardian starts the target with inherited pty fds, so input/size/
+    // term route stably to the target with no shuttle. The pty pid is the
+    // owned guardian (group leader); teardown kills it and it reaps the
+    // pty tree. No extra-fd lease (pty libs lack extra fds); parent death
+    // is owned via ppid/birth polling. Inactive without a runtime token.
+    // kilocode_change (F-B) - wrap is required with a valid private
+    // token; a missing/corrupt KILO_GUARDIAN_CMD must fail closed via the
+    // guardianPtyCommand undefined -> throw path below, never a direct
+    // target spawn. Matches cross-spawn wrapActive (token-gated only).
+    function wrapActive(): boolean {
+      try {
+        if (globalThis.process.env["KILO_GUARDIAN"] === "1") return false
+        if (globalThis.process.argv.includes("__process-guardian")) return false
+        const token = globalThis.process.env["KILO_RUNTIME_TOKEN"]
+        if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token)) return false
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    // kilocode_change (F-C) - PTY wrappers carry the owner birth
+    // identity; unobtainable birth fails closed (undefined -> throw, no
+    // target side effect), consistent with cross-spawn and supervise.
+    function guardianPtyCommand(target: { command: string; args: string[] }): { command: string; args: string[] } | undefined {
+      try {
+        const raw = globalThis.process.env["KILO_GUARDIAN_CMD"]
+        if (!raw) return undefined
+        const parsed: unknown = JSON.parse(raw)
+        if (!Array.isArray(parsed) || typeof parsed[0] !== "string") return undefined
+        if (!parsed.every((x) => typeof x === "string")) return undefined
+        const birth = birthOf(globalThis.process.pid)
+        if (!birth) return undefined
+        const token = globalThis.process.env["KILO_RUNTIME_TOKEN"]
+        const oracle = typeof token === "string" ? `KILO_RUNTIME_TOKEN=${token}` : undefined
+        const spec = Buffer.from(JSON.stringify({ cmd: target.command, args: target.args, shell: false, extraFds: [] }), "utf8")
+          .toString("base64")
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "")
+        return {
+          command: parsed[0] as string,
+          args: [...(parsed as Array<string>).slice(1), "__process-guardian", "--cmd-b64", spec, "--parent-pid", String(globalThis.process.pid), "--parent-birth", birth, ...(oracle ? ["--token", oracle] : [])],
+        }
+      } catch {
+        return undefined
+      }
+    }
+
     function teardown(session: Active) {
       for (const listener of session.listeners) listener.dispose()
       session.listeners.length = 0
@@ -187,8 +239,16 @@ export const layer = Layer.effect(
       // kilocode_change - expose the pty id to the spawned shell so a nested `kilo tui`/`kilo run` can
       // detect it is running inside a kilo-spawned terminal (read via process.env.KILO_PTY_ID)
       const env = { ...input.env, KILO_PTY_ID: id }
+      // kilocode_change - prelaunch wrapper: the pty spawns the guardian
+      // (with the target's cwd/env) and the guardian starts the target on
+      // the same pty fds, so input/size/term route directly. Fail closed:
+      // absent/invalid install refuses the pty with no target side effect.
+      const wrapped = wrapActive() ? guardianPtyCommand({ command: input.command, args: input.args }) : undefined
+      if (wrapActive() && !wrapped) {
+        throw new Error("Process guardian unavailable: KILO_GUARDIAN_CMD absent or invalid; refusing pty without ownership")
+      }
       const proc = yield* Effect.sync(() =>
-        spawn(input.command, input.args, {
+        spawn(wrapped ? wrapped.command : input.command, wrapped ? wrapped.args : input.args, {
           name: "xterm-256color",
           cwd: input.cwd,
           env,

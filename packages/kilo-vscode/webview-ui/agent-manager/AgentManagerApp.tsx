@@ -35,7 +35,7 @@ import { FileComponentProvider } from "@kilocode/kilo-ui/context/file"
 import { Code } from "@kilocode/kilo-ui/code"
 import { Diff } from "@kilocode/kilo-ui/diff"
 import { File } from "@kilocode/kilo-ui/file"
-import { Toast, showToast } from "@kilocode/kilo-ui/toast"
+import { Toast } from "@kilocode/kilo-ui/toast"
 import { ResizeHandle } from "@kilocode/kilo-ui/resize-handle"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { Button } from "@kilocode/kilo-ui/button"
@@ -92,8 +92,7 @@ import { reorderTabs, applyTabOrder, firstOrderedTitle } from "./tab-order"
 import { createTabOrderSync } from "./tab-order-sync"
 import { reportRemoteSessions, reportVisibleSession, visible } from "./remote-sessions"
 import { ConstrainDragYAxis } from "../src/components/chat/TabDnd"
-import { isTerminalTabId, createTerminalState, createTerminalHandlers, createTerminalMessageHandler } from "./terminal"
-import { focusCurrentTab, renderTab, renderTerminalLayer, renderNewTabButton } from "./tab-rendering"
+import { focusCurrentTab, renderTab, renderNewTabButton } from "./tab-rendering"
 import { useTabScroll } from "./tab-scroll"
 import type { SidebarSearchMenuRef } from "./SidebarSearchMenu"
 import { SidebarSearchMenu } from "./SidebarSearchMenu"
@@ -133,8 +132,6 @@ const defaultBindings: Record<string, string> = {
   previousTab: isMac ? "⌘⌥←" : "Ctrl+Alt+←",
   nextTab: isMac ? "⌘⌥→" : "Ctrl+Alt+→",
   search: isMac ? "⌘F" : "Ctrl+F",
-  showTerminal: isMac ? "⌘/" : "Ctrl+/",
-  newTerminal: isMac ? "⌘⇧T" : "Ctrl+Shift+T",
   showShortcuts: isMac ? "⌘⇧/" : "Ctrl+Shift+/",
   newTab: isMac ? "⌘T" : "Ctrl+T",
   closeTab: isMac ? "⌘W" : "Ctrl+W",
@@ -236,11 +233,6 @@ const AgentManagerContent: Component = () => {
       requestAnimationFrame(() => sidebarSearchMenu?.open())
     }
   }
-  const handleShowTerminalAction = () => {
-    const id = session.currentSessionID()
-    if (id) vscode.postMessage({ type: "agentManager.showTerminal", sessionId: id })
-    else if (selection() === LOCAL) vscode.postMessage({ type: "agentManager.showLocalTerminal" })
-  }
   const [sidebarWidth, setSidebarWidth] = createSignal(initialUI.sidebarWidth)
   const [sessionsCollapsed, setSessionsCollapsed] = createSignal(true)
   const sidebar = createSidebarCollapse(vscode)
@@ -264,11 +256,6 @@ const AgentManagerContent: Component = () => {
   // Stable ref for the .am-list scroll container, passed to SidebarSessionList
   // so it can own scroll-preservation without querying the DOM.
   let listEl: HTMLDivElement | undefined
-
-  // Per-sidebar-context terminal state. `terms.activeId` holds the id
-  // of the focused terminal tab, if any — takes precedence over
-  // session/pending when deriving the visible tab.
-  const terms = createTerminalState(selection)
 
   // Phase 3A: tabMemory removed — single LOCAL context, no per-context memory.
 
@@ -302,9 +289,9 @@ const AgentManagerContent: Component = () => {
   const releaseTabs = () => setTabWidths(false)
   // Tab ordering: context key → ordered session ID array (recovered from extension state)
   const [tabOrder, setTabOrder] = createSignal<Record<string, string[]>>({})
-  // Pin new tabs at the tail (see tab-order-sync); strip ephemeral terminal+pending ids so the durable tab order stays clean.
+  // Pin new tabs at the tail (see tab-order-sync); strip ephemeral pending ids so the durable tab order stays clean.
   const persistTabOrder = (key: string, order: string[]) => {
-    const durable = order.filter((id) => !isTerminalTabId(id) && !isPending(id))
+    const durable = order.filter((id) => !isPending(id))
     vscode.postMessage({ type: "agentManager.setTabOrder", key, order: durable })
   }
   const tabOrderSync = createTabOrderSync({
@@ -313,7 +300,6 @@ const AgentManagerContent: Component = () => {
     setOrder: setTabOrder,
     persist: persistTabOrder,
     localSessionIDs,
-    terminalIdsFor: (key) => terms.forSelection(key).map((t) => t.id),
   })
   const appendToTabOrder = tabOrderSync.append
 
@@ -323,8 +309,6 @@ const AgentManagerContent: Component = () => {
     setLocalSessionIDs(next.ids)
     tabMgr.open(LOCAL, id)
     appendToTabOrder(LOCAL, id)
-    // Deactivate any focused terminal so the new pending session is visible.
-    terms.setActiveId(undefined)
     setActivePendingId(id)
     session.clearCurrentSession()
     return id
@@ -407,7 +391,7 @@ const AgentManagerContent: Component = () => {
     if (out.needsPending) {
       const ids = effNextIds ?? localSessionIDs()
       const hasPending = ids.some((id) => isPending(id))
-      if (ids.length === 0 && terms.current().length === 0 && !hasPending) {
+      if (ids.length === 0 && !hasPending) {
         addPendingTab()
         // Derive bottom-page from final reconciled state: pending created by
         // reconciliation represents fresh-empty hydration, not a user close-last.
@@ -423,7 +407,7 @@ const AgentManagerContent: Component = () => {
       // when tabs exist or empty state is shown; contradicts hidden gated state.
       const finalIds = tabMgr.ids(LOCAL)
       const finalHasPending = finalIds.some((id) => isPending(id))
-      const finalEmpty = finalIds.length === 0 && terms.current().length === 0
+      const finalEmpty = finalIds.length === 0
       if (finalEmpty && !finalHasPending) setIsBottomPage(false)
       else setIsBottomPage(false)
       if (latestDurable) {
@@ -439,12 +423,12 @@ const AgentManagerContent: Component = () => {
       }
     }
     // Final invariant: bottom stays while only an internal pending draft (or
-    // nothing) exists with no terminals. Lone pending is hidden by the
+    // nothing) exists. Lone pending is hidden by the
     // bottom-page tab-bar gate, not real content. Any non-pending real tab
-    // or terminal content clears bottom as before.
+    // clears bottom as before.
     if (isBottomPage()) {
       const finalIds = tabMgr.ids(LOCAL)
-      if (shouldClearBottomPage(finalIds, terms.current().length, isPending)) setIsBottomPage(false)
+      if (shouldClearBottomPage(finalIds, 0, isPending)) setIsBottomPage(false)
     }
   }
 
@@ -512,7 +496,6 @@ const AgentManagerContent: Component = () => {
     selectSession: session.selectSession,
     setActivePendingId,
     setHistory,
-    setTermsActiveId: terms.setActiveId,
     setSelection: () => {},
     isPending,
     ensureLocal,
@@ -581,7 +564,6 @@ const AgentManagerContent: Component = () => {
 
   // Phase 3A: contextEmpty checks only LOCAL.
   const contextEmpty = createMemo(() => {
-    if (terms.current().length > 0) return false
     return tabMgr.ids(LOCAL).length === 0
   })
 
@@ -595,13 +577,9 @@ const AgentManagerContent: Component = () => {
   })
 
   const visibleTabId = createMemo(() => {
-    const term = terms.activeId()
-    if (term) return term
     return session.currentSessionID() ?? activePendingId()
   })
-  const visibleSession = createMemo(() =>
-    visible(session.currentSessionID(), !!terms.activeId() || history() || contextEmpty()),
-  )
+  const visibleSession = createMemo(() => visible(session.currentSessionID(), history() || contextEmpty()))
   reportVisibleSession(vscode, visibleSession)
 
   const isAnySessionBusy = (ids: string[]): boolean => {
@@ -673,7 +651,6 @@ const AgentManagerContent: Component = () => {
         const res = resolveNavigation("up", cur, ids)
         if (res.action === "select") handleOpenSession(res.id)
         else if (res.action === LOCAL) {
-          terms.setActiveId(undefined)
           setHistory(false)
           setActivePendingId(undefined)
           session.clearCurrentSession()
@@ -688,7 +665,6 @@ const AgentManagerContent: Component = () => {
         const res = resolveNavigation("down", cur, ids)
         if (res.action === "select") handleOpenSession(res.id)
         else if (res.action === LOCAL) {
-          terms.setActiveId(undefined)
           setHistory(false)
           setActivePendingId(undefined)
           session.clearCurrentSession()
@@ -707,13 +683,11 @@ const AgentManagerContent: Component = () => {
         if (next) focusTab(next)
       },
       search: handleSearchAction,
-      showTerminal: handleShowTerminalAction,
       newTab: handleAddSession,
       closeTab: closeActiveTab,
       showShortcuts: handleShowKeyboardShortcuts,
       focusInput: () => window.dispatchEvent(new Event("focusPrompt")),
-      focusSearch: () => focusChatSearch({ history: setHistory, terminal: () => terms.setActiveId(undefined) }),
-      newTerminal: () => termHandlers.requestNew(),
+      focusSearch: () => focusChatSearch({ history: setHistory }),
     }
     const handler = (event: MessageEvent) => {
       const msg = event.data
@@ -761,7 +735,7 @@ const AgentManagerContent: Component = () => {
     }
     window.addEventListener("keydown", preventDefaults, true)
 
-    // When the panel regains focus (e.g. returning from terminal), focus the prompt
+    // When the panel regains focus, focus the prompt
     // and clear any stale body styles left by Kobalte modal overlays (dropdowns/dialogs
     // set pointer-events:none and overflow:hidden on body, but cleanup never runs if
     // focus leaves the webview before the overlay closes).
@@ -866,19 +840,6 @@ const AgentManagerContent: Component = () => {
         catalogFailId = m.refreshId
         setCatalogFailed(true)
       }
-    })
-
-    // Terminal messages have their own subscription to keep main-handler complexity in check.
-    const terminalDispatch = createTerminalMessageHandler({
-      state: terms,
-      activate: termHandlers.activate,
-      setSelection: () => {},
-      showError: (message) =>
-        showToast({ variant: "error", title: t("agentManager.terminal.errorTitle"), description: message }),
-      onCreated: (contextKey, terminalId) => appendToTabOrder(contextKey, terminalId),
-    })
-    const unsubTerminals = vscode.onMessage((msg) => {
-      terminalDispatch(msg)
     })
 
     const unsub = vscode.onMessage((msg) => {
@@ -1010,7 +971,7 @@ const AgentManagerContent: Component = () => {
     })
 
     // Fixture-only content-readiness ack: emitted only after all Agent Manager
-    // content subscriptions above (sessionCreated/sessionsLoaded/terminal/
+    // content subscriptions above (sessionCreated/sessionsLoaded/
     // repo/state/model/initial-message/sessionDeleted) are installed, so the
     // extension fixture bridge can wait for it before posting seed messages.
     // A single extra webview→extension message; ignored in production.
@@ -1022,7 +983,6 @@ const AgentManagerContent: Component = () => {
       window.removeEventListener("focus", onWindowFocus)
       unsubCreate()
       unsubSessions()
-      unsubTerminals()
       unsub()
       unsubDeleted()
       unsubBarrier()
@@ -1123,7 +1083,7 @@ const AgentManagerContent: Component = () => {
     }
     vscode.postMessage({ type: "agentManager.closeSession", sessionId })
     tabFocus.restore()
-    if (tabMgr.ids(LOCAL).length === 0 && terms.current().length === 0) {
+    if (tabMgr.ids(LOCAL).length === 0) {
       addPendingTab()
       setIsBottomPage(true)
     }
@@ -1162,34 +1122,13 @@ const AgentManagerContent: Component = () => {
       session.selectSession(id)
     }
   }
-  const termHandlers = createTerminalHandlers({
-    state: terms,
-    tabIds: () => tabIds(),
-    selectSessionTab,
-    clearSession: () => session.clearCurrentSession(),
-    resetOthers: () => {
-      setActivePendingId(undefined)
-      session.clearCurrentSession()
-    },
-    isPendingId: isPending,
-    findTab: (id) => tabLookup().get(id),
-    postMessage: (msg) => vscode.postMessage(msg as never),
-    onRemove: freezeTabs,
-    getSelection: selection,
-    LOCAL,
-  })
-
   // Drag-and-drop handlers for tab reordering
   const tabLookup = createMemo(() => new Map(activeTabs().map((s) => [s.id, s])))
   const tabIds = createMemo(() => {
     const ids = activeTabs().map((s) => s.id)
-    const sel = selection()
-    if (sel === null) return ids
-    const terminalIds = terms.current().map((t) => t.id)
-    const base = [...ids, ...terminalIds]
     // Phase 3A: always use LOCAL as the tab-order key regardless of selection.
     return applyTabOrder(
-      base.map((id) => ({ id })),
+      ids.map((id) => ({ id })),
       tabOrder()[LOCAL],
     ).map((item) => item.id)
   })
@@ -1207,24 +1146,15 @@ const AgentManagerContent: Component = () => {
     if (sel === null) return
     // Phase 3A: always use LOCAL as the tab-order key regardless of selection.
     const key = LOCAL
-    // Unified mixed-drag: the current visible order is `tabIds()` and
-    // includes sessions and terminals. `reorderTabs` moves
-    // `from` to `to`'s position regardless of kind, so a user can slot
-    // a terminal between two sessions or vice versa.
     const reordered = reorderTabs(tabIds(), from, to)
     if (!reordered) return
     setTabOrder((prev) => ({ ...prev, [key]: reordered }))
     // Keep the session-only list in sync for LOCAL so `localSessions()`
     // and membership checks stay aligned after a drag.
     if (key === LOCAL) {
-      const sessionSubset = reordered.filter((id) => !isTerminalTabId(id))
-      setLocalSessionIDs(sessionSubset)
-      tabMgr.setOrder(LOCAL, sessionSubset)
+      setLocalSessionIDs(reordered)
+      tabMgr.setOrder(LOCAL, reordered)
     }
-    // Mirror the order into the terminal state so `terms.current()`
-    // (the source for renderTerminalLayer's slot order) matches.
-    const terminalSubset = reordered.filter(isTerminalTabId)
-    if (terminalSubset.length > 0) terms.reorder(key, terminalSubset)
   }
 
   const handleDragEnd = () => {
@@ -1240,25 +1170,18 @@ const AgentManagerContent: Component = () => {
   const draggedTab = createMemo(() => {
     const id = draggingTab()
     if (!id) return undefined
-    if (isTerminalTabId(id)) {
-      const term = terms.lookup().get(id)
-      return term ? { id, title: term.title } : undefined
-    }
     return activeTabs().find((s) => s.id === id)
   })
 
   const focusTab = (id: string) => {
-    if (!isTerminalTabId(id)) tabMgr.select(LOCAL, id)
+    tabMgr.select(LOCAL, id)
     return focusCurrentTab({
       id,
-      terms,
-      isTerminal: isTerminalTabId,
       isPending,
       tabLookup,
       setActivePendingId,
       clearSession: session.clearCurrentSession,
       selectSession: session.selectSession,
-      activateTerminal: termHandlers.activate,
     })
   }
   const tabFocus = createTabFocus({ ids: () => tabIds(), select: focusTab })
@@ -1266,10 +1189,6 @@ const AgentManagerContent: Component = () => {
   // Close the currently active tab via keyboard shortcut.
   // If no tabs remain, nothing to close.
   const closeActiveTab = () => {
-    if (termHandlers.closeActive()) {
-      tabFocus.restore()
-      return
-    }
     const tabs = activeTabs()
     if (tabs.length === 0) {
       return
@@ -1419,7 +1338,6 @@ const AgentManagerContent: Component = () => {
                       <For each={tabIds()}>
                         {(id) =>
                           renderTab(id, {
-                            terms,
                             tabIds,
                             kb,
                             currentSessionID: () => session.currentSessionID(),
@@ -1431,11 +1349,6 @@ const AgentManagerContent: Component = () => {
                             adjacentHint,
                             ctx,
                             tabMgrCloseOthers,
-                            activateTerminal: termHandlers.activate,
-                            deactivateTerminal: termHandlers.deactivate,
-                            closeTerminal: (id) => tabFocus.run(() => termHandlers.closeTerminal(id)),
-                            terminalMiddleClick: (id, event) =>
-                              tabFocus.middle(event, () => termHandlers.middleClick(id, event)),
                             selectSessionTab,
                             sessionMiddleClick: handleTabMouseDown,
                             sessionClose: handleCloseTab,
@@ -1457,11 +1370,8 @@ const AgentManagerContent: Component = () => {
                     contextSelected: () => selection() !== null,
                     kb,
                     newSessionLabel: t("agentManager.session.new"),
-                    newTerminalLabel: t("agentManager.terminal.new"),
-                    newSessionMenuLabel: t("agentManager.session.newSession"),
                     moreOptionsLabel: t("agentManager.tab.newOptions"),
                     onNewSession: metrics.click("new_session", "tab_bar", handleAddSession),
-                    onNewTerminal: metrics.click("embedded_terminal", "new_tab_menu", () => termHandlers.requestNew()),
                   })}
                 </div>
               </Show>
@@ -1502,12 +1412,9 @@ const AgentManagerContent: Component = () => {
           />
         </Show>
         <Show when={!contextEmpty() && !history()}>
-          {/* Terminal overlay is scoped to the main pane so it does not cover the tab bar. */}
           <div class="am-detail-stack">
             <div class="am-detail-content">
-              <div class={`am-main-pane ${terms.activeId() ? "am-main-pane-terminal-active" : ""}`}>
-                {/* Keep terminal tabs mounted so output streams across context switches. */}
-                {renderTerminalLayer({ state: terms })}
+              <div class="am-main-pane">
                 <div class="am-chat-wrapper">
                   {(() => {
                     const id = session.currentSessionID()

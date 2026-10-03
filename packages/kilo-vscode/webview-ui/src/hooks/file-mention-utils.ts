@@ -1,23 +1,14 @@
 import type { FileAttachment, FileSearchItem } from "../types/messages"
 import { GIT_CHANGES_MENTION } from "./git-changes-context-utils"
-import { TERMINAL_MENTION } from "./terminal-context-utils"
 
 export const AT_PATTERN = /(?:^|\s)@(\S*)$/
 
 export type MentionResult =
-  | { type: "terminal"; value: typeof TERMINAL_MENTION; label: string; description: string }
   | { type: "git-changes"; value: typeof GIT_CHANGES_MENTION; label: string; description: string }
   | { type: "file"; value: string }
   | { type: "opened-file"; value: string }
   | { type: "folder"; value: string }
   | { type: "file-picker"; value: "file-picker"; label: string; description: string }
-
-export const TERMINAL_RESULT: MentionResult = {
-  type: "terminal",
-  value: TERMINAL_MENTION,
-  label: "Terminal",
-  description: "Active terminal output",
-}
 
 export const GIT_CHANGES_RESULT: MentionResult = {
   type: "git-changes",
@@ -33,12 +24,6 @@ export const FILE_PICKER_RESULT: MentionResult = {
   description: "Select a file outside the workspace",
 }
 
-export function getTerminalMentionResult(query: string): MentionResult[] {
-  const normalized = query.toLowerCase()
-  if (!TERMINAL_MENTION.startsWith(normalized)) return []
-  return [TERMINAL_RESULT]
-}
-
 export function getGitChangesMentionResult(query: string): MentionResult[] {
   const normalized = query.toLowerCase()
   if (normalized && !GIT_CHANGES_MENTION.startsWith(normalized) && !"git".startsWith(normalized)) return []
@@ -52,19 +37,13 @@ export function buildMentionResults(query: string, items: Array<FileSearchItem |
     if (item.type === "opened-file") return { type: "opened-file", value: item.path }
     return { type: "file", value: item.path }
   })
-  return [
-    ...getTerminalMentionResult(query),
-    ...(git ? getGitChangesMentionResult(query) : []),
-    ...results,
-    FILE_PICKER_RESULT,
-  ]
+  return [...(git ? getGitChangesMentionResult(query) : []), ...results, FILE_PICKER_RESULT]
 }
 
 export function filterMentionResults(query: string, items: MentionResult[]): MentionResult[] {
   const value = query.toLowerCase()
   if (!value) return items
   return items.filter((item) => {
-    if (item.type === "terminal") return TERMINAL_MENTION.startsWith(value)
     if (item.type === "git-changes") return GIT_CHANGES_MENTION.startsWith(value) || "git".startsWith(value)
     if (item.type === "file-picker") return true
     return item.value.toLowerCase().includes(value)
@@ -140,7 +119,7 @@ export function getMentionRemovalRange(
   paths: Set<string>,
 ): { start: number; end: number } | null {
   const before = text.slice(0, position)
-  const all = [...[...paths].sort((a, b) => b.length - a.length), TERMINAL_MENTION, GIT_CHANGES_MENTION]
+  const all = [...[...paths].sort((a, b) => b.length - a.length), GIT_CHANGES_MENTION]
   for (const path of all) {
     const token = `@${path}`
     if (before.endsWith(token)) {
@@ -161,9 +140,7 @@ export function isCursorAtMentionEnd(text: string, position: number, paths: Set<
   for (const path of sorted) {
     if (before.endsWith(`@${path}`)) return true
   }
-  for (const builtin of [TERMINAL_MENTION, GIT_CHANGES_MENTION]) {
-    if (before.endsWith(`@${builtin}`)) return true
-  }
+  if (before.endsWith(`@${GIT_CHANGES_MENTION}`)) return true
   return false
 }
 
@@ -179,7 +156,7 @@ export function findMentionRange(
   position: number,
   paths: Set<string>,
 ): { start: number; end: number } | null {
-  const all = [...paths, TERMINAL_MENTION, GIT_CHANGES_MENTION]
+  const all = [...paths, GIT_CHANGES_MENTION]
   // Check longest first to avoid partial matches
   all.sort((a, b) => b.length - a.length)
   for (const path of all) {

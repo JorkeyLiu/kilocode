@@ -4,7 +4,7 @@
  * Verifies the Phase 2/3A contract:
  *   1. Tab registry add-or-focus in LOCAL UI context
  *   2. Set active session/tab
- *   3. Clear history/terminal/pending overlays
+ *   3. Clear history/pending overlays
  *   4. Call session.selectSession(id)
  *   5. No parent/root classification, no ownership mutation
  *   6. Phase 3A: no saveTabMemory, always LOCAL context, no read-only path
@@ -35,7 +35,6 @@ function createDeps() {
     selected: [] as string[],
     pending: undefined as string | undefined,
     history: true,
-    terminal: "some-terminal" as string | undefined,
     selection: "old-selection" as string,
     ensured: [] as string[],
     insertedAfter: [] as { source?: string; id: string }[],
@@ -48,9 +47,6 @@ function createDeps() {
     },
     setHistory: (v) => {
       state.history = v
-    },
-    setTermsActiveId: (id) => {
-      state.terminal = id
     },
     setSelection: (sel) => {
       state.selection = sel
@@ -78,12 +74,11 @@ describe("openSession — returns false for empty/undefined ID", () => {
 })
 
 describe("openSession — clears overlays", () => {
-  it("closes history and terminal", () =>
+  it("closes history", () =>
     createRoot(() => {
       const { state, deps } = createDeps()
       openSession(ROOT_A, deps)
       expect(state.history).toBe(false)
-      expect(state.terminal).toBeUndefined()
     }))
 
   it("sets selection to LOCAL", () =>
@@ -194,7 +189,6 @@ describe("openSession — no ownership mutation", () => {
       expect(result).toBe(true)
       // Only these side effects occur (Phase 3A: saveTabMemory removed):
       expect(state.history).toBe(false) // clear history
-      expect(state.terminal).toBeUndefined() // clear terminal
       expect(state.selection).toBe(LOCAL) // set selection
       expect(state.selected).toEqual([ROOT_A]) // selectSession
       expect(state.pending).toBeUndefined() // clear pending
@@ -324,7 +318,6 @@ describe("Phase 3A — single LOCAL context invariants", () => {
       selectSession: () => {},
       setActivePendingId: () => {},
       setHistory: () => {},
-      setTermsActiveId: () => {},
       setSelection: () => {},
       isPending: () => false,
       ensureLocal: () => {},
@@ -398,7 +391,6 @@ describe("openChildSession — source-relative placement contract", () => {
       const { state, deps } = createDeps()
       openChildSession(CHILD_A, ROOT_A, deps)
       expect(state.history).toBe(false)
-      expect(state.terminal).toBeUndefined()
       expect(state.selection).toBe(LOCAL)
     }))
 
@@ -441,14 +433,12 @@ describe("openChildSession — real three-store coordination (LOCK-002)", () => 
       setOrder,
       persist: (_key, value) => persisted.push([...value]),
       localSessionIDs: local,
-      terminalIdsFor: () => [],
     })
     const deps: OpenChildSessionDeps = {
       tabMgr: mgr,
       selectSession: () => {},
       setActivePendingId: () => {},
       setHistory: () => {},
-      setTermsActiveId: () => {},
       setSelection: () => {},
       isPending: (id) => id.startsWith("pending:"),
       ensureLocal: () => {},
